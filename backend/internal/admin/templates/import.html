@@ -1,0 +1,240 @@
+{{ template "header.html" . }}
+{{ template "sidebar.html" . }}
+
+<div class="header">
+    <h1>网盘资源导入</h1>
+</div>
+
+<div class="grid-3" style="grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;">
+    <!-- Directory browser -->
+    <div class="card">
+        <div class="card-header" style="display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;">
+            <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                <h2 class="card-title">网盘文件浏览器</h2>
+                <button class="btn btn-secondary" onclick="scanDirectory(currentPath)" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;">刷新目录</button>
+            </div>
+            <!-- Breadcrumbs -->
+            <div id="breadcrumbs" style="font-family: monospace; color: #a78bfa; font-size: 0.875rem; word-break: break-all; margin-top: 0.25rem;">
+                加载中...
+            </div>
+        </div>
+
+        <div style="max-height: 500px; overflow-y: auto;">
+            <table id="file-table">
+                <thead>
+                    <tr>
+                        <th style="width: 40px;"><input type="checkbox" id="select-all-files" onchange="toggleSelectAll(this.checked)"></th>
+                        <th>名称</th>
+                        <th>大小</th>
+                        <th>修改时间</th>
+                    </tr>
+                </thead>
+                <tbody id="file-list-body">
+                    <!-- Loaded dynamically via javascript -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Import controls -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">导入设置</h2>
+        </div>
+        <div class="form-group">
+            <label for="import-course-select">选择目标课程库</label>
+            <select id="import-course-select" class="form-control" required>
+                <option value="">-- 请选择课程库 --</option>
+                {{ range .Courses }}
+                <option value="{{ .ID }}">{{ .Title }} ({{ if eq (printf "%s" .Grade) "universal" }}通用{{ else }}{{ .Grade }}年级{{ end }}/{{ .Subject }})</option>
+                {{ end }}
+            </select>
+        </div>
+        <div style="background-color: rgba(139, 92, 246, 0.05); border: 1px dashed rgba(139, 92, 246, 0.2); padding: 1rem; border-radius: 12px; margin-bottom: 1.5rem;">
+            <div style="font-size: 0.8125rem; color: #cbd5e1; font-weight: 600; margin-bottom: 0.25rem;">已选择的文件</div>
+            <div id="selected-files-count" style="font-size: 1.25rem; font-weight: 700; color: #a78bfa;">0 个文件</div>
+            <div style="font-size: 0.75rem; color: #9ca3af; margin-top: 0.25rem;">
+                仅导入选中的视频文件（自动忽略目录）。导入后将自动匹配本地字幕。
+            </div>
+        </div>
+        <button class="btn btn-primary" onclick="executeImport()" style="width: 100%;">开始导入资源</button>
+    </div>
+</div>
+
+<script>
+let currentPath = '/';
+let filesData = [];
+
+document.addEventListener('DOMContentLoaded', () => {
+    scanDirectory('/');
+});
+
+function scanDirectory(path) {
+    currentPath = path;
+    updateBreadcrumbs(path);
+    
+    const tbody = document.getElementById('file-list-body');
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 2rem;">正在加载网盘目录树，请稍候...</td></tr>';
+    document.getElementById('select-all-files').checked = false;
+    updateSelectedCount();
+
+    fetch('/admin/api/import/scan?path=' + encodeURIComponent(path))
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(files => {
+        filesData = files || [];
+        renderFiles();
+    })
+    .catch(err => {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 2rem;">加载失败: ${err.message}<br><small style="color: #9ca3af;">请确保「系统设置」中的 AList/WebDAV 服务配置正确且在线。</small></td></tr>`;
+    });
+}
+
+function updateBreadcrumbs(path) {
+    const container = document.getElementById('breadcrumbs');
+    container.innerHTML = '';
+    
+    const parts = path.split('/').filter(p => p !== '');
+    
+    const rootLink = document.createElement('a');
+    rootLink.href = '#';
+    rootLink.textContent = 'Root';
+    rootLink.style.color = '#a78bfa';
+    rootLink.style.textDecoration = 'none';
+    rootLink.onclick = (e) => { e.preventDefault(); scanDirectory('/'); };
+    container.appendChild(rootLink);
+    
+    let currentAccumPath = '';
+    for (let i = 0; i < parts.length; i++) {
+        container.appendChild(document.createTextNode(' / '));
+        currentAccumPath += '/' + parts[i];
+        
+        const link = document.createElement('a');
+        link.href = '#';
+        link.textContent = parts[i];
+        link.style.color = '#a78bfa';
+        link.style.textDecoration = 'none';
+        
+        const targetPath = currentAccumPath;
+        link.onclick = (e) => { e.preventDefault(); scanDirectory(targetPath); };
+        container.appendChild(link);
+    }
+}
+
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function renderFiles() {
+    const tbody = document.getElementById('file-list-body');
+    tbody.innerHTML = '';
+
+    if (filesData.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 2rem;">空目录</td></tr>';
+        return;
+    }
+
+    // Add back folder link if not at root
+    if (currentPath !== '/') {
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        
+        const parentPath = currentPath.substring(0, currentPath.lastIndexOf('/')) || '/';
+        tr.onclick = () => scanDirectory(parentPath);
+        
+        tr.innerHTML = `
+            <td></td>
+            <td colspan="3" style="color: #a78bfa; font-weight: 500;">
+                📁 .. (返回上级目录)
+            </td>
+        `;
+        tbody.appendChild(tr);
+    }
+
+    filesData.forEach((file, index) => {
+        const tr = document.createElement('tr');
+        
+        let selectCell = '';
+        let nameCell = '';
+        
+        if (file.is_dir) {
+            selectCell = '<td></td>';
+            nameCell = `<td style="color: #60a5fa; cursor: pointer; font-weight: 500;" onclick="scanDirectory('${file.path}')">📁 ${file.name}</td>`;
+        } else {
+            selectCell = `<td><input type="checkbox" class="file-check" value="${file.path}" onchange="updateSelectedCount()"></td>`;
+            nameCell = `<td>📄 ${file.name}</td>`;
+        }
+
+        const sizeStr = file.is_dir ? '-' : formatBytes(file.size);
+        const timeStr = new Date(file.modified).toLocaleString();
+
+        tr.innerHTML = `
+            ${selectCell}
+            ${nameCell}
+            <td>${sizeStr}</td>
+            <td style="font-size: 0.8125rem; color: #9ca3af;">${timeStr}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function toggleSelectAll(checked) {
+    document.querySelectorAll('.file-check').forEach(cb => {
+        cb.checked = checked;
+    });
+    updateSelectedCount();
+}
+
+// Update file check count dynamically
+function updateSelectedCount() {
+    const count = document.querySelectorAll('.file-check:checked').length;
+    document.getElementById('selected-files-count').textContent = count + ' 个文件';
+}
+
+function executeImport() {
+    const courseSelect = document.getElementById('import-course-select');
+    const courseID = courseSelect.value;
+    if (!courseID) {
+        alert('请先选择要导入到的目标课程库！');
+        return;
+    }
+
+    const checkedBoxes = document.querySelectorAll('.file-check:checked');
+    if (checkedBoxes.length === 0) {
+        alert('请至少勾选一个要导入的视频文件！');
+        return;
+    }
+
+    const paths = Array.from(checkedBoxes).map(cb => cb.value);
+
+    fetch('/admin/api/import/execute', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            course_id: parseInt(courseID, 10),
+            paths: paths
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        alert(`成功导入 ${data.imported} 个课时！`);
+        scanDirectory(currentPath);
+    })
+    .catch(err => {
+        alert('导入失败: ' + err.message);
+    });
+}
+</script>
+
+{{ template "footer.html" . }}

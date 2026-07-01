@@ -1,0 +1,171 @@
+{{ template "header.html" . }}
+{{ template "sidebar.html" . }}
+
+<div class="header">
+    <h1>课程库管理</h1>
+</div>
+
+<div class="grid-3" style="grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;">
+    <!-- Course List with Episodes -->
+    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+        {{ range .Courses }}
+        <div class="card" id="course-card-{{ .ID }}">
+            <div class="card-header" style="border-bottom: 1px solid #1f2937; padding-bottom: 0.5rem; margin-bottom: 1rem;">
+                <div>
+                    <h2 style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">{{ .Title }}</h2>
+                    <div style="font-size: 0.8125rem; color: #9ca3af; margin-top: 0.25rem;">
+                        年级: <span style="color: #c084fc;">{{ if eq (printf "%s" .Grade) "universal" }}全学段通用{{ else }}{{ .Grade }}年级{{ end }}</span> | 
+                        科目: <span style="color: #60a5fa;">{{ .Subject }}</span>
+                    </div>
+                </div>
+                <button class="btn btn-danger" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" data-course-id="{{ .ID }}" onclick="deleteCourse(parseInt(this.dataset.courseId, 10))">删除课程</button>
+            </div>
+            
+            <div style="margin-top: 0.5rem;">
+                <h3 style="font-size: 0.875rem; color: #9ca3af; margin-bottom: 0.5rem; font-weight: 600;">课时明细 ({{ len .Episodes }} 集)</h3>
+                {{ if .Episodes }}
+                <table style="font-size: 0.8125rem;">
+                    <thead>
+                        <tr>
+                            <th style="width: 60px;">集数</th>
+                            <th>课时标题</th>
+                            <th>网盘相对路径</th>
+                            <th>Hash 值</th>
+                            <th>课外附件</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{ range .Episodes }}
+                        <tr>
+                            <td><strong>P{{ .SortOrder }}</strong></td>
+                            <td>{{ .Title }}</td>
+                            <td style="word-break: break-all; max-width: 250px; font-family: monospace; color: #9ca3af;">{{ .VideoRelativePath }}</td>
+                            <td style="font-family: monospace; color: #34d399;">
+                                {{ if .FileHash }}
+                                <span title="{{ .FileHash }}">{{ printf "%.10s..." .FileHash }}</span>
+                                {{ else }}
+                                <span style="color: #ef4444;">无 Hash</span>
+                                {{ end }}
+                            </td>
+                            <td>
+                                <span style="font-size: 0.75rem; color: #9ca3af;">
+                                    {{ if .AttachmentJSON }}
+                                        {{ .AttachmentJSON }}
+                                    {{ else }}
+                                        []
+                                    {{ end }}
+                                </span>
+                            </td>
+                        </tr>
+                        {{ end }}
+                    </tbody>
+                </table>
+                {{ else }}
+                <div style="padding: 1.5rem; text-align: center; color: #4b5563; border: 1px dashed #1f2937; border-radius: 12px; font-size: 0.875rem;">
+                    暂无课时，请前往「文件导入」浏览并导入资源。
+                </div>
+                {{ end }}
+            </div>
+        </div>
+        {{ else }}
+        <div class="card" style="padding: 3rem; text-align: center; color: #9ca3af;">
+            <h2>课程库为空</h2>
+            <p style="margin-top: 0.5rem; font-size: 0.875rem; color: #4b5563;">请在右侧表单中创建您的第一个课程库。</p>
+        </div>
+        {{ end }}
+    </div>
+
+    <!-- Create Course Form -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">新增课程库</h2>
+        </div>
+        <form id="create-course-form" onsubmit="createCourse(event)">
+            <div class="form-group">
+                <label for="title">课程名称</label>
+                <input type="text" id="title" class="form-control" placeholder="如：神奇的物理世界" required>
+            </div>
+            <div class="form-group">
+                <label for="grade">适用年级</label>
+                <select id="grade" class="form-control" required>
+                    <option value="1">一年级 (1)</option>
+                    <option value="2">二年级 (2)</option>
+                    <option value="3">三年级 (3)</option>
+                    <option value="4">四年级 (4)</option>
+                    <option value="5">五年级 (5)</option>
+                    <option value="6">六年级 (6)</option>
+                    <option value="7">初中一年级/七年级 (7)</option>
+                    <option value="8">初中二年级/八年级 (8)</option>
+                    <option value="9">初中三年级/九年级 (9)</option>
+                    <option value="universal">全学段通用 (universal)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="subject">类别/科目</label>
+                <select id="subject" class="form-control">
+                    <option value="chinese">语文 (chinese)</option>
+                    <option value="math">数学 (math)</option>
+                    <option value="english">英语 (english)</option>
+                    <option value="physics">物理/科学 (physics)</option>
+                    <option value="extra">课外百科 (extra)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="cover_url">封面图 URL</label>
+                <input type="url" id="cover_url" class="form-control" placeholder="https://picsum.photos/300/200">
+            </div>
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;">保存并创建</button>
+        </form>
+    </div>
+</div>
+
+<script>
+function createCourse(event) {
+    event.preventDefault();
+    const title = document.getElementById('title').value;
+    const grade = document.getElementById('grade').value;
+    const subject = document.getElementById('subject').value;
+    const cover_url = document.getElementById('cover_url').value;
+
+    fetch('/admin/api/courses', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title, grade, subject, cover_url })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        alert('课程库创建成功！');
+        window.location.reload();
+    })
+    .catch(err => {
+        alert('创建失败: ' + err.message);
+    });
+}
+
+function deleteCourse(id) {
+    if (!confirm('警告：删除该课程将会连带删除旗下所有课时、进度和字幕记录！确定要删除吗？')) return;
+
+    fetch('/admin/api/courses/' + id, {
+        method: 'DELETE'
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        const el = document.getElementById('course-card-' + id);
+        if (el) el.remove();
+        window.location.reload(); // safer to reload to clear UI
+    })
+    .catch(err => {
+        alert('删除失败: ' + err.message);
+    });
+}
+</script>
+
+{{ template "footer.html" . }}

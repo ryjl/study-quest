@@ -1,0 +1,103 @@
+package service
+
+import (
+	"errors"
+	"fmt"
+	"studyquest/backend/internal/model"
+	"studyquest/backend/internal/repository"
+	"time"
+)
+
+// ProgressService manages playback tracking, completing lessons, and points accumulation.
+type ProgressService interface {
+	GetProgress(userID, episodeID uint) (*model.UserProgress, error)
+	ReportProgress(userID, episodeID uint, positionSec, deltaWatchSec int) (*model.UserProgress, error)
+	GetPoints(userID uint) (*model.UserPoint, error)
+	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
+}
+
+type progressService struct {
+	progressRepo repository.ProgressRepository
+	episodeRepo  repository.EpisodeRepository
+}
+
+// NewProgressService creates an instance of ProgressService.
+func NewProgressService(pr repository.ProgressRepository, er repository.EpisodeRepository) ProgressService {
+	return &progressService{
+		progressRepo: pr,
+		episodeRepo:  er,
+	}
+}
+
+func (s *progressService) GetProgress(userID, episodeID uint) (*model.UserProgress, error) {
+	return s.progressRepo.GetProgress(userID, episodeID)
+}
+
+func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, deltaWatchSec int) (*model.UserProgress, error) {
+	ep, err := s.episodeRepo.FindByID(episodeID)
+	if err != nil {
+		return nil, err
+	}
+	if ep == nil {
+		return nil, errors.New("episode not found")
+	}
+
+	prog, err := s.progressRepo.GetProgress(userID, episodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	if prog == nil {
+		// New progress record
+		now := time.Now()
+		prog = &model.UserProgress{
+			UserID:              userID,
+			EpisodeID:           episodeID,
+			LastPositionSeconds: positionSec,
+			WatchSeconds:        deltaWatchSec,
+			IsCompleted:         0,
+			UnlockedAt:          &now,
+		}
+	} else {
+		// Update existing
+		prog.LastPositionSeconds = positionSec
+		prog.WatchSeconds += deltaWatchSec
+	}
+
+	// Completeness verification (anti-cheat: must watch > 80% of actual video duration)
+	if prog.IsCompleted == 0 && ep.DurationSeconds != nil && *ep.DurationSeconds > 0 {
+		duration := *ep.DurationSeconds
+		threshold := int(float64(duration) * 0.8)
+		if prog.WatchSeconds >= threshold {
+			prog.IsCompleted = 1
+
+			// Reward user points (10 points per episode watched)
+			pointsLedger := &model.PointsLedger{
+				UserID:       userID,
+				ChangeAmount: 10,
+				ReasonType:   "system_watch",
+				Description:  fmt.Sprintf("Completed watching episode %d: %s", ep.ID, ep.Title),
+			}
+
+			// AddPoints updates points ledger and updates user_points table in a single transaction
+			if err := s.progressRepo.AddPoints(pointsLedger); err != nil {
+				// Log error but don't fail the progress reporting transaction
+				fmt.Printf("Error adding user points: %v\n", err)
+			}
+		}
+	}
+
+	if err := s.progressRepo.SaveProgress(prog); err != nil {
+		return nil, err
+	}
+
+	return prog, nil
+}
+
+func (s *progressService) GetPoints(userID uint) (*model.UserPoint, error) {
+	return s.progressRepo.GetPoints(userID)
+}
+
+func (s *progressService) GetUserProgressOverview(userID uint) ([]model.UserProgress, error) {
+	return s.progressRepo.GetUserProgressOverview(userID)
+}

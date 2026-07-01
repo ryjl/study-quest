@@ -1,0 +1,55 @@
+{{ template "header.html" . }}
+{{ template "sidebar.html" . }}
+
+<div class="header">
+    <h1>控制台概览</h1>
+</div>
+
+<div class="grid-3">
+    <div class="card" style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+            <div style="color: #9ca3af; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem;">总用户数</div>
+            <div style="font-size: 2.25rem; font-weight: 700; color: #ffffff;">{{ .UserCount }}</div>
+        </div>
+        <div style="background-color: rgba(139, 92, 246, 0.1); border-radius: 12px; padding: 0.75rem; color: #a78bfa;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+        </div>
+    </div>
+
+    <div class="card" style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+            <div style="color: #9ca3af; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem;">课程数量</div>
+            <div style="font-size: 2.25rem; font-weight: 700; color: #ffffff;">{{ .CourseCount }}</div>
+        </div>
+        <div style="background-color: rgba(59, 130, 246, 0.1); border-radius: 12px; padding: 0.75rem; color: #60a5fa;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+        </div>
+    </div>
+
+    <div class="card" style="display: flex; align-items: center; justify-content: space-between;">
+        <div>
+            <div style="color: #9ca3af; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem;">导入课时数</div>
+            <div style="font-size: 2.25rem; font-weight: 700; color: #ffffff;">{{ .EpisodeCount }}</div>
+        </div>
+        <div style="background-color: rgba(16, 185, 129, 0.1); border-radius: 12px; padding: 0.75rem; color: #34d399;">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">系统快速指引</h2>
+    </div>
+    <div style="line-height: 1.6; color: #9ca3af;">
+        <p style="margin-bottom: 1rem;">欢迎来到 <strong>StudyQuest (学途奇旅)</strong> 平台后台管理系统。您可以进行以下操作：</p>
+        <ul style="margin-left: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem;">
+            <li><strong>用户与授权</strong>：创建和管理孩子的账户（支持 student, teen, parent 等多种角色），重置 4-6 位 PIN 码，并授权他们可以访问的课程库。</li>
+            <li><strong>课程库管理</strong>：创建不同的课程大类，并在此为课程分配年级（grade）和学科（subject）标识。</li>
+            <li><strong>文件导入</strong>：直接通过集成的 AList 或 WebDAV 服务浏览网盘文件，一键选择视频快速将它们导入并生成课时。系统会自动与已由本地 Whisper 生成推送到服务器的字幕文件根据 Hash 或路径进行“认亲匹配”。</li>
+            <li><strong>系统设置</strong>：在这里配置后端服务器 and AList/WebDAV 服务的连接参数，确保连接测试成功。</li>
+        </ul>
+    </div>
+</div>
+
+{{ template "footer.html" . }}

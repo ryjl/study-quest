@@ -1,0 +1,22 @@
+{{ define "footer.html" }}
+    </div>
+
+    <script>
+        // Auto active navigation link based on current path
+        const path = window.location.pathname;
+        document.querySelectorAll('.nav-links li').forEach(li => li.classList.remove('active'));
+        if (path === '/admin/' || path === '/admin') {
+            document.getElementById('menu-dash').classList.add('active');
+        } else if (path.startsWith('/admin/users')) {
+            document.getElementById('menu-users').classList.add('active');
+        } else if (path.startsWith('/admin/courses')) {
+            document.getElementById('menu-courses').classList.add('active');
+        } else if (path.startsWith('/admin/import')) {
+            document.getElementById('menu-import').classList.add('active');
+        } else if (path.startsWith('/admin/settings')) {
+            document.getElementById('menu-settings').classList.add('active');
+        }
+    </script>
+</body>
+</html>
+{{ end }}

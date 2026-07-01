@@ -1,0 +1,182 @@
+{{ template "header.html" . }}
+{{ template "sidebar.html" . }}
+
+<div class="header">
+    <h1>系统设置</h1>
+</div>
+
+<div class="grid-3" style="grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;">
+    <!-- Config Form Card -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">系统与存储源参数配置</h2>
+        </div>
+        <form id="settings-form" onsubmit="saveSettings(event)">
+            <!-- Storage configuration -->
+            <div class="form-group">
+                <label for="storage_type">存储源类型</label>
+                <select id="storage_type" class="form-control" onchange="toggleStorageInputs(this.value)">
+                    <option value="alist" {{ if eq (index .Settings "storage_type") "alist" }}selected{{ end }}>AList / OpenList v3 API</option>
+                    <option value="webdav" {{ if eq (index .Settings "storage_type") "webdav" }}selected{{ end }}>通用 WebDAV 协议</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="storage_url">存储源基准 URL</label>
+                <input type="url" id="storage_url" class="form-control" value="{{ index .Settings "storage_url" }}" placeholder="http://localhost:5244 (AList) 或 http://host/dav/ (WebDAV)" required>
+            </div>
+
+            <!-- Credentials -->
+            <div style="background-color: rgba(255, 255, 255, 0.02); border: 1px solid #1f2937; padding: 1.25rem; border-radius: 12px; margin-bottom: 1.25rem;">
+                <h3 style="font-size: 0.875rem; font-weight: 600; margin-bottom: 1rem; color: #cbd5e1;">凭据配置</h3>
+                
+                <!-- Common Credentials -->
+                <div class="form-group">
+                    <label for="storage_username" id="username-label">用户名</label>
+                    <input type="text" id="storage_username" class="form-control" value="{{ index .Settings "storage_username" }}" placeholder="请输入用户名">
+                </div>
+                <div class="form-group">
+                    <label for="storage_password" id="password-label">密码</label>
+                    <input type="password" id="storage_password" class="form-control" value="{{ index .Settings "storage_password" }}" placeholder="请输入密码">
+                </div>
+
+                <!-- AList Token Option -->
+                <div id="alist-token-group" style="display: none;">
+                    <div class="form-group">
+                        <label for="storage_token">AList Token (Authorization 授权码 - 可选)</label>
+                        <input type="password" id="storage_token" class="form-control" value="{{ index .Settings "storage_token" }}" placeholder="alist-xxxx...">
+                        <small style="color: #9ca3af; font-size: 0.75rem; margin-top: 0.25rem; display: block;">
+                            可选输入。若留空，系统将使用上述用户名/密码自动登录并索取授权 Token。
+                        </small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Admin Password Reset -->
+            <div class="form-group">
+                <label for="admin_password">重置管理员密码 (为空则不修改)</label>
+                <input type="password" id="admin_password" class="form-control" placeholder="输入新的管理员密码">
+            </div>
+
+            <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                <button type="submit" class="btn btn-primary" style="flex: 2;">保存配置</button>
+                <button type="button" class="btn btn-secondary" onclick="testConnection()" style="flex: 1;">测试连接</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Info/Status sidebar -->
+    <div class="card">
+        <div class="card-header">
+            <h2 class="card-title">连接状态测试</h2>
+        </div>
+        <div id="ping-status-box" style="padding: 1.5rem; text-align: center; border-radius: 12px; background-color: rgba(255, 255, 255, 0.02); border: 1px dashed #1f2937; color: #9ca3af; font-size: 0.875rem;">
+            未进行测试。请点击左侧「测试连接」按钮进行即时存储验证。
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const sType = document.getElementById('storage_type').value;
+    toggleStorageInputs(sType);
+});
+
+function toggleStorageInputs(value) {
+    const alistTokenGroup = document.getElementById('alist-token-group');
+    const usernameLabel = document.getElementById('username-label');
+    const passwordLabel = document.getElementById('password-label');
+    
+    if (value === 'alist') {
+        alistTokenGroup.style.display = 'block';
+        usernameLabel.textContent = 'AList/OpenList 用户名';
+        passwordLabel.textContent = 'AList/OpenList 密码';
+    } else {
+        alistTokenGroup.style.display = 'none';
+        usernameLabel.textContent = 'WebDAV 用户名';
+        passwordLabel.textContent = 'WebDAV 密码';
+    }
+}
+
+function saveSettings(event) {
+    event.preventDefault();
+    const storage_type = document.getElementById('storage_type').value;
+    const storage_url = document.getElementById('storage_url').value;
+    const storage_username = document.getElementById('storage_username').value;
+    const storage_password = document.getElementById('storage_password').value;
+    const storage_token = document.getElementById('storage_token').value;
+    const admin_password = document.getElementById('admin_password').value;
+
+    fetch('/admin/api/settings', {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            storage_type,
+            storage_url,
+            storage_username,
+            storage_password,
+            storage_token,
+            admin_password
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        alert('配置保存成功！');
+        window.location.reload();
+    })
+    .catch(err => {
+        alert('保存失败: ' + err.message);
+    });
+}
+
+function testConnection() {
+    const statusBox = document.getElementById('ping-status-box');
+    statusBox.style.backgroundColor = 'rgba(255, 255, 255, 0.05)';
+    statusBox.style.border = '1px dashed #1f2937';
+    statusBox.style.color = '#cbd5e1';
+    statusBox.innerHTML = '正在测试连接中，请稍后...';
+
+    const storage_type = document.getElementById('storage_type').value;
+    const storage_url = document.getElementById('storage_url').value;
+    const storage_username = document.getElementById('storage_username').value;
+    const storage_password = document.getElementById('storage_password').value;
+    const storage_token = document.getElementById('storage_token').value;
+
+    fetch('/admin/api/storage/ping', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            storage_type,
+            storage_url,
+            storage_username,
+            storage_password,
+            storage_token
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        statusBox.style.backgroundColor = 'rgba(16, 185, 129, 0.1)';
+        statusBox.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+        statusBox.style.color = '#34d399';
+        statusBox.innerHTML = `<strong>连接成功！</strong><br><br>${data.message}`;
+    })
+    .catch(err => {
+        statusBox.style.backgroundColor = 'rgba(239, 68, 68, 0.1)';
+        statusBox.style.border = '1px solid rgba(239, 68, 68, 0.3)';
+        statusBox.style.color = '#fca5a5';
+        statusBox.innerHTML = `<strong>连接失败！</strong><br><br>错误信息: ${err.message}`;
+    });
+}
+</script>
+
+{{ template "footer.html" . }}
