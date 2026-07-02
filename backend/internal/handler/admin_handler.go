@@ -1,12 +1,19 @@
 package handler
 
 import (
+	"crypto/rand"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
 	"studyquest/backend/internal/storage"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -26,15 +33,41 @@ type AdminHandler interface {
 
 	// API controllers
 	CreateUser(c *gin.Context)
+	UpdateUser(c *gin.Context)
 	DeleteUser(c *gin.Context)
+	BulkAccess(c *gin.Context)
 	CreateCourse(c *gin.Context)
+	UpdateCourse(c *gin.Context)
 	DeleteCourse(c *gin.Context)
+	CreateEpisode(c *gin.Context)
+	UpdateEpisode(c *gin.Context)
+	DeleteEpisode(c *gin.Context)
+	ReorderEpisodes(c *gin.Context)
+	BulkDeleteEpisodes(c *gin.Context)
+	BulkMoveEpisodes(c *gin.Context)
 	GrantAccess(c *gin.Context)
 	RevokeAccess(c *gin.Context)
 	Scan(c *gin.Context)
+	PreviewTree(c *gin.Context)
 	ExecuteImport(c *gin.Context)
 	UpdateSettings(c *gin.Context)
 	PingStorage(c *gin.Context)
+
+	// Chapter API controllers
+	CreateChapter(c *gin.Context)
+	UpdateChapter(c *gin.Context)
+	DeleteChapter(c *gin.Context)
+	ListChaptersByCourse(c *gin.Context)
+	ListEpisodesByCourse(c *gin.Context)
+
+	// Subtitle API controllers
+	ListSubtitles(c *gin.Context)
+	SaveSubtitle(c *gin.Context)
+	DeleteSubtitle(c *gin.Context)
+	AutoMatchSubtitle(c *gin.Context)
+
+	// Image upload controller
+	UploadImage(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -46,6 +79,7 @@ type adminHandler struct {
 	courseService  service.CourseService
 	importService  service.ImportService
 	episodeService service.EpisodeService
+	chapterService service.ChapterService
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -58,6 +92,7 @@ func NewAdminHandler(
 	cs service.CourseService,
 	is service.ImportService,
 	es service.EpisodeService,
+	chs service.ChapterService,
 ) AdminHandler {
 	return &adminHandler{
 		settingsRepo:   sr,
@@ -68,6 +103,7 @@ func NewAdminHandler(
 		courseService:  cs,
 		importService:  is,
 		episodeService: es,
+		chapterService: chs,
 	}
 }
 
@@ -137,39 +173,100 @@ func (h *adminHandler) UsersGet(c *gin.Context) {
 		userPermissions[u.ID] = ids
 	}
 
+	gradesList := []struct {
+		Key  string
+		Name string
+	}{
+		{"1", "一年级"},
+		{"2", "二年级"},
+		{"3", "三年级"},
+		{"4", "四年级"},
+		{"5", "五年级"},
+		{"6", "六年级"},
+		{"7", "七年级/初一"},
+		{"8", "八年级/初二"},
+		{"9", "九年级/初三"},
+		{"universal", "全学段通用"},
+	}
+
 	c.HTML(http.StatusOK, "users.html", gin.H{
 		"Users":       users,
 		"Courses":     courses,
 		"Permissions": userPermissions,
+		"GradesList":  gradesList,
 	})
+}
+
+func getUniqueCourseTags(courses []model.Course) []string {
+	tagMap := make(map[string]bool)
+	for _, cr := range courses {
+		if cr.Tags != "" {
+			parts := strings.Split(cr.Tags, ",")
+			for _, p := range parts {
+				trimmed := strings.TrimSpace(p)
+				if trimmed != "" {
+					tagMap[trimmed] = true
+				}
+			}
+		}
+	}
+	var tags []string
+	for t := range tagMap {
+		tags = append(tags, t)
+	}
+	return tags
 }
 
 func (h *adminHandler) CoursesGet(c *gin.Context) {
 	courses, _ := h.courseRepo.List("", "", nil)
+	existingTags := getUniqueCourseTags(courses)
 
 	type courseView struct {
 		model.Course
 		Episodes []model.Episode
+		Chapters []model.Chapter
 	}
 
 	viewList := make([]courseView, len(courses))
 	for i, cr := range courses {
 		eps, _ := h.episodeRepo.ListByCourse(cr.ID)
+		chaps, _ := h.chapterService.GetChaptersByCourse(cr.ID)
 		viewList[i] = courseView{
 			Course:   cr,
 			Episodes: eps,
+			Chapters: chaps,
 		}
 	}
 
+	gradesList := []struct {
+		Key  string
+		Name string
+	}{
+		{"1", "一年级"},
+		{"2", "二年级"},
+		{"3", "三年级"},
+		{"4", "四年级"},
+		{"5", "五年级"},
+		{"6", "六年级"},
+		{"7", "七年级/初一"},
+		{"8", "八年级/初二"},
+		{"9", "九年级/初三"},
+		{"universal", "全学段通用"},
+	}
+
 	c.HTML(http.StatusOK, "courses.html", gin.H{
-		"Courses": viewList,
+		"Courses":      viewList,
+		"GradesList":   gradesList,
+		"ExistingTags": existingTags,
 	})
 }
 
 func (h *adminHandler) ImportGet(c *gin.Context) {
 	courses, _ := h.courseRepo.List("", "", nil)
+	existingTags := getUniqueCourseTags(courses)
 	c.HTML(http.StatusOK, "import.html", gin.H{
-		"Courses": courses,
+		"Courses":      courses,
+		"ExistingTags": existingTags,
 	})
 }
 
@@ -226,6 +323,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		Grade    string `json:"grade" binding:"required"`
 		Subject  string `json:"subject" binding:"required"`
 		CoverURL string `json:"cover_url"`
+		Tags     string `json:"tags"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -233,7 +331,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, req.Grade, req.Subject, req.CoverURL)
+	course, err := h.courseService.CreateCourse(req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -311,27 +409,37 @@ func (h *adminHandler) Scan(c *gin.Context) {
 	c.JSON(http.StatusOK, files)
 }
 
-func (h *adminHandler) ExecuteImport(c *gin.Context) {
-	var req struct {
-		CourseID uint     `json:"course_id" binding:"required"`
-		Paths    []string `json:"paths" binding:"required"`
+func (h *adminHandler) PreviewTree(c *gin.Context) {
+	path := c.Query("path")
+	if path == "" {
+		path = "/"
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+	tree, err := h.importService.PreviewDeepScan(path)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Storage scan failed: " + err.Error()})
 		return
 	}
 
-	imported, err := h.importService.ImportEpisodes(req.CourseID, req.Paths)
+	c.JSON(http.StatusOK, tree)
+}
+
+func (h *adminHandler) ExecuteImport(c *gin.Context) {
+	var req service.ExecuteTreeImportRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format: " + err.Error()})
+		return
+	}
+
+	err := h.importService.ExecuteTreeImport(&req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "success",
-		"imported": len(imported),
-		"details":  imported,
+		"status": "success",
 	})
 }
 
@@ -405,4 +513,552 @@ func (h *adminHandler) PingStorage(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Successfully connected to storage source"})
+}
+
+func (h *adminHandler) UpdateUser(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var req struct {
+		Nickname  string `json:"nickname" binding:"required"`
+		AvatarURL string `json:"avatar_url"`
+		Pin       string `json:"pin"`
+		Role      string `json:"role" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	user, err := h.userService.UpdateUser(uint(id), req.Nickname, req.AvatarURL, req.Pin, req.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, user)
+}
+
+func (h *adminHandler) BulkAccess(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+
+	var req struct {
+		Action string `json:"action" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	if err := h.userService.BulkCourseAccess(uint(id), req.Action); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "success"})
+}
+
+func (h *adminHandler) UpdateCourse(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var req struct {
+		Title    string `json:"title" binding:"required"`
+		Grade    string `json:"grade" binding:"required"`
+		Subject  string `json:"subject" binding:"required"`
+		CoverURL string `json:"cover_url"`
+		Tags     string `json:"tags"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	course, err := h.courseService.UpdateCourse(uint(id), req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, course)
+}
+
+func (h *adminHandler) CreateEpisode(c *gin.Context) {
+	courseIDStr := c.Param("id")
+	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var req struct {
+		ChapterID            uint   `json:"chapter_id"`
+		Title                string `json:"title" binding:"required"`
+		VideoRelativePath    string `json:"video_relative_path" binding:"required"`
+		AttachmentJSON       string `json:"attachment_json"`
+		SortOrder            int    `json:"sort_order"`
+		FileHash             string `json:"file_hash"`
+		OriginalRelativePath string `json:"original_relative_path"`
+		FileSize             *int64 `json:"file_size"`
+		DurationSeconds      *int   `json:"duration_seconds"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	if req.AttachmentJSON == "" {
+		req.AttachmentJSON = "[]"
+	}
+
+	ep, err := h.episodeService.CreateEpisode(
+		uint(courseID),
+		req.ChapterID,
+		req.Title,
+		req.VideoRelativePath,
+		req.AttachmentJSON,
+		req.SortOrder,
+		req.FileHash,
+		req.OriginalRelativePath,
+		req.FileSize,
+		req.DurationSeconds,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ep)
+}
+
+func (h *adminHandler) UpdateEpisode(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
+		return
+	}
+
+	var req struct {
+		ChapterID            uint   `json:"chapter_id"`
+		Title                string `json:"title" binding:"required"`
+		VideoRelativePath    string `json:"video_relative_path" binding:"required"`
+		AttachmentJSON       string `json:"attachment_json"`
+		SortOrder            int    `json:"sort_order"`
+		FileHash             string `json:"file_hash"`
+		OriginalRelativePath string `json:"original_relative_path"`
+		FileSize             *int64 `json:"file_size"`
+		DurationSeconds      *int   `json:"duration_seconds"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	if req.AttachmentJSON == "" {
+		req.AttachmentJSON = "[]"
+	}
+
+	ep, err := h.episodeService.UpdateEpisode(
+		uint(id),
+		req.ChapterID,
+		req.Title,
+		req.VideoRelativePath,
+		req.AttachmentJSON,
+		req.SortOrder,
+		req.FileHash,
+		req.OriginalRelativePath,
+		req.FileSize,
+		req.DurationSeconds,
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ep)
+}
+
+func (h *adminHandler) DeleteEpisode(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
+		return
+	}
+
+	if err := h.episodeService.DeleteEpisode(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (h *adminHandler) ReorderEpisodes(c *gin.Context) {
+	var req struct {
+		IDs []uint `json:"ids" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+
+	if err := h.episodeService.ReorderEpisodes(req.IDs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "reordered"})
+}
+
+func (h *adminHandler) BulkDeleteEpisodes(c *gin.Context) {
+	var req struct {
+		IDs []uint `json:"ids" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	for _, id := range req.IDs {
+		if err := h.episodeService.DeleteEpisode(id); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete episode: " + err.Error()})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (h *adminHandler) BulkMoveEpisodes(c *gin.Context) {
+	var req struct {
+		IDs       []uint `json:"ids" binding:"required"`
+		ChapterID uint   `json:"chapter_id"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	for _, id := range req.IDs {
+		ep, err := h.episodeRepo.FindByID(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find episode: " + err.Error()})
+			return
+		}
+		if ep != nil {
+			ep.ChapterID = req.ChapterID
+			if err := h.episodeRepo.Update(ep); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to move episode: " + err.Error()})
+				return
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "moved"})
+}
+
+// Chapter Controllers
+func (h *adminHandler) CreateChapter(c *gin.Context) {
+	courseIDStr := c.Param("id")
+	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	var req struct {
+		Title       string `json:"title" binding:"required"`
+		Description string `json:"description"`
+		CoverURL    string `json:"cover_url"`
+		SortOrder   int    `json:"sort_order"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ch, err := h.chapterService.CreateChapter(uint(courseID), req.Title, req.Description, req.CoverURL, req.SortOrder)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ch)
+}
+
+func (h *adminHandler) UpdateChapter(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter ID"})
+		return
+	}
+
+	var req struct {
+		Title       string `json:"title" binding:"required"`
+		Description string `json:"description"`
+		CoverURL    string `json:"cover_url"`
+		SortOrder   int    `json:"sort_order"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ch, err := h.chapterService.UpdateChapter(uint(id), req.Title, req.Description, req.CoverURL, req.SortOrder)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ch)
+}
+
+func (h *adminHandler) DeleteChapter(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter ID"})
+		return
+	}
+
+	if err := h.chapterService.DeleteChapter(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (h *adminHandler) ListChaptersByCourse(c *gin.Context) {
+	courseIDStr := c.Param("id")
+	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	chapters, err := h.chapterService.GetChaptersByCourse(uint(courseID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, chapters)
+}
+
+func (h *adminHandler) ListEpisodesByCourse(c *gin.Context) {
+	courseIDStr := c.Param("id")
+	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+
+	episodes, err := h.episodeService.GetEpisodesByCourse(uint(courseID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, episodes)
+}
+
+// Subtitle Controllers
+func (h *adminHandler) ListSubtitles(c *gin.Context) {
+	episodeIDStr := c.Param("id")
+	episodeID, err := strconv.ParseUint(episodeIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
+		return
+	}
+
+	subs, err := h.episodeService.ListSubtitles(uint(episodeID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, subs)
+}
+
+func (h *adminHandler) SaveSubtitle(c *gin.Context) {
+	episodeIDStr := c.Param("id")
+	episodeID, err := strconv.ParseUint(episodeIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
+		return
+	}
+
+	var req struct {
+		Language   string `json:"language" binding:"required"`
+		Label      string `json:"label" binding:"required"`
+		SrtContent string `json:"srt_content" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	err = h.episodeService.SaveSubtitle(uint(episodeID), req.Language, req.Label, req.SrtContent)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "saved"})
+}
+
+func (h *adminHandler) DeleteSubtitle(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subtitle ID"})
+		return
+	}
+
+	if err := h.episodeService.DeleteSubtitle(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (h *adminHandler) AutoMatchSubtitle(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no subtitle file uploaded"})
+		return
+	}
+
+	videoBasename := c.PostForm("video_basename")
+	if videoBasename == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "video_basename is required"})
+		return
+	}
+
+	language := c.PostForm("language")
+	if language == "" {
+		language = "zh-CN"
+	}
+
+	label := c.PostForm("label")
+	if label == "" {
+		label = "中文"
+	}
+
+	var sizeVal *int64
+	sizeStr := c.PostForm("video_size")
+	if sizeStr != "" {
+		if s, err := strconv.ParseInt(sizeStr, 10, 64); err == nil {
+			sizeVal = &s
+		}
+	}
+
+	pathHint := c.PostForm("video_path_hint")
+
+	fileSrc, err := file.Open()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to open uploaded file"})
+		return
+	}
+	defer fileSrc.Close()
+
+	fileBytes, err := io.ReadAll(fileSrc)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read uploaded file"})
+		return
+	}
+	srtContent := string(fileBytes)
+
+	// Search matching episodes in database
+	episodes, err := h.episodeRepo.FindByCriteria(videoBasename, sizeVal, pathHint)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "database search failed: " + err.Error()})
+		return
+	}
+
+	if len(episodes) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no matching video episode found"})
+		return
+	}
+
+	if len(episodes) > 1 {
+		c.JSON(http.StatusConflict, gin.H{"error": "multiple matching video episodes found, please refine parameters (e.g. provide size or path hint)"})
+		return
+	}
+
+	// Exactly one matched
+	ep := episodes[0]
+	err = h.episodeService.SaveSubtitle(ep.ID, language, label, srtContent)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save matched subtitle: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":     "success",
+		"episode_id": ep.ID,
+		"title":      ep.Title,
+	})
+}
+
+// Local image uploads
+func (h *adminHandler) UploadImage(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no file uploaded"})
+		return
+	}
+
+	uploadDir := "./data/uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create upload dir"})
+		return
+	}
+
+	ext := filepath.Ext(file.Filename)
+	randomName := fmt.Sprintf("%d_%s%s", time.Now().UnixNano(), generateRandomString(4), ext)
+	dst := filepath.Join(uploadDir, randomName)
+
+	if err := c.SaveUploadedFile(file, dst); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save file"})
+		return
+	}
+
+	urlPath := "/uploads/" + randomName
+	c.JSON(http.StatusOK, gin.H{"url": urlPath})
+}
+
+func generateRandomString(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
 }

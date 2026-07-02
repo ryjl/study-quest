@@ -16,10 +16,14 @@ type EpisodeRepository interface {
 	Create(episode *model.Episode) error
 	Update(episode *model.Episode) error
 	Delete(id uint) error
+	FindByCriteria(basename string, size *int64, pathHint string) ([]model.Episode, error)
 
 	// Subtitle operations
 	GetSubtitle(episodeID uint) (*model.Subtitle, error)
+	ListSubtitles(episodeID uint) ([]model.Subtitle, error)
+	GetSubtitleByID(id uint) (*model.Subtitle, error)
 	SaveSubtitle(subtitle *model.Subtitle) error
+	DeleteSubtitle(id uint) error
 
 	// AI Lesson Content operations
 	GetAIContent(episodeID uint) (*model.AILessonContent, error)
@@ -94,7 +98,24 @@ func (r *episodeRepo) Delete(id uint) error {
 
 func (r *episodeRepo) GetSubtitle(episodeID uint) (*model.Subtitle, error) {
 	var sub model.Subtitle
-	if err := r.db.First(&sub, "episode_id = ?", episodeID).Error; err != nil {
+	if err := r.db.Where("episode_id = ?", episodeID).Order("id asc").First(&sub).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &sub, nil
+}
+
+func (r *episodeRepo) ListSubtitles(episodeID uint) ([]model.Subtitle, error) {
+	var subs []model.Subtitle
+	err := r.db.Where("episode_id = ?", episodeID).Order("id asc").Find(&subs).Error
+	return subs, err
+}
+
+func (r *episodeRepo) GetSubtitleByID(id uint) (*model.Subtitle, error) {
+	var sub model.Subtitle
+	if err := r.db.First(&sub, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -105,7 +126,7 @@ func (r *episodeRepo) GetSubtitle(episodeID uint) (*model.Subtitle, error) {
 
 func (r *episodeRepo) SaveSubtitle(subtitle *model.Subtitle) error {
 	var sub model.Subtitle
-	err := r.db.First(&sub, "episode_id = ?", subtitle.EpisodeID).Error
+	err := r.db.Where("episode_id = ? AND language = ?", subtitle.EpisodeID, subtitle.Language).First(&sub).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return r.db.Create(subtitle).Error
@@ -113,7 +134,12 @@ func (r *episodeRepo) SaveSubtitle(subtitle *model.Subtitle) error {
 		return err
 	}
 	sub.SrtContent = subtitle.SrtContent
+	sub.Label = subtitle.Label
 	return r.db.Save(&sub).Error
+}
+
+func (r *episodeRepo) DeleteSubtitle(id uint) error {
+	return r.db.Delete(&model.Subtitle{}, id).Error
 }
 
 func (r *episodeRepo) GetAIContent(episodeID uint) (*model.AILessonContent, error) {
@@ -139,4 +165,25 @@ func (r *episodeRepo) SaveAIContent(content *model.AILessonContent) error {
 	ai.PreAdventureJSON = content.PreAdventureJSON
 	ai.PostReviewJSON = content.PostReviewJSON
 	return r.db.Save(&ai).Error
+}
+
+func (r *episodeRepo) FindByCriteria(basename string, size *int64, pathHint string) ([]model.Episode, error) {
+	var episodes []model.Episode
+	query := r.db.Model(&model.Episode{})
+
+	// Match basename at the end of path (e.g., /01.mp4 or /01.mkv)
+	basenameLike := "%/" + basename + ".%"
+	query = query.Where("(original_relative_path LIKE ? OR video_relative_path LIKE ?)", basenameLike, basenameLike)
+
+	if size != nil {
+		query = query.Where("file_size = ?", *size)
+	}
+
+	if pathHint != "" {
+		pathHintLike := "%" + pathHint + "%"
+		query = query.Where("(original_relative_path LIKE ? OR video_relative_path LIKE ?)", pathHintLike, pathHintLike)
+	}
+
+	err := query.Find(&episodes).Error
+	return episodes, err
 }

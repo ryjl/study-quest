@@ -14,6 +14,7 @@ type ProgressService interface {
 	ReportProgress(userID, episodeID uint, positionSec, deltaWatchSec int) (*model.UserProgress, error)
 	GetPoints(userID uint) (*model.UserPoint, error)
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
+	GetLastWatchedEpisode(userID, courseID uint) (*model.Episode, *model.UserProgress, error)
 }
 
 type progressService struct {
@@ -100,4 +101,20 @@ func (s *progressService) GetPoints(userID uint) (*model.UserPoint, error) {
 
 func (s *progressService) GetUserProgressOverview(userID uint) ([]model.UserProgress, error) {
 	return s.progressRepo.GetUserProgressOverview(userID)
+}
+
+func (s *progressService) GetLastWatchedEpisode(userID, courseID uint) (*model.Episode, *model.UserProgress, error) {
+	prog, err := s.progressRepo.GetLastWatchedEpisode(userID, courseID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if prog == nil {
+		return nil, nil, nil
+	}
+
+	ep, err := s.episodeRepo.FindByID(prog.EpisodeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ep, prog, nil
 }

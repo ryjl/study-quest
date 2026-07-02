@@ -39,8 +39,7 @@ func (r *courseRepo) List(grade, subject string, allowedIDs []uint) ([]model.Cou
 
 	// Double-dimension filters
 	if grade != "" {
-		// support both exact match or "all" category
-		query = query.Where("grade = ? OR grade = 'all'", grade)
+		query = query.Where("grade LIKE ? OR grade = 'universal' OR grade = 'all'", "%"+grade+"%")
 	}
 	if subject != "" {
 		query = query.Where("subject = ?", subject)

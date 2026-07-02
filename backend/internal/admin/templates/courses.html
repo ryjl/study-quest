@@ -1,105 +1,227 @@
 {{ template "header.html" . }}
 {{ template "sidebar.html" . }}
 
-<div class="header">
-    <h1>课程库管理</h1>
+<div class="header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 1rem; margin-bottom: 1.5rem;">
+    <h1 style="margin: 0;">课程库管理</h1>
+    <button class="btn btn-primary" onclick="openCreateCourseModal()">+ 新增课程库</button>
 </div>
 
-<div class="grid-3" style="grid-template-columns: 2fr 1fr; gap: 1.5rem; align-items: start;">
-    <!-- Course List with Episodes -->
-    <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-        {{ range .Courses }}
-        <div class="card" id="course-card-{{ .ID }}">
-            <div class="card-header" style="border-bottom: 1px solid #1f2937; padding-bottom: 0.5rem; margin-bottom: 1rem;">
-                <div>
-                    <h2 style="font-size: 1.25rem; font-weight: 700; color: #ffffff;">{{ .Title }}</h2>
-                    <div style="font-size: 0.8125rem; color: #9ca3af; margin-top: 0.25rem;">
-                        年级: <span style="color: #c084fc;">{{ if eq (printf "%s" .Grade) "universal" }}全学段通用{{ else }}{{ .Grade }}年级{{ end }}</span> | 
-                        科目: <span style="color: #60a5fa;">{{ .Subject }}</span>
+<!-- Premium Grade Filter Tabs -->
+<div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1.5rem; background-color: #111827; padding: 0.75rem; border-radius: 12px; border: 1px solid #1f2937;">
+    <button class="btn btn-secondary filter-tab active" data-filter="all" onclick="filterCourses('all')" style="padding: 0.5rem 1rem; font-size: 0.8125rem; background-color: #8b5cf6; border-color: #8b5cf6; color: #ffffff;">全部课程</button>
+    {{ range .GradesList }}
+    <button class="btn btn-secondary filter-tab" data-filter="{{ .Key }}" onclick="filterCourses('{{ .Key }}')" style="padding: 0.5rem 1rem; font-size: 0.8125rem; background-color: #1f2937; color: #cbd5e1; border: 1px solid #374151;">{{ .Name }}</button>
+    {{ end }}
+</div>
+
+<!-- Course List Container (Full Width, No Duplicates) -->
+<div id="course-list-container" style="display: flex; flex-direction: column; gap: 1.5rem; width: 100%; margin-bottom: 3rem;">
+    {{ range .Courses }}
+    <div class="card course-manage-card" id="course-card-{{ .ID }}" data-course-grades="{{ .Grade }}">
+        <div class="card-header" style="border-bottom: 1px solid #1f2937; padding-bottom: 0.5rem; margin-bottom: 1rem; align-items: center;">
+            <div>
+                <h2 style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin: 0;">{{ .Title }}</h2>
+                <div style="font-size: 0.8125rem; color: #9ca3af; margin-top: 0.25rem;">
+                    适用学段/年级: <span style="color: #c084fc;">{{ .GradeDisplay }}</span> | 
+                    科目: <span style="color: #60a5fa;">{{ .Subject }}</span>
+                    {{ if .TagsList }}
+                     | 标签: 
+                    {{ range .TagsList }}
+                    <span class="badge" style="background-color: #10b981; color: white; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.6875rem; margin-right: 0.25rem;">{{ . }}</span>
+                    {{ end }}
+                    {{ end }}
+                </div>
+            </div>
+            <div style="display: flex; gap: 0.5rem;">
+                <button class="btn btn-primary" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" onclick="openEpisodeManager({{ .ID }}, '{{ .Title }}')">管理课时</button>
+                <button class="btn btn-secondary" style="padding: 0.375rem 0.75rem; font-size: 0.75rem; background-color: #8b5cf6;" onclick="openChapterManager({{ .ID }}, '{{ .Title }}')">管理章节</button>
+                <button class="btn btn-secondary" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" onclick="openEditCourseModal({{ .ID }}, '{{ .Title }}', '{{ .Grade }}', '{{ .Subject }}', '{{ .CoverURL }}', '{{ .Tags }}')">编辑课程</button>
+                <button class="btn btn-danger" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" data-course-id="{{ .ID }}" onclick="deleteCourse(parseInt(this.dataset.courseId, 10))">删除</button>
+            </div>
+        </div>
+            <h3 style="font-size: 0.875rem; color: #9ca3af; margin-bottom: 0.5rem; font-weight: 600;">章节课时树架 ({{ len .Episodes }} 课时)</h3>
+            
+            <div class="episodes-tree-container" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 1rem; margin-top: 0.5rem;">
+                <!-- Bulk actions toolbar, hidden by default -->
+                <div class="bulk-actions-toolbar" id="bulk-toolbar-{{ .ID }}" style="display: none; align-items: center; justify-content: space-between; background-color: #1e1b4b; border: 1px solid #312e81; padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+                    <div style="font-size: 0.8125rem; color: #c084fc;">
+                        已选中 <span class="selected-count" id="selected-count-{{ .ID }}">0</span> 个课时
+                    </div>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <select class="form-control" id="bulk-chapter-select-{{ .ID }}" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; width: 140px; background-color: #111827 !important; height: 32px;">
+                            <option value="0">移到默认/未分类</option>
+                            {{ range .Chapters }}
+                            <option value="{{ .ID }}">移动到: {{ .Title }}</option>
+                            {{ end }}
+                        </select>
+                        <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; height: 32px;" onclick="executeBulkMove({{ .ID }})">批量移动</button>
+                        <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; height: 32px;" onclick="executeBulkDelete({{ .ID }})">批量删除</button>
                     </div>
                 </div>
-                <button class="btn btn-danger" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" data-course-id="{{ .ID }}" onclick="deleteCourse(parseInt(this.dataset.courseId, 10))">删除课程</button>
-            </div>
-            
-            <div style="margin-top: 0.5rem;">
-                <h3 style="font-size: 0.875rem; color: #9ca3af; margin-bottom: 0.5rem; font-weight: 600;">课时明细 ({{ len .Episodes }} 集)</h3>
-                {{ if .Episodes }}
-                <table style="font-size: 0.8125rem;">
-                    <thead>
-                        <tr>
-                            <th style="width: 60px;">集数</th>
-                            <th>课时标题</th>
-                            <th>网盘相对路径</th>
-                            <th>Hash 值</th>
-                            <th>课外附件</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {{ range .Episodes }}
-                        <tr>
-                            <td><strong>P{{ .SortOrder }}</strong></td>
-                            <td>{{ .Title }}</td>
-                            <td style="word-break: break-all; max-width: 250px; font-family: monospace; color: #9ca3af;">{{ .VideoRelativePath }}</td>
-                            <td style="font-family: monospace; color: #34d399;">
-                                {{ if .FileHash }}
-                                <span title="{{ .FileHash }}">{{ printf "%.10s..." .FileHash }}</span>
-                                {{ else }}
-                                <span style="color: #ef4444;">无 Hash</span>
+
+                {{ $course := . }}
+
+                <!-- Render Chapters -->
+                {{ range .Chapters }}
+                    {{ $chapter := . }}
+                    <div class="chapter-node" style="margin-bottom: 1rem;">
+                        <!-- Chapter title row -->
+                        <div class="chapter-row" style="display: flex; align-items: center; justify-content: space-between; background-color: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.2); padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 0.375rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="font-size: 1.125rem;">📁</span>
+                                <strong style="color: #60a5fa; font-size: 0.875rem;">{{ .Title }}</strong>
+                                {{ if .Description }}
+                                <span style="font-size: 0.75rem; color: #64748b; margin-left: 0.5rem;">({{ .Description }})</span>
                                 {{ end }}
-                            </td>
-                            <td>
-                                <span style="font-size: 0.75rem; color: #9ca3af;">
-                                    {{ if .AttachmentJSON }}
-                                        {{ .AttachmentJSON }}
-                                    {{ else }}
-                                        []
-                                    {{ end }}
-                                </span>
-                            </td>
-                        </tr>
-                        {{ end }}
-                    </tbody>
-                </table>
-                {{ else }}
-                <div style="padding: 1.5rem; text-align: center; color: #4b5563; border: 1px dashed #1f2937; border-radius: 12px; font-size: 0.875rem;">
-                    暂无课时，请前往「文件导入」浏览并导入资源。
-                </div>
+                            </div>
+                            <div style="display: flex; gap: 0.375rem;">
+                                <button class="btn btn-secondary btn-quick-ch-edit" 
+                                        data-course-id="{{ $course.ID }}"
+                                        data-course-title="{{ $course.Title }}"
+                                        data-chapter-id="{{ .ID }}"
+                                        data-chapter-title="{{ .Title }}"
+                                        data-chapter-desc="{{ .Description }}"
+                                        data-chapter-cover="{{ .CoverURL }}"
+                                        data-chapter-sort="{{ .SortOrder }}"
+                                        style="padding: 0.15rem 0.4rem; font-size: 0.6875rem; background-color: #1f2937; border-color: #374151;" 
+                                        onclick="openChapterEditFromBtn(this)">编辑</button>
+                                <button class="btn btn-danger" style="padding: 0.15rem 0.4rem; font-size: 0.6875rem;" onclick="deleteChapter(parseInt('{{ .ID }}', 10))">删除</button>
+                            </div>
+                        </div>
+
+                        <!-- Chapter's Episodes -->
+                        <div class="chapter-episodes" style="padding-left: 1.5rem; border-left: 1px dashed #374151; margin-left: 0.75rem;">
+                            {{ $hasEpisodes := false }}
+                            {{ range $course.Episodes }}
+                                {{ if eq .ChapterID $chapter.ID }}
+                                    {{ $hasEpisodes = true }}
+                                    <div class="episode-row" style="display: flex; align-items: center; justify-content: space-between; background-color: #1f2937; border: 1px solid #2d3748; padding: 0.375rem 0.75rem; border-radius: 6px; margin-bottom: 0.25rem; font-size: 0.8125rem;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; overflow: hidden;">
+                                            <input type="checkbox" class="episode-checkbox-{{ $course.ID }}" data-episode-id="{{ .ID }}" onchange="updateBulkToolbar({{ $course.ID }})" style="cursor: pointer; width: 14px; height: 14px;">
+                                            <span style="font-weight: 700; color: #a78bfa; width: 35px; min-width: 35px;">P{{ .SortOrder }}</span>
+                                            <span style="color: #ffffff; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px;">{{ .Title }}</span>
+                                            <span style="font-family: monospace; color: #64748b; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px; margin-left: 1rem;" title="网盘相对路径: {{ .VideoRelativePath }}">{{ .VideoRelativePath }}</span>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                                            {{ if .FileHash }}
+                                            <span style="font-family: monospace; color: #10b981; font-size: 0.75rem; background-color: rgba(16, 185, 129, 0.1); padding: 0.15rem 0.375rem; border-radius: 4px;" title="SHA-1 Hash: {{ .FileHash }}">✓ {{ printf "%.8s" .FileHash }}</span>
+                                            {{ else }}
+                                            <span style="font-size: 0.75rem; color: #ef4444; background-color: rgba(239, 68, 68, 0.1); padding: 0.15rem 0.375rem; border-radius: 4px;">无 Hash</span>
+                                            {{ end }}
+                                            <button class="btn btn-secondary btn-quick-ep-edit"
+                                                    data-course-id="{{ $course.ID }}"
+                                                    data-course-title="{{ $course.Title }}"
+                                                    data-episode-id="{{ .ID }}"
+                                                    data-episode-title="{{ .Title }}"
+                                                    data-episode-path="{{ .VideoRelativePath }}"
+                                                    data-episode-sort="{{ .SortOrder }}"
+                                                    data-episode-chapter-id="{{ .ChapterID }}"
+                                                    style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #111827; border-color: #374151;" 
+                                                    onclick="openEpisodeEditFromBtn(this)">编辑</button>
+                                            <button class="btn btn-secondary" style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #312e81; border-color: #4338ca; color: #c084fc;" onclick="openSubtitleManager({{ .ID }}, '{{ .Title }}')">字幕</button>
+                                            <button class="btn btn-danger" style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.2); color: #ef4444;" onclick="deleteEpisode(parseInt('{{ .ID }}', 10))">删除</button>
+                                        </div>
+                                    </div>
+                                {{ end }}
+                            {{ end }}
+                            {{ if not $hasEpisodes }}
+                                <div style="padding: 0.375rem 0.5rem; color: #4b5563; font-style: italic; font-size: 0.75rem;">(该章节下暂无课时)</div>
+                            {{ end }}
+                        </div>
+                    </div>
+                {{ end }}
+
+                <!-- Render Uncategorized Episodes (if any) -->
+                {{ $hasUncategorized := false }}
+                {{ range .Episodes }}
+                    {{ if eq .ChapterID 0 }}
+                        {{ $hasUncategorized = true }}
+                    {{ end }}
+                {{ end }}
+
+                {{ if $hasUncategorized }}
+                    <div class="chapter-node" style="margin-bottom: 1rem;">
+                        <div class="chapter-row" style="display: flex; align-items: center; justify-content: space-between; background-color: rgba(156, 163, 175, 0.08); border: 1px solid rgba(156, 163, 175, 0.2); padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 0.375rem;">
+                            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                <span style="font-size: 1.125rem;">📂</span>
+                                <strong style="color: #9ca3af; font-size: 0.875rem;">默认/未分类课时 (Uncategorized)</strong>
+                            </div>
+                        </div>
+                        <div class="chapter-episodes" style="padding-left: 1.5rem; border-left: 1px dashed #374151; margin-left: 0.75rem;">
+                            {{ range .Episodes }}
+                                {{ if eq .ChapterID 0 }}
+                                    <div class="episode-row" style="display: flex; align-items: center; justify-content: space-between; background-color: #1f2937; border: 1px solid #2d3748; padding: 0.375rem 0.75rem; border-radius: 6px; margin-bottom: 0.25rem; font-size: 0.8125rem;">
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; flex: 1; overflow: hidden;">
+                                            <input type="checkbox" class="episode-checkbox-{{ $course.ID }}" data-episode-id="{{ .ID }}" onchange="updateBulkToolbar({{ $course.ID }})" style="cursor: pointer; width: 14px; height: 14px;">
+                                            <span style="font-weight: 700; color: #a78bfa; width: 35px; min-width: 35px;">P{{ .SortOrder }}</span>
+                                            <span style="color: #ffffff; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px;">{{ .Title }}</span>
+                                            <span style="font-family: monospace; color: #64748b; font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 250px; margin-left: 1rem;" title="网盘相对路径: {{ .VideoRelativePath }}">{{ .VideoRelativePath }}</span>
+                                        </div>
+                                        <div style="display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0;">
+                                            {{ if .FileHash }}
+                                            <span style="font-family: monospace; color: #10b981; font-size: 0.75rem; background-color: rgba(16, 185, 129, 0.1); padding: 0.15rem 0.375rem; border-radius: 4px;" title="SHA-1 Hash: {{ .FileHash }}">✓ {{ printf "%.8s" .FileHash }}</span>
+                                            {{ else }}
+                                            <span style="font-size: 0.75rem; color: #ef4444; background-color: rgba(239, 68, 68, 0.1); padding: 0.15rem 0.375rem; border-radius: 4px;">无 Hash</span>
+                                            {{ end }}
+                                            <button class="btn btn-secondary btn-quick-ep-edit"
+                                                    data-course-id="{{ $course.ID }}"
+                                                    data-course-title="{{ $course.Title }}"
+                                                    data-episode-id="{{ .ID }}"
+                                                    data-episode-title="{{ .Title }}"
+                                                    data-episode-path="{{ .VideoRelativePath }}"
+                                                    data-episode-sort="{{ .SortOrder }}"
+                                                    data-episode-chapter-id="{{ .ChapterID }}"
+                                                    style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #111827; border-color: #374151;" 
+                                                    onclick="openEpisodeEditFromBtn(this)">编辑</button>
+                                            <button class="btn btn-secondary" style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #312e81; border-color: #4338ca; color: #c084fc;" onclick="openSubtitleManager({{ .ID }}, '{{ .Title }}')">字幕</button>
+                                            <button class="btn btn-danger" style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.2); color: #ef4444;" onclick="deleteEpisode(parseInt('{{ .ID }}', 10))">删除</button>
+                                        </div>
+                                    </div>
+                                {{ end }}
+                            {{ end }}
+                        </div>
+                    </div>
                 {{ end }}
             </div>
         </div>
-        {{ else }}
-        <div class="card" style="padding: 3rem; text-align: center; color: #9ca3af;">
-            <h2>课程库为空</h2>
-            <p style="margin-top: 0.5rem; font-size: 0.875rem; color: #4b5563;">请在右侧表单中创建您的第一个课程库。</p>
-        </div>
-        {{ end }}
+    {{ end }}
+    {{ if not .Courses }}
+    <div class="card" style="padding: 3rem; text-align: center; color: #9ca3af;">
+        <h2>课程库为空</h2>
+        <p style="margin-top: 0.5rem; font-size: 0.875rem; color: #4b5563;">请点击右上角「+ 新增课程库」创建您的第一个课程。</p>
     </div>
+    {{ end }}
+</div>
 
-    <!-- Create Course Form -->
-    <div class="card">
-        <div class="card-header">
+<!-- Modal: Create Course -->
+<div id="create-course-modal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(4px);">
+    <div class="modal-content" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; margin: 10% auto; padding: 2rem; width: 90%; max-width: 500px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 1rem; margin-bottom: 1.5rem;">
             <h2 class="card-title">新增课程库</h2>
+            <button class="modal-close" onclick="closeCreateCourseModal()">&times;</button>
         </div>
         <form id="create-course-form" onsubmit="createCourse(event)">
             <div class="form-group">
                 <label for="title">课程名称</label>
                 <input type="text" id="title" class="form-control" placeholder="如：神奇的物理世界" required>
             </div>
+            
             <div class="form-group">
-                <label for="grade">适用年级</label>
-                <select id="grade" class="form-control" required>
-                    <option value="1">一年级 (1)</option>
-                    <option value="2">二年级 (2)</option>
-                    <option value="3">三年级 (3)</option>
-                    <option value="4">四年级 (4)</option>
-                    <option value="5">五年级 (5)</option>
-                    <option value="6">六年级 (6)</option>
-                    <option value="7">初中一年级/七年级 (7)</option>
-                    <option value="8">初中二年级/八年级 (8)</option>
-                    <option value="9">初中三年级/九年级 (9)</option>
-                    <option value="universal">全学段通用 (universal)</option>
-                </select>
+                <label>适用年级 (可多选)</label>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; background-color: #1f2937; padding: 0.75rem; border-radius: 10px; border: 1px solid #374151;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="1"> 一年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="2"> 二年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="3"> 三年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="4"> 四年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="5"> 五年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="6"> 六年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="7"> 七年级/初一</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="8"> 八年级/初二</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="grades" value="9"> 九年级/初三</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; grid-column: span 2;"><input type="checkbox" name="grades" value="universal"> 全学段通用</label>
+                </div>
             </div>
+            
             <div class="form-group">
                 <label for="subject">类别/科目</label>
                 <select id="subject" class="form-control">
@@ -112,27 +234,358 @@
             </div>
             <div class="form-group">
                 <label for="cover_url">封面图 URL</label>
-                <input type="url" id="cover_url" class="form-control" placeholder="https://picsum.photos/300/200">
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="cover_url" class="form-control" placeholder="输入 URL 或上传" style="flex: 1;">
+                    <input type="file" id="cover-file" style="display: none;" accept="image/*" onchange="uploadImageFile(this, 'cover_url')">
+                    <button type="button" class="btn btn-secondary" style="padding: 0.375rem 0.75rem;" onclick="document.getElementById('cover-file').click()">本地上传</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="tags">标签 (用英文逗号分隔，如：上学期,作文,重点)</label>
+                <input type="text" id="tags" class="form-control" placeholder="如：上学期,作文,重点">
+                <div style="display: flex; gap: 0.375rem; flex-wrap: wrap; margin-top: 0.5rem;" class="existing-tags-pool">
+                    {{ range .ExistingTags }}
+                    <span class="badge" style="background-color: #1f2937; border: 1px solid #374151; color: #cbd5e1; cursor: pointer; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.75rem; transition: all 0.2s;" onclick="toggleInputTag('tags', '{{ . }}')">{{ . }}</span>
+                    {{ end }}
+                </div>
             </div>
             <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;">保存并创建</button>
         </form>
     </div>
 </div>
 
+<!-- Modal: Edit Course -->
+<div id="edit-course-modal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(4px);">
+    <div class="modal-content" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; margin: 10% auto; padding: 2rem; width: 90%; max-width: 500px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 1rem; margin-bottom: 1.5rem;">
+            <h2 class="card-title" id="edit-course-modal-title">编辑课程</h2>
+            <button class="modal-close" onclick="closeEditCourseModal()">&times;</button>
+        </div>
+        <form id="edit-course-form" onsubmit="submitEditCourse(event)">
+            <input type="hidden" id="edit-course-id">
+            <div class="form-group">
+                <label for="edit-title">课程名称</label>
+                <input type="text" id="edit-title" class="form-control" required>
+            </div>
+            <div class="form-group">
+                <label>适用年级 (可多选)</label>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; background-color: #1f2937; padding: 0.75rem; border-radius: 10px; border: 1px solid #374151;">
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="1"> 一年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="2"> 二年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="3"> 三年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="4"> 四年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="5"> 五年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="6"> 六年级</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="7"> 七年级/初一</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="8"> 八年级/初二</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem;"><input type="checkbox" name="edit-grades" value="9"> 九年级/初三</label>
+                    <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; grid-column: span 2;"><input type="checkbox" name="edit-grades" value="universal"> 全学段通用</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="edit-subject">类别/科目</label>
+                <select id="edit-subject" class="form-control">
+                    <option value="chinese">语文 (chinese)</option>
+                    <option value="math">数学 (math)</option>
+                    <option value="english">英语 (english)</option>
+                    <option value="physics">物理/科学 (physics)</option>
+                    <option value="extra">课外百科 (extra)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="edit-cover_url">封面图 URL</label>
+                <div style="display: flex; gap: 0.5rem;">
+                    <input type="text" id="edit-cover_url" class="form-control" style="flex: 1;">
+                    <input type="file" id="edit-cover-file" style="display: none;" accept="image/*" onchange="uploadImageFile(this, 'edit-cover_url')">
+                    <button type="button" class="btn btn-secondary" style="padding: 0.375rem 0.75rem;" onclick="document.getElementById('edit-cover-file').click()">本地上传</button>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="edit-tags">标签 (用英文逗号分隔，如：上学期,作文,重点)</label>
+                <input type="text" id="edit-tags" class="form-control" placeholder="如：上学期,作文,重点">
+                <div style="display: flex; gap: 0.375rem; flex-wrap: wrap; margin-top: 0.5rem;" class="existing-tags-pool">
+                    {{ range .ExistingTags }}
+                    <span class="badge" style="background-color: #1f2937; border: 1px solid #374151; color: #cbd5e1; cursor: pointer; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.75rem; transition: all 0.2s;" onclick="toggleInputTag('edit-tags', '{{ . }}')">{{ . }}</span>
+                    {{ end }}
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;">保存修改</button>
+        </form>
+    </div>
+</div>
+
+<!-- Modal: Episode Manager -->
+<div id="episode-manager-modal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(4px);">
+    <div class="modal-content" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; margin: 5% auto; padding: 2rem; width: 90%; max-width: 950px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 1rem; margin-bottom: 1.5rem;">
+            <h2 class="card-title" id="episode-manager-title">课时管理</h2>
+            <button class="modal-close" onclick="closeEpisodeManager()">&times;</button>
+        </div>
+        
+        <!-- Episode List Table -->
+        <div style="max-height: 350px; overflow-y: auto;">
+            <table id="episode-manager-table">
+                <thead>
+                    <tr>
+                        <th style="width: 70px;">序号</th>
+                        <th>课时标题</th>
+                        <th>关联章节</th>
+                        <th>网盘相对路径</th>
+                        <th style="width: 240px; text-align: center;">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="episode-manager-list-body">
+                    <!-- Dynamic Rows -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Inline Add Episode Form -->
+        <div style="margin-top: 1.5rem; border-top: 1px solid #1f2937; padding-top: 1rem;">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: #ffffff;">手动新增课时</h3>
+            <form id="add-episode-form" onsubmit="submitAddEpisode(event)" style="display: grid; grid-template-columns: 1.2fr 1fr 2.5fr 80px 100px; gap: 0.5rem; align-items: end;">
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">课时名称</label>
+                    <input type="text" id="add-ep-title" class="form-control" placeholder="如：第1课 杠杆原理" required>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">关联章节</label>
+                    <select id="add-ep-chapter-id" class="form-control">
+                        <option value="0">默认 (未分类)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">视频相对路径</label>
+                    <input type="text" id="add-ep-path" class="form-control" placeholder="如：/Physics/01.mp4" required>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">排序</label>
+                    <input type="number" id="add-ep-sort" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary" style="height: 38px;">添加课时</button>
+            </form>
+        </div>
+
+        <!-- Inline Edit Episode Form (Hidden by default) -->
+        <div id="edit-episode-section" style="display: none; margin-top: 1.5rem; border-top: 1px solid #1f2937; padding-top: 1rem; background-color: #1f2937; padding: 1rem; border-radius: 12px;">
+            <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 0.75rem; color: #a78bfa;">编辑课时信息</h3>
+            <form id="edit-episode-form" onsubmit="submitUpdateEpisode(event)" style="display: grid; grid-template-columns: 1.2fr 1fr 2.5fr 80px 160px; gap: 0.5rem; align-items: end;">
+                <input type="hidden" id="edit-ep-id">
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">课时名称</label>
+                    <input type="text" id="edit-ep-title" class="form-control" required>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">关联章节</label>
+                    <select id="edit-ep-chapter-id" class="form-control">
+                        <option value="0">默认 (未分类)</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">视频相对路径</label>
+                    <input type="text" id="edit-ep-path" class="form-control" required>
+                </div>
+                <div>
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">排序</label>
+                    <input type="number" id="edit-ep-sort" class="form-control" required>
+                </div>
+                <div style="display: flex; gap: 0.25rem;">
+                    <button type="submit" class="btn btn-primary" style="height: 38px; flex: 1;">保存</button>
+                    <button type="button" class="btn btn-secondary" style="height: 38px; flex: 1;" onclick="cancelEditEpisode()">取消</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Chapter Manager -->
+<div id="chapter-manager-modal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(4px);">
+    <div class="modal-content" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; margin: 5% auto; padding: 2rem; width: 90%; max-width: 700px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 1rem; margin-bottom: 1.5rem;">
+            <h2 class="card-title" id="chapter-manager-modal-title">章节管理</h2>
+            <button class="modal-close" onclick="closeChapterManager()">&times;</button>
+        </div>
+        
+        <div style="max-height: 250px; overflow-y: auto; margin-bottom: 1.5rem;">
+            <table id="chapter-manager-table">
+                <thead>
+                    <tr>
+                        <th style="width: 60px;">排序</th>
+                        <th>章节标题</th>
+                        <th>简介</th>
+                        <th style="width: 140px; text-align: center;">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="chapter-manager-list-body">
+                    <!-- Dynamic rows -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Add/Edit Chapter Form -->
+        <div style="border-top: 1px solid #1f2937; padding-top: 1rem;">
+            <h3 style="font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.75rem; color: #ffffff;" id="chapter-form-title">新增章节</h3>
+            <form id="add-chapter-form" onsubmit="submitAddChapter(event)">
+                <input type="hidden" id="edit-ch-id">
+                <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                    <div>
+                        <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">章节名称</label>
+                        <input type="text" id="add-ch-title" class="form-control" required>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">排序值</label>
+                        <input type="number" id="add-ch-sort" class="form-control" value="1" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">章节简介</label>
+                    <textarea id="add-ch-desc" class="form-control" rows="2" placeholder="输入本章节的学习目标或说明"></textarea>
+                </div>
+                <div class="form-group">
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">章节封面 URL</label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="text" id="add-ch-cover" class="form-control" placeholder="输入 URL 或上传" style="flex: 1;">
+                        <input type="file" id="chapter-cover-file" style="display: none;" accept="image/*" onchange="uploadImageFile(this, 'add-ch-cover')">
+                        <button type="button" class="btn btn-secondary" style="padding: 0.375rem 0.75rem;" onclick="document.getElementById('chapter-cover-file').click()">本地上传</button>
+                    </div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                    <button type="button" class="btn btn-secondary" id="cancel-ch-edit-btn" style="display: none;" onclick="cancelChapterEdit()">取消编辑</button>
+                    <button type="submit" class="btn btn-primary" id="submit-ch-btn">保存章节</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Subtitle Manager -->
+<div id="subtitle-manager-modal" class="modal" style="display: none; position: fixed; z-index: 1100; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.6); backdrop-filter: blur(4px);">
+    <div class="modal-content" style="background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; margin: 10% auto; padding: 2rem; width: 90%; max-width: 600px;">
+        <div class="modal-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f2937; padding-bottom: 1rem; margin-bottom: 1.5rem;">
+            <h2 class="card-title" id="subtitle-manager-title">字幕管理</h2>
+            <button class="modal-close" onclick="closeSubtitleManager()">&times;</button>
+        </div>
+        
+        <div style="max-height: 200px; overflow-y: auto; margin-bottom: 1.5rem;">
+            <table id="subtitle-manager-table">
+                <thead>
+                    <tr>
+                        <th>语言标识</th>
+                        <th>显示名称</th>
+                        <th style="width: 100px; text-align: center;">操作</th>
+                    </tr>
+                </thead>
+                <tbody id="subtitle-manager-list-body">
+                    <!-- Dynamic rows -->
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Upload Subtitle Form -->
+        <div style="border-top: 1px solid #1f2937; padding-top: 1rem;">
+            <h3 style="font-size: 0.9375rem; font-weight: 600; margin-bottom: 0.75rem; color: #ffffff;">上传新字幕 (.srt / .vtt)</h3>
+            <form id="upload-subtitle-form" onsubmit="submitAddSubtitle(event)">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.75rem;">
+                    <div>
+                        <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">语言代码</label>
+                        <input type="text" id="sub-lang" class="form-control" placeholder="如: zh-CN, en-US" required>
+                    </div>
+                    <div>
+                        <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">显示名称</label>
+                        <input type="text" id="sub-label" class="form-control" placeholder="如: 中文, English" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">选择字幕文件</label>
+                    <input type="file" id="sub-file-input" class="form-control" accept=".srt,.vtt" onchange="readSubtitleFile(this)" required style="height: 38px;">
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">开始上传</button>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script>
+// Helper to toggle a tag inside a comma-separated text input
+function toggleInputTag(inputId, tag) {
+    const input = document.getElementById(inputId);
+    let tags = input.value.split(',').map(t => t.trim()).filter(t => t !== '');
+    const idx = tags.indexOf(tag);
+    if (idx === -1) {
+        tags.push(tag);
+    } else {
+        tags.splice(idx, 1);
+    }
+    input.value = tags.join(',');
+}
+// Helper to collect checked values from a checkbox list
+function getCheckedValues(name) {
+    return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(cb => cb.value);
+}
+
+// Helper to set checkbox list values
+function setCheckedValues(name, commaString) {
+    const vals = (commaString || '').split(',').map(s => s.trim());
+    document.querySelectorAll(`input[name="${name}"]`).forEach(cb => {
+        cb.checked = vals.includes(cb.value);
+    });
+}
+
+// Global Image Upload Handler
+function uploadImageFile(fileInput, targetId) {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    fetch('/admin/api/upload/image', {
+        method: 'POST',
+        body: formData
+    })
+    .then(res => {
+        if (!res.ok) throw new Error('上传失败');
+        return res.json();
+    })
+    .then(data => {
+        document.getElementById(targetId).value = data.url;
+    })
+    .catch(err => {
+        alert('图片上传失败: ' + err.message);
+    });
+}
+
+// Create Course Modal Actions
+function openCreateCourseModal() {
+    document.getElementById('create-course-form').reset();
+    document.getElementById('create-course-modal').style.display = 'block';
+}
+
+function closeCreateCourseModal() {
+    document.getElementById('create-course-modal').style.display = 'none';
+}
+
 function createCourse(event) {
     event.preventDefault();
     const title = document.getElementById('title').value;
-    const grade = document.getElementById('grade').value;
+    const grades = getCheckedValues('grades');
     const subject = document.getElementById('subject').value;
     const cover_url = document.getElementById('cover_url').value;
+    const tags = document.getElementById('tags').value;
+
+    if (grades.length === 0) {
+        alert('请至少选择一个适用年级！');
+        return;
+    }
+
+    const grade = grades.join(',');
 
     fetch('/admin/api/courses', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ title, grade, subject, cover_url })
+        body: JSON.stringify({ title, grade, subject, cover_url, tags })
     })
     .then(res => {
         if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
@@ -140,6 +593,7 @@ function createCourse(event) {
     })
     .then(data => {
         alert('课程库创建成功！');
+        closeCreateCourseModal();
         window.location.reload();
     })
     .catch(err => {
@@ -148,7 +602,7 @@ function createCourse(event) {
 }
 
 function deleteCourse(id) {
-    if (!confirm('警告：删除该课程将会连带删除旗下所有课时、进度和字幕记录！确定要删除吗？')) return;
+    if (!confirm('警告：删除该课程将会连带删除旗下所有章节、课时、进度和字幕记录！确定要删除吗？')) return;
 
     fetch('/admin/api/courses/' + id, {
         method: 'DELETE'
@@ -160,11 +614,716 @@ function deleteCourse(id) {
     .then(data => {
         const el = document.getElementById('course-card-' + id);
         if (el) el.remove();
-        window.location.reload(); // safer to reload to clear UI
+        window.location.reload();
     })
     .catch(err => {
         alert('删除失败: ' + err.message);
     });
+}
+
+// Edit Course Modal Logic
+function openEditCourseModal(id, title, grade, subject, coverURL, tags) {
+    document.getElementById('edit-course-id').value = id;
+    document.getElementById('edit-title').value = title;
+    setCheckedValues('edit-grades', grade);
+    document.getElementById('edit-subject').value = subject;
+    document.getElementById('edit-cover_url').value = coverURL;
+    document.getElementById('edit-tags').value = tags || '';
+    document.getElementById('edit-course-modal').style.display = 'block';
+}
+
+// Close Modals
+function closeEditCourseModal() {
+    document.getElementById('edit-course-modal').style.display = 'none';
+}
+
+function submitEditCourse(event) {
+    event.preventDefault();
+    const id = document.getElementById('edit-course-id').value;
+    const title = document.getElementById('edit-title').value;
+    const grades = getCheckedValues('edit-grades');
+    const subject = document.getElementById('edit-subject').value;
+    const cover_url = document.getElementById('edit-cover_url').value;
+    const tags = document.getElementById('edit-tags').value;
+
+    if (grades.length === 0) {
+        alert('请至少选择一个适用年级！');
+        return;
+    }
+
+    const grade = grades.join(',');
+
+    fetch('/admin/api/courses/' + id, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ title, grade, subject, cover_url, tags })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        alert('课程更新成功！');
+        closeEditCourseModal();
+        window.location.reload();
+    })
+    .catch(err => {
+        alert('更新失败: ' + err.message);
+    });
+}
+
+// Interactive Grade Filtering Logic
+function filterCourses(gradeKey) {
+    // 1. Update filter tab styling
+    document.querySelectorAll('.filter-tab').forEach(btn => {
+        if (btn.dataset.filter === gradeKey) {
+            btn.style.backgroundColor = '#8b5cf6';
+            btn.style.borderColor = '#8b5cf6';
+            btn.style.color = '#ffffff';
+            btn.classList.add('active');
+        } else {
+            btn.style.backgroundColor = '#1f2937';
+            btn.style.borderColor = '#374151';
+            btn.style.color = '#cbd5e1';
+            btn.classList.remove('active');
+        }
+    });
+
+    // 2. Hide/Show course cards based on active filter gradeKey
+    document.querySelectorAll('.course-manage-card').forEach(card => {
+        if (gradeKey === 'all') {
+            card.style.display = 'block';
+        } else {
+            const grades = (card.dataset.courseGrades || '').split(',').map(s => s.trim());
+            if (grades.includes(gradeKey)) {
+                card.style.display = 'block';
+            } else {
+                card.style.display = 'none';
+            }
+        }
+    });
+}
+
+// Episode Manager Modal Logic
+let currentCourseID = 0;
+let currentEpisodesList = [];
+let courseChapters = [];
+
+function openEpisodeManager(courseID, courseTitle) {
+    currentCourseID = courseID;
+    document.getElementById('episode-manager-title').textContent = `课时管理 - ${courseTitle}`;
+    
+    // Clear forms
+    document.getElementById('add-episode-form').reset();
+    cancelEditEpisode();
+
+    // Load chapters first then episodes
+    fetch(`/admin/api/courses/${courseID}/chapters`)
+    .then(res => res.json())
+    .then(chapters => {
+        courseChapters = chapters || [];
+        populateChapterSelects();
+        
+        document.getElementById('episode-manager-modal').style.display = 'block';
+        loadEpisodesList();
+    })
+    .catch(err => {
+        alert('加载章节信息失败: ' + err.message);
+    });
+}
+
+function populateChapterSelects() {
+    const addSelect = document.getElementById('add-ep-chapter-id');
+    const editSelect = document.getElementById('edit-ep-chapter-id');
+    
+    const optionsHtml = '<option value="0">默认 (未分类)</option>' + 
+        courseChapters.map(ch => `<option value="${ch.ID}">${ch.Title}</option>`).join('');
+        
+    addSelect.innerHTML = optionsHtml;
+    editSelect.innerHTML = optionsHtml;
+}
+
+function closeEpisodeManager() {
+    document.getElementById('episode-manager-modal').style.display = 'none';
+    window.location.reload(); 
+}
+
+// Episode list loaders and moves
+function loadEpisodesList() {
+    const tbody = document.getElementById('episode-manager-list-body');
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 1.5rem;">正在加载课时...</td></tr>';
+    
+    fetch(`/admin/api/courses/${currentCourseID}/episodes`)
+    .then(res => {
+        if (!res.ok) throw new Error('Failed to fetch episodes');
+        return res.json();
+    })
+    .then(episodes => {
+        currentEpisodesList = episodes || [];
+        const nextSort = currentEpisodesList.length > 0 ? (currentEpisodesList[currentEpisodesList.length - 1].SortOrder + 1) : 1;
+        document.getElementById('add-ep-sort').value = nextSort;
+        
+        renderEpisodesList();
+    })
+    .catch(err => {
+        tbody.innerHTML = `<tr><td colspan="5" style="text-align: center; color: #ef4444; padding: 1.5rem;">加载失败: ${err.message}</td></tr>`;
+    });
+}
+
+function renderEpisodesList() {
+    const tbody = document.getElementById('episode-manager-list-body');
+    tbody.innerHTML = '';
+    
+    if (currentEpisodesList.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: #9ca3af; padding: 1.5rem;">暂无课时，请在下方手动添加。</td></tr>';
+        return;
+    }
+    
+    currentEpisodesList.forEach((ep, index) => {
+        const tr = document.createElement('tr');
+        
+        // Find chapter title
+        const chapter = courseChapters.find(ch => ch.ID === ep.ChapterID);
+        const chapterTitle = chapter ? `<span class="badge" style="background-color: #8b5cf6;">${chapter.Title}</span>` : '<span style="color: #4b5563; font-style: italic;">默认/未分类</span>';
+        
+        tr.innerHTML = `
+            <td>
+                <div style="display: flex; align-items: center; gap: 0.25rem;">
+                    <strong>P${ep.SortOrder}</strong>
+                    <div style="display: flex; flex-direction: column; font-size: 0.625rem;">
+                        <span style="cursor: pointer; color: ${index > 0 ? '#a78bfa' : '#4b5563'}" onclick="moveEpisode(${index}, -1)">▲</span>
+                        <span style="cursor: pointer; color: ${index < currentEpisodesList.length - 1 ? '#a78bfa' : '#4b5563'}" onclick="moveEpisode(${index}, 1)">▼</span>
+                    </div>
+                </div>
+            </td>
+            <td>${ep.Title}</td>
+            <td>${chapterTitle}</td>
+            <td style="word-break: break-all; font-family: monospace; font-size: 0.75rem; color: #9ca3af;">${ep.VideoRelativePath}</td>
+            <td style="text-align: center;">
+                <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem; background-color: #10b981; border: 1px solid #10b981;" onclick="openSubtitleManager(${ep.ID}, '${ep.Title.replace(/'/g, "\\'")}')">字幕</button>
+                <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem;" onclick="startEditEpisode(${ep.ID}, '${ep.Title.replace(/'/g, "\\'")}', '${ep.VideoRelativePath.replace(/'/g, "\\'")}', ${ep.SortOrder}, ${ep.ChapterID})">编辑</button>
+                <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="deleteEpisode(${ep.ID})">删除</button>
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function submitAddEpisode(event) {
+    event.preventDefault();
+    const title = document.getElementById('add-ep-title').value;
+    const path = document.getElementById('add-ep-path').value;
+    const sort = parseInt(document.getElementById('add-ep-sort').value, 10);
+    const chapterId = parseInt(document.getElementById('add-ep-chapter-id').value, 10);
+    
+    fetch(`/admin/api/courses/${currentCourseID}/episodes`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            title: title,
+            video_relative_path: path,
+            sort_order: sort,
+            chapter_id: chapterId
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        document.getElementById('add-episode-form').reset();
+        loadEpisodesList();
+    })
+    .catch(err => {
+        alert('添加失败: ' + err.message);
+    });
+}
+
+function startEditEpisode(id, title, path, sort, chapterId) {
+    document.getElementById('edit-ep-id').value = id;
+    document.getElementById('edit-ep-title').value = title;
+    document.getElementById('edit-ep-path').value = path;
+    document.getElementById('edit-ep-sort').value = sort;
+    document.getElementById('edit-ep-chapter-id').value = chapterId;
+    document.getElementById('edit-episode-section').style.display = 'block';
+}
+
+function cancelEditEpisode() {
+    document.getElementById('edit-episode-section').style.display = 'none';
+    document.getElementById('edit-episode-form').reset();
+}
+
+function submitUpdateEpisode(event) {
+    event.preventDefault();
+    const id = document.getElementById('edit-ep-id').value;
+    const title = document.getElementById('edit-ep-title').value;
+    const path = document.getElementById('edit-ep-path').value;
+    const sort = parseInt(document.getElementById('edit-ep-sort').value, 10);
+    const chapterId = parseInt(document.getElementById('edit-ep-chapter-id').value, 10);
+    
+    fetch(`/admin/api/episodes/${id}`, {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            title: title,
+            video_relative_path: path,
+            sort_order: sort,
+            chapter_id: chapterId
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        cancelEditEpisode();
+        loadEpisodesList();
+    })
+    .catch(err => {
+        alert('修改失败: ' + err.message);
+    });
+}
+
+function deleteEpisode(id) {
+    if (!confirm('确定要删除这个课时吗？')) return;
+    
+    fetch(`/admin/api/episodes/${id}`, {
+        method: 'DELETE'
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        loadEpisodesList();
+    })
+    .catch(err => {
+        alert('删除失败: ' + err.message);
+    });
+}
+
+function moveEpisode(index, direction) {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= currentEpisodesList.length) return;
+    
+    const temp = currentEpisodesList[index];
+    currentEpisodesList[index] = currentEpisodesList[targetIndex];
+    currentEpisodesList[targetIndex] = temp;
+    
+    const ids = currentEpisodesList.map(ep => ep.ID);
+    
+    fetch('/admin/api/episodes/reorder', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ids: ids })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        currentEpisodesList.forEach((ep, i) => {
+            ep.SortOrder = i + 1;
+        });
+        renderEpisodesList();
+    })
+    .catch(err => {
+        alert('排序更新失败: ' + err.message);
+        loadEpisodesList();
+    });
+}
+
+// Chapter Manager Logic
+let currentEditChapterID = null;
+
+function openChapterManager(courseID, courseTitle) {
+    currentCourseID = courseID;
+    document.getElementById('chapter-manager-modal-title').textContent = `章节管理 - ${courseTitle}`;
+    document.getElementById('chapter-manager-modal').style.display = 'block';
+    
+    cancelChapterEdit();
+    loadChaptersList();
+}
+
+function closeChapterManager() {
+    document.getElementById('chapter-manager-modal').style.display = 'none';
+    window.location.reload();
+}
+
+function loadChaptersList() {
+    const tbody = document.getElementById('chapter-manager-list-body');
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 1rem;">正在加载章节...</td></tr>';
+    
+    fetch(`/admin/api/courses/${currentCourseID}/chapters`)
+    .then(res => res.json())
+    .then(chapters => {
+        tbody.innerHTML = '';
+        if (!chapters || chapters.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #9ca3af; padding: 1rem;">暂无章节，请在下方创建。</td></tr>';
+            return;
+        }
+        
+        chapters.forEach(ch => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${ch.SortOrder}</strong></td>
+                <td><strong>${ch.Title}</strong></td>
+                <td style="color: #9ca3af; font-size: 0.75rem;">${ch.Description || '无'}</td>
+                <td style="text-align: center;">
+                    <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem;" onclick="startEditChapter(${ch.ID}, '${ch.Title.replace(/'/g, "\\'")}', '${(ch.Description || '').replace(/'/g, "\\'")}', '${ch.CoverURL}', ${ch.SortOrder})">编辑</button>
+                    <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="deleteChapter(${ch.ID})">删除</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    })
+    .catch(err => {
+        tbody.innerHTML = `<tr><td colspan="4" style="text-align: center; color: #ef4444; padding: 1rem;">加载失败: ${err.message}</td></tr>`;
+    });
+}
+
+function submitAddChapter(event) {
+    event.preventDefault();
+    const title = document.getElementById('add-ch-title').value;
+    const desc = document.getElementById('add-ch-desc').value;
+    const cover = document.getElementById('add-ch-cover').value;
+    const sort = parseInt(document.getElementById('add-ch-sort').value, 10);
+
+    const isEdit = currentEditChapterID !== null;
+    const url = isEdit ? `/admin/api/chapters/${currentEditChapterID}` : `/admin/api/courses/${currentCourseID}/chapters`;
+    const method = isEdit ? 'PUT' : 'POST';
+
+    fetch(url, {
+        method: method,
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            title: title,
+            description: desc,
+            cover_url: cover,
+            sort_order: sort
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        document.getElementById('add-chapter-form').reset();
+        cancelChapterEdit();
+        loadChaptersList();
+    })
+    .catch(err => {
+        alert('保存章节失败: ' + err.message);
+    });
+}
+
+function startEditChapter(id, title, desc, cover, sort) {
+    currentEditChapterID = id;
+    document.getElementById('chapter-form-title').textContent = '修改章节信息';
+    document.getElementById('add-ch-title').value = title;
+    document.getElementById('add-ch-desc').value = desc;
+    document.getElementById('add-ch-cover').value = cover;
+    document.getElementById('add-ch-sort').value = sort;
+    
+    document.getElementById('cancel-ch-edit-btn').style.display = 'inline-block';
+    document.getElementById('submit-ch-btn').textContent = '保存修改';
+}
+
+function cancelChapterEdit() {
+    currentEditChapterID = null;
+    document.getElementById('chapter-form-title').textContent = '新增章节';
+    document.getElementById('add-chapter-form').reset();
+    document.getElementById('add-ch-sort').value = '1';
+    
+    document.getElementById('cancel-ch-edit-btn').style.display = 'none';
+    document.getElementById('submit-ch-btn').textContent = '保存章节';
+}
+
+function deleteChapter(id) {
+    if (!confirm('确定要删除这个章节吗？关联在此章节下的课时会被自动归类为 [默认/未分类]，不会被物理删除。')) return;
+    
+    fetch(`/admin/api/chapters/${id}`, {
+        method: 'DELETE'
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        loadChaptersList();
+    })
+    .catch(err => {
+        alert('删除失败: ' + err.message);
+    });
+}
+
+// Subtitle Manager Logic
+let currentEpisodeID = 0;
+let uploadedSubtitleText = '';
+
+function openSubtitleManager(episodeID, episodeTitle) {
+    currentEpisodeID = episodeID;
+    document.getElementById('subtitle-manager-title').textContent = `字幕管理 - ${episodeTitle}`;
+    document.getElementById('upload-subtitle-form').reset();
+    uploadedSubtitleText = '';
+    
+    document.getElementById('subtitle-manager-modal').style.display = 'block';
+    loadSubtitlesList();
+}
+
+function closeSubtitleManager() {
+    document.getElementById('subtitle-manager-modal').style.display = 'none';
+}
+
+function loadSubtitlesList() {
+    const tbody = document.getElementById('subtitle-manager-list-body');
+    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #9ca3af; padding: 1rem;">正在加载字幕...</td></tr>';
+    
+    fetch(`/admin/api/episodes/${currentEpisodeID}/subtitles`)
+    .then(res => res.json())
+    .then(subs => {
+        tbody.innerHTML = '';
+        if (!subs || subs.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #9ca3af; padding: 1rem;">暂无字幕记录。</td></tr>';
+            return;
+        }
+        
+        subs.forEach(s => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><span class="badge" style="background-color: #10b981;">${s.Language}</span></td>
+                <td><strong>${s.Label}</strong></td>
+                <td style="text-align: center;">
+                    <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="deleteSubtitle(${s.ID})">删除</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    })
+    .catch(err => {
+        tbody.innerHTML = `<tr><td colspan="3" style="text-align: center; color: #ef4444; padding: 1rem;">加载失败: ${err.message}</td></tr>`;
+    });
+}
+
+function readSubtitleFile(fileInput) {
+    const file = fileInput.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        uploadedSubtitleText = e.target.result;
+    };
+    reader.readAsText(file);
+}
+
+function submitAddSubtitle(event) {
+    event.preventDefault();
+    const lang = document.getElementById('sub-lang').value;
+    const label = document.getElementById('sub-label').value;
+    
+    if (!uploadedSubtitleText) {
+        alert('请选择字幕文件或等待文件读取完毕！');
+        return;
+    }
+    
+    fetch(`/admin/api/episodes/${currentEpisodeID}/subtitles`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            language: lang,
+            label: label,
+            srt_content: uploadedSubtitleText
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(data => {
+        alert('字幕上传成功！');
+        document.getElementById('upload-subtitle-form').reset();
+        uploadedSubtitleText = '';
+        loadSubtitlesList();
+    })
+    .catch(err => {
+        alert('字幕上传失败: ' + err.message);
+    });
+}
+
+function deleteSubtitle(id) {
+    if (!confirm('确定要删除这个字幕吗？')) return;
+    
+    fetch(`/admin/api/subtitles/${id}`, {
+        method: 'DELETE'
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        loadSubtitlesList();
+    })
+    .catch(err => {
+        alert('删除失败: ' + err.message);
+    });
+}
+
+// Quick Edit Helpers from Main Page
+function openChapterEditDirectly(courseId, courseTitle, chId, chTitle, chDesc, chCover, chSort) {
+    currentCourseID = courseId;
+    document.getElementById('chapter-manager-modal-title').textContent = `章节管理 - ${courseTitle}`;
+    document.getElementById('chapter-manager-modal').style.display = 'block';
+    
+    startEditChapter(chId, chTitle, chDesc, chCover, chSort);
+    loadChaptersList();
+}
+
+function openChapterEditFromBtn(btn) {
+    const courseId = parseInt(btn.dataset.courseId, 10);
+    const courseTitle = btn.dataset.courseTitle;
+    const chId = parseInt(btn.dataset.chapterId, 10);
+    const chTitle = btn.dataset.chapterTitle;
+    const chDesc = btn.dataset.chapterDesc;
+    const chCover = btn.dataset.chapterCover;
+    const chSort = parseInt(btn.dataset.chapterSort, 10);
+    
+    openChapterEditDirectly(courseId, courseTitle, chId, chTitle, chDesc, chCover, chSort);
+}
+
+function openEpisodeEditDirectly(courseId, courseTitle, epId, epTitle, epPath, epSort, epChapterId) {
+    currentCourseID = courseId;
+    document.getElementById('episode-manager-title').textContent = `课时管理 - ${courseTitle}`;
+    
+    document.getElementById('add-episode-form').reset();
+    cancelEditEpisode();
+
+    fetch(`/admin/api/courses/${courseId}/chapters`)
+    .then(res => res.json())
+    .then(chapters => {
+        courseChapters = chapters || [];
+        populateChapterSelects();
+        
+        startEditEpisode(epId, epTitle, epPath, epSort, epChapterId);
+        document.getElementById('episode-manager-modal').style.display = 'block';
+        loadEpisodesList();
+    });
+}
+
+function openEpisodeEditFromBtn(btn) {
+    const courseId = parseInt(btn.dataset.courseId, 10);
+    const courseTitle = btn.dataset.courseTitle;
+    const epId = parseInt(btn.dataset.episodeId, 10);
+    const epTitle = btn.dataset.episodeTitle;
+    const epPath = btn.dataset.episodePath;
+    const epSort = parseInt(btn.dataset.episodeSort, 10);
+    const epChapterId = parseInt(btn.dataset.episodeChapterId, 10);
+    
+    openEpisodeEditDirectly(courseId, courseTitle, epId, epTitle, epPath, epSort, epChapterId);
+}
+
+// Bulk Actions Logic
+function updateBulkToolbar(courseId) {
+    const checkboxes = document.querySelectorAll(`.episode-checkbox-${courseId}:checked`);
+    const toolbar = document.getElementById(`bulk-toolbar-${courseId}`);
+    const countSpan = document.getElementById(`selected-count-${courseId}`);
+    
+    if (checkboxes.length > 0) {
+        toolbar.style.display = 'flex';
+        countSpan.textContent = checkboxes.length;
+    } else {
+        toolbar.style.display = 'none';
+    }
+}
+
+function executeBulkMove(courseId) {
+    const checkboxes = document.querySelectorAll(`.episode-checkbox-${courseId}:checked`);
+    const chapterId = parseInt(document.getElementById(`bulk-chapter-select-${courseId}`).value, 10);
+    
+    if (checkboxes.length === 0) return;
+    
+    const ids = Array.from(checkboxes).map(cb => parseInt(cb.dataset.episodeId, 10));
+    
+    if (!confirm(`确定要将选中的 ${ids.length} 个课时移动到所选章节吗？`)) {
+        return;
+    }
+    
+    fetch('/admin/api/episodes/bulk-move', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            ids: ids,
+            chapter_id: chapterId
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(() => {
+        alert('批量移动成功！');
+        window.location.reload();
+    })
+    .catch(err => {
+        alert('批量移动失败: ' + err.message);
+    });
+}
+
+function executeBulkDelete(courseId) {
+    const checkboxes = document.querySelectorAll(`.episode-checkbox-${courseId}:checked`);
+    if (checkboxes.length === 0) return;
+    
+    const ids = Array.from(checkboxes).map(cb => parseInt(cb.dataset.episodeId, 10));
+    
+    if (!confirm(`确定要永久删除选中的 ${ids.length} 个课时及其对应的学习进度/字幕吗？该操作不可撤销！`)) {
+        return;
+    }
+    
+    fetch('/admin/api/episodes/bulk-delete', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            ids: ids
+        })
+    })
+    .then(res => {
+        if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
+        return res.json();
+    })
+    .then(() => {
+        alert('批量删除成功！');
+        window.location.reload();
+    })
+    .catch(err => {
+        alert('批量删除失败: ' + err.message);
+    });
+}
+
+// Close modals when clicking outside
+window.onclick = function(event) {
+    const createModal = document.getElementById('create-course-modal');
+    const editModal = document.getElementById('edit-course-modal');
+    const epModal = document.getElementById('episode-manager-modal');
+    const chModal = document.getElementById('chapter-manager-modal');
+    const subModal = document.getElementById('subtitle-manager-modal');
+    if (event.target == createModal) {
+        closeCreateCourseModal();
+    }
+    if (event.target == editModal) {
+        closeEditCourseModal();
+    }
+    if (event.target == epModal) {
+        closeEpisodeManager();
+    }
+    if (event.target == chModal) {
+        closeChapterManager();
+    }
+    if (event.target == subModal) {
+        closeSubtitleManager();
+    }
 }
 </script>
 

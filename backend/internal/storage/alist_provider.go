@@ -168,6 +168,10 @@ func (a *AListProvider) fetchBasePath() {
 }
 
 func (a *AListProvider) request(method, path string, body interface{}, out interface{}) error {
+	return a.requestWithUA(method, path, body, out, "")
+}
+
+func (a *AListProvider) requestWithUA(method, path string, body interface{}, out interface{}, userAgent string) error {
 	// If token is missing, but username and password are provided, attempt dynamic login
 	if a.token == "" && a.username != "" && a.password != "" {
 		if err := a.login(); err != nil {
@@ -196,6 +200,9 @@ func (a *AListProvider) request(method, path string, body interface{}, out inter
 	if a.token != "" {
 		req.Header.Set("Authorization", a.token)
 	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -215,7 +222,7 @@ func (a *AListProvider) request(method, path string, body interface{}, out inter
 			// Try login again
 			if err := a.login(); err == nil {
 				// Re-execute request once
-				return a.request(method, path, body, out)
+				return a.requestWithUA(method, path, body, out, userAgent)
 			}
 		}
 	}
@@ -307,7 +314,7 @@ func (a *AListProvider) GetFileInfo(path string) (*FileInfo, error) {
 	}, nil
 }
 
-func (a *AListProvider) GetDownloadURL(path string) (*DownloadLink, error) {
+func (a *AListProvider) GetDownloadURL(path string, userAgent string) (*DownloadLink, error) {
 	apiPath := a.getRelativePath(path)
 	reqBody := map[string]interface{}{
 		"path":     apiPath,
@@ -315,14 +322,10 @@ func (a *AListProvider) GetDownloadURL(path string) (*DownloadLink, error) {
 	}
 
 	var result alistGetResult
-	if err := a.request("POST", "/api/fs/get", reqBody, &result); err != nil {
+	if err := a.requestWithUA("POST", "/api/fs/get", reqBody, &result, userAgent); err != nil {
 		return nil, err
 	}
 
-	// Construct signed URL similar to synctutor:
-	// baseURL/d/absolutePath?sign=sign
-	// The /api/fs/get path is relative to the user's base_path,
-	// but /d/ endpoint requires the absolute path.
 	absolutePath := a.getAbsolutePath(path)
 
 	escapedPath := url.PathEscape(absolutePath)
@@ -338,8 +341,6 @@ func (a *AListProvider) GetDownloadURL(path string) (*DownloadLink, error) {
 
 	headers := make(map[string]string)
 	if len(result.Header) > 0 {
-		// AList might return "" (empty string) instead of map if no headers are present.
-		// Try parsing as map; if it fails, we keep the empty map.
 		var parsed map[string]string
 		if err := json.Unmarshal(result.Header, &parsed); err == nil && parsed != nil {
 			headers = parsed

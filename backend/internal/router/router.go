@@ -1,6 +1,9 @@
 package router
 
 import (
+	"fmt"
+	"html/template"
+	"strings"
 	"studyquest/backend/internal/handler"
 	"studyquest/backend/internal/middleware"
 	"studyquest/backend/internal/repository"
@@ -25,8 +28,33 @@ func RegisterRoutes(
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORSMiddleware())
 
+	// Custom template functions
+	r.SetFuncMap(template.FuncMap{
+		"contains": func(s interface{}, substr string) bool {
+			var str string
+			if s != nil {
+				switch v := s.(type) {
+				case string:
+					str = v
+				default:
+					str = string(fmt.Sprintf("%v", s))
+				}
+			}
+			parts := strings.Split(str, ",")
+			for _, p := range parts {
+				if strings.TrimSpace(p) == substr {
+					return true
+				}
+			}
+			return false
+		},
+	})
+
 	// Load Admin HTML templates
 	r.LoadHTMLGlob("internal/admin/templates/*.html")
+	
+	// Map local uploads folder
+	r.Static("/uploads", "./data/uploads")
 
 	// 1. Health check & Initial login list (Public)
 	v1 := r.Group("/api/v1")
@@ -38,6 +66,7 @@ func RegisterRoutes(
 		
 		// VLC / external player playback streaming is public for format compatibility
 		v1.GET("/episodes/:id/stream", episode.Stream)
+		v1.GET("/subtitles/:id.vtt", episode.GetSubtitleVTT)
 	}
 
 	// 2. Client restricted operations (UserAuth required)
@@ -47,6 +76,7 @@ func RegisterRoutes(
 		v1Restricted.GET("/courses", course.GetCourses)
 		v1Restricted.GET("/courses/:id", course.GetCourseByID)
 		v1Restricted.GET("/courses/:id/episodes", course.GetEpisodesByCourse)
+		v1Restricted.GET("/courses/:id/last-watched", progress.GetLastWatched)
 		
 		v1Restricted.GET("/episodes/:id", episode.GetEpisodeByID)
 		v1Restricted.GET("/episodes/:id/play-info", episode.GetPlayInfo)
@@ -84,17 +114,45 @@ func RegisterRoutes(
 
 		// Backend actions
 		adm.POST("/api/users", admin.CreateUser)
+		adm.PUT("/api/users/:id", admin.UpdateUser)
 		adm.DELETE("/api/users/:id", admin.DeleteUser)
+		adm.POST("/api/users/:id/access/bulk", admin.BulkAccess)
+		
 		adm.POST("/api/courses", admin.CreateCourse)
+		adm.PUT("/api/courses/:id", admin.UpdateCourse)
 		adm.DELETE("/api/courses/:id", admin.DeleteCourse)
+		
+		adm.GET("/api/courses/:id/episodes", admin.ListEpisodesByCourse)
+		adm.POST("/api/courses/:id/episodes", admin.CreateEpisode)
+		adm.PUT("/api/episodes/:id", admin.UpdateEpisode)
+		adm.DELETE("/api/episodes/:id", admin.DeleteEpisode)
+		adm.POST("/api/episodes/reorder", admin.ReorderEpisodes)
+		adm.POST("/api/episodes/bulk-delete", admin.BulkDeleteEpisodes)
+		adm.POST("/api/episodes/bulk-move", admin.BulkMoveEpisodes)
 		
 		adm.POST("/api/access", admin.GrantAccess)
 		adm.POST("/api/access/revoke", admin.RevokeAccess)
 		
 		adm.GET("/api/import/scan", admin.Scan)
+		adm.GET("/api/import/preview-tree", admin.PreviewTree)
 		adm.POST("/api/import/execute", admin.ExecuteImport)
 		adm.PUT("/api/settings", admin.UpdateSettings)
 		adm.GET("/api/storage/ping", admin.PingStorage)
 		adm.POST("/api/storage/ping", admin.PingStorage)
+
+		// Chapter API routes
+		adm.GET("/api/courses/:id/chapters", admin.ListChaptersByCourse)
+		adm.POST("/api/courses/:id/chapters", admin.CreateChapter)
+		adm.PUT("/api/chapters/:id", admin.UpdateChapter)
+		adm.DELETE("/api/chapters/:id", admin.DeleteChapter)
+
+		// Subtitle API routes
+		adm.GET("/api/episodes/:id/subtitles", admin.ListSubtitles)
+		adm.POST("/api/episodes/:id/subtitles", admin.SaveSubtitle)
+		adm.DELETE("/api/subtitles/:id", admin.DeleteSubtitle)
+		adm.POST("/api/subtitles/auto-match", admin.AutoMatchSubtitle)
+
+		// Image upload route
+		adm.POST("/api/upload/image", admin.UploadImage)
 	}
 }

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -49,30 +50,97 @@ const (
 	GradeUniversal Grade = "universal"
 )
 
-// Valid checks if the grade matches one of the enum values.
+// Valid checks if the grade matches one of the enum values or is a comma-separated list of them.
 func (g Grade) Valid() bool {
-	switch g {
-	case Grade1, Grade2, Grade3, Grade4, Grade5, Grade6, Grade7, Grade8, Grade9, GradeUniversal:
-		return true
+	if g == "" {
+		return false
 	}
-	return false
+	parts := strings.Split(string(g), ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		switch Grade(p) {
+		case Grade1, Grade2, Grade3, Grade4, Grade5, Grade6, Grade7, Grade8, Grade9, GradeUniversal:
+			// valid
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // Course represents a multi-episode course.
 type Course struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Title     string    `gorm:"size:255;not null"`
-	Grade     Grade     `gorm:"type:varchar(50);not null"`   // "1" to "9" or "universal"
+	Grade     Grade     `gorm:"type:varchar(50);not null"`   // "1" to "9" or "universal" (or comma-separated)
 	Subject   string    `gorm:"size:100;not null"`  // e.g., "chinese", "math", "english", "physics"
 	CoverURL  string    `gorm:"size:1024"`
+	Tags      string    `gorm:"type:text"`          // Comma-separated tags, e.g. "上学期,作文,重难点"
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// TagsList splits comma-separated tags into a slice.
+func (c Course) TagsList() []string {
+	if c.Tags == "" {
+		return []string{}
+	}
+	parts := strings.Split(c.Tags, ",")
+	var result []string
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+// Grades splits a comma-separated grade list into a slice.
+func (c Course) Grades() []string {
+	if c.Grade == "" {
+		return []string{}
+	}
+	parts := strings.Split(string(c.Grade), ",")
+	for i, p := range parts {
+		parts[i] = strings.TrimSpace(p)
+	}
+	return parts
+}
+
+// GradeDisplay formats the course grade for display.
+func (c Course) GradeDisplay() string {
+	if c.Grade == "universal" {
+		return "全学段通用"
+	}
+	parts := c.Grades()
+	for i, p := range parts {
+		if p == "universal" {
+			parts[i] = "通用"
+		} else {
+			parts[i] = p + "年级"
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Chapter represents a chapter/module within a course.
+type Chapter struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement"`
+	CourseID    uint   `gorm:"index;not null"`
+	Title       string `gorm:"size:255;not null"`
+	Description string `gorm:"type:text"`
+	CoverURL    string `gorm:"size:1024"`
+	SortOrder   int    `gorm:"default:0"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Episode represents a specific episode in a course.
 type Episode struct {
 	ID                   uint   `gorm:"primaryKey;autoIncrement"`
 	CourseID             uint   `gorm:"index:idx_course_sort;not null"`
+	ChapterID            uint   `gorm:"index;not null;default:0"` // Belonging chapter, 0 means default/unassigned
 	SortOrder            int    `gorm:"index:idx_course_sort;not null"`
 	Title                string `gorm:"size:255;not null"`
 	VideoRelativePath    string `gorm:"type:text;not null"`
@@ -87,7 +155,10 @@ type Episode struct {
 
 // Subtitle holds the raw SRT subtitle content.
 type Subtitle struct {
-	EpisodeID  uint   `gorm:"primaryKey"`
+	ID         uint   `gorm:"primaryKey;autoIncrement"`
+	EpisodeID  uint   `gorm:"index:idx_episode_lang;not null"`
+	Language   string `gorm:"size:50;index:idx_episode_lang;not null;default:'zh-CN'"` // e.g. zh-CN, en-US, bi
+	Label      string `gorm:"size:100;not null;default:'中文'"` // User-facing label
 	SrtContent string `gorm:"type:text;not null"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
@@ -140,6 +211,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&User{},
 		&UserCourseAccess{},
 		&Course{},
+		&Chapter{},
 		&Episode{},
 		&Subtitle{},
 		&AILessonContent{},

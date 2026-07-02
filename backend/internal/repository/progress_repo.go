@@ -15,6 +15,7 @@ type ProgressRepository interface {
 	GetPoints(userID uint) (*model.UserPoint, error)
 	AddPoints(ledger *model.PointsLedger) error
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
+	GetLastWatchedEpisode(userID, courseID uint) (*model.UserProgress, error)
 }
 
 type progressRepo struct {
@@ -110,4 +111,20 @@ func (r *progressRepo) GetUserProgressOverview(userID uint) ([]model.UserProgres
 	var list []model.UserProgress
 	err := r.db.Where("user_id = ?", userID).Find(&list).Error
 	return list, err
+}
+
+func (r *progressRepo) GetLastWatchedEpisode(userID, courseID uint) (*model.UserProgress, error) {
+	var prog model.UserProgress
+	err := r.db.Table("user_progresses").
+		Joins("JOIN episodes ON episodes.id = user_progresses.episode_id").
+		Where("user_progresses.user_id = ? AND episodes.course_id = ?", userID, courseID).
+		Order("user_progresses.updated_at DESC").
+		First(&prog).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &prog, nil
 }

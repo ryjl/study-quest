@@ -99,6 +99,7 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 
 			_, err = h.episodeService.CreateEpisode(
 				reqEp.CourseID,
+				0, // Default ChapterID
 				reqEp.Title,
 				reqEp.VideoRelativePath,
 				attachments,

@@ -12,10 +12,12 @@ import (
 type UserService interface {
 	GetUsers() ([]model.User, error)
 	CreateUser(nickname, avatarURL, pin, role string) (*model.User, error)
+	UpdateUser(id uint, nickname, avatarURL, pin, role string) (*model.User, error)
 	Authenticate(userID uint, pin string) (bool, error)
 	DeleteUser(id uint) error
 	GrantCourseAccess(userID, courseID uint) error
 	RevokeCourseAccess(userID, courseID uint) error
+	BulkCourseAccess(userID uint, action string) error
 	GetUserCourseAccess(userID uint) ([]uint, error)
 }
 
@@ -88,4 +90,43 @@ func (s *userService) GetUserCourseAccess(userID uint) ([]uint, error) {
 
 func (s *userService) DeleteUser(id uint) error {
 	return s.repo.Delete(id)
+}
+
+func (s *userService) UpdateUser(id uint, nickname, avatarURL, pin, role string) (*model.User, error) {
+	u, err := s.repo.FindByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		return nil, errors.New("user not found")
+	}
+
+	u.Nickname = nickname
+	u.AvatarURL = avatarURL
+	u.Role = role
+
+	if pin != "" {
+		if len(pin) < 4 || len(pin) > 6 {
+			return nil, errors.New("PIN code must be between 4 and 6 digits")
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(pin), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, err
+		}
+		u.PinHash = string(hash)
+	}
+
+	if err := s.repo.Update(u); err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+func (s *userService) BulkCourseAccess(userID uint, action string) error {
+	if action == "grant_all" {
+		return s.repo.GrantAllCoursesAccess(userID)
+	} else if action == "revoke_all" {
+		return s.repo.RevokeAllAccess(userID)
+	}
+	return errors.New("unsupported bulk access action: " + action)
 }

@@ -19,7 +19,9 @@ type UserRepository interface {
 	// Course Access controls
 	HasAccess(userID, courseID uint) (bool, error)
 	GrantAccess(userID, courseID uint) error
+	GrantAllCoursesAccess(userID uint) error
 	RevokeAccess(userID, courseID uint) error
+	RevokeAllAccess(userID uint) error
 	GetAccessList(userID uint) ([]uint, error)
 }
 
@@ -109,8 +111,31 @@ func (r *userRepo) GrantAccess(userID, courseID uint) error {
 	return r.db.Save(&access).Error
 }
 
+func (r *userRepo) GrantAllCoursesAccess(userID uint) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var courses []model.Course
+		if err := tx.Find(&courses).Error; err != nil {
+			return err
+		}
+		for _, c := range courses {
+			access := model.UserCourseAccess{
+				UserID:   userID,
+				CourseID: c.ID,
+			}
+			if err := tx.Save(&access).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (r *userRepo) RevokeAccess(userID, courseID uint) error {
 	return r.db.Delete(&model.UserCourseAccess{}, "user_id = ? AND course_id = ?", userID, courseID).Error
+}
+
+func (r *userRepo) RevokeAllAccess(userID uint) error {
+	return r.db.Delete(&model.UserCourseAccess{}, "user_id = ?", userID).Error
 }
 
 func (r *userRepo) GetAccessList(userID uint) ([]uint, error) {

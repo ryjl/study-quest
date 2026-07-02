@@ -18,18 +18,20 @@ type EpisodeHandler interface {
 	Stream(c *gin.Context)
 	GetPlayInfo(c *gin.Context)
 	GetSubtitle(c *gin.Context)
+	GetSubtitleVTT(c *gin.Context)
 	GetAIContent(c *gin.Context)
 	GetAttachments(c *gin.Context)
 }
 
 type episodeHandler struct {
-	episodeService service.EpisodeService
-	settingsRepo   repository.SettingsRepository
+	episodeService  service.EpisodeService
+	progressService service.ProgressService
+	settingsRepo    repository.SettingsRepository
 }
 
 // NewEpisodeHandler creates an instance of EpisodeHandler.
-func NewEpisodeHandler(es service.EpisodeService, sr repository.SettingsRepository) EpisodeHandler {
-	return &episodeHandler{episodeService: es, settingsRepo: sr}
+func NewEpisodeHandler(es service.EpisodeService, ps service.ProgressService, sr repository.SettingsRepository) EpisodeHandler {
+	return &episodeHandler{episodeService: es, progressService: ps, settingsRepo: sr}
 }
 
 func (h *episodeHandler) GetEpisodeByID(c *gin.Context) {
@@ -54,6 +56,39 @@ func (h *episodeHandler) GetEpisodeByID(c *gin.Context) {
 	c.JSON(http.StatusOK, ep)
 }
 
+func (h *episodeHandler) GetSubtitleVTT(c *gin.Context) {
+	idStr := c.Param("id")
+	// Note: id here is the subtitle ID
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.String(http.StatusBadRequest, "invalid subtitle ID format")
+		return
+	}
+
+	sub, err := h.episodeService.GetSubtitleByID(uint(id))
+	if err != nil {
+		c.String(http.StatusInternalServerError, "failed to query subtitle: "+err.Error())
+		return
+	}
+
+	if sub == nil {
+		c.String(http.StatusNotFound, "subtitle not found")
+		return
+	}
+
+	vttContent := srtToVtt(sub.SrtContent)
+
+	c.Header("Content-Type", "text/vtt; charset=utf-8")
+	c.String(http.StatusOK, vttContent)
+}
+
+func srtToVtt(srt string) string {
+	vtt := "WEBVTT\n\n"
+	content := strings.ReplaceAll(srt, ",", ".")
+	vtt += content
+	return vtt
+}
+
 func (h *episodeHandler) Stream(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -62,7 +97,7 @@ func (h *episodeHandler) Stream(c *gin.Context) {
 		return
 	}
 
-	link, err := h.episodeService.GetStreamURL(uint(id))
+	link, err := h.episodeService.GetStreamURL(uint(id), c.Request.UserAgent())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve stream link: " + err.Error()})
 		return
@@ -87,7 +122,7 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 		return
 	}
 
-	link, err := h.episodeService.GetStreamURL(uint(id))
+	link, err := h.episodeService.GetStreamURL(uint(id), c.Request.UserAgent())
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve stream link: " + err.Error()})
 		return
@@ -96,9 +131,40 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 	// Rewrite localhost/127.0.0.1 back to server's request IP for remote clients
 	streamURL := rewriteLocalhostURL(link.URL, c.Request.Host)
 
+	// Fetch user progress if authenticated
+	var progressObj interface{} = nil
+	if userIDVal, exists := c.Get("userID"); exists {
+		if userID, ok := userIDVal.(uint); ok {
+			prog, err := h.progressService.GetProgress(userID, uint(id))
+			if err == nil && prog != nil {
+				progressObj = gin.H{
+					"last_position_seconds": prog.LastPositionSeconds,
+					"watch_seconds":         prog.WatchSeconds,
+					"is_completed":          prog.IsCompleted,
+				}
+			}
+		}
+	}
+
+	// Fetch subtitles list
+	var subtitlesList []gin.H = []gin.H{}
+	subs, err := h.episodeService.ListSubtitles(uint(id))
+	if err == nil {
+		for _, s := range subs {
+			subtitlesList = append(subtitlesList, gin.H{
+				"id":       s.ID,
+				"language": s.Language,
+				"label":    s.Label,
+				"url":      "/api/v1/subtitles/" + strconv.Itoa(int(s.ID)) + ".vtt",
+			})
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"url":     streamURL,
-		"headers": link.Header,
+		"url":       streamURL,
+		"headers":   link.Header,
+		"progress":  progressObj,
+		"subtitles": subtitlesList,
 	})
 }
 

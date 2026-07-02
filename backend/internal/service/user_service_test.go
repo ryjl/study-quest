@@ -87,4 +87,88 @@ func TestUserService(t *testing.T) {
 			t.Error("Expected authentication to error out for invalid user ID, got nil")
 		}
 	})
+
+	t.Run("UpdateUser", func(t *testing.T) {
+		user, err := svc.CreateUser("OrigName", "http://avatar.orig", "1111", "student")
+		if err != nil {
+			t.Fatalf("Failed to create user: %v", err)
+		}
+
+		// Update fields without changing PIN
+		updated, err := svc.UpdateUser(user.ID, "NewName", "http://avatar.new", "", "teen")
+		if err != nil {
+			t.Fatalf("UpdateUser failed: %v", err)
+		}
+
+		if updated.Nickname != "NewName" || updated.AvatarURL != "http://avatar.new" || updated.Role != "teen" {
+			t.Errorf("Updated fields mismatch, got: %+v", updated)
+		}
+
+		// Old PIN should still work
+		ok, err := svc.Authenticate(user.ID, "1111")
+		if err != nil || !ok {
+			t.Errorf("Old PIN should still work when not reset: ok=%v, err=%v", ok, err)
+		}
+
+		// Update PIN
+		_, err = svc.UpdateUser(user.ID, "NewName", "http://avatar.new", "2222", "teen")
+		if err != nil {
+			t.Fatalf("UpdateUser with PIN failed: %v", err)
+		}
+
+		// New PIN should work, old PIN should fail
+		ok, err = svc.Authenticate(user.ID, "2222")
+		if err != nil || !ok {
+			t.Errorf("New PIN should work: ok=%v, err=%v", ok, err)
+		}
+
+		ok, err = svc.Authenticate(user.ID, "1111")
+		if err != nil || ok {
+			t.Errorf("Old PIN should no longer work: ok=%v, err=%v", ok, err)
+		}
+	})
+
+	t.Run("BulkCourseAccess", func(t *testing.T) {
+		user, err := svc.CreateUser("BulkUser", "http://avatar", "1234", "student")
+		if err != nil {
+			t.Fatalf("Failed to create user: %v", err)
+		}
+
+		courseRepo := repository.NewCourseRepository(db)
+		courseSvc := NewCourseService(courseRepo, userRepo)
+
+		_, _ = courseSvc.CreateCourse("Course1", "3", "math", "", "")
+		_, _ = courseSvc.CreateCourse("Course2", "4", "physics", "", "")
+
+		// Grant all
+		err = svc.BulkCourseAccess(user.ID, "grant_all")
+		if err != nil {
+			t.Fatalf("BulkCourseAccess grant_all failed: %v", err)
+		}
+
+		accessList, err := svc.GetUserCourseAccess(user.ID)
+		if err != nil {
+			t.Fatalf("GetUserCourseAccess failed: %v", err)
+		}
+
+		if len(accessList) != 2 {
+			t.Errorf("Expected access list size 2, got %d", len(accessList))
+		}
+
+		// Revoke all
+		err = svc.BulkCourseAccess(user.ID, "revoke_all")
+		if err != nil {
+			t.Fatalf("BulkCourseAccess revoke_all failed: %v", err)
+		}
+
+		accessList, err = svc.GetUserCourseAccess(user.ID)
+		if err != nil {
+			t.Fatalf("GetUserCourseAccess failed: %v", err)
+		}
+
+		if len(accessList) != 0 {
+			t.Errorf("Expected empty access list, got %d", len(accessList))
+		}
+	})
 }
+

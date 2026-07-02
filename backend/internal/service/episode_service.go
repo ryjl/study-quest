@@ -12,20 +12,24 @@ import (
 type EpisodeService interface {
 	GetEpisodesByCourse(courseID uint) ([]model.Episode, error)
 	GetEpisodeByID(id uint) (*model.Episode, error)
-	CreateEpisode(courseID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error)
-	UpdateEpisode(id uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error)
+	CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error)
+	UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error)
 	DeleteEpisode(id uint) error
+	ReorderEpisodes(episodeIDs []uint) error
 
 	// Subtitles
 	GetSubtitle(episodeID uint) (*model.Subtitle, error)
-	SaveSubtitle(episodeID uint, srtContent string) error
+	ListSubtitles(episodeID uint) ([]model.Subtitle, error)
+	GetSubtitleByID(id uint) (*model.Subtitle, error)
+	SaveSubtitle(episodeID uint, lang, label, srtContent string) error
+	DeleteSubtitle(id uint) error
 
 	// AI Content
 	GetAIContent(episodeID uint) (*model.AILessonContent, error)
 	SaveAIContent(episodeID uint, preJSON, postJSON string) error
 
 	// Streaming Stream Link Resolution
-	GetStreamURL(episodeID uint) (*storage.DownloadLink, error)
+	GetStreamURL(episodeID uint, userAgent string) (*storage.DownloadLink, error)
 }
 
 type episodeService struct {
@@ -64,9 +68,10 @@ func (s *episodeService) GetEpisodeByID(id uint) (*model.Episode, error) {
 	return s.episodeRepo.FindByID(id)
 }
 
-func (s *episodeService) CreateEpisode(courseID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error) {
+func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error) {
 	ep := &model.Episode{
 		CourseID:             courseID,
+		ChapterID:            chapterID,
 		SortOrder:            sortOrder,
 		Title:                title,
 		VideoRelativePath:    videoPath,
@@ -82,7 +87,7 @@ func (s *episodeService) CreateEpisode(courseID uint, title, videoPath, attachme
 	return ep, nil
 }
 
-func (s *episodeService) UpdateEpisode(id uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error) {
+func (s *episodeService) UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error) {
 	ep, err := s.episodeRepo.FindByID(id)
 	if err != nil {
 		return nil, err
@@ -91,6 +96,7 @@ func (s *episodeService) UpdateEpisode(id uint, title, videoPath, attachments st
 		return nil, nil
 	}
 
+	ep.ChapterID = chapterID
 	ep.Title = title
 	ep.VideoRelativePath = videoPath
 	ep.AttachmentJSON = attachments
@@ -110,16 +116,52 @@ func (s *episodeService) DeleteEpisode(id uint) error {
 	return s.episodeRepo.Delete(id)
 }
 
+func (s *episodeService) ReorderEpisodes(episodeIDs []uint) error {
+	for i, id := range episodeIDs {
+		ep, err := s.episodeRepo.FindByID(id)
+		if err != nil {
+			return err
+		}
+		if ep != nil {
+			ep.SortOrder = i + 1
+			if err := s.episodeRepo.Update(ep); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (s *episodeService) GetSubtitle(episodeID uint) (*model.Subtitle, error) {
 	return s.episodeRepo.GetSubtitle(episodeID)
 }
 
-func (s *episodeService) SaveSubtitle(episodeID uint, srtContent string) error {
+func (s *episodeService) ListSubtitles(episodeID uint) ([]model.Subtitle, error) {
+	return s.episodeRepo.ListSubtitles(episodeID)
+}
+
+func (s *episodeService) GetSubtitleByID(id uint) (*model.Subtitle, error) {
+	return s.episodeRepo.GetSubtitleByID(id)
+}
+
+func (s *episodeService) SaveSubtitle(episodeID uint, lang, label, srtContent string) error {
+	if lang == "" {
+		lang = "zh-CN"
+	}
+	if label == "" {
+		label = "中文"
+	}
 	sub := &model.Subtitle{
 		EpisodeID:  episodeID,
+		Language:   lang,
+		Label:      label,
 		SrtContent: srtContent,
 	}
 	return s.episodeRepo.SaveSubtitle(sub)
+}
+
+func (s *episodeService) DeleteSubtitle(id uint) error {
+	return s.episodeRepo.DeleteSubtitle(id)
 }
 
 func (s *episodeService) GetAIContent(episodeID uint) (*model.AILessonContent, error) {
@@ -135,7 +177,7 @@ func (s *episodeService) SaveAIContent(episodeID uint, preJSON, postJSON string)
 	return s.episodeRepo.SaveAIContent(ai)
 }
 
-func (s *episodeService) GetStreamURL(episodeID uint) (*storage.DownloadLink, error) {
+func (s *episodeService) GetStreamURL(episodeID uint, userAgent string) (*storage.DownloadLink, error) {
 	ep, err := s.episodeRepo.FindByID(episodeID)
 	if err != nil {
 		return nil, err
@@ -150,7 +192,7 @@ func (s *episodeService) GetStreamURL(episodeID uint) (*storage.DownloadLink, er
 	}
 
 	// Try regular path lookup
-	link, err := provider.GetDownloadURL(ep.VideoRelativePath)
+	link, err := provider.GetDownloadURL(ep.VideoRelativePath, userAgent)
 	if err == nil {
 		return link, nil
 	}
@@ -163,7 +205,7 @@ func (s *episodeService) GetStreamURL(episodeID uint) (*storage.DownloadLink, er
 			// Update locally cached path for next requests
 			ep.VideoRelativePath = resolved.VideoRelativePath
 			_ = s.episodeRepo.Update(ep)
-			return provider.GetDownloadURL(resolved.VideoRelativePath)
+			return provider.GetDownloadURL(resolved.VideoRelativePath, userAgent)
 		}
 	}
 
@@ -171,7 +213,7 @@ func (s *episodeService) GetStreamURL(episodeID uint) (*storage.DownloadLink, er
 	if ep.FileSize != nil {
 		resolved, err := s.episodeRepo.FindByPathAndSize(ep.VideoRelativePath, *ep.FileSize)
 		if err == nil && resolved != nil {
-			return provider.GetDownloadURL(resolved.VideoRelativePath)
+			return provider.GetDownloadURL(resolved.VideoRelativePath, userAgent)
 		}
 	}
 

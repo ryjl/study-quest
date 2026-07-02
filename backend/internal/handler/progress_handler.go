@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 	"studyquest/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -12,6 +13,7 @@ type ProgressHandler interface {
 	ReportProgress(c *gin.Context)
 	GetProgressOverview(c *gin.Context)
 	GetPoints(c *gin.Context)
+	GetLastWatched(c *gin.Context)
 }
 
 type progressHandler struct {
@@ -92,4 +94,43 @@ func (h *progressHandler) GetPoints(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, pt)
+}
+
+func (h *progressHandler) GetLastWatched(c *gin.Context) {
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user authentication context missing"})
+		return
+	}
+	userID := userIDVal.(uint)
+
+	courseIDStr := c.Param("id")
+	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID format"})
+		return
+	}
+
+	ep, prog, err := h.progressService.GetLastWatchedEpisode(userID, uint(courseID))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query last watched: " + err.Error()})
+		return
+	}
+
+	if ep == nil || prog == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"episode":  nil,
+			"progress": nil,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"episode":  ep,
+		"progress": gin.H{
+			"last_position_seconds": prog.LastPositionSeconds,
+			"watch_seconds":         prog.WatchSeconds,
+			"is_completed":          prog.IsCompleted,
+		},
+	})
 }

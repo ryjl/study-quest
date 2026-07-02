@@ -91,7 +91,7 @@ func (w *WebDAVProvider) GetFileInfo(path string) (*FileInfo, error) {
 	}, nil
 }
 
-func (w *WebDAVProvider) GetDownloadURL(path string) (*DownloadLink, error) {
+func (w *WebDAVProvider) GetDownloadURL(path string, userAgent string) (*DownloadLink, error) {
 	// Clean relative path prefix
 	cleanPath := strings.TrimPrefix(path, "/")
 

@@ -54,19 +54,21 @@ func main() {
 	courseRepo := repository.NewCourseRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
+	chapterRepo := repository.NewChapterRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	progressService := service.NewProgressService(progressRepo, episodeRepo)
-	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo)
+	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo)
+	chapterService := service.NewChapterService(chapterRepo)
 
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
 	userHandler := handler.NewUserHandler(userService)
 	courseHandler := handler.NewCourseHandler(courseService, episodeService)
-	episodeHandler := handler.NewEpisodeHandler(episodeService, settingsRepo)
+	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo)
 	progressHandler := handler.NewProgressHandler(progressService)
 	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService)
 	adminHandler := handler.NewAdminHandler(
@@ -78,6 +80,7 @@ func main() {
 		courseService,
 		importService,
 		episodeService,
+		chapterService,
 	)
 
 	// 9. Boot up Gin Server Router

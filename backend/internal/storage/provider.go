@@ -29,7 +29,7 @@ type StorageProvider interface {
 	GetFileInfo(path string) (*FileInfo, error)
 
 	// GetDownloadURL generates the link (possibly with headers) for streaming.
-	GetDownloadURL(path string) (*DownloadLink, error)
+	GetDownloadURL(path string, userAgent string) (*DownloadLink, error)
 
 	// SupportsHash returns true if file hashes (e.g. SHA1) are natively supported and returned.
 	SupportsHash() bool
