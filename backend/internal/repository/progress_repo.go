@@ -16,6 +16,7 @@ type ProgressRepository interface {
 	AddPoints(ledger *model.PointsLedger) error
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
 	GetLastWatchedEpisode(userID, courseID uint) (*model.UserProgress, error)
+	GetPointsLedger(userID uint, limit, offset int) ([]model.PointsLedger, error)
 }
 
 type progressRepo struct {
@@ -127,4 +128,17 @@ func (r *progressRepo) GetLastWatchedEpisode(userID, courseID uint) (*model.User
 		return nil, err
 	}
 	return &prog, nil
+}
+
+func (r *progressRepo) GetPointsLedger(userID uint, limit, offset int) ([]model.PointsLedger, error) {
+	var ledger []model.PointsLedger
+	query := r.db.Where("user_id = ?", userID).Order("created_at DESC, id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if offset > 0 {
+		query = query.Offset(offset)
+	}
+	err := query.Find(&ledger).Error
+	return ledger, err
 }

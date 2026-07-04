@@ -70,14 +70,15 @@ func (g Grade) Valid() bool {
 
 // Course represents a multi-episode course.
 type Course struct {
-	ID        uint      `gorm:"primaryKey;autoIncrement"`
-	Title     string    `gorm:"size:255;not null"`
-	Grade     Grade     `gorm:"type:varchar(50);not null"`   // "1" to "9" or "universal" (or comma-separated)
-	Subject   string    `gorm:"size:100;not null"`  // e.g., "chinese", "math", "english", "physics"
-	CoverURL  string    `gorm:"size:1024"`
-	Tags      string    `gorm:"type:text"`          // Comma-separated tags, e.g. "上学期,作文,重难点"
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             uint      `gorm:"primaryKey;autoIncrement"`
+	Title          string    `gorm:"size:255;not null"`
+	Grade          Grade     `gorm:"type:varchar(50);not null"`   // "1" to "9" or "universal" (or comma-separated)
+	Subject        string    `gorm:"size:100;not null"`  // e.g., "chinese", "math", "english", "physics"
+	CoverURL       string    `gorm:"size:1024"`
+	Tags           string    `gorm:"type:text"`          // Comma-separated tags, e.g. "上学期,作文,重难点"
+	AttachmentJSON string    `gorm:"type:text"`          // JSON array of attachments
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // TagsList splits comma-separated tags into a slice.
@@ -126,14 +127,15 @@ func (c Course) GradeDisplay() string {
 
 // Chapter represents a chapter/module within a course.
 type Chapter struct {
-	ID          uint   `gorm:"primaryKey;autoIncrement"`
-	CourseID    uint   `gorm:"index;not null"`
-	Title       string `gorm:"size:255;not null"`
-	Description string `gorm:"type:text"`
-	CoverURL    string `gorm:"size:1024"`
-	SortOrder   int    `gorm:"default:0"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID             uint   `gorm:"primaryKey;autoIncrement"`
+	CourseID       uint   `gorm:"index;not null"`
+	Title          string `gorm:"size:255;not null"`
+	Description    string `gorm:"type:text"`
+	CoverURL       string `gorm:"size:1024"`
+	AttachmentJSON string `gorm:"type:text"` // JSON array of attachments
+	SortOrder      int    `gorm:"default:0"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // Episode represents a specific episode in a course.
@@ -204,6 +206,28 @@ type UserProgress struct {
 	UpdatedAt           time.Time
 }
 
+// Badge represents an achievement badge that can be earned by a student.
+type Badge struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement"`
+	Code        string    `gorm:"size:100;uniqueIndex;not null"`
+	Title       string    `gorm:"size:255;not null"`
+	Description string    `gorm:"type:text"`
+	IconName    string    `gorm:"size:255;not null"`
+	RuleType    string    `gorm:"size:50;not null"` // watch_duration, consecutive_days, subject_count, night_owl_count, points_earned
+	RuleTarget  string    `gorm:"size:100"`         // target e.g. "math" or empty
+	Threshold   int       `gorm:"not null"`         // threshold to reach e.g. 100, 7, 5
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// UserBadge stores which badges have been unlocked by which users.
+type UserBadge struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement"`
+	UserID     uint      `gorm:"uniqueIndex:idx_user_badge;not null"`
+	BadgeID    uint      `gorm:"uniqueIndex:idx_user_badge;not null"`
+	UnlockedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+}
+
 // AutoMigrate runs GORM schema auto-migration for all tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
@@ -218,5 +242,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserPoint{},
 		&PointsLedger{},
 		&UserProgress{},
+		&Badge{},
+		&UserBadge{},
 	)
 }

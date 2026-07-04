@@ -15,18 +15,21 @@ type ProgressService interface {
 	GetPoints(userID uint) (*model.UserPoint, error)
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
 	GetLastWatchedEpisode(userID, courseID uint) (*model.Episode, *model.UserProgress, error)
+	GetPointsLedger(userID uint, limit, offset int) ([]model.PointsLedger, error)
 }
 
 type progressService struct {
 	progressRepo repository.ProgressRepository
 	episodeRepo  repository.EpisodeRepository
+	badgeService BadgeService
 }
 
 // NewProgressService creates an instance of ProgressService.
-func NewProgressService(pr repository.ProgressRepository, er repository.EpisodeRepository) ProgressService {
+func NewProgressService(pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService) ProgressService {
 	return &progressService{
 		progressRepo: pr,
 		episodeRepo:  er,
+		badgeService: bs,
 	}
 }
 
@@ -92,6 +95,11 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 		return nil, err
 	}
 
+	// Trigger Badge rules evaluation on every watch activity update
+	if s.badgeService != nil {
+		_, _ = s.badgeService.EvaluateRules(userID)
+	}
+
 	return prog, nil
 }
 
@@ -117,4 +125,8 @@ func (s *progressService) GetLastWatchedEpisode(userID, courseID uint) (*model.E
 		return nil, nil, err
 	}
 	return ep, prog, nil
+}
+
+func (s *progressService) GetPointsLedger(userID uint, limit, offset int) ([]model.PointsLedger, error) {
+	return s.progressRepo.GetPointsLedger(userID, limit, offset)
 }

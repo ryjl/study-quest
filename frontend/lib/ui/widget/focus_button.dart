@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../theme.dart';
+import 'glass_panel.dart';
 
 class FocusButton extends StatefulWidget {
   final Widget child;
@@ -42,7 +43,6 @@ class _FocusButtonState extends State<FocusButton> {
 
   @override
   void dispose() {
-    // Only dispose if created internally
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
@@ -79,20 +79,24 @@ class _FocusButtonState extends State<FocusButton> {
         onExit: (_) => setState(() => _isHovered = false),
         child: GestureDetector(
           onTap: widget.onPressed,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 150),
-            padding: widget.padding,
-            decoration: AppTheme.switchDecoration(
+          child: AnimatedScale(
+            scale: active ? 0.98 : 1.0, // Scale down slightly when active for tactile clicky feedback!
+            duration: const Duration(milliseconds: 100),
+            child: GlassPanel(
+              borderRadius: widget.borderRadius,
               hasFocus: active,
-              bg: active ? AppTheme.primaryColor.withOpacity(0.15) : widget.baseColor,
-              border: active ? AppTheme.primaryColor : widget.borderColor,
-            ),
-            child: DefaultTextStyle(
-              style: TextStyle(
-                color: active ? AppTheme.textWhite : AppTheme.textWhite,
-                fontWeight: active ? FontWeight.bold : FontWeight.normal,
+              baseColor: active ? AppTheme.primaryColor.withOpacity(0.12) : widget.baseColor,
+              borderColor: active ? AppTheme.primaryColor : widget.borderColor,
+              padding: widget.padding,
+              child: DefaultTextStyle(
+                style: TextStyle(
+                  color: AppTheme.textWhite,
+                  fontSize: 16,
+                  fontWeight: active ? FontWeight.bold : FontWeight.w600,
+                  fontFamily: 'Quicksand',
+                ),
+                child: widget.child,
               ),
-              child: widget.child,
             ),
           ),
         ),
@@ -100,3 +104,4 @@ class _FocusButtonState extends State<FocusButton> {
     );
   }
 }
+

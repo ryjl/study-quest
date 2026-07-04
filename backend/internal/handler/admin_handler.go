@@ -30,6 +30,7 @@ type AdminHandler interface {
 	CoursesGet(c *gin.Context)
 	ImportGet(c *gin.Context)
 	SettingsGet(c *gin.Context)
+	BadgesGet(c *gin.Context)
 
 	// API controllers
 	CreateUser(c *gin.Context)
@@ -50,6 +51,7 @@ type AdminHandler interface {
 	Scan(c *gin.Context)
 	PreviewTree(c *gin.Context)
 	ExecuteImport(c *gin.Context)
+	ScanAttachments(c *gin.Context)
 	UpdateSettings(c *gin.Context)
 	PingStorage(c *gin.Context)
 
@@ -277,6 +279,10 @@ func (h *adminHandler) SettingsGet(c *gin.Context) {
 	})
 }
 
+func (h *adminHandler) BadgesGet(c *gin.Context) {
+	c.HTML(http.StatusOK, "badges.html", nil)
+}
+
 // API CONTROLLERS
 
 func (h *adminHandler) CreateUser(c *gin.Context) {
@@ -319,11 +325,12 @@ func (h *adminHandler) DeleteUser(c *gin.Context) {
 
 func (h *adminHandler) CreateCourse(c *gin.Context) {
 	var req struct {
-		Title    string `json:"title" binding:"required"`
-		Grade    string `json:"grade" binding:"required"`
-		Subject  string `json:"subject" binding:"required"`
-		CoverURL string `json:"cover_url"`
-		Tags     string `json:"tags"`
+		Title          string `json:"title" binding:"required"`
+		Grade          string `json:"grade" binding:"required"`
+		Subject        string `json:"subject" binding:"required"`
+		CoverURL       string `json:"cover_url"`
+		Tags           string `json:"tags"`
+		AttachmentJSON string `json:"attachment_json"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -331,7 +338,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags)
+	course, err := h.courseService.CreateCourse(req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags, req.AttachmentJSON)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -578,11 +585,12 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 	}
 
 	var req struct {
-		Title    string `json:"title" binding:"required"`
-		Grade    string `json:"grade" binding:"required"`
-		Subject  string `json:"subject" binding:"required"`
-		CoverURL string `json:"cover_url"`
-		Tags     string `json:"tags"`
+		Title          string `json:"title" binding:"required"`
+		Grade          string `json:"grade" binding:"required"`
+		Subject        string `json:"subject" binding:"required"`
+		CoverURL       string `json:"cover_url"`
+		Tags           string `json:"tags"`
+		AttachmentJSON string `json:"attachment_json"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -590,7 +598,7 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.UpdateCourse(uint(id), req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags)
+	course, err := h.courseService.UpdateCourse(uint(id), req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags, req.AttachmentJSON)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -790,10 +798,11 @@ func (h *adminHandler) CreateChapter(c *gin.Context) {
 	}
 
 	var req struct {
-		Title       string `json:"title" binding:"required"`
-		Description string `json:"description"`
-		CoverURL    string `json:"cover_url"`
-		SortOrder   int    `json:"sort_order"`
+		Title          string `json:"title" binding:"required"`
+		Description    string `json:"description"`
+		CoverURL       string `json:"cover_url"`
+		AttachmentJSON string `json:"attachment_json"`
+		SortOrder      int    `json:"sort_order"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -801,7 +810,7 @@ func (h *adminHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
-	ch, err := h.chapterService.CreateChapter(uint(courseID), req.Title, req.Description, req.CoverURL, req.SortOrder)
+	ch, err := h.chapterService.CreateChapter(uint(courseID), req.Title, req.Description, req.CoverURL, req.AttachmentJSON, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -819,10 +828,11 @@ func (h *adminHandler) UpdateChapter(c *gin.Context) {
 	}
 
 	var req struct {
-		Title       string `json:"title" binding:"required"`
-		Description string `json:"description"`
-		CoverURL    string `json:"cover_url"`
-		SortOrder   int    `json:"sort_order"`
+		Title          string `json:"title" binding:"required"`
+		Description    string `json:"description"`
+		CoverURL       string `json:"cover_url"`
+		AttachmentJSON string `json:"attachment_json"`
+		SortOrder      int    `json:"sort_order"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -830,13 +840,81 @@ func (h *adminHandler) UpdateChapter(c *gin.Context) {
 		return
 	}
 
-	ch, err := h.chapterService.UpdateChapter(uint(id), req.Title, req.Description, req.CoverURL, req.SortOrder)
+	ch, err := h.chapterService.UpdateChapter(uint(id), req.Title, req.Description, req.CoverURL, req.AttachmentJSON, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, ch)
+}
+
+func (h *adminHandler) ScanAttachments(c *gin.Context) {
+	entityType := c.Query("type") // "course", "chapter", "episode"
+	idStr := c.Query("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
+		return
+	}
+
+	var targetPath string
+	switch entityType {
+	case "episode":
+		ep, err := h.episodeRepo.FindByID(uint(id))
+		if err != nil || ep == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Episode not found"})
+			return
+		}
+		if ep.OriginalRelativePath != "" {
+			targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
+		}
+	case "chapter":
+		ch, err := h.chapterService.GetChapterByID(uint(id))
+		if err != nil || ch == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Chapter not found"})
+			return
+		}
+		eps, err := h.episodeRepo.ListByCourse(ch.CourseID)
+		if err == nil {
+			for _, ep := range eps {
+				if ep.ChapterID == ch.ID && ep.OriginalRelativePath != "" {
+					targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
+					break
+				}
+			}
+		}
+	case "course":
+		cr, err := h.courseRepo.FindByID(uint(id))
+		if err != nil || cr == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+			return
+		}
+		eps, err := h.episodeRepo.ListByCourse(cr.ID)
+		if err == nil && len(eps) > 0 {
+			for _, ep := range eps {
+				if ep.OriginalRelativePath != "" {
+					targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
+					break
+				}
+			}
+		}
+	}
+
+	if targetPath == "" || targetPath == "." {
+		targetPath = "/"
+	}
+
+	files, err := h.importService.ScanDirectoryAttachments(targetPath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"path":  targetPath,
+		"files": files,
+	})
 }
 
 func (h *adminHandler) DeleteChapter(c *gin.Context) {

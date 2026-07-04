@@ -38,7 +38,7 @@ func TestChapterService(t *testing.T) {
 
 	t.Run("CreateChapter", func(t *testing.T) {
 		var err error
-		ch1, err = chapterSvc.CreateChapter(course.ID, "Reading Chapter", "Description of reading", "/path/cover.jpg", 1)
+		ch1, err = chapterSvc.CreateChapter(course.ID, "Reading Chapter", "Description of reading", "/path/cover.jpg", "", 1)
 		if err != nil {
 			t.Fatalf("CreateChapter failed: %v", err)
 		}
@@ -60,7 +60,7 @@ func TestChapterService(t *testing.T) {
 	})
 
 	t.Run("UpdateChapter", func(t *testing.T) {
-		ch, err := chapterSvc.UpdateChapter(ch1.ID, "Updated Reading Chapter", "New desc", "/path/new.jpg", 2)
+		ch, err := chapterSvc.UpdateChapter(ch1.ID, "Updated Reading Chapter", "New desc", "/path/new.jpg", "", 2)
 		if err != nil {
 			t.Fatalf("UpdateChapter failed: %v", err)
 		}

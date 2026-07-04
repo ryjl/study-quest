@@ -55,14 +55,21 @@ func main() {
 	episodeRepo := repository.NewEpisodeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
 	chapterRepo := repository.NewChapterRepository(db)
+	badgeRepo := repository.NewBadgeRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
-	progressService := service.NewProgressService(progressRepo, episodeRepo)
+	badgeService := service.NewBadgeService(badgeRepo, progressRepo)
+	progressService := service.NewProgressService(progressRepo, episodeRepo, badgeService)
 	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo)
 	chapterService := service.NewChapterService(chapterRepo)
+
+	// Seed default badges
+	if err := badgeService.SeedDefaultBadges(); err != nil {
+		log.Printf("Warning: failed to seed default badges: %v", err)
+	}
 
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
@@ -82,6 +89,7 @@ func main() {
 		episodeService,
 		chapterService,
 	)
+	badgeHandler := handler.NewBadgeHandler(badgeService)
 
 	// 9. Boot up Gin Server Router
 	gin.SetMode(gin.ReleaseMode)
@@ -97,6 +105,7 @@ func main() {
 		progressHandler,
 		ingestHandler,
 		adminHandler,
+		badgeHandler,
 		userRepo,
 		settingsRepo,
 	)

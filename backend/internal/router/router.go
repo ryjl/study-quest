@@ -21,6 +21,7 @@ func RegisterRoutes(
 	progress handler.ProgressHandler,
 	ingest handler.IngestHandler,
 	admin handler.AdminHandler,
+	badge handler.BadgeHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
 ) {
@@ -86,7 +87,9 @@ func RegisterRoutes(
 
 		v1Restricted.POST("/progress/report", progress.ReportProgress)
 		v1Restricted.GET("/progress", progress.GetProgressOverview)
+		v1Restricted.GET("/progress/ledger", progress.GetPointsLedger)
 		v1Restricted.GET("/progress/points", progress.GetPoints)
+		v1Restricted.GET("/users/:id/badges", badge.GetUserBadges)
 	}
 
 	// 3. Local Python Toolchain ingestion points (Public)
@@ -111,6 +114,7 @@ func RegisterRoutes(
 		adm.GET("/courses", admin.CoursesGet)
 		adm.GET("/import", admin.ImportGet)
 		adm.GET("/settings", admin.SettingsGet)
+		adm.GET("/badges", admin.BadgesGet)
 
 		// Backend actions
 		adm.POST("/api/users", admin.CreateUser)
@@ -151,6 +155,15 @@ func RegisterRoutes(
 		adm.POST("/api/episodes/:id/subtitles", admin.SaveSubtitle)
 		adm.DELETE("/api/subtitles/:id", admin.DeleteSubtitle)
 		adm.POST("/api/subtitles/auto-match", admin.AutoMatchSubtitle)
+
+		// Attachment scanning route
+		adm.GET("/api/scan-attachments", admin.ScanAttachments)
+
+		// Badge CRUD routes
+		adm.GET("/api/badges", badge.AdminListBadges)
+		adm.POST("/api/badges", badge.AdminCreateBadge)
+		adm.PUT("/api/badges/:id", badge.AdminUpdateBadge)
+		adm.DELETE("/api/badges/:id", badge.AdminDeleteBadge)
 
 		// Image upload route
 		adm.POST("/api/upload/image", admin.UploadImage)

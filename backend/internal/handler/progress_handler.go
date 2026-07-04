@@ -14,6 +14,7 @@ type ProgressHandler interface {
 	GetProgressOverview(c *gin.Context)
 	GetPoints(c *gin.Context)
 	GetLastWatched(c *gin.Context)
+	GetPointsLedger(c *gin.Context)
 }
 
 type progressHandler struct {
@@ -133,4 +134,27 @@ func (h *progressHandler) GetLastWatched(c *gin.Context) {
 			"is_completed":          prog.IsCompleted,
 		},
 	})
+}
+
+func (h *progressHandler) GetPointsLedger(c *gin.Context) {
+	userIDVal, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user authentication context missing"})
+		return
+	}
+	userID := userIDVal.(uint)
+
+	limitStr := c.DefaultQuery("limit", "20")
+	offsetStr := c.DefaultQuery("offset", "0")
+
+	limit, _ := strconv.Atoi(limitStr)
+	offset, _ := strconv.Atoi(offsetStr)
+
+	ledger, err := h.progressService.GetPointsLedger(userID, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query ledger: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, ledger)
 }

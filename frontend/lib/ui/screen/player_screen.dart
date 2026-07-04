@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
@@ -6,6 +7,8 @@ import '../../model/course.dart';
 import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
+import '../widget/glass_panel.dart';
+import '../widget/button_3d.dart';
 
 class PlayerScreen extends StatefulWidget {
   final int activeUserId;
@@ -29,8 +32,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // AI Content State
   AILessonContent? _aiContent;
   bool _loadingAI = true;
-  bool _showExplorerBlocker = false;
-  int _currentExplorerCardIndex = 0;
 
   // Quiz State
   bool _showQuizBlocker = false;
@@ -67,10 +68,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         setState(() {
           _aiContent = content;
           _loadingAI = false;
-          // If pre-adventure cards exist, we show the blocker overlay
-          if (content != null && content.preAdventureCards.isNotEmpty) {
-            _showExplorerBlocker = true;
-          }
         });
       }
     } catch (_) {
@@ -107,6 +104,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
         setState(() {
           _isInitialized = true;
         });
+        
+        // Start playback automatically once initialized
+        _controller!.play();
         
         // Start watching logging timer (sync progress every 5 seconds)
         _startProgressTimer();
@@ -169,6 +169,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
       } else {
         // If no quiz ready, directly complete progress silently
         _completeProgressWithoutQuiz();
+        _quizFinished = true;
+        _showQuizBlocker = true; // Show final completed modal anyway
       }
     });
   }
@@ -182,22 +184,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         deltaWatchSeconds: 1, // small ping to complete
       );
     } catch (_) {}
-  }
-
-  void _onExplorerCardNext() {
-    if (_aiContent == null) return;
-    
-    if (_currentExplorerCardIndex < _aiContent!.preAdventureCards.length - 1) {
-      setState(() {
-        _currentExplorerCardIndex++;
-      });
-    } else {
-      // Finished all cards, clear blocker and play
-      setState(() {
-        _showExplorerBlocker = false;
-      });
-      _controller?.play();
-    }
   }
 
   void _onAnswerSelected(int index) {
@@ -268,7 +254,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 const SizedBox(height: 16),
                 Text(_errorMessage, style: const TextStyle(fontSize: 18, color: Colors.redAccent)),
                 const SizedBox(height: 32),
-                FocusButton(
+                Button3D.white(
                   onPressed: () => Navigator.pop(context),
                   child: const Text('返回上一页'),
                 ),
@@ -280,7 +266,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFFF8FAFC), // slate-50 base background
       body: Shortcuts(
         shortcuts: <LogicalKeySet, Intent>{
           LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
@@ -288,23 +274,45 @@ class _PlayerScreenState extends State<PlayerScreen> {
         },
         child: Stack(
           children: [
-            // Video Output layer
-            Center(
-              child: AspectRatio(
-                aspectRatio: _controller!.value.aspectRatio,
-                child: VideoPlayer(_controller!),
-              ),
+            // 70/30 Split Layout
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Left 70%: Video player container
+                Expanded(
+                  flex: 7,
+                  child: Container(
+                    color: Colors.black,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        AspectRatio(
+                          aspectRatio: _controller!.value.aspectRatio,
+                          child: VideoPlayer(_controller!),
+                        ),
+                        // Custom Player Controls layer
+                        if (!_showQuizBlocker)
+                          _buildPlayerControls(),
+                      ],
+                    ),
+                  ),
+                ),
+
+                // Right 30%: "随堂助手" Sidebar Resource Panel (360px wide)
+                Container(
+                  width: 360,
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    border: Border(
+                      left: BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
+                    ),
+                  ),
+                  child: _buildSidebarHelper(),
+                ),
+              ],
             ),
 
-            // Custom Player Controls layer
-            if (!_showExplorerBlocker && !_showQuizBlocker)
-              _buildPlayerControls(),
-
-            // AI Pre-adventure Explorer Card blocker
-            if (_showExplorerBlocker && _aiContent != null)
-              _buildExplorerBlockerOverlay(),
-
-            // AI Review Quiz blocker
+            // AI Review Quiz blocker overlay (floated over split screen)
             if (_showQuizBlocker && _aiContent != null)
               _buildQuizBlockerOverlay(),
           ],
@@ -323,7 +331,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         padding: const EdgeInsets.all(24),
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Colors.transparent, Colors.black.withOpacity(0.8)],
+            colors: [Colors.transparent, Colors.black.withOpacity(0.85)],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -366,15 +374,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       _formatDuration(_controller!.value.position) +
                           ' / ' +
                           _formatDuration(_controller!.value.duration),
-                      style: const TextStyle(color: AppTheme.textWhite, fontWeight: FontWeight.bold),
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                     ),
                   ],
                 ),
-                FocusButton(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  baseColor: Colors.white12,
+                Button3D.dark(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
                   onPressed: () => Navigator.pop(context),
-                  child: const Text('退出播放'),
+                  child: const Text('退出播放', style: TextStyle(color: Colors.white)),
                 ),
               ],
             ),
@@ -391,72 +398,119 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return '$minutes:$seconds';
   }
 
-  // 2. Pre-watch Explorer overlay builder
-  Widget _buildExplorerBlockerOverlay() {
-    final cards = _aiContent!.preAdventureCards;
-    final currentCard = cards[_currentExplorerCardIndex];
-
-    return Positioned.fill(
-      child: Container(
-        color: Colors.black.withOpacity(0.9),
-        padding: const EdgeInsets.all(40),
-        child: Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 600),
-            padding: const EdgeInsets.all(32),
-            decoration: AppTheme.switchDecoration(hasFocus: false),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Header badge
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: AppTheme.accentOrange.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: const [
-                          Icon(Icons.explore, color: AppTheme.accentOrange, size: 18),
-                          SizedBox(width: 8),
-                          Text('课前探险卡', style: TextStyle(color: AppTheme.accentOrange, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      '${_currentExplorerCardIndex + 1} / ${cards.length}',
-                      style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold),
-                    ),
-                  ],
+  // 2. 30% Sidebar helper panel
+  Widget _buildSidebarHelper() {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Sidebar Title Header
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: const BoxDecoration(
+                  color: Color(0xFFEFF6FF),
+                  shape: BoxShape.circle,
                 ),
-                const SizedBox(height: 32),
-
-                // Card prompt text
-                Text(
-                  currentCard.prompt,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, height: 1.5),
+                child: const Icon(Icons.psychology_rounded, color: Color(0xFF2563EB), size: 24),
+              ),
+              const SizedBox(width: 12),
+              const Text(
+                '随堂助手',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  color: AppTheme.textWhite,
                 ),
-                const SizedBox(height: 48),
+              ),
+            ],
+          ),
+          const SizedBox(height: 32),
 
-                // Explorer control button
-                FocusButton(
-                  autoFocus: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
-                  baseColor: AppTheme.primaryColor,
-                  onPressed: _onExplorerCardNext,
-                  child: Text(
-                    _currentExplorerCardIndex == cards.length - 1 ? '开始观看视频' : '下一张思考卡',
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                  ),
-                ),
+          // Section: Learning Attachments
+          const Text(
+            '配套学习资料',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+          ),
+          const SizedBox(height: 12),
+          // PDF Attachment Button
+          Button3D.white(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            onPressed: () => _openResourceModal('pdf'),
+            child: Row(
+              children: const [
+                Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFF97316), size: 18),
+                SizedBox(width: 10),
+                Text('配套讲义课件.pdf', style: TextStyle(color: Color(0xFFC2410C), fontWeight: FontWeight.w800, fontSize: 13)),
               ],
             ),
           ),
-        ),
+          const SizedBox(height: 12),
+          // AI Summary Button
+          Button3D.white(
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            onPressed: () => _openResourceModal('summary'),
+            child: Row(
+              children: const [
+                Icon(Icons.auto_awesome_rounded, color: Color(0xFF8B5CF6), size: 18),
+                SizedBox(width: 10),
+                Text('AI 重点提炼总结', style: TextStyle(color: Color(0xFF6D28D9), fontWeight: FontWeight.w800, fontSize: 13)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 36),
+
+          // Section: Pre-watch Tasks List
+          const Text(
+            '本节探索任务',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+          ),
+          const SizedBox(height: 16),
+          _buildSidebarTaskCard(1, '雨来被抓住后，他是怎么跟敌人周旋的？'),
+          const SizedBox(height: 12),
+          _buildSidebarTaskCard(2, '找出视频里雨来使用的一个成语。'),
+          const SizedBox(height: 12),
+          _buildSidebarTaskCard(3, '如果你是雨来，你会怎么把信送出去？'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSidebarTaskCard(int index, String text) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 24,
+            height: 24,
+            alignment: Alignment.center,
+            decoration: const BoxDecoration(
+              color: Color(0xFFEFF6FF),
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              '$index',
+              style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF2563EB), fontSize: 11),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              text,
+              style: const TextStyle(color: Color(0xFF475569), fontWeight: FontWeight.bold, fontSize: 13, height: 1.4),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -471,135 +525,146 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.95),
-        padding: const EdgeInsets.all(40),
+        color: const Color(0x900F172A), // Dim background overlay
         child: Center(
           child: Container(
-            constraints: const BoxConstraints(maxWidth: 700),
-            padding: const EdgeInsets.all(32),
-            decoration: AppTheme.switchDecoration(hasFocus: false),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Header details
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: AppTheme.accentGreen.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: const [
-                          Icon(Icons.emoji_events, color: AppTheme.accentGreen, size: 18),
-                          SizedBox(width: 8),
-                          Text('课后小挑战', style: TextStyle(color: AppTheme.accentGreen, fontWeight: FontWeight.bold)),
-                        ],
-                      ),
-                    ),
-                    Text(
-                      '问题 ${_currentQuizIndex + 1} / ${_aiContent!.postReviewQuiz.length}',
-                      style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-
-                // Question Title
-                Text(
-                  quiz.question,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, height: 1.4),
-                ),
-                const SizedBox(height: 24),
-
-                // Multiple choice options list
-                Column(
-                  children: List.generate(quiz.options.length, (index) {
-                    final optionText = quiz.options[index];
-                    final isSelected = _selectedAnswerIndex == index;
-                    final isCorrect = quiz.answerIndex == index;
-
-                    Color bg = AppTheme.cardColor;
-                    Color border = AppTheme.borderMuted;
-
-                    // Color indicators after selection lock-in
-                    if (_selectedAnswerIndex != null) {
-                      if (isCorrect) {
-                        bg = AppTheme.accentGreen.withOpacity(0.15);
-                        border = AppTheme.accentGreen;
-                      } else if (isSelected) {
-                        bg = Colors.redAccent.withOpacity(0.15);
-                        border = Colors.redAccent;
-                      }
-                    }
-
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      width: double.infinity,
-                      child: FocusButton(
-                        baseColor: bg,
-                        borderColor: border,
-                        onPressed: () => _onAnswerSelected(index),
+            constraints: const BoxConstraints(maxWidth: 650),
+            child: GlassPanel(
+              borderRadius: 32,
+              baseColor: Colors.white,
+              borderColor: Colors.white,
+              borderWidth: 2,
+              padding: const EdgeInsets.all(36),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Header details
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: AppTheme.accentGreen.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
                         child: Row(
-                          children: [
-                            Container(
-                              width: 32,
-                              height: 32,
-                              alignment: Alignment.center,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: isSelected ? AppTheme.primaryColor : Colors.white10,
-                              ),
-                              child: Text(
-                                String.fromCharCode(65 + index), // A, B, C, D
-                                style: const TextStyle(fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Text(
-                                optionText,
-                                style: const TextStyle(fontSize: 16, color: AppTheme.textWhite),
-                              ),
-                            ),
-                            if (_selectedAnswerIndex != null && isCorrect)
-                              const Icon(Icons.check_circle, color: AppTheme.accentGreen),
-                            if (_selectedAnswerIndex != null && isSelected && !isCorrect)
-                              const Icon(Icons.cancel, color: Colors.redAccent),
+                          children: const [
+                            Icon(Icons.emoji_events_rounded, color: AppTheme.accentGreen, size: 18),
+                            SizedBox(width: 8),
+                            Text('课后小挑战', style: TextStyle(color: AppTheme.accentGreen, fontWeight: FontWeight.bold, fontFamily: 'Quicksand')),
                           ],
                         ),
                       ),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 24),
+                      Text(
+                        '问题 ${_currentQuizIndex + 1} / ${_aiContent!.postReviewQuiz.length}',
+                        style: const TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
 
-                // Next Button (shows after option is selected)
-                if (_selectedAnswerIndex != null)
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: FocusButton(
-                      autoFocus: true,
-                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-                      baseColor: AppTheme.primaryColor,
-                      onPressed: _onQuizNext,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _currentQuizIndex == _aiContent!.postReviewQuiz.length - 1 ? '完成测验' : '下一题',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                  // Question Title
+                  Text(
+                    quiz.question,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, height: 1.4, color: AppTheme.textWhite),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Multiple choice options list
+                  Column(
+                    children: List.generate(quiz.options.length, (index) {
+                      final optionText = quiz.options[index];
+                      final isSelected = _selectedAnswerIndex == index;
+                      final isCorrect = quiz.answerIndex == index;
+
+                      Color bg = Colors.white;
+                      Color shadow = const Color(0xFFE2E8F0);
+                      Border? customBorder = Border.all(color: const Color(0xFFF1F5F9), width: 2.0);
+
+                      // Color indicators after selection lock-in
+                      if (_selectedAnswerIndex != null) {
+                        if (isCorrect) {
+                          bg = const Color(0xFFECFDF5);
+                          shadow = const Color(0xFFA7F3D0);
+                          customBorder = Border.all(color: AppTheme.accentGreen, width: 2.0);
+                        } else if (isSelected) {
+                          bg = const Color(0xFFFEF2F2);
+                          shadow = const Color(0xFFFCA5A5);
+                          customBorder = Border.all(color: Colors.redAccent, width: 2.0);
+                        }
+                      }
+
+                      return Container(
+                        margin: const EdgeInsets.only(bottom: 12),
+                        width: double.infinity,
+                        child: Button3D(
+                          borderRadius: 20,
+                          backgroundColor: bg,
+                          shadowColor: shadow,
+                          border: customBorder,
+                          onPressed: () => _onAnswerSelected(index),
+                          padding: const EdgeInsets.all(16),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 32,
+                                height: 32,
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: isSelected ? AppTheme.primaryColor : const Color(0xFFF1F5F9),
+                                ),
+                                child: Text(
+                                  String.fromCharCode(65 + index), // A, B, C, D
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w900,
+                                    color: isSelected ? Colors.white : AppTheme.textWhite,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Text(
+                                  optionText,
+                                  style: const TextStyle(fontSize: 15, color: AppTheme.textWhite, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              if (_selectedAnswerIndex != null && isCorrect)
+                                const Icon(Icons.check_circle_rounded, color: AppTheme.accentGreen),
+                              if (_selectedAnswerIndex != null && isSelected && !isCorrect)
+                                const Icon(Icons.cancel_rounded, color: Colors.redAccent),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          const Icon(Icons.arrow_forward_rounded, size: 20),
-                        ],
+                        ),
+                      );
+                    }),
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Next Button (shows after option is selected)
+                  if (_selectedAnswerIndex != null)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: Button3D.blue(
+                        onPressed: _onQuizNext,
+                        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            Text(
+                              '下一题',
+                              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: Colors.white),
+                            ),
+                            SizedBox(width: 8),
+                            Icon(Icons.arrow_forward_rounded, size: 20, color: Colors.white),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -611,67 +676,219 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget _buildQuizFinishedScreen() {
     return Positioned.fill(
       child: Container(
-        color: Colors.black.withOpacity(0.95),
+        color: const Color(0x900F172A),
         child: Center(
           child: Container(
             constraints: const BoxConstraints(maxWidth: 500),
-            padding: const EdgeInsets.all(40),
-            decoration: AppTheme.switchDecoration(hasFocus: false),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.stars, color: AppTheme.accentOrange, size: 80),
-                const SizedBox(height: 24),
-                const Text(
-                  '恭喜你通关成功！',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: AppTheme.accentOrange),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  '您已看完了课时: ${widget.episode.title}',
-                  style: const TextStyle(color: AppTheme.textMuted, fontSize: 16),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 32),
+            child: GlassPanel(
+              borderRadius: 36,
+              baseColor: Colors.white,
+              borderColor: Colors.white,
+              borderWidth: 2,
+              padding: const EdgeInsets.all(40),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.stars_rounded, color: AppTheme.accentOrange, size: 80),
+                  const SizedBox(height: 24),
+                  const Text(
+                    '恭喜你通关成功！',
+                    style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppTheme.accentOrange, fontFamily: 'Quicksand'),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    '您已看完了课时: ${widget.episode.title}',
+                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 16, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 32),
 
-                // Points summary box
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.02),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: AppTheme.borderMuted),
+                  // Points summary box
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Text('本次学习奖励积分: ', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textWhite)),
+                        Text(
+                          '+$_earnedPoints 星币',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.accentGreen),
+                        ),
+                      ],
+                    ),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Text('本次学习奖励积分: ', style: TextStyle(fontSize: 16)),
-                      Text(
-                        '+$_earnedPoints 分',
-                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.accentGreen),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 40),
+                  const SizedBox(height: 40),
 
-                // Complete and close button
-                FocusButton(
-                  autoFocus: true,
-                  padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
-                  baseColor: AppTheme.accentGreen,
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
-                  child: const Text(
-                    '好的，关闭播放',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  // Complete and close button
+                  Button3D.blue(
+                    onPressed: () {
+                      Navigator.pop(context);
+                    },
+                    padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 16),
+                    child: const Text(
+                      '好的，关闭播放',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  // 5. Open resource modals
+  void _openResourceModal(String type) {
+    final isPdf = type == 'pdf';
+    showDialog(
+      context: context,
+      barrierColor: const Color(0x900F172A),
+      builder: (context) {
+        return Center(
+          child: Container(
+            constraints: const BoxConstraints(maxWidth: 700),
+            height: MediaQuery.of(context).size.height * 0.75,
+            child: GlassPanel(
+              borderRadius: 32,
+              baseColor: Colors.white,
+              borderColor: Colors.white,
+              borderWidth: 2,
+              padding: const EdgeInsets.all(0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // Title Bar
+                  Container(
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: isPdf ? const Color(0xFFFFF7ED) : const Color(0xFFF5F3FF),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(30),
+                        topRight: Radius.circular(30),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          decoration: BoxDecoration(
+                            color: isPdf ? const Color(0xFFFFF0E0) : const Color(0xFFEDE9FE),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Icon(
+                            isPdf ? Icons.picture_as_pdf_rounded : Icons.auto_awesome_rounded,
+                            color: isPdf ? const Color(0xFFF97316) : const Color(0xFF8B5CF6),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isPdf ? '随堂讲义预览' : 'AI 随堂重点提炼',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 16,
+                                  color: isPdf ? const Color(0xFF7C2D12) : const Color(0xFF4C1D95),
+                                ),
+                              ),
+                              Text(
+                                widget.episode.title,
+                                style: TextStyle(color: isPdf ? const Color(0xFFC2410C) : const Color(0xFF6D28D9), fontSize: 12),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Content Body
+                  Expanded(
+                    child: Container(
+                      color: const Color(0xFFF8FAFC),
+                      padding: const EdgeInsets.all(32),
+                      child: isPdf
+                          ? Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(color: const Color(0xFFE2E8F0)),
+                              ),
+                              alignment: Alignment.center,
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.picture_as_pdf_outlined, color: Color(0xFFF97316), size: 64),
+                                  const SizedBox(height: 16),
+                                  const Text('PDF 文件渲染器加载中...', style: TextStyle(fontWeight: FontWeight.w900)),
+                                  const SizedBox(height: 8),
+                                  const Text('这里将同步渲染配套 PDF 课件讲义内容', style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                                  const SizedBox(height: 24),
+                                  Button3D.blue(
+                                    onPressed: () => Navigator.pop(context),
+                                    child: const Text('好的，关闭', style: TextStyle(color: Colors.white)),
+                                  ),
+                                ],
+                              ),
+                            )
+                          : SingleChildScrollView(
+                              physics: const BouncingScrollPhysics(),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  _buildSummarySection('核心要点梳理', '1. 小英雄雨来的性格特点分析：机智、勇敢、爱国。\n2. 重点字词积累：扫荡、周旋、晋察冀边区。\n3. 学会通过细节描写，感受雨来面临鬼子威胁时的从容应对。'),
+                                  const SizedBox(height: 20),
+                                  _buildSummarySection('探险任务自查', '结合课前探险任务，想一想：\n- 雨来在河湾里跟鬼子周旋，体现了什么战术？\n- 你找到了几个课时中用到的四字成语？'),
+                                ],
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSummarySection(String title, String content) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(width: 4, height: 16, decoration: BoxDecoration(color: const Color(0xFF8B5CF6), borderRadius: BorderRadius.circular(2))),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF4C1D95))),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(content, style: const TextStyle(color: Color(0xFF475569), fontSize: 13, height: 1.5, fontWeight: FontWeight.bold)),
+        ],
       ),
     );
   }

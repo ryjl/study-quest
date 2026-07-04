@@ -10,8 +10,8 @@ import (
 type CourseService interface {
 	GetCourses(userID uint, userRole string, grade, subject string) ([]model.Course, error)
 	GetCourseByID(id uint) (*model.Course, error)
-	CreateCourse(title, grade, subject, coverURL, tags string) (*model.Course, error)
-	UpdateCourse(id uint, title, grade, subject, coverURL, tags string) (*model.Course, error)
+	CreateCourse(title, grade, subject, coverURL, tags, attachmentJSON string) (*model.Course, error)
+	UpdateCourse(id uint, title, grade, subject, coverURL, tags, attachmentJSON string) (*model.Course, error)
 	DeleteCourse(id uint) error
 }
 
@@ -47,18 +47,23 @@ func (s *courseService) GetCourseByID(id uint) (*model.Course, error) {
 	return s.courseRepo.FindByID(id)
 }
 
-func (s *courseService) CreateCourse(title, grade, subject, coverURL, tags string) (*model.Course, error) {
+func (s *courseService) CreateCourse(title, grade, subject, coverURL, tags, attachmentJSON string) (*model.Course, error) {
 	g := model.Grade(grade)
 	if !g.Valid() {
 		return nil, errors.New("invalid course grade value: " + grade)
 	}
 
+	if attachmentJSON == "" {
+		attachmentJSON = "[]"
+	}
+
 	c := &model.Course{
-		Title:    title,
-		Grade:    g,
-		Subject:  subject,
-		CoverURL: coverURL,
-		Tags:     tags,
+		Title:          title,
+		Grade:          g,
+		Subject:        subject,
+		CoverURL:       coverURL,
+		Tags:           tags,
+		AttachmentJSON: attachmentJSON,
 	}
 	if err := s.courseRepo.Create(c); err != nil {
 		return nil, err
@@ -66,7 +71,7 @@ func (s *courseService) CreateCourse(title, grade, subject, coverURL, tags strin
 	return c, nil
 }
 
-func (s *courseService) UpdateCourse(id uint, title, grade, subject, coverURL, tags string) (*model.Course, error) {
+func (s *courseService) UpdateCourse(id uint, title, grade, subject, coverURL, tags, attachmentJSON string) (*model.Course, error) {
 	g := model.Grade(grade)
 	if !g.Valid() {
 		return nil, errors.New("invalid course grade value: " + grade)
@@ -80,11 +85,16 @@ func (s *courseService) UpdateCourse(id uint, title, grade, subject, coverURL, t
 		return nil, nil
 	}
 
+	if attachmentJSON == "" {
+		attachmentJSON = "[]"
+	}
+
 	c.Title = title
 	c.Grade = g
 	c.Subject = subject
 	c.CoverURL = coverURL
 	c.Tags = tags
+	c.AttachmentJSON = attachmentJSON
 
 	if err := s.courseRepo.Update(c); err != nil {
 		return nil, err

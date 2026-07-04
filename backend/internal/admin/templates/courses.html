@@ -35,7 +35,16 @@
             <div style="display: flex; gap: 0.5rem;">
                 <button class="btn btn-primary" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" onclick="openEpisodeManager({{ .ID }}, '{{ .Title }}')">管理课时</button>
                 <button class="btn btn-secondary" style="padding: 0.375rem 0.75rem; font-size: 0.75rem; background-color: #8b5cf6;" onclick="openChapterManager({{ .ID }}, '{{ .Title }}')">管理章节</button>
-                <button class="btn btn-secondary" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" onclick="openEditCourseModal({{ .ID }}, '{{ .Title }}', '{{ .Grade }}', '{{ .Subject }}', '{{ .CoverURL }}', '{{ .Tags }}')">编辑课程</button>
+                <button class="btn btn-secondary btn-edit-course" 
+                        data-course-id="{{ .ID }}" 
+                        data-course-title="{{ .Title }}" 
+                        data-course-grade="{{ .Grade }}" 
+                        data-course-subject="{{ .Subject }}" 
+                        data-course-cover="{{ .CoverURL }}" 
+                        data-course-tags="{{ .Tags }}" 
+                        data-course-attachments="{{ .AttachmentJSON }}" 
+                        style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" 
+                        onclick="openEditCourseModalFromBtn(this)">编辑课程</button>
                 <button class="btn btn-danger" style="padding: 0.375rem 0.75rem; font-size: 0.75rem;" data-course-id="{{ .ID }}" onclick="deleteCourse(parseInt(this.dataset.courseId, 10))">删除</button>
             </div>
         </div>
@@ -83,6 +92,7 @@
                                         data-chapter-desc="{{ .Description }}"
                                         data-chapter-cover="{{ .CoverURL }}"
                                         data-chapter-sort="{{ .SortOrder }}"
+                                        data-chapter-attachments="{{ .AttachmentJSON }}"
                                         style="padding: 0.15rem 0.4rem; font-size: 0.6875rem; background-color: #1f2937; border-color: #374151;" 
                                         onclick="openChapterEditFromBtn(this)">编辑</button>
                                 <button class="btn btn-danger" style="padding: 0.15rem 0.4rem; font-size: 0.6875rem;" onclick="deleteChapter(parseInt('{{ .ID }}', 10))">删除</button>
@@ -116,6 +126,7 @@
                                                     data-episode-path="{{ .VideoRelativePath }}"
                                                     data-episode-sort="{{ .SortOrder }}"
                                                     data-episode-chapter-id="{{ .ChapterID }}"
+                                                    data-episode-attachments="{{ .AttachmentJSON }}"
                                                     style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #111827; border-color: #374151;" 
                                                     onclick="openEpisodeEditFromBtn(this)">编辑</button>
                                             <button class="btn btn-secondary" style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #312e81; border-color: #4338ca; color: #c084fc;" onclick="openSubtitleManager({{ .ID }}, '{{ .Title }}')">字幕</button>
@@ -171,6 +182,7 @@
                                                     data-episode-path="{{ .VideoRelativePath }}"
                                                     data-episode-sort="{{ .SortOrder }}"
                                                     data-episode-chapter-id="{{ .ChapterID }}"
+                                                    data-episode-attachments="{{ .AttachmentJSON }}"
                                                     style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #111827; border-color: #374151;" 
                                                     onclick="openEpisodeEditFromBtn(this)">编辑</button>
                                             <button class="btn btn-secondary" style="padding: 0.15rem 0.375rem; font-size: 0.6875rem; background-color: #312e81; border-color: #4338ca; color: #c084fc;" onclick="openSubtitleManager({{ .ID }}, '{{ .Title }}')">字幕</button>
@@ -309,6 +321,10 @@
                     {{ end }}
                 </div>
             </div>
+            <div class="form-group" style="margin-top: 1rem; margin-bottom: 1.5rem; text-align: left;">
+                <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">课程配套资料/讲义 (多选绑定)</label>
+                <div id="course-attachments-container"></div>
+            </div>
             <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 0.5rem;">保存修改</button>
         </form>
     </div>
@@ -389,9 +405,13 @@
                     <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">排序</label>
                     <input type="number" id="edit-ep-sort" class="form-control" required>
                 </div>
-                <div style="display: flex; gap: 0.25rem;">
-                    <button type="submit" class="btn btn-primary" style="height: 38px; flex: 1;">保存</button>
-                    <button type="button" class="btn btn-secondary" style="height: 38px; flex: 1;" onclick="cancelEditEpisode()">取消</button>
+                <div style="display: flex; gap: 0.25rem; height: 38px;">
+                    <button type="submit" class="btn btn-primary" style="flex: 1;">保存</button>
+                    <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="cancelEditEpisode()">取消</button>
+                </div>
+                <div class="form-group" style="grid-column: span 5; margin-top: 0.5rem; text-align: left;">
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">课时配套资料/讲义 (多选绑定)</label>
+                    <div id="episode-attachments-container"></div>
                 </div>
             </form>
         </div>
@@ -449,7 +469,11 @@
                         <button type="button" class="btn btn-secondary" style="padding: 0.375rem 0.75rem;" onclick="document.getElementById('chapter-cover-file').click()">本地上传</button>
                     </div>
                 </div>
-                <div style="display: flex; gap: 0.5rem; justify-content: flex-end;">
+                <div class="form-group" id="chapter-attachments-group" style="display: none; margin-top: 1rem; text-align: left;">
+                    <label style="font-size: 0.75rem; color: #9ca3af; display: block; margin-bottom: 0.25rem;">章节配套资料/讲义 (多选绑定)</label>
+                    <div id="chapter-attachments-container"></div>
+                </div>
+                <div style="display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem;">
                     <button type="button" class="btn btn-secondary" id="cancel-ch-edit-btn" style="display: none;" onclick="cancelChapterEdit()">取消编辑</button>
                     <button type="submit" class="btn btn-primary" id="submit-ch-btn">保存章节</button>
                 </div>
@@ -622,17 +646,27 @@ function deleteCourse(id) {
 }
 
 // Edit Course Modal Logic
-function openEditCourseModal(id, title, grade, subject, coverURL, tags) {
+function openEditCourseModalFromBtn(btn) {
+    const id = parseInt(btn.dataset.courseId, 10);
+    const title = btn.dataset.courseTitle;
+    const grade = btn.dataset.courseGrade;
+    const subject = btn.dataset.courseSubject;
+    const coverURL = btn.dataset.courseCover;
+    const tags = btn.dataset.courseTags;
+    const attachments = btn.dataset.courseAttachments || '[]';
+    
     document.getElementById('edit-course-id').value = id;
     document.getElementById('edit-title').value = title;
     setCheckedValues('edit-grades', grade);
     document.getElementById('edit-subject').value = subject;
     document.getElementById('edit-cover_url').value = coverURL;
     document.getElementById('edit-tags').value = tags || '';
+    
+    renderAttachmentScanner('course-attachments-container', 'course', id, attachments);
+    
     document.getElementById('edit-course-modal').style.display = 'block';
 }
 
-// Close Modals
 function closeEditCourseModal() {
     document.getElementById('edit-course-modal').style.display = 'none';
 }
@@ -645,6 +679,7 @@ function submitEditCourse(event) {
     const subject = document.getElementById('edit-subject').value;
     const cover_url = document.getElementById('edit-cover_url').value;
     const tags = document.getElementById('edit-tags').value;
+    const attachment_json = JSON.stringify(getSelectedScannerFiles('course-attachments-container'));
 
     if (grades.length === 0) {
         alert('请至少选择一个适用年级！');
@@ -658,7 +693,7 @@ function submitEditCourse(event) {
         headers: {
             'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ title, grade, subject, cover_url, tags })
+        body: JSON.stringify({ title, grade, subject, cover_url, tags, attachment_json })
     })
     .then(res => {
         if (!res.ok) return res.json().then(e => { throw new Error(e.error) });
@@ -803,7 +838,7 @@ function renderEpisodesList() {
             <td style="word-break: break-all; font-family: monospace; font-size: 0.75rem; color: #9ca3af;">${ep.VideoRelativePath}</td>
             <td style="text-align: center;">
                 <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem; background-color: #10b981; border: 1px solid #10b981;" onclick="openSubtitleManager(${ep.ID}, '${ep.Title.replace(/'/g, "\\'")}')">字幕</button>
-                <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem;" onclick="startEditEpisode(${ep.ID}, '${ep.Title.replace(/'/g, "\\'")}', '${ep.VideoRelativePath.replace(/'/g, "\\'")}', ${ep.SortOrder}, ${ep.ChapterID})">编辑</button>
+                <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem;" onclick="startEditEpisode(${ep.ID}, '${ep.Title.replace(/'/g, "\\'")}', '${ep.VideoRelativePath.replace(/'/g, "\\'")}', ${ep.SortOrder}, ${ep.ChapterID}, '${ep.AttachmentJSON || '[]'}')">编辑</button>
                 <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="deleteEpisode(${ep.ID})">删除</button>
             </td>
         `;
@@ -843,12 +878,15 @@ function submitAddEpisode(event) {
     });
 }
 
-function startEditEpisode(id, title, path, sort, chapterId) {
+function startEditEpisode(id, title, path, sort, chapterId, attachmentJSON) {
     document.getElementById('edit-ep-id').value = id;
     document.getElementById('edit-ep-title').value = title;
     document.getElementById('edit-ep-path').value = path;
     document.getElementById('edit-ep-sort').value = sort;
     document.getElementById('edit-ep-chapter-id').value = chapterId;
+    
+    renderAttachmentScanner('episode-attachments-container', 'episode', id, attachmentJSON);
+    
     document.getElementById('edit-episode-section').style.display = 'block';
 }
 
@@ -864,6 +902,7 @@ function submitUpdateEpisode(event) {
     const path = document.getElementById('edit-ep-path').value;
     const sort = parseInt(document.getElementById('edit-ep-sort').value, 10);
     const chapterId = parseInt(document.getElementById('edit-ep-chapter-id').value, 10);
+    const attachment_json = JSON.stringify(getSelectedScannerFiles('episode-attachments-container'));
     
     fetch(`/admin/api/episodes/${id}`, {
         method: 'PUT',
@@ -874,7 +913,8 @@ function submitUpdateEpisode(event) {
             title: title,
             video_relative_path: path,
             sort_order: sort,
-            chapter_id: chapterId
+            chapter_id: chapterId,
+            attachment_json: attachment_json
         })
     })
     .then(res => {
@@ -972,7 +1012,7 @@ function loadChaptersList() {
                 <td><strong>${ch.Title}</strong></td>
                 <td style="color: #9ca3af; font-size: 0.75rem;">${ch.Description || '无'}</td>
                 <td style="text-align: center;">
-                    <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem;" onclick="startEditChapter(${ch.ID}, '${ch.Title.replace(/'/g, "\\'")}', '${(ch.Description || '').replace(/'/g, "\\'")}', '${ch.CoverURL}', ${ch.SortOrder})">编辑</button>
+                    <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; margin-right: 0.25rem;" onclick="startEditChapter(${ch.ID}, '${ch.Title.replace(/'/g, "\\'")}', '${(ch.Description || '').replace(/'/g, "\\'")}', '${ch.CoverURL}', ${ch.SortOrder}, '${ch.AttachmentJSON || '[]'}')">编辑</button>
                     <button class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="deleteChapter(${ch.ID})">删除</button>
                 </td>
             `;
@@ -994,6 +1034,7 @@ function submitAddChapter(event) {
     const isEdit = currentEditChapterID !== null;
     const url = isEdit ? `/admin/api/chapters/${currentEditChapterID}` : `/admin/api/courses/${currentCourseID}/chapters`;
     const method = isEdit ? 'PUT' : 'POST';
+    const attachment_json = isEdit ? JSON.stringify(getSelectedScannerFiles('chapter-attachments-container')) : '[]';
 
     fetch(url, {
         method: method,
@@ -1004,7 +1045,8 @@ function submitAddChapter(event) {
             title: title,
             description: desc,
             cover_url: cover,
-            sort_order: sort
+            sort_order: sort,
+            attachment_json: attachment_json
         })
     })
     .then(res => {
@@ -1021,13 +1063,16 @@ function submitAddChapter(event) {
     });
 }
 
-function startEditChapter(id, title, desc, cover, sort) {
+function startEditChapter(id, title, desc, cover, sort, attachmentJSON) {
     currentEditChapterID = id;
     document.getElementById('chapter-form-title').textContent = '修改章节信息';
     document.getElementById('add-ch-title').value = title;
     document.getElementById('add-ch-desc').value = desc;
     document.getElementById('add-ch-cover').value = cover;
     document.getElementById('add-ch-sort').value = sort;
+    
+    document.getElementById('chapter-attachments-group').style.display = 'block';
+    renderAttachmentScanner('chapter-attachments-container', 'chapter', id, attachmentJSON);
     
     document.getElementById('cancel-ch-edit-btn').style.display = 'inline-block';
     document.getElementById('submit-ch-btn').textContent = '保存修改';
@@ -1038,6 +1083,8 @@ function cancelChapterEdit() {
     document.getElementById('chapter-form-title').textContent = '新增章节';
     document.getElementById('add-chapter-form').reset();
     document.getElementById('add-ch-sort').value = '1';
+    
+    document.getElementById('chapter-attachments-group').style.display = 'none';
     
     document.getElementById('cancel-ch-edit-btn').style.display = 'none';
     document.getElementById('submit-ch-btn').textContent = '保存章节';
@@ -1169,14 +1216,6 @@ function deleteSubtitle(id) {
 }
 
 // Quick Edit Helpers from Main Page
-function openChapterEditDirectly(courseId, courseTitle, chId, chTitle, chDesc, chCover, chSort) {
-    currentCourseID = courseId;
-    document.getElementById('chapter-manager-modal-title').textContent = `章节管理 - ${courseTitle}`;
-    document.getElementById('chapter-manager-modal').style.display = 'block';
-    
-    startEditChapter(chId, chTitle, chDesc, chCover, chSort);
-    loadChaptersList();
-}
 
 function openChapterEditFromBtn(btn) {
     const courseId = parseInt(btn.dataset.courseId, 10);
@@ -1300,6 +1339,60 @@ function executeBulkDelete(courseId) {
     .catch(err => {
         alert('批量删除失败: ' + err.message);
     });
+}
+
+function renderAttachmentScanner(containerId, entityType, entityId, selectedAttachmentsJson) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    container.innerHTML = '<div style="color: #64748b; font-size: 0.8125rem;">正在扫描同级目录资料...</div>';
+    
+    let selectedList = [];
+    try {
+        if (selectedAttachmentsJson) {
+            selectedList = JSON.parse(selectedAttachmentsJson);
+        }
+    } catch(e) {
+        selectedList = [];
+    }
+    if (!Array.isArray(selectedList)) {
+        selectedList = [];
+    }
+
+    fetch(`/admin/api/scan-attachments?type=${entityType}&id=${entityId}`)
+    .then(res => {
+        if (!res.ok) throw new Error('扫描失败');
+        return res.json();
+    })
+    .then(data => {
+        const files = data.files || [];
+        const path = data.path;
+        if (files.length === 0) {
+            container.innerHTML = `<div style="font-size: 0.8125rem; color: #9ca3af; border: 1px dashed #374151; padding: 0.5rem; border-radius: 8px;">同级目录 <code>${path}</code> 未检测到文档附件 (.pdf, .docx, .txt等)</div>`;
+            return;
+        }
+        
+        let html = `<div style="font-size: 0.75rem; color: #9ca3af; margin-bottom: 0.25rem;">扫描目录: <code>${path}</code> (勾选绑定)</div>`;
+        html += `<div style="max-height: 150px; overflow-y: auto; background-color: #111827; padding: 0.5rem; border-radius: 8px; border: 1px solid #374151; display: flex; flex-direction: column; gap: 0.25rem;">`;
+        files.forEach(f => {
+            const isChecked = selectedList.includes(f.path) ? 'checked' : '';
+            html += `
+                <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; cursor: pointer; color: #e2e8f0; margin: 0.15rem 0;">
+                    <input type="checkbox" name="${containerId}-file" value="${f.path}" ${isChecked} style="cursor: pointer; width: 14px; height: 14px;">
+                    <span style="font-family: monospace; word-break: break-all;">${f.name}</span>
+                </label>
+            `;
+        });
+        html += `</div>`;
+        container.innerHTML = html;
+    })
+    .catch(err => {
+        container.innerHTML = `<div style="color: #ef4444; font-size: 0.8125rem;">加载失败: ${err.message}</div>`;
+    });
+}
+
+function getSelectedScannerFiles(containerId) {
+    return Array.from(document.querySelectorAll(`input[name="${containerId}-file"]:checked`)).map(cb => cb.value);
 }
 
 // Close modals when clicking outside

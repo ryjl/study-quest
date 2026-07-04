@@ -29,7 +29,7 @@ func TestCourseService(t *testing.T) {
 	svc := NewCourseService(courseRepo, userRepo)
 
 	t.Run("CreateCourseSingleGrade", func(t *testing.T) {
-		course, err := svc.CreateCourse("Math Grade 3", "3", "math", "http://cover.url", "")
+		course, err := svc.CreateCourse("Math Grade 3", "3", "math", "http://cover.url", "", "")
 		if err != nil {
 			t.Fatalf("Failed to create course: %v", err)
 		}
@@ -39,7 +39,7 @@ func TestCourseService(t *testing.T) {
 	})
 
 	t.Run("CreateCourseMultiGrade", func(t *testing.T) {
-		course, err := svc.CreateCourse("Science 3-4", "3,4", "physics", "http://cover.url", "science,physics")
+		course, err := svc.CreateCourse("Science 3-4", "3,4", "physics", "http://cover.url", "science,physics", "")
 		if err != nil {
 			t.Fatalf("Failed to create course with multi-grade: %v", err)
 		}
@@ -52,24 +52,24 @@ func TestCourseService(t *testing.T) {
 	})
 
 	t.Run("CreateCourseInvalidGrade", func(t *testing.T) {
-		_, err := svc.CreateCourse("Invalid", "12", "math", "", "")
+		_, err := svc.CreateCourse("Invalid", "12", "math", "", "", "")
 		if err == nil {
 			t.Error("Expected error creating course with invalid grade, got nil")
 		}
 
-		_, err = svc.CreateCourse("Invalid Parts", "3,invalid", "math", "", "")
+		_, err = svc.CreateCourse("Invalid Parts", "3,invalid", "math", "", "", "")
 		if err == nil {
 			t.Error("Expected error creating course with invalid grade part, got nil")
 		}
 	})
 
 	t.Run("UpdateCourse", func(t *testing.T) {
-		course, err := svc.CreateCourse("Physics 7", "7", "physics", "", "science")
+		course, err := svc.CreateCourse("Physics 7", "7", "physics", "", "science", "")
 		if err != nil {
 			t.Fatalf("Failed to create course: %v", err)
 		}
 
-		updated, err := svc.UpdateCourse(course.ID, "Physics 7-8", "7,8", "physics", "http://new.cover", "science,advanced")
+		updated, err := svc.UpdateCourse(course.ID, "Physics 7-8", "7,8", "physics", "http://new.cover", "science,advanced", "")
 		if err != nil {
 			t.Fatalf("Failed to update course: %v", err)
 		}
@@ -84,10 +84,10 @@ func TestCourseService(t *testing.T) {
 		db.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&model.Course{})
 
 		// Create test courses
-		_, _ = svc.CreateCourse("Course Grade 3 and 4", "3,4", "math", "", "")
-		_, _ = svc.CreateCourse("Course Grade 4 and 5", "4,5", "math", "", "")
-		_, _ = svc.CreateCourse("Course Universal", "universal", "math", "", "")
-		_, _ = svc.CreateCourse("Course Grade 6 Only", "6", "math", "", "")
+		_, _ = svc.CreateCourse("Course Grade 3 and 4", "3,4", "math", "", "", "")
+		_, _ = svc.CreateCourse("Course Grade 4 and 5", "4,5", "math", "", "", "")
+		_, _ = svc.CreateCourse("Course Universal", "universal", "math", "", "", "")
+		_, _ = svc.CreateCourse("Course Grade 6 Only", "6", "math", "", "", "")
 
 		// Query courses (simulating Admin user role)
 		courses, err := svc.GetCourses(0, "admin", "3", "math")

@@ -9,8 +9,8 @@ import (
 type ChapterService interface {
 	GetChaptersByCourse(courseID uint) ([]model.Chapter, error)
 	GetChapterByID(id uint) (*model.Chapter, error)
-	CreateChapter(courseID uint, title, description, coverURL string, sortOrder int) (*model.Chapter, error)
-	UpdateChapter(id uint, title, description, coverURL string, sortOrder int) (*model.Chapter, error)
+	CreateChapter(courseID uint, title, description, coverURL, attachmentJSON string, sortOrder int) (*model.Chapter, error)
+	UpdateChapter(id uint, title, description, coverURL, attachmentJSON string, sortOrder int) (*model.Chapter, error)
 	DeleteChapter(id uint) error
 }
 
@@ -31,13 +31,17 @@ func (s *chapterService) GetChapterByID(id uint) (*model.Chapter, error) {
 	return s.chapterRepo.FindByID(id)
 }
 
-func (s *chapterService) CreateChapter(courseID uint, title, description, coverURL string, sortOrder int) (*model.Chapter, error) {
+func (s *chapterService) CreateChapter(courseID uint, title, description, coverURL, attachmentJSON string, sortOrder int) (*model.Chapter, error) {
+	if attachmentJSON == "" {
+		attachmentJSON = "[]"
+	}
 	ch := &model.Chapter{
-		CourseID:    courseID,
-		Title:       title,
-		Description: description,
-		CoverURL:    coverURL,
-		SortOrder:   sortOrder,
+		CourseID:       courseID,
+		Title:          title,
+		Description:    description,
+		CoverURL:       coverURL,
+		AttachmentJSON: attachmentJSON,
+		SortOrder:      sortOrder,
 	}
 	if err := s.chapterRepo.Create(ch); err != nil {
 		return nil, err
@@ -45,7 +49,7 @@ func (s *chapterService) CreateChapter(courseID uint, title, description, coverU
 	return ch, nil
 }
 
-func (s *chapterService) UpdateChapter(id uint, title, description, coverURL string, sortOrder int) (*model.Chapter, error) {
+func (s *chapterService) UpdateChapter(id uint, title, description, coverURL, attachmentJSON string, sortOrder int) (*model.Chapter, error) {
 	ch, err := s.chapterRepo.FindByID(id)
 	if err != nil {
 		return nil, err
@@ -54,9 +58,14 @@ func (s *chapterService) UpdateChapter(id uint, title, description, coverURL str
 		return nil, nil
 	}
 
+	if attachmentJSON == "" {
+		attachmentJSON = "[]"
+	}
+
 	ch.Title = title
 	ch.Description = description
 	ch.CoverURL = coverURL
+	ch.AttachmentJSON = attachmentJSON
 	ch.SortOrder = sortOrder
 
 	if err := s.chapterRepo.Update(ch); err != nil {

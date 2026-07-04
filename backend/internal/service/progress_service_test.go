@@ -28,7 +28,7 @@ func TestProgressServiceLastWatched(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
-	svc := NewProgressService(progressRepo, episodeRepo)
+	svc := NewProgressService(progressRepo, episodeRepo, nil)
 
 	t.Run("GetLastWatchedEpisode", func(t *testing.T) {
 		// Create User

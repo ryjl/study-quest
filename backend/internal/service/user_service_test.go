@@ -137,8 +137,8 @@ func TestUserService(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
 		courseSvc := NewCourseService(courseRepo, userRepo)
 
-		_, _ = courseSvc.CreateCourse("Course1", "3", "math", "", "")
-		_, _ = courseSvc.CreateCourse("Course2", "4", "physics", "", "")
+		_, _ = courseSvc.CreateCourse("Course1", "3", "math", "", "", "")
+		_, _ = courseSvc.CreateCourse("Course2", "4", "physics", "", "", "")
 
 		// Grant all
 		err = svc.BulkCourseAccess(user.ID, "grant_all")

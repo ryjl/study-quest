@@ -34,7 +34,7 @@ class StudyQuestApp extends StatelessWidget {
 
     return MaterialApp(
       title: 'StudyQuest',
-      theme: AppTheme.darkTheme,
+      theme: AppTheme.lightTheme,
       debugShowCheckedModeBanner: false,
       home: auth.isAuthenticated ? const MainNavigation() : const LoginScreen(),
     );

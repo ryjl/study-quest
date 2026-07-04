@@ -39,6 +39,7 @@ type ImportService interface {
 	ScanPath(path string) ([]storage.FileInfo, error)
 	PreviewDeepScan(path string) (*ImportPreviewNode, error)
 	ExecuteTreeImport(req *ExecuteTreeImportRequest) error
+	ScanDirectoryAttachments(path string) ([]storage.FileInfo, error)
 	PingStorage() error
 }
 
@@ -352,6 +353,33 @@ func (s *importService) PingStorage() error {
 		return err
 	}
 	return provider.Ping()
+}
+
+func (s *importService) ScanDirectoryAttachments(path string) ([]storage.FileInfo, error) {
+	provider, err := s.getActiveProvider()
+	if err != nil {
+		return nil, err
+	}
+	files, err := provider.ListDir(path)
+	if err != nil {
+		return nil, err
+	}
+	var documents []storage.FileInfo
+	for _, f := range files {
+		if !f.IsDir && isDocumentFile(f.Name) {
+			documents = append(documents, f)
+		}
+	}
+	return documents, nil
+}
+
+func isDocumentFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".pdf", ".docx", ".doc", ".txt", ".md", ".xlsx", ".xls", ".pptx", ".ppt", ".zip":
+		return true
+	}
+	return false
 }
 
 func isVideoFile(filename string) bool {

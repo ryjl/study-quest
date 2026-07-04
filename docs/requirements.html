@@ -1,0 +1,1084 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StudyQuest 学途奇旅</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Phosphor Icons -->
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+  <!-- React & ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    .scrollbar-hide::-webkit-scrollbar {
+      display: none;
+    }
+
+    .scrollbar-hide {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+
+    @keyframes zoomIn {
+      from {
+        opacity: 0;
+        transform: scale(0.95) translateY(20px);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+      }
+    }
+
+    .animate-zoom-in {
+      animation: zoomIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    select {
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+    }
+
+    .bg-dot-pattern {
+      background-color: #f8fafc;
+      background-image: radial-gradient(#cbd5e1 1.5px, transparent 1.5px);
+      background-size: 24px 24px;
+    }
+
+    .btn-3d {
+      transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .btn-3d:active {
+      transform: translateY(4px);
+    }
+
+    .btn-3d-blue {
+      background-color: #3b82f6;
+      box-shadow: 0 4px 0 0 #2563eb;
+      color: white;
+    }
+
+    .btn-3d-blue:active {
+      box-shadow: 0 0 0 0 #2563eb;
+    }
+
+    .btn-3d-white {
+      background-color: #ffffff;
+      box-shadow: 0 4px 0 0 #e2e8f0;
+      color: #64748b;
+      border: 2px solid #f1f5f9;
+    }
+
+    .btn-3d-white:active {
+      box-shadow: 0 0 0 0 #e2e8f0;
+      transform: translateY(4px);
+    }
+
+    .btn-3d-dark {
+      background-color: #1e293b;
+      box-shadow: 0 4px 0 0 #0f172a;
+      color: white;
+    }
+
+    .btn-3d-dark:active {
+      box-shadow: 0 0 0 0 #0f172a;
+      transform: translateY(4px);
+    }
+
+    .hover-card-lift {
+      transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease;
+    }
+
+    .hover-card-lift:hover {
+      transform: translateY(-6px) scale(1.01);
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+    }
+  </style>
+</head>
+
+<body class="bg-dot-pattern text-slate-800 font-sans overflow-hidden">
+
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useMemo } = React;
+
+    // --- 模拟数据 ---
+    const currentUser = {
+      name: "天天",
+      avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=Felix&backgroundColor=e0e7ff",
+      points: 1250,
+      grade: "四年级",
+      totalStudyMinutes: 340,
+      completedCoursesCount: 2
+    };
+
+    const courses = [
+      {
+        id: 1, title: "小英雄雨来：抗日小英雄", subject: "语文", grade: "四年级", progress: 60, totalEpisodes: 4, completedEpisodes: 2, cover: "blue", tag: "必修",
+        chapters: [
+          {
+            id: 101, title: "第一章：晋察冀边区的小英雄",
+            episodes: [
+              { id: 1001, title: "第1集：雨来的家乡与夜校读书", isCompleted: true, duration: "12:05", hasPdf: true, hasSummary: true },
+              { id: 1002, title: "第2集：掩护交通员李大叔", isCompleted: true, duration: "15:30", hasPdf: false, hasSummary: true }
+            ]
+          },
+          {
+            id: 102, title: "第二章：智斗敌人",
+            episodes: [
+              { id: 1003, title: "第3集：鬼子进村与雨来被捕", isCompleted: false, duration: "14:20", hasPdf: true, hasSummary: false },
+              { id: 1004, title: "第4集：机智逃生", isCompleted: false, duration: "16:45", hasPdf: false, hasSummary: false }
+            ]
+          }
+        ]
+      },
+      {
+        id: 2, title: "动画几何：认识空间图形", subject: "数学", grade: "三年级", progress: 30, totalEpisodes: 3, completedEpisodes: 1, cover: "indigo", tag: "思维",
+        chapters: [
+          {
+            id: 201, title: "",
+            episodes: [
+              { id: 2001, title: "第1讲：点、线、面的神奇关系", isCompleted: true, duration: "08:15", hasPdf: true, hasSummary: true },
+              { id: 2002, title: "第2讲：三角形为什么最稳定？", isCompleted: false, duration: "10:30", hasPdf: true, hasSummary: false },
+              { id: 2003, title: "第3讲：勾股定理的初步接触", isCompleted: false, duration: "11:20", hasPdf: false, hasSummary: false }
+            ]
+          }
+        ]
+      },
+      { id: 3, title: "新概念英语 (第一册)", subject: "英语", grade: "通用", progress: 100, totalEpisodes: 20, completedEpisodes: 20, cover: "sky", tag: "课外", chapters: [] },
+      { id: 4, title: "国家地理：奇妙的昆虫", subject: "科学", grade: "通用", progress: 0, totalEpisodes: 8, completedEpisodes: 0, cover: "emerald", tag: "探索", chapters: [] },
+      { id: 5, title: "趣味唐诗三百首", subject: "语文", grade: "三年级", progress: 10, totalEpisodes: 50, completedEpisodes: 5, cover: "blue", tag: "拓展", chapters: [] },
+      // 新增：特洛伊木马——下棋兴趣课
+      { id: 6, title: "国际象棋大师班：开局定式", subject: "兴趣", grade: "通用", progress: 0, totalEpisodes: 12, completedEpisodes: 0, cover: "indigo", tag: "逻辑", chapters: [] },
+      // 新增：杂七杂八的优质纪录片/拓展视野视频
+      { id: 7, title: "航拍中国：俯瞰大好河山", subject: "综合", grade: "通用", progress: 20, totalEpisodes: 34, completedEpisodes: 7, cover: "sky", tag: "视野", chapters: [] },
+    ];
+
+    const adventureCardData = {
+      tasks: [
+        "雨来被抓住后，他是怎么跟敌人周旋的？",
+        "找出视频里雨来使用的一个成语。",
+        "如果你是雨来，你会怎么把信送出去？"
+      ]
+    };
+
+    const mockHistory = [
+      { id: 1, title: "完成了 小英雄雨来 第2集", time: "今天 14:30", type: "video", points: "+10" },
+      { id: 2, title: "通关了 几何空间 小测试", time: "昨天 19:20", type: "quiz", points: "+50" },
+      { id: 3, title: "完成了 动画几何 第1讲", time: "昨天 19:00", type: "video", points: "+10" },
+      { id: 4, title: "获得成就「坚持不懈」", time: "3天前", type: "badge", points: "+100" },
+    ];
+
+    const mockBadges = [
+      { id: 1, name: "七日先锋", desc: "连续登录学习7天", icon: "ph-fire", color: "text-orange-500 bg-orange-100", unlocked: true },
+      { id: 2, name: "数学达人", desc: "通关5次数学挑战", icon: "ph-function", color: "text-blue-500 bg-blue-100", unlocked: true },
+      { id: 3, name: "英语之星", desc: "看完一整部英语外文片", icon: "ph-translate", color: "text-purple-500 bg-purple-100", unlocked: false },
+    ];
+
+    function App() {
+      const [activeTab, setActiveTab] = useState('学习大厅');
+
+      const [searchQuery, setSearchQuery] = useState('');
+      const [selectedSubject, setSelectedSubject] = useState('全部');
+      const [selectedGrade, setSelectedGrade] = useState('全部');
+      const [selectedTag, setSelectedTag] = useState('全部');
+
+      const [viewingCourse, setViewingCourse] = useState(null);
+      const [showAdventureModal, setShowAdventureModal] = useState(false);
+      const [selectedEpisode, setSelectedEpisode] = useState(null);
+
+      const [activeVideo, setActiveVideo] = useState(null);
+      const [showResourceModal, setShowResourceModal] = useState(false);
+      const [activeResource, setActiveResource] = useState({ type: null, data: null });
+
+      // 更新：扩充科目与标签体系，将兴趣和综合容纳进来
+      const subjects = ['全部', '语文', '数学', '英语', '科学', '兴趣', '综合'];
+      const grades = ['全部', '三年级', '四年级', '五年级', '六年级', '通用'];
+      const tags = ['全部', '必修', '思维', '拓展', '探索', '课外', '逻辑', '视野'];
+
+      const filteredCourses = useMemo(() => {
+        return courses.filter(c => {
+          const matchSearch = c.title.toLowerCase().includes(searchQuery.toLowerCase());
+          const matchSubject = selectedSubject === '全部' || c.subject === selectedSubject;
+          const matchGrade = selectedGrade === '全部' || c.grade === selectedGrade;
+          const matchTag = selectedTag === '全部' || c.tag === selectedTag;
+          return matchSearch && matchSubject && matchGrade && matchTag;
+        });
+      }, [courses, searchQuery, selectedSubject, selectedGrade, selectedTag]);
+
+      const handleCourseClick = (course) => {
+        setViewingCourse(course);
+        setActiveVideo(null);
+      };
+
+      const handleEpisodeClick = (episode) => {
+        setSelectedEpisode(episode);
+        setShowAdventureModal(true);
+      };
+
+      const handleBackToHall = () => {
+        setViewingCourse(null);
+        setActiveVideo(null);
+      };
+
+      const handleBackToCourseDetail = () => {
+        setActiveVideo(null);
+      };
+
+      const openResource = (type, episode, e) => {
+        if (e) e.stopPropagation();
+        setActiveResource({ type, data: episode });
+        setShowResourceModal(true);
+      };
+
+      // --- 侧边栏组件 ---
+      const Sidebar = () => (
+        <div className="w-[280px] bg-white border-r border-slate-100/80 flex flex-col h-full shadow-[8px_0_30px_rgba(0,0,0,0.03)] relative z-10 shrink-0">
+          <div className="pt-8 pb-4 px-8 flex items-center space-x-3">
+            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+              <i className="ph-fill ph-rocket text-white text-xl"></i>
+            </div>
+            <h1 className="text-xl font-black bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-600 tracking-tight">学途奇旅</h1>
+          </div>
+
+          <div className="mx-5 my-4 p-5 bg-gradient-to-b from-blue-50/80 to-white rounded-3xl border border-blue-100/50 shadow-sm relative overflow-hidden">
+            <div className="absolute -right-4 -top-4 w-20 h-20 bg-blue-400/10 rounded-full blur-xl"></div>
+            <div className="flex items-center space-x-4 relative z-10">
+              <div className="relative shrink-0">
+                <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-blue-400 to-purple-400 p-[3px] shadow-md">
+                  <div className="w-full h-full rounded-full border-2 border-white overflow-hidden bg-white">
+                    <img src={currentUser.avatar} alt="avatar" className="w-full h-full object-cover" />
+                  </div>
+                </div>
+                <div className="absolute -bottom-2 -right-1 bg-gradient-to-r from-orange-400 to-yellow-400 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm border border-white">
+                  Lv.4
+                </div>
+              </div>
+              <div className="flex-1 min-w-0">
+                <h2 className="text-lg font-extrabold text-slate-800 truncate">{currentUser.name}</h2>
+                <div className="flex items-center mt-1 space-x-1 text-xs font-bold text-slate-500">
+                  <span className="bg-slate-100 px-2 py-0.5 rounded-md">{currentUser.grade}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 bg-white/60 backdrop-blur-sm rounded-2xl p-3 flex items-center justify-between border border-white shadow-sm">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center">
+                  <i className="ph-fill ph-star text-orange-500 text-lg"></i>
+                </div>
+                <span className="text-sm font-black text-slate-700">我的积分</span>
+              </div>
+              <span className="text-lg font-black text-orange-500">{currentUser.points}</span>
+            </div>
+          </div>
+
+          <nav className="flex-1 px-5 py-2 space-y-3">
+            <NavItem icon="ph-book-open" label="学习大厅" active={activeTab === '学习大厅'} onClick={() => { setActiveTab('学习大厅'); setViewingCourse(null); setActiveVideo(null); }} />
+            <NavItem icon="ph-map-trifold" label="成长足迹" active={activeTab === '成长足迹'} onClick={() => { setActiveTab('成长足迹'); setViewingCourse(null); setActiveVideo(null); }} />
+            <NavItem icon="ph-gear" label="系统设置" active={activeTab === '系统设置'} onClick={() => { setActiveTab('系统设置'); setViewingCourse(null); setActiveVideo(null); }} />
+          </nav>
+
+          <div className="p-5">
+            <button className="w-full flex items-center justify-center space-x-2 px-4 py-3.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-2xl transition-colors font-bold text-sm">
+              <i className="ph-bold ph-sign-out text-lg"></i>
+              <span>退出当前账号</span>
+            </button>
+          </div>
+        </div>
+      );
+
+      const NavItem = ({ icon, label, active, onClick }) => (
+        <button
+          onClick={onClick}
+          className={`w-full flex items-center space-x-4 px-5 py-4 rounded-[20px] transition-all duration-200 font-bold text-[15px]
+            ${active
+              ? 'bg-blue-50 text-blue-600 shadow-sm border border-blue-100/50 relative overflow-hidden'
+              : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border border-transparent'}`}
+        >
+          {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1.5 h-8 bg-blue-500 rounded-r-full"></div>}
+          <i className={`ph ${icon} text-2xl ${active ? 'ph-fill drop-shadow-sm' : 'ph-bold'}`}></i>
+          <span>{label}</span>
+        </button>
+      );
+
+      // --- 大厅课程卡片组件 ---
+      const CourseCard = ({ course }) => {
+        const bgColors = {
+          blue: 'from-[#60A5FA] to-[#3B82F6] shadow-blue-500/25',
+          indigo: 'from-[#818CF8] to-[#6366F1] shadow-indigo-500/25',
+          sky: 'from-[#38BDF8] to-[#0EA5E9] shadow-sky-500/25',
+          emerald: 'from-[#34D399] to-[#10B981] shadow-emerald-500/25',
+        };
+        const isCompleted = course.progress === 100;
+
+        return (
+          <div
+            onClick={() => handleCourseClick(course)}
+            className="group relative bg-white rounded-[28px] p-4 cursor-pointer border-2 border-transparent hover:border-blue-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] hover-card-lift flex flex-col h-full"
+          >
+            <div className={`w-full h-40 rounded-[20px] bg-gradient-to-br ${bgColors[course.cover]} shadow-lg relative overflow-hidden mb-5 shrink-0`}>
+              <div className="absolute top-3 left-3 bg-white/25 backdrop-blur-md text-white text-[11px] font-black px-2.5 py-1.5 rounded-xl border border-white/20 shadow-sm">
+                {course.tag} | {course.grade}
+              </div>
+              {isCompleted && (
+                <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm text-emerald-500 rounded-full p-1.5 shadow-md">
+                  <i className="ph-fill ph-check-circle text-emerald-500 text-lg"></i>
+                </div>
+              )}
+              <div className="absolute -bottom-6 -right-6 w-32 h-32 bg-white/20 rounded-full blur-2xl group-hover:scale-125 transition-transform duration-500"></div>
+              <div className="absolute top-4 -left-4 w-16 h-16 bg-white/20 rounded-full blur-xl"></div>
+
+              <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-slate-900/10 backdrop-blur-[2px]">
+                <div className="bg-white/95 text-blue-600 font-black px-6 py-2.5 rounded-full shadow-xl transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 flex items-center space-x-2">
+                  <i className="ph-fill ph-play-circle text-xl"></i>
+                  <span>进入学习</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-2 flex flex-col flex-1">
+              <div className="flex justify-between items-start mb-3 gap-2">
+                <h3 className="font-extrabold text-slate-800 text-[17px] leading-snug line-clamp-2">{course.title}</h3>
+                <span className="text-[11px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-lg shrink-0 border border-slate-200/60">
+                  {course.subject}
+                </span>
+              </div>
+
+              <div className="mt-auto pt-4">
+                <div className="flex justify-between text-xs font-black mb-2">
+                  <span className={isCompleted ? "text-emerald-500" : "text-blue-600"}>
+                    {isCompleted ? '已圆满通关' : `当前进度 ${course.progress}%`}
+                  </span>
+                  <span className="text-slate-400 bg-slate-50 px-2 py-0.5 rounded-md">{course.completedEpisodes}/{course.totalEpisodes} 讲</span>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden shadow-inner">
+                  <div className={`h-full rounded-full transition-all duration-700 relative overflow-hidden ${isCompleted ? 'bg-emerald-500' : 'bg-gradient-to-r from-blue-400 to-blue-500'}`} style={{ width: `${course.progress}%` }}>
+                    {!isCompleted && <div className="absolute top-0 bottom-0 left-0 right-0 bg-gradient-to-r from-transparent via-white/30 to-transparent -translate-x-full animate-[shimmer_2s_infinite]"></div>}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- 学习大厅视图 ---
+      const StudyHallView = () => (
+        <>
+          <header className="sticky top-0 bg-white/70 backdrop-blur-2xl z-20 px-10 py-6 flex justify-between items-center border-b border-slate-200/50 shadow-[0_4px_30px_rgba(0,0,0,0.02)]">
+            <div>
+              <h1 className="text-[28px] font-black text-slate-800 tracking-tight">学习大厅</h1>
+              <p className="text-slate-500 text-sm mt-1 font-bold">今天想探索哪个领域呢？🚀</p>
+            </div>
+
+            <button className="btn-3d btn-3d-blue rounded-2xl p-3 flex items-center space-x-4 group border-2 border-white">
+              <div className="w-12 h-12 bg-white/20 backdrop-blur-sm rounded-xl flex items-center justify-center shadow-inner group-active:scale-95 transition-transform">
+                <i className="ph-fill ph-play-circle text-white text-[28px] drop-shadow-md"></i>
+              </div>
+              <div className="text-left pr-4">
+                <p className="text-[11px] font-black text-blue-100 mb-0.5 uppercase tracking-wider">继续学习</p>
+                <p className="text-[15px] font-extrabold text-white">小英雄雨来：第1集</p>
+              </div>
+            </button>
+          </header>
+
+          <div className="p-10 max-w-7xl mx-auto pb-24">
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 space-y-4 md:space-y-0">
+              <div className="flex space-x-3 overflow-x-auto pb-2 scrollbar-hide px-1">
+                {subjects.map(subject => {
+                  const isActive = selectedSubject === subject;
+                  return (
+                    <button
+                      key={subject}
+                      onClick={() => setSelectedSubject(subject)}
+                      className={`btn-3d px-6 py-2.5 rounded-xl font-black text-[14px] whitespace-nowrap transition-all 
+                        ${isActive ? 'btn-3d-dark' : 'btn-3d-white'}`}
+                    >
+                      {subject}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="relative w-full md:w-72 shadow-sm">
+                <i className="ph-bold ph-magnifying-glass absolute left-4 top-1/2 transform -translate-y-1/2 text-slate-400 text-lg"></i>
+                <input
+                  type="text"
+                  placeholder="搜索课程名称..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-white border-2 border-slate-200 text-slate-800 font-bold text-sm rounded-2xl pl-12 pr-4 py-3 focus:outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-100/50 transition-all placeholder-slate-400"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-4 mb-8 bg-white p-3 rounded-2xl border border-slate-200/60 shadow-sm inline-flex">
+              <div className="relative">
+                <i className="ph-fill ph-graduation-cap absolute left-4 top-1/2 transform -translate-y-1/2 text-blue-500 text-lg"></i>
+                <select
+                  value={selectedGrade}
+                  onChange={(e) => setSelectedGrade(e.target.value)}
+                  className="bg-blue-50/50 border-none text-blue-700 font-extrabold text-sm rounded-xl pl-11 pr-10 py-2.5 cursor-pointer focus:outline-none hover:bg-blue-50 transition-colors"
+                >
+                  {grades.map(grade => <option key={grade} value={grade}>{grade === '全部' ? '所有年级' : grade}</option>)}
+                </select>
+                <i className="ph-bold ph-caret-down absolute right-4 top-1/2 transform -translate-y-1/2 text-blue-500 pointer-events-none text-sm"></i>
+              </div>
+
+              <div className="w-px h-6 bg-slate-200"></div>
+
+              <div className="relative">
+                <i className="ph-fill ph-tag absolute left-4 top-1/2 transform -translate-y-1/2 text-emerald-500 text-lg"></i>
+                <select
+                  value={selectedTag}
+                  onChange={(e) => setSelectedTag(e.target.value)}
+                  className="bg-emerald-50/50 border-none text-emerald-700 font-extrabold text-sm rounded-xl pl-11 pr-10 py-2.5 cursor-pointer focus:outline-none hover:bg-emerald-50 transition-colors"
+                >
+                  {tags.map(tag => <option key={tag} value={tag}>{tag === '全部' ? '所有标签' : tag}</option>)}
+                </select>
+                <i className="ph-bold ph-caret-down absolute right-4 top-1/2 transform -translate-y-1/2 text-emerald-500 pointer-events-none text-sm"></i>
+              </div>
+
+              <div className="px-4 text-sm font-bold text-slate-400">
+                找到 <span className="text-slate-700">{filteredCourses.length}</span> 门
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-x-6 gap-y-8">
+              {filteredCourses.map(course => (
+                <CourseCard key={course.id} course={course} />
+              ))}
+            </div>
+
+            {filteredCourses.length === 0 && (
+              <div className="text-center py-24 bg-white rounded-[32px] border border-slate-200/60 mt-6 shadow-sm">
+                <div className="w-24 h-24 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <i className="ph-duotone ph-magnifying-glass text-slate-300 text-5xl"></i>
+                </div>
+                <h3 className="text-xl font-black text-slate-700 mb-2">未找到匹配的课程</h3>
+                <p className="text-slate-400 font-bold text-sm">尝试更改年级、标签或换个搜索词看看</p>
+                <button
+                  onClick={() => { setSearchQuery(''); setSelectedGrade('全部'); setSelectedTag('全部'); setSelectedSubject('全部'); }}
+                  className="mt-8 btn-3d btn-3d-white px-8 py-3 rounded-xl font-bold"
+                >
+                  清除所有筛选
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      );
+
+      // --- 课程详情页 ---
+      const CourseDetailView = ({ course }) => {
+        const bgColors = {
+          blue: 'from-[#60A5FA] to-[#3B82F6]',
+          indigo: 'from-[#818CF8] to-[#6366F1]',
+          sky: 'from-[#38BDF8] to-[#0EA5E9]',
+          emerald: 'from-[#34D399] to-[#10B981]',
+        };
+
+        return (
+          <div className="flex flex-col h-full animate-zoom-in">
+            <div className="sticky top-0 bg-white/70 backdrop-blur-2xl z-20 px-10 py-5 border-b border-slate-200/50 flex items-center shadow-[0_4px_30px_rgba(0,0,0,0.02)]">
+              <button
+                onClick={handleBackToHall}
+                className="btn-3d btn-3d-white flex items-center px-5 py-2.5 rounded-xl font-bold text-sm"
+              >
+                <i className="ph-bold ph-arrow-left mr-2 text-lg"></i> 返回大厅
+              </button>
+            </div>
+
+            <div className="p-10 max-w-5xl mx-auto w-full pb-24">
+              <div className={`w-full rounded-[36px] bg-gradient-to-r ${bgColors[course.cover]} p-12 text-white shadow-2xl shadow-${course.cover}-500/20 mb-12 relative overflow-hidden flex justify-between items-center border-4 border-white`}>
+                <div className="absolute top-0 right-0 w-[400px] h-[400px] bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3"></div>
+                <div className="relative z-10">
+                  <div className="flex items-center space-x-3 mb-6">
+                    <span className="bg-white/20 backdrop-blur-md px-4 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border border-white/20">{course.subject}</span>
+                    <span className="bg-white/20 backdrop-blur-md px-4 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border border-white/20">{course.grade}</span>
+                    <span className="bg-white/20 backdrop-blur-md px-4 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border border-white/20">{course.tag}</span>
+                  </div>
+                  <h1 className="text-[40px] leading-tight font-black tracking-tight mb-3 drop-shadow-sm">{course.title}</h1>
+                  <p className="text-white/90 font-bold flex items-center mt-4 text-lg bg-black/10 w-fit px-4 py-2 rounded-xl backdrop-blur-sm">
+                    <i className="ph-fill ph-video-camera mr-2 text-2xl"></i> 共 {course.totalEpisodes} 讲挑战任务
+                  </p>
+                </div>
+                <div className="relative z-10 bg-white/95 backdrop-blur-xl p-8 rounded-[32px] text-center border-4 border-white shadow-xl shadow-black/5 min-w-[160px] transform rotate-3">
+                  <p className="text-slate-400 text-sm font-black mb-1 uppercase tracking-widest">学习进度</p>
+                  <p className="text-[56px] font-black text-slate-800 leading-none">{course.progress}<span className="text-2xl text-slate-400">%</span></p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-[36px] p-10 shadow-sm border border-slate-200/60">
+                <h2 className="text-[28px] font-black text-slate-800 mb-10 flex items-center">
+                  <div className="w-12 h-12 bg-blue-100 text-blue-500 rounded-2xl flex items-center justify-center mr-4">
+                    <i className="ph-bold ph-list-dashes text-2xl"></i>
+                  </div>
+                  闯关目录
+                </h2>
+
+                {course.chapters && course.chapters.length > 0 ? (
+                  <div className="space-y-10">
+                    {course.chapters.map((chapter) => (
+                      <div key={chapter.id} className="relative">
+                        {chapter.title && (
+                          <div className="flex items-center mb-5">
+                            <div className="w-3 h-8 bg-gradient-to-b from-blue-400 to-blue-600 rounded-full mr-4 shadow-sm shadow-blue-500/20"></div>
+                            <h3 className="text-xl font-black text-slate-800">{chapter.title}</h3>
+                          </div>
+                        )}
+                        <div className={`space-y-4 ${chapter.title ? 'ml-6 border-l-4 border-slate-100 pl-8' : ''}`}>
+                          {chapter.episodes.map(episode => (
+                            <div
+                              key={episode.id}
+                              className="w-full flex items-center justify-between p-5 bg-white rounded-2xl border-2 border-slate-100 hover:border-blue-200 transition-all hover-card-lift group text-left cursor-pointer"
+                              onClick={() => handleEpisodeClick(episode)}
+                            >
+                              <div className="flex items-start">
+                                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mr-5 shadow-sm transition-all border-2 shrink-0
+                                  ${episode.isCompleted ? 'bg-emerald-50 border-emerald-200 text-emerald-500' : 'bg-slate-50 border-slate-200 text-slate-400 group-hover:bg-blue-50 group-hover:border-blue-200 group-hover:text-blue-500'}`}>
+                                  <i className={`text-3xl ${episode.isCompleted ? 'ph-fill ph-check-circle' : 'ph-fill ph-play-circle'}`}></i>
+                                </div>
+                                <div className="flex flex-col">
+                                  <h4 className={`font-extrabold text-[17px] transition-colors mb-2 ${episode.isCompleted ? 'text-slate-500' : 'text-slate-800 group-hover:text-blue-600'}`}>
+                                    {episode.title}
+                                  </h4>
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200/80 px-2.5 py-1 rounded-lg flex items-center">
+                                      <i className="ph-bold ph-clock mr-1.5"></i>{episode.duration}
+                                    </span>
+
+                                    {episode.hasPdf && (
+                                      <button
+                                        onClick={(e) => openResource('pdf', episode, e)}
+                                        className="text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 border border-orange-200 hover:border-orange-300 px-2.5 py-1 rounded-lg flex items-center transition-all"
+                                      >
+                                        <i className="ph-fill ph-file-pdf mr-1 text-orange-500"></i> 配套讲义
+                                      </button>
+                                    )}
+
+                                    {episode.hasSummary && (
+                                      <button
+                                        onClick={(e) => openResource('summary', episode, e)}
+                                        className="text-xs font-bold text-purple-600 bg-purple-50 hover:bg-purple-100 border border-purple-200 hover:border-purple-300 px-2.5 py-1 rounded-lg flex items-center transition-all"
+                                      >
+                                        <i className="ph-fill ph-sparkle mr-1 text-purple-500"></i> AI 总结
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center shrink-0">
+                                {!episode.isCompleted && (
+                                  <span className="mr-5 text-sm font-black text-blue-600 bg-blue-100 px-4 py-2 rounded-xl opacity-0 group-hover:opacity-100 transition-opacity transform translate-x-4 group-hover:translate-x-0 shadow-sm">
+                                    开始挑战
+                                  </span>
+                                )}
+                                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-blue-100 transition-colors">
+                                  <i className="ph-bold ph-caret-right text-slate-400 group-hover:text-blue-500 text-lg"></i>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                    <div className="w-20 h-20 bg-white rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+                      <i className="ph-duotone ph-package text-slate-300 text-4xl"></i>
+                    </div>
+                    <p className="text-slate-500 font-bold text-lg">老师还在努力备课中，暂无内容哦</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- 沉浸式视频播放页 (包含播放器与右侧辅屏资源) ---
+      const VideoPlayerView = ({ episode, course }) => {
+        return (
+          <div className="flex flex-col h-full bg-slate-900 animate-zoom-in">
+            {/* 极简深色导航栏 */}
+            <div className="px-6 py-4 flex items-center justify-between border-b border-white/10 bg-slate-900 z-10 shrink-0">
+              <div className="flex items-center">
+                <button
+                  onClick={handleBackToCourseDetail}
+                  className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors mr-4"
+                >
+                  <i className="ph-bold ph-arrow-left text-xl"></i>
+                </button>
+                <div>
+                  <h1 className="text-white font-bold text-lg">{episode.title}</h1>
+                  <p className="text-slate-400 text-xs font-medium">{course.title}</p>
+                </div>
+              </div>
+              <div className="flex items-center space-x-3">
+                <div className="bg-blue-500/20 border border-blue-500/30 text-blue-400 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center">
+                  <i className="ph-fill ph-check-circle mr-1"></i> 已安全连接护眼模式
+                </div>
+              </div>
+            </div>
+
+            {/* 70/30 左右分栏 */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* 左侧 70%：视频播放核心区 */}
+              <div className="flex-1 flex flex-col items-center justify-center p-6 bg-black relative">
+                {/* Mock 视频播放器占位 */}
+                <div className="w-full max-w-5xl aspect-video bg-slate-800 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden flex flex-col items-center justify-center group">
+                  <div className="absolute top-4 left-4 flex space-x-2 z-10">
+                    <span className="bg-black/50 text-white/80 text-[10px] px-2 py-1 rounded backdrop-blur-sm">流畅 1080P</span>
+                    <span className="bg-black/50 text-white/80 text-[10px] px-2 py-1 rounded backdrop-blur-sm">{episode.duration}</span>
+                  </div>
+
+                  <div className="w-20 h-20 bg-blue-500/80 backdrop-blur-md rounded-full flex items-center justify-center shadow-[0_0_30px_rgba(59,130,246,0.5)] group-hover:scale-110 transition-transform cursor-pointer border border-white/20">
+                    <i className="ph-fill ph-play text-white text-3xl ml-1"></i>
+                  </div>
+                  <p className="text-slate-500 font-bold mt-4 tracking-wider text-sm">Flutter media_kit 播放内核渲染区域</p>
+
+                  {/* 假进度条 */}
+                  <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent">
+                    <div className="w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500 w-1/3"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 右侧 30%：随堂资源面板 */}
+              <div className="w-[360px] bg-slate-800 border-l border-white/5 flex flex-col shrink-0">
+                <div className="p-5 border-b border-white/5 bg-slate-800/50">
+                  <h3 className="text-white font-bold text-lg flex items-center">
+                    <i className="ph-fill ph-books mr-2 text-blue-400"></i> 随堂助手
+                  </h3>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-5 space-y-6">
+                  {/* 第一部分：配套资源（你要的讲义和总结） */}
+                  <div>
+                    <h4 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-3">附属资料</h4>
+                    <div className="space-y-3">
+                      {episode.hasPdf ? (
+                        <button
+                          onClick={() => openResource('pdf', episode)}
+                          className="w-full flex items-center justify-between p-3.5 bg-slate-700/50 hover:bg-orange-500/20 border border-slate-600 hover:border-orange-500/50 rounded-xl transition-all group"
+                        >
+                          <div className="flex items-center">
+                            <div className="w-10 h-10 rounded-lg bg-orange-500/20 flex items-center justify-center mr-3 group-hover:bg-orange-500 transition-colors">
+                              <i className="ph-fill ph-file-pdf text-orange-400 group-hover:text-white text-xl"></i>
+                            </div>
+                            <div className="text-left">
+                              <p className="text-white font-bold text-sm">随堂讲义 PDF</p>
+                              <p className="text-slate-400 text-xs mt-0.5">配合视频一起看</p>
+                            </div>
+                          </div>
+                          <i className="ph-bold ph-caret-right text-slate-500 group-hover:text-orange-400"></i>
+                        </button>
+                      ) : (
+                        <div className="w-full flex items-center p-3.5 bg-slate-800/50 border border-slate-700/50 rounded-xl opacity-50">
+                          <div className="w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center mr-3"><i className="ph-fill ph-file-pdf text-slate-500 text-xl"></i></div>
+                          <div className="text-left"><p className="text-slate-400 font-bold text-sm">暂无配套讲义</p></div>
+                        </div>
+                      )}
+
+                      {episode.hasSummary && (
+                        <button
+                          onClick={() => openResource('summary', episode)}
+                          className="w-full flex items-center justify-between p-3.5 bg-slate-700/50 hover:bg-purple-500/20 border border-slate-600 hover:border-purple-500/50 rounded-xl transition-all group"
+                        >
+                          <div className="flex items-center">
+                            <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center mr-3 group-hover:bg-purple-500 transition-colors">
+                              <i className="ph-fill ph-sparkle text-purple-400 group-hover:text-white text-xl"></i>
+                            </div>
+                            <div className="text-left">
+                              <p className="text-white font-bold text-sm">AI 重点总结</p>
+                              <p className="text-slate-400 text-xs mt-0.5">看完视频点这里复习</p>
+                            </div>
+                          </div>
+                          <i className="ph-bold ph-caret-right text-slate-500 group-hover:text-purple-400"></i>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="w-full h-px bg-white/5"></div>
+
+                  {/* 第二部分：课前探险任务的备忘录 */}
+                  <div>
+                    <h4 className="text-slate-400 text-xs font-bold uppercase tracking-widest mb-3 flex items-center justify-between">
+                      <span>本节探索任务</span>
+                      <span className="bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded text-[10px]">带着问题看</span>
+                    </h4>
+                    <div className="space-y-3">
+                      {adventureCardData.tasks.map((task, index) => (
+                        <div key={index} className="flex items-start bg-slate-700/30 p-3 rounded-xl border border-slate-700/50">
+                          <span className="text-blue-400 font-black mr-2 text-sm mt-0.5">{index + 1}.</span>
+                          <p className="text-slate-300 text-sm leading-relaxed font-medium">{task}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- 课后附件/总结预览弹窗 (Resource Modal) ---
+      const ResourceModal = () => {
+        if (!showResourceModal || !activeResource.data) return null;
+
+        const isPdf = activeResource.type === 'pdf';
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={() => setShowResourceModal(false)}></div>
+            <div className="relative bg-white rounded-[32px] w-full max-w-3xl h-[80vh] shadow-2xl overflow-hidden animate-zoom-in border-4 border-white/20 flex flex-col">
+
+              <div className={`p-6 border-b border-slate-100 flex items-center justify-between ${isPdf ? 'bg-orange-50' : 'bg-purple-50'}`}>
+                <div className="flex items-center">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center mr-4 ${isPdf ? 'bg-orange-100 text-orange-500' : 'bg-purple-100 text-purple-500'}`}>
+                    <i className={`text-2xl ${isPdf ? 'ph-fill ph-file-pdf' : 'ph-fill ph-sparkle'}`}></i>
+                  </div>
+                  <div>
+                    <h3 className={`font-black text-lg ${isPdf ? 'text-orange-900' : 'text-purple-900'}`}>
+                      {isPdf ? '课后讲义预览' : 'AI 核心知识总结'}
+                    </h3>
+                    <p className={`text-sm font-bold ${isPdf ? 'text-orange-600' : 'text-purple-600'}`}>{activeResource.data.title}</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowResourceModal(false)} className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm hover:bg-slate-100 transition-colors">
+                  <i className="ph-bold ph-x text-slate-500"></i>
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50">
+                {isPdf ? (
+                  <div className="w-full h-full border-2 border-dashed border-orange-200 rounded-2xl bg-white flex flex-col items-center justify-center text-orange-400">
+                    <i className="ph-duotone ph-file-pdf text-6xl mb-4"></i>
+                    <p className="font-bold">PDF 文件渲染器加载中...</p>
+                    <p className="text-sm mt-2">（这里将调用 syncfusion_flutter_pdfviewer）</p>
+                    <button className="mt-6 btn-3d bg-orange-500 text-white px-6 py-2 rounded-xl font-bold flex items-center">
+                      <i className="ph-bold ph-printer mr-2"></i> 一键打印讲义
+                    </button>
+                  </div>
+                ) : (
+                  <div className="prose prose-slate max-w-none">
+                    <div className="bg-purple-100/50 border border-purple-200 rounded-2xl p-6 mb-6">
+                      <h4 className="text-purple-800 font-black mb-2 flex items-center"><i className="ph-fill ph-magic-wand mr-2"></i> 本集浓缩精华</h4>
+                      <p className="text-slate-700 font-medium leading-relaxed">小英雄雨来是一部经典的抗日儿童文学作品。在这一集中，主要讲述了雨来所在的村庄背景，以及他由于机智勇敢，在夜校读书时展现出的聪明才智。他不仅学会了认字，还懂得了“我们是中国人，我们爱自己的祖国”的深刻道理。</p>
+                    </div>
+                    <h4 className="font-bold text-slate-800 mb-4">📝 AI 提取的重点词汇：</h4>
+                    <ul className="list-disc list-inside space-y-2 text-slate-600 font-medium ml-2">
+                      <li><span className="font-bold text-purple-600">晋察冀边区：</span> 抗日战争时期的一个重要根据地。</li>
+                      <li><span className="font-bold text-purple-600">掩护：</span> 采取某种措施保护别人，使其不受伤害。</li>
+                      <li><span className="font-bold text-purple-600">夜校：</span> 利用晚上时间为白天需要劳动的人开设的学校。</li>
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- 课前探险弹窗拦截器 ---
+      const PreAdventureModal = () => {
+        if (!showAdventureModal || !selectedEpisode) return null;
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={() => setShowAdventureModal(false)}></div>
+
+            <div className="relative bg-white rounded-[40px] w-full max-w-2xl shadow-2xl overflow-hidden animate-zoom-in border-4 border-white/20">
+              <div className="bg-gradient-to-br from-[#3B82F6] to-[#6366F1] p-10 text-center relative overflow-hidden">
+                <i className="ph-fill ph-sparkle absolute top-8 left-12 text-white/20 text-5xl animate-[pulse_2s_infinite]"></i>
+                <i className="ph-fill ph-sparkle absolute bottom-6 right-16 text-white/20 text-3xl animate-[pulse_3s_infinite]"></i>
+                <div className="absolute -top-24 -right-24 w-48 h-48 bg-white/10 rounded-full blur-2xl"></div>
+
+                <div className="bg-white/20 backdrop-blur-xl w-24 h-24 rounded-[28px] flex items-center justify-center mx-auto mb-6 shadow-inner border-2 border-white/30 transform rotate-3">
+                  <i className="ph-fill ph-treasure-chest text-white text-5xl drop-shadow-md"></i>
+                </div>
+                <h2 className="text-3xl font-black text-white tracking-widest drop-shadow-sm">探险任务卡</h2>
+                <div className="mt-4 bg-black/20 inline-block px-6 py-2.5 rounded-2xl backdrop-blur-md border border-white/10">
+                  <p className="text-blue-50 font-bold text-sm uppercase tracking-widest opacity-80 mb-0.5">即将探索</p>
+                  <p className="text-white font-black text-lg">{selectedEpisode.title}</p>
+                </div>
+              </div>
+
+              <div className="p-10 bg-slate-50/50">
+                <p className="text-slate-500 font-extrabold mb-8 text-center text-lg flex justify-center items-center">
+                  <i className="ph-fill ph-info text-blue-500 mr-2 text-2xl"></i>
+                  带上这 <span className="text-blue-600 mx-2 text-2xl">3 个</span> 秘密任务出发吧：
+                </p>
+
+                <div className="space-y-4">
+                  {adventureCardData.tasks.map((task, index) => (
+                    <div key={index} className="flex items-start p-5 bg-white rounded-2xl border-2 border-slate-100 shadow-sm hover:border-blue-200 hover:shadow-md transition-all group">
+                      <div className="flex-shrink-0 w-10 h-10 rounded-xl bg-blue-50 text-blue-600 border-2 border-blue-100 flex items-center justify-center font-black text-lg mr-5 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                        {index + 1}
+                      </div>
+                      <p className="text-slate-700 font-bold leading-relaxed pt-1.5 text-[16px]">{task}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-12 flex justify-center">
+                  <button
+                    onClick={() => {
+                      setShowAdventureModal(false);
+                      setActiveVideo(selectedEpisode);
+                    }}
+                    className="btn-3d btn-3d-blue px-10 py-5 rounded-[24px] font-black text-[20px] flex items-center group w-full justify-center max-w-sm border-2 border-white"
+                  >
+                    接受任务，开始播放
+                    <i className="ph-bold ph-rocket-launch ml-3 text-2xl group-active:translate-x-1 group-active:-translate-y-1 transition-transform"></i>
+                  </button>
+                </div>
+                <p className="text-center text-sm font-bold text-slate-400 mt-6 flex items-center justify-center">
+                  <i className="ph-fill ph-robot mr-1.5 text-lg"></i> 看完视频后，AI 老师会考考你哦！
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // --- 成长足迹视图 ---
+      const ProgressView = () => (
+        <div className="animate-zoom-in h-full flex flex-col">
+          <header className="sticky top-0 bg-white/70 backdrop-blur-2xl z-20 px-10 py-6 flex justify-between items-center border-b border-slate-200/50 shadow-[0_4px_30px_rgba(0,0,0,0.02)]">
+            <div>
+              <h1 className="text-[28px] font-black text-slate-800 tracking-tight">成长足迹</h1>
+              <p className="text-slate-500 text-sm mt-1 font-bold">看看你取得了多少成就！🏅</p>
+            </div>
+          </header>
+
+          <div className="p-10 max-w-7xl mx-auto w-full flex-1 pb-24">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+              <div className="bg-gradient-to-br from-orange-400 to-orange-500 rounded-[32px] p-8 text-white shadow-xl shadow-orange-500/20 relative overflow-hidden border-2 border-white hover-card-lift">
+                <i className="ph-fill ph-star text-white/20 text-[100px] absolute -right-6 -bottom-6 transform rotate-12"></i>
+                <p className="text-orange-100 font-bold mb-2">累计获得积分</p>
+                <h2 className="text-5xl font-black">{currentUser.points}</h2>
+              </div>
+              <div className="bg-gradient-to-br from-[#60A5FA] to-[#3B82F6] rounded-[32px] p-8 text-white shadow-xl shadow-blue-500/20 relative overflow-hidden border-2 border-white hover-card-lift">
+                <i className="ph-fill ph-clock text-white/20 text-[100px] absolute -right-6 -bottom-6"></i>
+                <p className="text-blue-100 font-bold mb-2">专注学习时长</p>
+                <h2 className="text-5xl font-black">{currentUser.totalStudyMinutes} <span className="text-2xl font-bold">分钟</span></h2>
+              </div>
+              <div className="bg-gradient-to-br from-emerald-400 to-emerald-500 rounded-[32px] p-8 text-white shadow-xl shadow-emerald-500/20 relative overflow-hidden border-2 border-white hover-card-lift">
+                <i className="ph-fill ph-check-circle text-white/20 text-[100px] absolute -right-6 -bottom-6"></i>
+                <p className="text-emerald-100 font-bold mb-2">已圆满通关</p>
+                <h2 className="text-5xl font-black">{currentUser.completedCoursesCount} <span className="text-2xl font-bold">门课</span></h2>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2 bg-white rounded-[36px] p-10 shadow-sm border border-slate-200/60">
+                <h3 className="text-2xl font-black text-slate-800 mb-8 flex items-center">
+                  <div className="w-10 h-10 bg-blue-100 text-blue-500 rounded-xl flex items-center justify-center mr-3">
+                    <i className="ph-fill ph-clock-counter-clockwise text-2xl"></i>
+                  </div>
+                  最近动态
+                </h3>
+                <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-blue-200 before:to-transparent">
+                  {mockHistory.map((item, index) => (
+                    <div key={item.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
+                      <div className="flex items-center justify-center w-12 h-12 rounded-full border-4 border-white bg-blue-50 text-blue-500 shadow-md shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                        {item.type === 'video' && <i className="ph-fill ph-play-circle text-xl"></i>}
+                        {item.type === 'quiz' && <i className="ph-fill ph-exam text-xl"></i>}
+                        {item.type === 'badge' && <i className="ph-fill ph-medal text-xl"></i>}
+                      </div>
+                      <div className="w-[calc(100%-4rem)] md:w-[calc(50%-3rem)] bg-slate-50/80 p-5 rounded-[24px] border border-slate-200/60 shadow-sm hover:shadow-md transition-shadow group-hover:border-blue-200">
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="font-extrabold text-[15px] text-slate-700">{item.title}</span>
+                          <span className="text-orange-500 font-black bg-orange-100/50 border border-orange-200 px-2 py-0.5 rounded-lg text-sm">{item.points}</span>
+                        </div>
+                        <time className="text-xs font-bold text-slate-400 bg-white px-2 py-1 rounded-md border border-slate-200/50 inline-block">{item.time}</time>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white rounded-[36px] p-10 shadow-sm border border-slate-200/60 h-fit">
+                <h3 className="text-2xl font-black text-slate-800 mb-8 flex items-center">
+                  <div className="w-10 h-10 bg-orange-100 text-orange-500 rounded-xl flex items-center justify-center mr-3">
+                    <i className="ph-fill ph-medal text-2xl"></i>
+                  </div>
+                  荣誉墙
+                </h3>
+                <div className="space-y-4">
+                  {mockBadges.map(badge => (
+                    <div key={badge.id} className={`flex items-center p-4 rounded-2xl border-2 transition-all ${badge.unlocked ? 'border-slate-100 bg-white hover:border-orange-200 hover:shadow-md cursor-pointer' : 'border-slate-50 bg-slate-50 opacity-60 grayscale'}`}>
+                      <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-3xl mr-4 shrink-0 shadow-sm ${badge.color}`}>
+                        <i className={`ph-fill ${badge.icon}`}></i>
+                      </div>
+                      <div>
+                        <h4 className="font-extrabold text-slate-700 mb-1 flex items-center text-[16px]">
+                          {badge.title || badge.name}
+                          {!badge.unlocked && <i className="ph-fill ph-lock-key text-slate-400 ml-2 text-sm"></i>}
+                        </h4>
+                        <p className="text-xs text-slate-500 font-bold">{badge.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button className="btn-3d btn-3d-white w-full mt-8 py-4 rounded-2xl font-black">
+                  查看所有 12 个成就
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+
+      // --- 系统设置视图 ---
+      const SettingsView = () => (
+        <div className="animate-zoom-in h-full flex flex-col">
+          <header className="sticky top-0 bg-white/70 backdrop-blur-2xl z-20 px-10 py-6 flex justify-between items-center border-b border-slate-200/50 shadow-[0_4px_30px_rgba(0,0,0,0.02)]">
+            <div>
+              <h1 className="text-[28px] font-black text-slate-800 tracking-tight">系统设置</h1>
+              <p className="text-slate-500 text-sm mt-1 font-bold">配置你的专属学习环境 ⚙️</p>
+            </div>
+          </header>
+
+          <div className="p-10 max-w-4xl mx-auto w-full pb-24">
+            <div className="bg-white rounded-[36px] p-10 shadow-sm border border-slate-200/60 space-y-12">
+
+              <section>
+                <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center">
+                  <div className="w-10 h-10 bg-blue-100 text-blue-500 rounded-xl flex items-center justify-center mr-3">
+                    <i className="ph-fill ph-shield-check text-2xl"></i>
+                  </div>
+                  账号安全
+                </h3>
+                <div className="flex items-center justify-between p-5 bg-slate-50 rounded-[24px] border border-slate-200/60">
+                  <div className="flex items-center">
+                    <img src={currentUser.avatar} alt="avatar" className="w-14 h-14 rounded-full border-2 border-white shadow-sm mr-4" />
+                    <div>
+                      <p className="font-extrabold text-[16px] text-slate-700">{currentUser.name}</p>
+                      <p className="text-xs font-bold text-slate-400 mt-1 bg-white px-2 py-0.5 rounded-md border border-slate-200/50 inline-block">当前设备已绑定</p>
+                    </div>
+                  </div>
+                  <button className="btn-3d btn-3d-white px-6 py-2.5 rounded-xl font-bold text-sm">
+                    修改 PIN 码
+                  </button>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center">
+                  <div className="w-10 h-10 bg-emerald-100 text-emerald-500 rounded-xl flex items-center justify-center mr-3">
+                    <i className="ph-fill ph-monitor-play text-2xl"></i>
+                  </div>
+                  偏好设置
+                </h3>
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-5 bg-slate-50 rounded-[24px] border border-slate-200/60 cursor-pointer hover:bg-slate-100 transition-colors">
+                    <div>
+                      <p className="font-extrabold text-[16px] text-slate-700">护眼模式</p>
+                      <p className="text-sm font-bold text-slate-500 mt-1">过滤蓝光，界面变为暖色调</p>
+                    </div>
+                    <div className="w-14 h-7 bg-emerald-500 rounded-full relative shadow-inner">
+                      <div className="absolute right-1 top-1 w-5 h-5 bg-white rounded-full shadow-md"></div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between p-5 bg-slate-50 rounded-[24px] border border-slate-200/60 cursor-pointer hover:bg-slate-100 transition-colors">
+                    <div>
+                      <p className="font-extrabold text-[16px] text-slate-700">自动连播</p>
+                      <p className="text-sm font-bold text-slate-500 mt-1">学完当前课程后，倒计时 3 秒自动播放下一集</p>
+                    </div>
+                    <div className="w-14 h-7 bg-slate-300 rounded-full relative shadow-inner">
+                      <div className="absolute left-1 top-1 w-5 h-5 bg-white rounded-full shadow-md"></div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-xl font-black text-slate-800 mb-6 flex items-center">
+                  <div className="w-10 h-10 bg-purple-100 text-purple-500 rounded-xl flex items-center justify-center mr-3">
+                    <i className="ph-fill ph-hard-drives text-2xl"></i>
+                  </div>
+                  高级配置 (家长专区)
+                </h3>
+                <div className="space-y-5">
+                  <div className="p-6 bg-slate-50 rounded-[24px] border border-slate-200/60">
+                    <label className="block text-sm font-extrabold text-slate-700 mb-3">后端 API 地址 (API Endpoint)</label>
+                    <div className="flex shadow-sm rounded-xl">
+                      <input
+                        type="text"
+                        defaultValue="http://192.168.1.100:8080"
+                        className="flex-1 bg-white border-y border-l border-slate-200 rounded-l-xl px-5 py-3 focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 font-mono text-sm text-slate-600 font-bold"
+                      />
+                      <button className="btn-3d btn-3d-blue px-6 py-3 rounded-r-xl font-bold text-sm shadow-none border-l border-blue-600">
+                        测试并保存
+                      </button>
+                    </div>
+                    <p className="text-xs font-bold text-slate-400 mt-3 flex items-center">
+                      <i className="ph-fill ph-info mr-1"></i>离开局域网时，请输入 ZeroTier 分配的虚拟 IP 地址。
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between p-6 bg-slate-50 rounded-[24px] border border-slate-200/60">
+                    <div>
+                      <p className="font-extrabold text-[16px] text-slate-700">本地视频缓存</p>
+                      <p className="text-sm font-bold text-slate-500 mt-1">当前已使用 1.2 GB (可解决播放卡顿)</p>
+                    </div>
+                    <button className="px-6 py-3 bg-red-50 text-red-600 border border-red-200 hover:border-red-300 hover:bg-red-100 rounded-xl font-bold text-sm transition-colors shadow-sm">
+                      一键清理
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      );
+
+      return (
+        <div className="h-screen w-full bg-dot-pattern flex font-sans overflow-hidden text-slate-800 selection:bg-blue-200">
+          <Sidebar />
+
+          <main className="flex-1 h-full overflow-y-auto relative scroll-smooth shadow-[-10px_0_30px_rgba(0,0,0,0.02)] z-20 bg-transparent">
+            {activeTab === '学习大厅' && !viewingCourse && !activeVideo && <StudyHallView />}
+            {activeTab === '学习大厅' && viewingCourse && !activeVideo && <CourseDetailView course={viewingCourse} />}
+            {activeTab === '学习大厅' && viewingCourse && activeVideo && <VideoPlayerView episode={activeVideo} course={viewingCourse} />}
+            {activeTab === '成长足迹' && <ProgressView />}
+            {activeTab === '系统设置' && <SettingsView />}
+          </main>
+
+          <PreAdventureModal />
+          <ResourceModal />
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+
+</html>
