@@ -151,8 +151,38 @@ type Episode struct {
 	OriginalRelativePath string `gorm:"type:text"` // Original multi-layer path to prevent name collision
 	FileSize             *int64 // Nullable file size in bytes
 	DurationSeconds      *int   // Nullable video duration in seconds
+	MediaMetaJSON        string `gorm:"type:text"` // Serialized MediaMeta from ffprobe (codecs, resolution, streams, ...)
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+}
+
+// MediaMeta is the parsed ffprobe result persisted on an episode. It captures
+// the container-level media information (duration, codecs, resolution,
+// bit-rate, full stream list) so listings and the player can show real
+// metadata without re-probing the netdisk on every view.
+type MediaMeta struct {
+	DurationSeconds int           `json:"duration_seconds"`
+	FormatName      string        `json:"format_name"` // e.g. "mov,mp4,m4a,3gp,3g2,mj2"
+	BitRate         int64         `json:"bit_rate"`    // total bit-rate in bps
+	Width           int           `json:"width"`       // video width, 0 if no video
+	Height          int           `json:"height"`      // video height, 0 if no video
+	VideoCodec      string        `json:"video_codec"` // e.g. "h264", "hevc"
+	Fps             string        `json:"fps"`         // e.g. "30/1"
+	AudioCodec      string        `json:"audio_codec"` // e.g. "aac"
+	AudioChannels   int           `json:"audio_channels"`
+	Streams         []MediaStream `json:"streams"` // full stream list, kept for future use
+}
+
+// MediaStream is a single track inside the container (video / audio / subtitle).
+type MediaStream struct {
+	Index    int    `json:"index"`
+	Type     string `json:"type"` // "video" | "audio" | "subtitle"
+	Codec    string `json:"codec"`
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	BitRate  int64  `json:"bit_rate"`
+	Channels int    `json:"channels"` // audio only
+	Language string `json:"language"`
 }
 
 // Subtitle holds the raw SRT subtitle content.

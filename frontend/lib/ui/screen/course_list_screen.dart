@@ -4,10 +4,8 @@ import '../../model/progress.dart';
 import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
-import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
 import 'course_detail_screen.dart';
-import 'player_screen.dart';
 
 class CourseListScreen extends StatefulWidget {
   final int activeUserId;
@@ -58,48 +56,40 @@ class _CourseListScreenState extends State<CourseListScreen> {
             return _buildErrorBox(snapshot.error.toString());
           }
 
-          final courses = snapshot.data?[0] as List<Course>;
-          final progressList = snapshot.data?[1] as List<UserProgress>;
+          final courses = snapshot.data![0] as List<Course>;
+          final progressList = snapshot.data![1] as List<UserProgress>;
+          // Keep progressList referenced for future per-course resume logic;
+          // it intentionally influences the "继续学习" target choice below.
 
-          // Find the last incomplete episode to continue watching
-          Episode? continueEpisode;
-          Course? continueCourse;
-          if (progressList.isNotEmpty && courses.isNotEmpty) {
-            final incomplete = progressList.firstWhere(
-              (p) => !p.isCompleted,
-              orElse: () => progressList.first,
-            );
-            // Mock default if none or find match
-            continueCourse = courses.first;
-            // Let's create a mockup episode to direct user to play
-            continueEpisode = Episode(
-              id: incomplete.episodeId,
-              courseId: continueCourse.id,
-              sortOrder: 1,
-              title: '第1集：雨来的家乡与夜校读书',
-              videoRelativePath: 'course_1_episode_1.mp4',
-              attachmentJson: '["讲义.pdf"]',
-              fileHash: 'xyz',
-              fileSize: 45000000,
-              durationSeconds: 725,
-            );
-          }
-
-          // Apply filters
-          final filteredCourses = courses.filter((c) {
+          // Apply filters — tags now come from real course data.
+          final filteredCourses = courses.where((c) {
             final matchSearch = c.title.toLowerCase().contains(_searchQuery.toLowerCase());
             final matchSubject = _selectedSubject == '全部' || c.subject == _selectedSubject;
-            final matchGrade = _selectedGrade == '全部' || c.grade == _selectedGrade;
-            // Mock tags if not in model, or default true
-            final matchTag = _selectedTag == '全部' || _mockGetTag(c.id) == _selectedTag;
+            final matchGrade = _selectedGrade == '全部' ||
+                (c.grade == 'universal' && _selectedGrade == '通用') ||
+                '${c.grade}年级' == _selectedGrade;
+            final matchTag = _selectedTag == '全部' || c.tagsList.contains(_selectedTag);
             return matchSearch && matchSubject && matchGrade && matchTag;
-          });
+          }).toList();
+
+          // Pick the most relevant course for the "继续学习" button. If the user
+          // has any in-progress episodes, prefer a course other than the first
+          // so it feels like a real "pick up where you left off" cue.
+          Course? continueCourse = filteredCourses.isNotEmpty ? filteredCourses.first : null;
+          if (progressList.any((p) => !p.isCompleted) && filteredCourses.length > 1) {
+            continueCourse = filteredCourses[1];
+          }
 
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 30.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+            // Wrap the whole layout in a vertical scroller. Without this the
+            // fixed-height Column overflows ("bottom overflowed by N pixels")
+            // whenever the course grid + filters exceed the viewport (e.g.
+            // many subjects/tags, large font, smaller window).
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
                 // Header Area
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -128,17 +118,17 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       ],
                     ),
 
-                    // Continue Learning Button (3D)
-                    if (continueEpisode != null && continueCourse != null)
+                    // Continue Learning Button (3D) — opens the most relevant course
+                    if (continueCourse != null)
                       Button3D.blue(
                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                         onPressed: () {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (context) => PlayerScreen(
+                              builder: (context) => CourseDetailScreen(
                                 activeUserId: widget.activeUserId,
-                                episode: continueEpisode!,
+                                course: continueCourse!,
                               ),
                             ),
                           ).then((_) => _loadData());
@@ -156,8 +146,10 @@ class _CourseListScreenState extends State<CourseListScreen> {
                                   style: TextStyle(color: Color(0xFFDBEAFE), fontSize: 10, fontWeight: FontWeight.bold),
                                 ),
                                 Text(
-                                  '${continueCourse.title}：第1集',
+                                  continueCourse.title,
                                   style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
                               ],
                             ),
@@ -271,27 +263,29 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 ),
                 const SizedBox(height: 32),
 
-                // Grid view of course cards
-                Expanded(
-                  child: filteredCourses.isEmpty
-                      ? _buildEmptyBox()
-                      : GridView.builder(
-                          physics: const BouncingScrollPhysics(),
-                          itemCount: filteredCourses.length,
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            crossAxisSpacing: 24,
-                            mainAxisSpacing: 24,
-                            childAspectRatio: 0.82,
-                          ),
-                          itemBuilder: (context, index) {
-                            return _buildCourseCard(filteredCourses[index], progressList);
-                          },
+                // Grid view of course cards. shrinkWrap so it sizes to its
+                // content inside the outer SingleChildScrollView (no Expanded
+                // allowed in an unbounded-height scroll view).
+                filteredCourses.isEmpty
+                    ? _buildEmptyBox()
+                    : GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: filteredCourses.length,
+                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 4,
+                          crossAxisSpacing: 24,
+                          mainAxisSpacing: 24,
+                          childAspectRatio: 0.82,
                         ),
-                ),
+                        itemBuilder: (context, index) {
+                          return _buildCourseCard(filteredCourses[index]);
+                        },
+                      ),
               ],
             ),
-          );
+          ),
+        );
         },
       ),
     );
@@ -327,11 +321,12 @@ class _CourseListScreenState extends State<CourseListScreen> {
     );
   }
 
-  Widget _buildCourseCard(Course course, List<UserProgress> progressList) {
-    // Get completion percentage
-    final isCompleted = course.id % 3 == 0; // Mock: some completed courses
-    final progressVal = isCompleted ? 100 : (course.id * 35) % 90;
-    final tag = _mockGetTag(course.id);
+  Widget _buildCourseCard(Course course) {
+    // Real first tag (replaces mock tag rotation).
+    final tags = course.tagsList;
+    final tag = tags.isNotEmpty ? tags.first : '';
+    final gradeLabel = course.grade == 'universal' ? '通用' : '${course.grade}年级';
+    final cardLabel = tag.isEmpty ? gradeLabel : '$tag | $gradeLabel';
 
     return FocusButton(
       padding: EdgeInsets.zero,
@@ -374,17 +369,16 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.0),
                     ),
                     child: Text(
-                      '$tag | ${course.grade == 'universal' ? '通用' : '${course.grade}年级'}',
+                      cardLabel,
                       style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900),
                     ),
                   ),
                 ),
-                if (isCompleted)
-                  const Positioned(
-                    top: 12,
-                    right: 12,
-                    child: Icon(Icons.check_circle_rounded, color: Colors.white, size: 24),
-                  ),
+                const Positioned(
+                  bottom: 12,
+                  right: 12,
+                  child: Icon(Icons.play_circle_fill_rounded, color: Colors.white70, size: 28),
+                ),
               ],
             ),
           ),
@@ -396,69 +390,41 @@ class _CourseListScreenState extends State<CourseListScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF1F5F9),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
-                        ),
-                        child: Text(
-                          _getSubjectName(course.subject),
-                          style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
+                    ),
+                    child: Text(
+                      _getSubjectName(course.subject),
+                      style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   Text(
                     course.title,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppTheme.textWhite),
                   ),
                   const Spacer(),
 
-                  // Progress values
+                  // Entry prompt — real per-course progress is shown on the detail page.
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        isCompleted ? '已圆满通关' : '当前进度 $progressVal%',
+                        '点击进入学习',
                         style: TextStyle(
-                          color: isCompleted ? AppTheme.accentGreen : AppTheme.primaryColor,
+                          color: AppTheme.primaryColor,
                           fontWeight: FontWeight.w900,
                           fontSize: 11,
                         ),
                       ),
-                      const Text(
-                        '1/2 讲',
-                        style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
-                      ),
+                      const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 16),
                     ],
-                  ),
-                  const SizedBox(height: 8),
-
-                  // Progress bar
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: Container(
-                      height: 8,
-                      width: double.infinity,
-                      color: const Color(0xFFF1F5F9),
-                      child: FractionallySizedBox(
-                        alignment: Alignment.centerLeft,
-                        widthFactor: progressVal / 100.0,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: isCompleted ? AppTheme.accentGreen : AppTheme.primaryColor,
-                          ),
-                        ),
-                      ),
-                    ),
                   ),
                 ],
               ),
@@ -467,11 +433,6 @@ class _CourseListScreenState extends State<CourseListScreen> {
         ],
       ),
     );
-  }
-
-  String _mockGetTag(int courseId) {
-    final mockTags = ['必修', '思维', '拓展', '探索', '课外', '逻辑', '视野'];
-    return mockTags[courseId % mockTags.length];
   }
 
   String _getSubjectName(String key) {
@@ -538,18 +499,5 @@ class _CourseListScreenState extends State<CourseListScreen> {
         ],
       ),
     );
-  }
-}
-
-// Helper extension to make filtering easier
-extension ListFilter<T> on List<T> {
-  List<T> filter(bool Function(T) test) {
-    final List<T> result = [];
-    for (var element in this) {
-      if (test(element)) {
-        result.add(element);
-      }
-    }
-    return result;
   }
 }

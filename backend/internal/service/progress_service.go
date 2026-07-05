@@ -68,11 +68,17 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 		prog.WatchSeconds += deltaWatchSec
 	}
 
-	// Completeness verification (anti-cheat: must watch > 80% of actual video duration)
+	// Completeness verification: mark complete only when the playhead has
+	// actually reached ≥90% of the video. The previous logic summed WatchSeconds
+	// (cumulative delta) which falsely marked episodes complete if the user
+	// re-watched the first 80% in many short sessions without ever reaching
+	// the end. Position-based gating matches what "watched" intuitively means.
+	// Note: completion does NOT reset the resume position — reopening a
+	// completed episode still resumes at the saved position.
 	if prog.IsCompleted == 0 && ep.DurationSeconds != nil && *ep.DurationSeconds > 0 {
 		duration := *ep.DurationSeconds
-		threshold := int(float64(duration) * 0.8)
-		if prog.WatchSeconds >= threshold {
+		threshold := int(float64(duration) * 0.9)
+		if prog.LastPositionSeconds >= threshold {
 			prog.IsCompleted = 1
 
 			// Reward user points (10 points per episode watched)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -63,7 +64,10 @@ func main() {
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(badgeRepo, progressRepo)
 	progressService := service.NewProgressService(progressRepo, episodeRepo, badgeService)
-	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo)
+	// Probe worker must exist before import/ingest handlers so they can wire
+	// its Enqueue callback. Started as a goroutine below.
+	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
+	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 
 	// Seed default badges
@@ -74,10 +78,10 @@ func main() {
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
 	userHandler := handler.NewUserHandler(userService)
-	courseHandler := handler.NewCourseHandler(courseService, episodeService)
+	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService)
 	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo)
 	progressHandler := handler.NewProgressHandler(progressService)
-	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService)
+	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
 	adminHandler := handler.NewAdminHandler(
 		settingsRepo,
 		userRepo,
@@ -88,6 +92,7 @@ func main() {
 		importService,
 		episodeService,
 		chapterService,
+		probeWorker,
 	)
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 
@@ -116,6 +121,12 @@ func main() {
 	fmt.Printf("Listening Address : %s\n", cfg.ServerAddr)
 	fmt.Printf("SQLite Database   : %s\n", cfg.DBPath)
 	fmt.Printf("-------------------------------------------------\n\n")
+
+	// Start the background media-probe worker (ffprobe backfill). It runs for
+	// the lifetime of the process; cancellation is implicit on exit.
+	probeCtx, probeCancel := context.WithCancel(context.Background())
+	defer probeCancel()
+	go probeWorker.Start(probeCtx)
 
 	if err := r.Run(cfg.ServerAddr); err != nil {
 		log.Fatalf("Server startup failed on '%s': %v", cfg.ServerAddr, err)

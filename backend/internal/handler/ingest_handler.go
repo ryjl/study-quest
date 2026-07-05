@@ -18,13 +18,17 @@ type IngestHandler interface {
 type ingestHandler struct {
 	episodeRepo    repository.EpisodeRepository
 	episodeService service.EpisodeService
+	enqueueProbe   func(uint) // optional: backfill media metadata via background probe
 }
 
-// NewIngestHandler creates an instance of IngestHandler.
-func NewIngestHandler(er repository.EpisodeRepository, es service.EpisodeService) IngestHandler {
+// NewIngestHandler creates an instance of IngestHandler. enqueueProbe is an
+// optional callback (pass nil to skip) invoked after a new episode is created
+// without an upstream-supplied duration.
+func NewIngestHandler(er repository.EpisodeRepository, es service.EpisodeService, enqueueProbe func(uint)) IngestHandler {
 	return &ingestHandler{
 		episodeRepo:    er,
 		episodeService: es,
+		enqueueProbe:   enqueueProbe,
 	}
 }
 
@@ -97,7 +101,7 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 				origPath = reqEp.VideoRelativePath
 			}
 
-			_, err = h.episodeService.CreateEpisode(
+			createdEp, err := h.episodeService.CreateEpisode(
 				reqEp.CourseID,
 				0, // Default ChapterID
 				reqEp.Title,
@@ -111,6 +115,11 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 			)
 			if err == nil {
 				importedCount++
+				// Backfill media metadata when the upstream ingest didn't
+				// supply a duration. The probe worker rate-limits itself.
+				if h.enqueueProbe != nil && createdEp != nil && reqEp.DurationSeconds == nil {
+					h.enqueueProbe(createdEp.ID)
+				}
 			}
 		}
 	}

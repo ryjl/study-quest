@@ -13,18 +13,21 @@ type CourseHandler interface {
 	GetCourses(c *gin.Context)
 	GetCourseByID(c *gin.Context)
 	GetEpisodesByCourse(c *gin.Context)
+	GetChaptersByCourse(c *gin.Context)
 }
 
 type courseHandler struct {
 	courseService  service.CourseService
 	episodeService service.EpisodeService
+	chapterService service.ChapterService
 }
 
 // NewCourseHandler creates an instance of CourseHandler.
-func NewCourseHandler(cs service.CourseService, es service.EpisodeService) CourseHandler {
+func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs service.ChapterService) CourseHandler {
 	return &courseHandler{
 		courseService:  cs,
 		episodeService: es,
+		chapterService: chs,
 	}
 }
 
@@ -90,4 +93,24 @@ func (h *courseHandler) GetEpisodesByCourse(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, episodes)
+}
+
+// GetChaptersByCourse returns the chapter tree for a course (client-facing).
+// Used by the course detail screen to render the real chapter structure
+// instead of a fabricated two-chapter split.
+func (h *courseHandler) GetChaptersByCourse(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID format"})
+		return
+	}
+
+	chapters, err := h.chapterService.GetChaptersByCourse(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query chapters: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, chapters)
 }

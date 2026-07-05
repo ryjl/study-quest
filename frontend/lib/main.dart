@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
 import 'config.dart';
 import 'service/auth_service.dart';
@@ -8,7 +9,10 @@ import 'ui/screen/main_navigation.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // Required by media_kit before any Player/VideoController is created.
+  MediaKit.ensureInitialized();
+
   // Initialize configurations and persistence services
   await AppConfig.init();
   

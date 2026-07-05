@@ -77,6 +77,7 @@ func RegisterRoutes(
 		v1Restricted.GET("/courses", course.GetCourses)
 		v1Restricted.GET("/courses/:id", course.GetCourseByID)
 		v1Restricted.GET("/courses/:id/episodes", course.GetEpisodesByCourse)
+		v1Restricted.GET("/courses/:id/chapters", course.GetChaptersByCourse)
 		v1Restricted.GET("/courses/:id/last-watched", progress.GetLastWatched)
 		
 		v1Restricted.GET("/episodes/:id", episode.GetEpisodeByID)
@@ -84,6 +85,8 @@ func RegisterRoutes(
 		v1Restricted.GET("/episodes/:id/subtitle", episode.GetSubtitle)
 		v1Restricted.GET("/episodes/:id/ai-content", episode.GetAIContent)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
+		// Resolve the Nth attachment of an episode into a 302 download link.
+		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)
 
 		v1Restricted.POST("/progress/report", progress.ReportProgress)
 		v1Restricted.GET("/progress", progress.GetProgressOverview)
@@ -143,6 +146,10 @@ func RegisterRoutes(
 		adm.PUT("/api/settings", admin.UpdateSettings)
 		adm.GET("/api/storage/ping", admin.PingStorage)
 		adm.POST("/api/storage/ping", admin.PingStorage)
+
+		// Media probe (ffprobe) — backfill missing durations / metadata
+		adm.POST("/api/probe/scan-missing", admin.ScanMissingDurations)
+		adm.GET("/api/probe/progress", admin.ProbeProgress)
 
 		// Chapter API routes
 		adm.GET("/api/courses/:id/chapters", admin.ListChaptersByCourse)

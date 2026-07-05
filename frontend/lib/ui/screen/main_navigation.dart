@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../config.dart';
 import '../../model/user.dart';
 import '../../model/progress.dart';
+import '../../model/badge.dart';
 import '../../service/api_service.dart';
 import '../../service/auth_service.dart';
 import '../../theme.dart';
@@ -431,6 +432,8 @@ class _MainNavigationState extends State<MainNavigation> {
       future: Future.wait([
         ApiService.fetchUserPoints(activeUserId),
         ApiService.fetchProgressOverview(activeUserId),
+        ApiService.fetchPointsLedger(activeUserId, limit: 8),
+        ApiService.fetchUserBadges(activeUserId),
       ]),
       builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
@@ -445,12 +448,18 @@ class _MainNavigationState extends State<MainNavigation> {
           );
         }
 
-        final userPoint = snapshot.data?[0] as UserPoint;
-        final progressList = snapshot.data?[1] as List<UserProgress>;
+        final userPoint = snapshot.data![0] as UserPoint;
+        final progressList = snapshot.data![1] as List<UserProgress>;
+        final ledger = snapshot.data![2] as List<PointsLedger>;
+        final badges = snapshot.data![3] as List<BadgeStatus>;
+
         final completedCount = progressList.where((p) => p.isCompleted).length;
 
-        // Mock study hours (e.g. 340 minutes) for visualization
-        final mockStudyMinutes = 340 + (userPoint.currentPoints % 15);
+        // Real accumulated study minutes from watch-seconds across all episodes.
+        final totalWatchSeconds =
+            progressList.fold<int>(0, (sum, p) => sum + p.watchSeconds);
+        final studyMinutes = (totalWatchSeconds / 60).round();
+        final unlockedBadges = badges.where((b) => b.unlocked).length;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(40.0),
@@ -577,7 +586,7 @@ class _MainNavigationState extends State<MainNavigation> {
                                 textBaseline: TextBaseline.alphabetic,
                                 children: [
                                   Text(
-                                    '$mockStudyMinutes',
+                                    '$studyMinutes',
                                     style: const TextStyle(
                                       fontSize: 40,
                                       fontWeight: FontWeight.w900,
@@ -699,7 +708,7 @@ class _MainNavigationState extends State<MainNavigation> {
                           const SizedBox(height: 32),
 
                           // Dynamic timeline items
-                          if (progressList.isEmpty)
+                          if (ledger.isEmpty)
                             const SizedBox(
                               height: 200,
                               child: Center(
@@ -710,10 +719,11 @@ class _MainNavigationState extends State<MainNavigation> {
                             ListView.builder(
                               shrinkWrap: true,
                               physics: const NeverScrollableScrollPhysics(),
-                              itemCount: progressList.take(4).length,
+                              itemCount: ledger.take(6).length,
                               itemBuilder: (context, index) {
-                                final item = progressList[index];
-                                final isCompleted = item.isCompleted;
+                                final item = ledger[index];
+                                final isGain = item.changeAmount > 0;
+                                final isNeutral = item.changeAmount == 0;
 
                                 return Container(
                                   margin: const EdgeInsets.only(bottom: 24),
@@ -731,8 +741,12 @@ class _MainNavigationState extends State<MainNavigation> {
                                           ],
                                         ),
                                         child: Icon(
-                                          isCompleted ? Icons.check_circle_rounded : Icons.play_arrow_rounded,
-                                          color: isCompleted ? AppTheme.accentGreen : AppTheme.primaryColor,
+                                          _ledgerIcon(item.reasonType),
+                                          color: isGain
+                                              ? AppTheme.accentGreen
+                                              : (isNeutral
+                                                  ? AppTheme.primaryColor
+                                                  : Colors.redAccent),
                                         ),
                                       ),
                                       const SizedBox(width: 16),
@@ -752,15 +766,17 @@ class _MainNavigationState extends State<MainNavigation> {
                                                   crossAxisAlignment: CrossAxisAlignment.start,
                                                   children: [
                                                     Text(
-                                                      isCompleted
-                                                          ? '完成了 课时 ID: ${item.episodeId}'
-                                                          : '正在挑战 课时 ID: ${item.episodeId}',
-                                                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+                                                      item.description.isEmpty
+                                                          ? _ledgerFallbackTitle(item.reasonType)
+                                                          : item.description,
+                                                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                                                      maxLines: 2,
+                                                      overflow: TextOverflow.ellipsis,
                                                     ),
                                                     const SizedBox(height: 4),
-                                                    const Text(
-                                                      '今天 14:30',
-                                                      style: TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
+                                                    Text(
+                                                      _formatLedgerTime(item.createdAt),
+                                                      style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
                                                     ),
                                                   ],
                                                 ),
@@ -768,13 +784,25 @@ class _MainNavigationState extends State<MainNavigation> {
                                               Container(
                                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                                 decoration: BoxDecoration(
-                                                  color: const Color(0xFFFFEDD5),
+                                                  color: isGain
+                                                      ? const Color(0xFFFFEDD5)
+                                                      : const Color(0xFFF1F5F9),
                                                   borderRadius: BorderRadius.circular(10),
-                                                  border: Border.all(color: const Color(0xFFFFDBB5)),
+                                                  border: Border.all(
+                                                    color: isGain
+                                                        ? const Color(0xFFFFDBB5)
+                                                        : const Color(0xFFE2E8F0),
+                                                  ),
                                                 ),
                                                 child: Text(
-                                                  isCompleted ? '+10' : '+5',
-                                                  style: const TextStyle(color: Color(0xFFF97316), fontWeight: FontWeight.w900, fontSize: 13),
+                                                  isNeutral ? '—' : '${item.changeAmount > 0 ? '+' : ''}${item.changeAmount}',
+                                                  style: TextStyle(
+                                                    color: isGain
+                                                        ? const Color(0xFFF97316)
+                                                        : AppTheme.textMuted,
+                                                    fontWeight: FontWeight.w900,
+                                                    fontSize: 13,
+                                                  ),
                                                 ),
                                               ),
                                             ],
@@ -819,19 +847,38 @@ class _MainNavigationState extends State<MainNavigation> {
                           ),
                           const SizedBox(height: 32),
 
-                          // Badges widgets
-                          _buildBadgeItem('七日先锋', '连续登录学习7天', Icons.local_fire_department_rounded, const Color(0xFFF97316), const Color(0xFFFFEDD5), true),
-                          const SizedBox(height: 16),
-                          _buildBadgeItem('数学达人', '通关5次数学挑战', Icons.architecture_rounded, const Color(0xFF3B82F6), const Color(0xFFEFF6FF), true),
-                          const SizedBox(height: 16),
-                          _buildBadgeItem('英语之星', '看完一整部英语外文片', Icons.translate_rounded, const Color(0xFF8B5CF6), const Color(0xFFF5F3FF), false),
+                          // Badges widgets (real data)
+                          if (badges.isEmpty)
+                            const SizedBox(
+                              height: 120,
+                              child: Center(
+                                child: Text('暂无成就', style: TextStyle(color: AppTheme.textMuted)),
+                              ),
+                            )
+                          else
+                            Column(
+                              children: [
+                                for (int i = 0; i < badges.length; i++) ...[
+                                  _buildBadgeItem(
+                                    title: badges[i].badge.title,
+                                    desc: badges[i].badge.description,
+                                    icon: _badgeIcon(badges[i].badge.iconName, badges[i].badge.ruleType),
+                                    color: _badgeColor(badges[i].badge.ruleType),
+                                    bgColor: _badgeBgColor(badges[i].badge.ruleType),
+                                    unlocked: badges[i].unlocked,
+                                  ),
+                                  if (i < badges.length - 1) const SizedBox(height: 16),
+                                ],
+                              ],
+                            ),
 
                           const SizedBox(height: 24),
                           Button3D.white(
                             onPressed: () {},
                             padding: const EdgeInsets.symmetric(vertical: 14),
-                            child: const Center(
-                              child: Text('查看所有 12 个成就', style: TextStyle(fontWeight: FontWeight.w900)),
+                            child: Center(
+                              child: Text('已解锁 $unlockedBadges / ${badges.length} 个成就',
+                                  style: const TextStyle(fontWeight: FontWeight.w900)),
                             ),
                           ),
                         ],
@@ -847,7 +894,14 @@ class _MainNavigationState extends State<MainNavigation> {
     );
   }
 
-  Widget _buildBadgeItem(String name, String desc, IconData icon, Color color, Color bgColor, bool unlocked) {
+  Widget _buildBadgeItem({
+    required String title,
+    required String desc,
+    required IconData icon,
+    required Color color,
+    required Color bgColor,
+    required bool unlocked,
+  }) {
     return Opacity(
       opacity: unlocked ? 1.0 : 0.5,
       child: Container(
@@ -874,7 +928,7 @@ class _MainNavigationState extends State<MainNavigation> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    name,
+                    title,
                     style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: AppTheme.textWhite),
                   ),
                   const SizedBox(height: 4),
@@ -891,6 +945,101 @@ class _MainNavigationState extends State<MainNavigation> {
         ),
       ),
     );
+  }
+
+  // --- Badge visual helpers: map backend rule_type/icon_name to UI tokens ---
+
+  IconData _badgeIcon(String iconName, String ruleType) {
+    // Prefer explicit icon name hints, fall back to rule type semantics.
+    final name = iconName.toLowerCase();
+    if (name.contains('streak') || ruleType == 'consecutive_days') {
+      return Icons.local_fire_department_rounded;
+    }
+    if (name.contains('math')) return Icons.architecture_rounded;
+    if (name.contains('english')) return Icons.translate_rounded;
+    if (name.contains('night')) return Icons.nights_stay_rounded;
+    if (name.contains('first') || ruleType == 'watch_duration') {
+      return Icons.timer_rounded;
+    }
+    if (ruleType == 'points_earned') return Icons.stars_rounded;
+    return Icons.military_tech_rounded;
+  }
+
+  Color _badgeColor(String ruleType) {
+    switch (ruleType) {
+      case 'consecutive_days':
+        return const Color(0xFFF97316);
+      case 'subject_count':
+        return const Color(0xFF3B82F6);
+      case 'points_earned':
+        return const Color(0xFF8B5CF6);
+      case 'night_owl_count':
+        return const Color(0xFF6D28D9);
+      case 'watch_duration':
+        return AppTheme.accentGreen;
+      default:
+        return const Color(0xFFD97706);
+    }
+  }
+
+  Color _badgeBgColor(String ruleType) {
+    switch (ruleType) {
+      case 'consecutive_days':
+        return const Color(0xFFFFEDD5);
+      case 'subject_count':
+        return const Color(0xFFEFF6FF);
+      case 'points_earned':
+        return const Color(0xFFF5F3FF);
+      case 'night_owl_count':
+        return const Color(0xFFEDE9FE);
+      case 'watch_duration':
+        return const Color(0xFFECFDF5);
+      default:
+        return const Color(0xFFFEF3C7);
+    }
+  }
+
+  // --- Ledger timeline helpers ---
+
+  IconData _ledgerIcon(String reasonType) {
+    switch (reasonType) {
+      case 'system_watch':
+        return Icons.play_circle_rounded;
+      case 'badge_unlocked':
+        return Icons.emoji_events_rounded;
+      case 'parent_grant':
+        return Icons.card_giftcard_rounded;
+      case 'redeem_gift':
+        return Icons.redeem_rounded;
+      default:
+        return Icons.history_rounded;
+    }
+  }
+
+  String _ledgerFallbackTitle(String reasonType) {
+    switch (reasonType) {
+      case 'system_watch':
+        return '完成了一次视频学习';
+      case 'badge_unlocked':
+        return '解锁了一个新成就';
+      case 'parent_grant':
+        return '家长奖励';
+      case 'redeem_gift':
+        return '兑换了礼物';
+      default:
+        return '积分变动';
+    }
+  }
+
+  String _formatLedgerTime(DateTime t) {
+    // Backend stores UTC; show a friendly relative-ish label.
+    final now = DateTime.now();
+    final diff = now.difference(t);
+    if (diff.inMinutes < 1) return '刚刚';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} 分钟前';
+    if (diff.inHours < 24) return '${diff.inHours} 小时前';
+    if (diff.inDays < 7) return '${diff.inDays} 天前';
+    return '${t.month}/${t.day}';
   }
 
   // 2. Settings Screen (to configure server URL address)

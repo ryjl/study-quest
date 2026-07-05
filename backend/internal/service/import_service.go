@@ -44,24 +44,29 @@ type ImportService interface {
 }
 
 type importService struct {
-	episodeRepo  repository.EpisodeRepository
-	courseRepo   repository.CourseRepository
-	settingsRepo repository.SettingsRepository
-	chapterRepo  repository.ChapterRepository
+	episodeRepo   repository.EpisodeRepository
+	courseRepo    repository.CourseRepository
+	settingsRepo  repository.SettingsRepository
+	chapterRepo   repository.ChapterRepository
+	enqueueProbe  func(uint) // optional: backfill media metadata after import
 }
 
-// NewImportService creates an instance of ImportService.
+// NewImportService creates an instance of ImportService. enqueueProbe is an
+// optional callback (pass nil to skip) invoked after each episode is created
+// or updated, so a background worker can ffprobe its media metadata.
 func NewImportService(
 	er repository.EpisodeRepository,
 	cr repository.CourseRepository,
 	sr repository.SettingsRepository,
 	ch repository.ChapterRepository,
+	enqueueProbe func(uint),
 ) ImportService {
 	return &importService{
 		episodeRepo:  er,
 		courseRepo:   cr,
 		settingsRepo: sr,
 		chapterRepo:  ch,
+		enqueueProbe: enqueueProbe,
 	}
 }
 
@@ -290,6 +295,7 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 				existing.FileSize = &node.Size
 				if err := s.episodeRepo.Update(existing); err == nil {
 					s.autoMapSubtitle(existing)
+					s.maybeEnqueueProbe(existing)
 				}
 				return nil
 			}
@@ -310,6 +316,7 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 			}
 			nextSortOrder++
 			s.autoMapSubtitle(ep)
+			s.maybeEnqueueProbe(ep)
 		}
 
 		return nil
@@ -322,6 +329,19 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 	}
 
 	return nil
+}
+
+// maybeEnqueueProbe hands the episode to the background probe worker when
+// media metadata is still missing. No-op when no worker is wired (nil callback)
+// or when the episode already has a duration (e.g. supplied by upstream ingest).
+func (s *importService) maybeEnqueueProbe(ep *model.Episode) {
+	if s.enqueueProbe == nil || ep == nil {
+		return
+	}
+	if ep.DurationSeconds != nil {
+		return
+	}
+	s.enqueueProbe(ep.ID)
 }
 
 func (s *importService) autoMapSubtitle(ep *model.Episode) {

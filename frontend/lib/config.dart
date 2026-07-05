@@ -9,6 +9,13 @@ class AppConfig {
 
   static String get baseUrl => _currentUrl;
 
+  /// Same as [baseUrl] but guaranteed to be usable for joining with absolute
+  /// API paths like "/api/v1/...". Always returns a value with no trailing slash.
+  static String get baseUrlRef {
+    final u = _currentUrl;
+    return u.endsWith('/') ? u.substring(0, u.length - 1) : u;
+  }
+
   static Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     _currentUrl = prefs.getString(_keyBaseUrl) ?? defaultUrl;

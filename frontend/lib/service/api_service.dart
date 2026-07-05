@@ -4,6 +4,7 @@ import '../config.dart';
 import '../model/user.dart';
 import '../model/course.dart';
 import '../model/progress.dart';
+import '../model/badge.dart';
 
 class ApiService {
   // Common headers builder
@@ -92,16 +93,57 @@ class ApiService {
   }
 
   // 6. Fetch play info (resolves direct streaming URL and custom HTTP headers for netdisk bypass)
-  static Future<Map<String, dynamic>> fetchPlayInfo(int activeUserId, int episodeId) async {
+  static Future<PlayInfo> fetchPlayInfo(int activeUserId, int episodeId) async {
     final response = await http.get(
       Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/play-info'),
       headers: _headers(activeUserId),
     );
     if (response.statusCode == 200) {
       final Map<String, dynamic> data = jsonDecode(response.body);
-      return data;
+      return PlayInfo.fromJson(data);
     }
     throw Exception('获取视频播放地址及请求头失败: ${response.statusCode}');
+  }
+
+  // 6b. Fetch attachments list (real PDF / supplementary materials) for an episode.
+  // The backend stores these as a JSON array of relative storage paths, so we
+  // wrap each entry into an [Attachment] carrying its index for stream URL use.
+  static Future<List<Attachment>> fetchAttachments(int activeUserId, int episodeId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/attachments'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      final result = <Attachment>[];
+      for (var i = 0; i < list.length; i++) {
+        final entry = list[i];
+        if (entry is Map) {
+          result.add(Attachment.fromJson({
+            'index': i,
+            'path': entry['path'] ?? entry['name'] ?? '',
+          }));
+        } else {
+          result.add(Attachment(index: i, path: entry.toString()));
+        }
+      }
+      return result;
+    }
+    throw Exception('获取课时附件失败: ${response.statusCode}');
+  }
+
+  /// Resolve a backend-relative subtitle/attachment URL to an absolute one,
+  /// so media_kit / url_launcher can reach it from the device.
+  static String absoluteUrl(String relativeOrAbsolute) {
+    if (relativeOrAbsolute.isEmpty) return relativeOrAbsolute;
+    if (relativeOrAbsolute.startsWith('http://') ||
+        relativeOrAbsolute.startsWith('https://')) {
+      return relativeOrAbsolute;
+    }
+    if (relativeOrAbsolute.startsWith('/')) {
+      return AppConfig.baseUrl + relativeOrAbsolute;
+    }
+    return AppConfig.baseUrl + '/' + relativeOrAbsolute;
   }
 
   // 7. Report progress updates and sync watch hours
@@ -149,5 +191,51 @@ class ApiService {
       return list.map((e) => UserProgress.fromJson(e)).toList();
     }
     throw Exception('获取进度列表失败: ${response.statusCode}');
+  }
+
+  // 10. Fetch chapters for a course (real chapter tree, replaces mock split)
+  static Future<List<Chapter>> fetchChapters(int activeUserId, int courseId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/$courseId/chapters'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list.map((e) => Chapter.fromJson(e)).toList();
+    }
+    throw Exception('获取章节列表失败: ${response.statusCode}');
+  }
+
+  // 11. Fetch points ledger (transaction history) for the growth-footprint screen
+  static Future<List<PointsLedger>> fetchPointsLedger(
+    int activeUserId, {
+    int limit = 20,
+    int offset = 0,
+  }) async {
+    final response = await http.get(
+      Uri.parse(
+          '${AppConfig.baseUrl}/api/v1/progress/ledger?limit=$limit&offset=$offset'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list.map((e) => PointsLedger.fromJson(e)).toList();
+    }
+    throw Exception('获取积分流水失败: ${response.statusCode}');
+  }
+
+  // 12. Fetch all badges with their unlocked state for the current user
+  static Future<List<BadgeStatus>> fetchUserBadges(int activeUserId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/users/$activeUserId/badges'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list
+          .map((e) => BadgeStatus.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    throw Exception('获取成就徽章失败: ${response.statusCode}');
   }
 }

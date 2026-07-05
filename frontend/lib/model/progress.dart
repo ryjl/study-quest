@@ -42,7 +42,40 @@ class UserPoint {
     return UserPoint(
       userId: json['UserID'] ?? json['user_id'] ?? 0,
       currentPoints: json['CurrentPoints'] ?? json['current_points'] ?? 0,
-      totalEarnedPoints: json['TotalEarnedPoints'] ?? json['total_earned_points'] ?? 0,
+      totalEarnedPoints:
+          json['TotalEarnedPoints'] ?? json['total_earned_points'] ?? 0,
+    );
+  }
+}
+
+/// A single points transaction entry (mirrors backend model.PointsLedger).
+class PointsLedger {
+  final int id;
+  final int userId;
+  final int changeAmount;
+  final String reasonType;
+  final String description;
+  final DateTime createdAt;
+
+  PointsLedger({
+    required this.id,
+    required this.userId,
+    required this.changeAmount,
+    required this.reasonType,
+    required this.description,
+    required this.createdAt,
+  });
+
+  factory PointsLedger.fromJson(Map<String, dynamic> json) {
+    return PointsLedger(
+      id: json['ID'] ?? json['id'] ?? 0,
+      userId: json['UserID'] ?? json['user_id'] ?? 0,
+      changeAmount: json['ChangeAmount'] ?? json['change_amount'] ?? 0,
+      reasonType: json['ReasonType'] ?? json['reason_type'] ?? '',
+      description: json['Description'] ?? json['description'] ?? '',
+      createdAt: DateTime.tryParse(
+              json['CreatedAt']?.toString() ?? json['created_at'] ?? '') ??
+          DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
 }

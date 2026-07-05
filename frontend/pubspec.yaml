@@ -12,8 +12,22 @@ dependencies:
   http: ^1.1.0
   shared_preferences: ^2.2.0
   google_fonts: ^6.1.0
-  video_player: ^2.8.2
   provider: ^6.0.5
+
+  # Video playback core — media_kit (libmpv-based) replaces video_player for
+  # broader codec support, hardware decoding, and native subtitle/audio track
+  # selection which are essential for netdisk video streaming.
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_android_video: ^1.3.6
+
+  # PDF viewer for in-app 讲义 preview. We use pdfrx (pdfium-backed) instead
+  # of syncfusion_flutter_pdfviewer because the latter is incompatible with
+  # AGP 9.x (NPE in its build script) and carries a commercial license.
+  pdfrx: ^1.0.121
+
+  # Open attachments in external app / download.
+  url_launcher: ^6.2.6
 
 dev_dependencies:
   flutter_test:

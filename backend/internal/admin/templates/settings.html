@@ -76,6 +76,27 @@
     </div>
 </div>
 
+<!-- Media metadata probe — backfill missing video durations via ffprobe -->
+<div class="card" style="margin-top: 1.5rem;">
+    <div class="card-header">
+        <h2 class="card-title">视频时长扫描</h2>
+    </div>
+    <div style="display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap;">
+        <div style="flex: 1; min-width: 280px;">
+            <p style="color: #9ca3af; font-size: 0.85rem; margin-bottom: 1rem;">
+                扫描所有时长缺失的视频，通过 ffprobe 提取媒体信息（时长、编码、分辨率、码率）并写回数据库。
+                为避免触发网盘 API 限流，采用串行探测（约每集 4 秒）。
+            </p>
+            <button type="button" class="btn btn-primary" onclick="scanMissingDurations()" id="scan-btn">
+                扫描缺失时长的视频
+            </button>
+        </div>
+        <div id="probe-status-box" style="flex: 2; min-width: 300px; padding: 1.5rem; border-radius: 12px; background-color: rgba(255, 255, 255, 0.02); border: 1px dashed #1f2937; color: #9ca3af; font-size: 0.875rem;">
+            尚未开始扫描。
+        </div>
+    </div>
+</div>
+
 <script>
 document.addEventListener('DOMContentLoaded', () => {
     const sType = document.getElementById('storage_type').value;
@@ -176,6 +197,99 @@ function testConnection() {
         statusBox.style.color = '#fca5a5';
         statusBox.innerHTML = `<strong>连接失败！</strong><br><br>错误信息: ${err.message}`;
     });
+}
+
+// --- Media probe (ffprobe) scan ---
+let probePollTimer = null;
+
+function setProbeBox(state, html) {
+    const box = document.getElementById('probe-status-box');
+    if (!box) return;
+    const palette = {
+        idle:   { bg: 'rgba(255,255,255,0.02)', border: '#1f2937', color: '#9ca3af' },
+        running:{ bg: 'rgba(59,130,246,0.08)',  border: '#3b82f6', color: '#bfdbfe' },
+        ok:     { bg: 'rgba(34,197,94,0.08)',   border: '#22c55e', color: '#bbf7d0' },
+        error:  { bg: 'rgba(239,68,68,0.08)',   border: '#ef4444', color: '#fecaca' },
+    }[state] || {};
+    box.style.backgroundColor = palette.bg;
+    box.style.borderColor = palette.border;
+    box.style.color = palette.color;
+    box.innerHTML = html;
+}
+
+function scanMissingDurations() {
+    const btn = document.getElementById('scan-btn');
+    btn.disabled = true;
+    btn.textContent = '扫描中…';
+    setProbeBox('running', '<strong>正在排队扫描任务…</strong>');
+
+    fetch('/admin/api/probe/scan-missing', { method: 'POST' })
+        .then(res => res.json().then(d => ({ ok: res.ok, data: d })))
+        .then(({ ok, data }) => {
+            if (!ok) {
+                btn.disabled = false;
+                btn.textContent = '扫描缺失时长的视频';
+                setProbeBox('error', `<strong>启动失败</strong><br><br>${data.error || '未知错误'}`);
+                return null;
+            }
+            setProbeBox('running',
+                `<strong>扫描进行中</strong><br><br>已排队 ${data.queued} / ${data.total} 集。<br>${data.message}`);
+            // Start polling progress.
+            if (probePollTimer) clearInterval(probePollTimer);
+            probePollTimer = setInterval(pollProbeProgress, 2000);
+            pollProbeProgress();
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.textContent = '扫描缺失时长的视频';
+            setProbeBox('error', `<strong>请求失败</strong><br><br>${err.message}`);
+        });
+}
+
+function pollProbeProgress() {
+    fetch('/admin/api/probe/progress', { method: 'GET' })
+        .then(r => r.json())
+        .then(s => {
+            const total = s.total || 0;
+            const done = s.done || 0;
+            const failed = s.failed || 0;
+            const pct = total > 0 ? Math.floor((done + failed) / total * 100) : 100;
+            const bar = `<div style="background:#1f2937;border-radius:6px;height:8px;overflow:hidden;margin:0.75rem 0;">
+                            <div style="background:#3b82f6;height:100%;width:${pct}%;transition:width .3s;"></div>
+                         </div>`;
+            const cur = s.current_episode_id
+                ? `<div style="margin-top:0.5rem;font-size:0.8rem;opacity:0.8;">正在处理：${escapeHtml(s.current_title || ('#' + s.current_episode_id))}</div>`
+                : '';
+            const errLine = s.last_error
+                ? `<div style="margin-top:0.5rem;font-size:0.8rem;color:#fca5a5;">最近错误：${escapeHtml(s.last_error)}</div>`
+                : '';
+
+            if (s.running) {
+                setProbeBox('running',
+                    `<strong>扫描进行中</strong> ${done + failed} / ${total}（成功 ${done}，失败 ${failed}）${bar}${cur}${errLine}`);
+            } else {
+                // Done.
+                if (probePollTimer) { clearInterval(probePollTimer); probePollTimer = null; }
+                const btn = document.getElementById('scan-btn');
+                btn.disabled = false;
+                btn.textContent = '扫描缺失时长的视频';
+                if (failed > 0) {
+                    setProbeBox('error',
+                        `<strong>扫描完成（含失败）</strong><br>成功 ${done}，失败 ${failed}。${errLine}`);
+                } else if (done === 0) {
+                    setProbeBox('ok', '<strong>没有需要扫描的视频</strong><br>所有视频时长均已存在。');
+                } else {
+                    setProbeBox('ok', `<strong>扫描完成</strong><br>成功补全 ${done} 集视频时长。`);
+                }
+            }
+        })
+        .catch(() => { /* keep polling; transient network blips */ });
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
 }
 </script>
 

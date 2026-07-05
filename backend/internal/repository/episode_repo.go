@@ -10,6 +10,7 @@ import (
 // EpisodeRepository implements core GORM functions and double-protection search.
 type EpisodeRepository interface {
 	ListByCourse(courseID uint) ([]model.Episode, error)
+	ListByNullDuration() ([]model.Episode, error)
 	FindByID(id uint) (*model.Episode, error)
 	FindByHash(hash string) (*model.Episode, error)
 	FindByPathAndSize(path string, size int64) (*model.Episode, error)
@@ -43,6 +44,15 @@ func (r *episodeRepo) ListByCourse(courseID uint) ([]model.Episode, error) {
 	var episodes []model.Episode
 	// Order by sort_order ascending
 	err := r.db.Where("course_id = ?", courseID).Order("sort_order asc").Find(&episodes).Error
+	return episodes, err
+}
+
+// ListByNullDuration returns every episode whose duration_seconds is NULL —
+// i.e. ones that still need an ffprobe backfill. Used by the admin
+// "scan missing durations" action.
+func (r *episodeRepo) ListByNullDuration() ([]model.Episode, error) {
+	var episodes []model.Episode
+	err := r.db.Where("duration_seconds IS NULL").Order("id asc").Find(&episodes).Error
 	return episodes, err
 }
 

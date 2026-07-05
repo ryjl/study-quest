@@ -70,6 +70,10 @@ type AdminHandler interface {
 
 	// Image upload controller
 	UploadImage(c *gin.Context)
+
+	// Media probe (ffprobe) backfill — manual scan + progress polling
+	ScanMissingDurations(c *gin.Context)
+	ProbeProgress(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -82,6 +86,7 @@ type adminHandler struct {
 	importService  service.ImportService
 	episodeService service.EpisodeService
 	chapterService service.ChapterService
+	probeWorker    *service.ProbeWorker
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -95,6 +100,7 @@ func NewAdminHandler(
 	is service.ImportService,
 	es service.EpisodeService,
 	chs service.ChapterService,
+	pw *service.ProbeWorker,
 ) AdminHandler {
 	return &adminHandler{
 		settingsRepo:   sr,
@@ -106,6 +112,7 @@ func NewAdminHandler(
 		importService:  is,
 		episodeService: es,
 		chapterService: chs,
+		probeWorker:    pw,
 	}
 }
 
@@ -1139,4 +1146,48 @@ func generateRandomString(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return fmt.Sprintf("%x", b)
+}
+
+// ScanMissingDurations finds every episode whose duration_seconds is NULL and
+// enqueues it onto the background probe worker. The worker probes one at a
+// time with a fixed gap (see probe_worker.go); progress is polled separately
+// via ProbeProgress.
+func (h *adminHandler) ScanMissingDurations(c *gin.Context) {
+	if h.probeWorker == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"status": "failed",
+			"error":  "probe worker is not initialized",
+		})
+		return
+	}
+	episodes, err := h.episodeRepo.ListByNullDuration()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"status": "failed",
+			"error":  "failed to query episodes: " + err.Error(),
+		})
+		return
+	}
+
+	ids := make([]uint, 0, len(episodes))
+	for _, ep := range episodes {
+		ids = append(ids, ep.ID)
+	}
+	enqueued := h.probeWorker.EnqueueBatch(ids)
+	c.JSON(http.StatusOK, gin.H{
+		"status":   "success",
+		"queued":   enqueued,
+		"total":    len(ids),
+		"message":  fmt.Sprintf("已排队 %d 集等待探测时长（串行限速，约每集 4 秒）", enqueued),
+	})
+}
+
+// ProbeProgress returns the worker's current progress snapshot. The admin UI
+// polls this every couple of seconds while a scan is running.
+func (h *adminHandler) ProbeProgress(c *gin.Context) {
+	if h.probeWorker == nil {
+		c.JSON(http.StatusOK, gin.H{"running": false})
+		return
+	}
+	c.JSON(http.StatusOK, h.probeWorker.Stats())
 }

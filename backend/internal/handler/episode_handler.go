@@ -21,6 +21,7 @@ type EpisodeHandler interface {
 	GetSubtitleVTT(c *gin.Context)
 	GetAIContent(c *gin.Context)
 	GetAttachments(c *gin.Context)
+	StreamAttachment(c *gin.Context)
 }
 
 type episodeHandler struct {
@@ -267,4 +268,36 @@ func (h *episodeHandler) GetAttachments(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, attachments)
+}
+
+// StreamAttachment resolves the Nth attachment of an episode into a 302
+// redirect, mirroring Stream() but for non-video files (PDFs, docs, ...).
+// Index is provided via the :index path parameter.
+func (h *episodeHandler) StreamAttachment(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID format"})
+		return
+	}
+
+	indexStr := c.Param("index")
+	index, err := strconv.Atoi(indexStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment index"})
+		return
+	}
+
+	link, _, err := h.episodeService.GetAttachmentStreamURL(uint(id), index, c.Request.UserAgent())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve attachment: " + err.Error()})
+		return
+	}
+
+	for k, v := range link.Header {
+		c.Header(k, v)
+	}
+
+	streamURL := rewriteLocalhostURL(link.URL, c.Request.Host)
+	c.Redirect(http.StatusFound, streamURL)
 }
