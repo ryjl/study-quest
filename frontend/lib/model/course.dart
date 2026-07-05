@@ -75,6 +75,7 @@ class Episode {
   final int sortOrder;
   final String title;
   final String videoRelativePath;
+  final String coverUrl;
   final String attachmentJson;
   final String fileHash;
   final int fileSize;
@@ -87,6 +88,7 @@ class Episode {
     required this.sortOrder,
     required this.title,
     required this.videoRelativePath,
+    this.coverUrl = '',
     required this.attachmentJson,
     required this.fileHash,
     required this.fileSize,
@@ -102,6 +104,7 @@ class Episode {
       title: json['Title'] ?? json['title'] ?? '',
       videoRelativePath:
           json['VideoRelativePath'] ?? json['video_relative_path'] ?? '',
+      coverUrl: json['CoverURL'] ?? json['cover_url'] ?? '',
       attachmentJson: json['AttachmentJSON'] ?? json['attachment_json'] ?? '[]',
       fileHash: json['FileHash'] ?? json['file_hash'] ?? '',
       fileSize: json['FileSize'] ?? json['file_size'] ?? 0,

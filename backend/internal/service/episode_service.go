@@ -1,11 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 	"studyquest/backend/internal/model"
@@ -312,10 +316,92 @@ func (s *episodeService) Probe(episodeID uint) (*model.MediaMeta, error) {
 	if buf, err := json.Marshal(meta); err == nil {
 		ep.MediaMetaJSON = string(buf)
 	}
+
+	// Extract cover image or screenshot
+	uploadDir := "./data/uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		log.Printf("[probe] failed to create upload directory %s: %v", uploadDir, err)
+	} else {
+		// Output path for cover/screenshot (always JPEG for simplicity)
+		localFileName := fmt.Sprintf("episode_%d_cover.jpg", episodeID)
+		localFullPath := filepath.Join(uploadDir, localFileName)
+
+		// 1. Try to extract embedded cover art first
+		log.Printf("[probe] attempting to extract embedded cover for episode %d...", episodeID)
+		err = extractEmbeddedCover(link.URL, localFullPath)
+		if err == nil {
+			ep.CoverURL = "/uploads/" + localFileName
+			log.Printf("[probe] successfully extracted embedded cover for episode %d", episodeID)
+		} else {
+			log.Printf("[probe] no embedded cover found or extraction failed for episode %d: %v. falling back to screenshot extraction...", episodeID, err)
+			// 2. Fallback to extracting screenshot at 5s (or duration/2)
+			durSecs := 0
+			if ep.DurationSeconds != nil {
+				durSecs = *ep.DurationSeconds
+			}
+			err = extractScreenshot(link.URL, localFullPath, durSecs)
+			if err == nil {
+				ep.CoverURL = "/uploads/" + localFileName
+				log.Printf("[probe] successfully extracted screenshot cover for episode %d", episodeID)
+			} else {
+				log.Printf("[probe] failed to extract screenshot cover for episode %d: %v", episodeID, err)
+			}
+		}
+	}
+
 	if err := s.episodeRepo.Update(ep); err != nil {
 		return nil, err
 	}
 	return meta, nil
+}
+
+// extractEmbeddedCover tries to extract an embedded cover art/image stream from a video.
+func extractEmbeddedCover(videoURL, outputPath string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-y",
+		"-i", videoURL,
+		"-map", "0:v",
+		"-map", "-0:V",
+		"-c", "copy",
+		outputPath,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("embedded cover extract failed: %w, stderr: %s", err, stderr.String())
+	}
+	return nil
+}
+
+// extractScreenshot extracts a single frame at a specific timestamp as JPEG.
+func extractScreenshot(videoURL, outputPath string, durationSeconds int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	seekTime := "5"
+	if durationSeconds > 0 && durationSeconds <= 5 {
+		seekTime = strconv.Itoa(durationSeconds / 2)
+	}
+
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-y",
+		"-ss", seekTime,
+		"-i", videoURL,
+		"-vframes", "1",
+		"-q:v", "2",
+		outputPath,
+	)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("screenshot extract failed: %w, stderr: %s", err, stderr.String())
+	}
+	return nil
 }
 
 // probeMedia shells out to ffprobe to extract container-level metadata from a

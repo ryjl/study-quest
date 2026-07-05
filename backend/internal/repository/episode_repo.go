@@ -52,7 +52,7 @@ func (r *episodeRepo) ListByCourse(courseID uint) ([]model.Episode, error) {
 // "scan missing durations" action.
 func (r *episodeRepo) ListByNullDuration() ([]model.Episode, error) {
 	var episodes []model.Episode
-	err := r.db.Where("duration_seconds IS NULL").Order("id asc").Find(&episodes).Error
+	err := r.db.Where("duration_seconds IS NULL OR cover_url IS NULL OR cover_url = ''").Order("id asc").Find(&episodes).Error
 	return episodes, err
 }
 

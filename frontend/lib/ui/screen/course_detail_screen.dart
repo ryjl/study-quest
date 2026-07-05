@@ -371,6 +371,23 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
+  Widget _buildThumbnailPlaceholder() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF94A3B8), Color(0xFF64748B)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: const Icon(
+        Icons.video_file_rounded,
+        color: Colors.white54,
+        size: 24,
+      ),
+    );
+  }
+
   /// Groups episodes under their chapters in display order. Real chapters
   /// come first (in [sortOrder] then [id] order), each populated with the
   /// episodes whose [Episode.chapterId] matches. Any episodes left over
@@ -450,22 +467,64 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         },
         child: Row(
           children: [
-            // Status Circle Icon
+            // Video Thumbnail
             Container(
-              width: 48,
-              height: 48,
+              width: 120,
+              height: 68,
               decoration: BoxDecoration(
-                color: isCompleted ? const Color(0xFFECFDF5) : const Color(0xFFF8FAFC),
-                shape: BoxShape.circle,
+                borderRadius: BorderRadius.circular(12),
+                color: const Color(0xFFF1F5F9),
                 border: Border.all(
                   color: isCompleted ? const Color(0xFFA7F3D0) : const Color(0xFFCBD5E1),
-                  width: 2.0,
+                  width: 1.5,
                 ),
               ),
-              child: Icon(
-                isCompleted ? Icons.check_circle_rounded : Icons.play_arrow_rounded,
-                color: isCompleted ? AppTheme.accentGreen : const Color(0xFF94A3B8),
-                size: 28,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10.5),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    // Cover Image
+                    ep.coverUrl.isNotEmpty
+                        ? Image.network(
+                            ApiService.absoluteUrl(ep.coverUrl),
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => _buildThumbnailPlaceholder(),
+                          )
+                        : _buildThumbnailPlaceholder(),
+
+                    // Semi-transparent dark overlay for play button visibility
+                    Container(
+                      color: Colors.black.withOpacity(0.15),
+                    ),
+
+                    // Status Circle Overlay (Play / Complete check) in the center
+                    Center(
+                      child: Container(
+                        width: 32,
+                        height: 32,
+                        decoration: BoxDecoration(
+                          color: isCompleted
+                              ? const Color(0xFFECFDF5).withOpacity(0.9)
+                              : Colors.white.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            )
+                          ],
+                        ),
+                        child: Icon(
+                          isCompleted ? Icons.check_rounded : Icons.play_arrow_rounded,
+                          color: isCompleted ? AppTheme.accentGreen : AppTheme.primaryColor,
+                          size: 20,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(width: 16),

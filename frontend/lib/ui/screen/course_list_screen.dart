@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../model/course.dart';
 import '../../model/progress.dart';
@@ -268,18 +269,24 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 // allowed in an unbounded-height scroll view).
                 filteredCourses.isEmpty
                     ? _buildEmptyBox()
-                    : GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: filteredCourses.length,
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 4,
-                          crossAxisSpacing: 24,
-                          mainAxisSpacing: 24,
-                          childAspectRatio: 0.82,
-                        ),
-                        itemBuilder: (context, index) {
-                          return _buildCourseCard(filteredCourses[index]);
+                    : LayoutBuilder(
+                        builder: (context, constraints) {
+                          final width = constraints.maxWidth;
+                          final crossAxisCount = width > 1200 ? 4 : (width > 800 ? 3 : 2);
+                          return GridView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: filteredCourses.length,
+                            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: crossAxisCount,
+                              crossAxisSpacing: 24,
+                              mainAxisSpacing: 24,
+                              childAspectRatio: 0.72,
+                            ),
+                            itemBuilder: (context, index) {
+                              return _buildCourseCard(filteredCourses[index]);
+                            },
+                          );
                         },
                       ),
               ],
@@ -321,6 +328,53 @@ class _CourseListScreenState extends State<CourseListScreen> {
     );
   }
 
+  Widget _buildSubjectWatermark(String subject) {
+    IconData iconData;
+    switch (subject.toLowerCase()) {
+      case 'chinese':
+      case '语文':
+        iconData = Icons.menu_book_rounded;
+        break;
+      case 'math':
+      case '数学':
+        iconData = Icons.calculate_rounded;
+        break;
+      case 'english':
+      case '英语':
+        iconData = Icons.translate_rounded;
+        break;
+      case 'physics':
+      case '科学':
+        iconData = Icons.science_rounded;
+        break;
+      case 'extra':
+      case '百科':
+        iconData = Icons.public_rounded;
+        break;
+      case '兴趣':
+        iconData = Icons.extension_rounded;
+        break;
+      case '综合':
+        iconData = Icons.map_rounded;
+        break;
+      default:
+        iconData = Icons.school_rounded;
+    }
+
+    return Positioned(
+      right: -24,
+      bottom: -24,
+      child: Transform.rotate(
+        angle: -15 * pi / 180,
+        child: Icon(
+          iconData,
+          size: 130,
+          color: Colors.white.withOpacity(0.15),
+        ),
+      ),
+    );
+  }
+
   Widget _buildCourseCard(Course course) {
     // Real first tag (replaces mock tag rotation).
     final tags = course.tagsList;
@@ -347,46 +401,72 @@ class _CourseListScreenState extends State<CourseListScreen> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Dynamic gradient banner header
-          Container(
-            height: 140,
-            decoration: BoxDecoration(
-              gradient: AppTheme.getSubjectGradient(course.subject),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(26),
-                topRight: Radius.circular(26),
+          Expanded(
+            flex: 5,
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: AppTheme.getSubjectGradient(course.subject),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(26),
+                  topRight: Radius.circular(26),
+                ),
               ),
-            ),
-            child: Stack(
-              children: [
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.25),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.0),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  // 1. Watermark (if no cover)
+                  if (course.coverUrl.isEmpty)
+                    _buildSubjectWatermark(course.subject),
+
+                  // 2. Cover image (if exists)
+                  if (course.coverUrl.isNotEmpty)
+                    ClipRRect(
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(26),
+                        topRight: Radius.circular(26),
+                      ),
+                      child: Image.network(
+                        ApiService.absoluteUrl(course.coverUrl),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            _buildSubjectWatermark(course.subject),
+                      ),
                     ),
-                    child: Text(
-                      cardLabel,
-                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900),
+
+                  // 3. Chip overlay (top-left)
+                  Positioned(
+                    top: 12,
+                    left: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.25),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.0),
+                      ),
+                      child: Text(
+                        cardLabel,
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900),
+                      ),
                     ),
                   ),
-                ),
-                const Positioned(
-                  bottom: 12,
-                  right: 12,
-                  child: Icon(Icons.play_circle_fill_rounded, color: Colors.white70, size: 28),
-                ),
-              ],
+
+                  // 4. Play icon overlay (bottom-right)
+                  const Positioned(
+                    bottom: 12,
+                    right: 12,
+                    child: Icon(Icons.play_circle_fill_rounded, color: Colors.white70, size: 28),
+                  ),
+                ],
+              ),
             ),
           ),
 
           // Course info
           Expanded(
+            flex: 4,
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
+              padding: const EdgeInsets.all(12.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -402,12 +482,12 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 8),
                   Text(
                     course.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16, color: AppTheme.textWhite),
+                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppTheme.textWhite),
                   ),
                   const Spacer(),
 

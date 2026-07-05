@@ -146,6 +146,7 @@ type Episode struct {
 	SortOrder            int    `gorm:"index:idx_course_sort;not null"`
 	Title                string `gorm:"size:255;not null"`
 	VideoRelativePath    string `gorm:"type:text;not null"`
+	CoverURL             string `gorm:"size:1024"`
 	AttachmentJSON       string `gorm:"type:text"` // JSON array of attachments
 	FileHash             string `gorm:"size:255;index"` // SHA1/MD5 for disaster recovery matching
 	OriginalRelativePath string `gorm:"type:text"` // Original multi-layer path to prevent name collision
