@@ -4,3 +4,6 @@ dist/
 coverage/
 *.log
 .DS_Store
+# tsc -b (project references) build artifacts — emit and incremental info.
+.tsbuild/
+*.tsbuildinfo

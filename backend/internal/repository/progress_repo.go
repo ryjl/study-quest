@@ -164,11 +164,19 @@ func (r *progressRepo) GetPointsLedger(userID uint, limit, offset int) ([]model.
 // regardless of user count. Users with no progress rows are absent from the
 // map (callers treat missing as zero).
 func (r *progressRepo) BatchUserProgressSummary() (map[uint]UserProgressSummary, error) {
+	// NOTE: last_active_at is scanned into a *string rather than *time.Time.
+	// SQLite returns MAX(updated_at) as a driver.Value string, and the
+	// mattn/go-sqlite3 driver refuses to scan a string column into *time.Time
+	// (it only auto-parses timestamps for columns declared with the
+	// datetime-ish affinities). Scanning into *time.Time therefore panics the
+	// whole query with "unsupported Scan, storing driver.Value type string
+	// into type *time.Time", which previously zeroed out every aggregate on
+	// the user list. We parse the string back into time.Time in Go instead.
 	type row struct {
 		UserID            uint
 		CompletedEpisodes int64
 		TotalWatchSeconds int64
-		LastActiveAt      *time.Time
+		LastActiveAt      *string
 	}
 	var rows []row
 	err := r.db.Table("user_progresses").
@@ -185,10 +193,31 @@ func (r *progressRepo) BatchUserProgressSummary() (map[uint]UserProgressSummary,
 	}
 	out := make(map[uint]UserProgressSummary, len(rows))
 	for _, r := range rows {
+		var lastActive *time.Time
+		if r.LastActiveAt != nil && *r.LastActiveAt != "" {
+			// SQLite stores time.Time as "2006-01-02 15:04:05.999999999-07:00"
+			// (its own datetime string, NOT RFC3339 — note the space and the
+			// fractional seconds). Try the SQLite layout first, then fall back
+			// to the two RFC3339 variants for other drivers (postgres/mysql).
+			layouts := []string{
+				"2006-01-02 15:04:05.999999999-07:00",
+				"2006-01-02 15:04:05.999999999",
+				time.RFC3339Nano,
+				time.RFC3339,
+			}
+			for _, layout := range layouts {
+				if t, perr := time.Parse(layout, *r.LastActiveAt); perr == nil {
+					lastActive = &t
+					break
+				}
+			}
+			// If none parse, leave lastActive nil (treated as "never active"
+			// downstream) rather than failing the whole batch.
+		}
 		out[r.UserID] = UserProgressSummary{
 			CompletedEpisodes: r.CompletedEpisodes,
 			TotalWatchSeconds: r.TotalWatchSeconds,
-			LastActiveAt:      r.LastActiveAt,
+			LastActiveAt:      lastActive,
 		}
 	}
 	return out, nil

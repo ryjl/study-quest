@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -197,14 +198,37 @@ func (h *adminHandler) Me(c *gin.Context) {
 
 // DashboardStats aggregates the headline numbers + charts shown on the
 // admin landing page. Each stat is a single SQL query so the page stays snappy.
+// A failure in any one stat degrades to a zero value rather than 500-ing the
+// whole dashboard, but each error is logged so silent breakage is visible.
 func (h *adminHandler) DashboardStats(c *gin.Context) {
-	users, _ := h.userRepo.List()
-	courses, _ := h.courseRepo.List("", 0, nil)
-	episodeCount, _ := h.episodeRepo.CountAll()
-	totalDur, _ := h.episodeRepo.SumTotalDurationSeconds()
-	pending, _ := h.episodeRepo.CountByNullDuration()
-	subjectMap, _ := h.episodeRepo.CountBySubject()
-	recent, _ := h.episodeRepo.RecentDailyCount(7)
+	users, err := h.userRepo.List()
+	if err != nil {
+		log.Printf("DashboardStats: userRepo.List failed: %v", err)
+	}
+	courses, err := h.courseRepo.List("", 0, nil)
+	if err != nil {
+		log.Printf("DashboardStats: courseRepo.List failed: %v", err)
+	}
+	episodeCount, err := h.episodeRepo.CountAll()
+	if err != nil {
+		log.Printf("DashboardStats: episodeRepo.CountAll failed: %v", err)
+	}
+	totalDur, err := h.episodeRepo.SumTotalDurationSeconds()
+	if err != nil {
+		log.Printf("DashboardStats: episodeRepo.SumTotalDurationSeconds failed: %v", err)
+	}
+	pending, err := h.episodeRepo.CountByNullDuration()
+	if err != nil {
+		log.Printf("DashboardStats: episodeRepo.CountByNullDuration failed: %v", err)
+	}
+	subjectMap, err := h.episodeRepo.CountBySubject()
+	if err != nil {
+		log.Printf("DashboardStats: episodeRepo.CountBySubject failed: %v", err)
+	}
+	recent, err := h.episodeRepo.RecentDailyCount(7)
+	if err != nil {
+		log.Printf("DashboardStats: episodeRepo.RecentDailyCount failed: %v", err)
+	}
 
 	subjectDist := make([]subjectCountDTO, 0, len(subjectMap))
 	for subj, cnt := range subjectMap {
@@ -241,13 +265,35 @@ func (h *adminHandler) ListUsers(c *gin.Context) {
 
 	// Batch-fetch all per-user aggregates in a fixed number of queries so the
 	// list stays O(users) and not O(users × stats). Each map is keyed by
-	// user id; missing entries read as zero-values.
-	points, _ := h.progressRepo.BatchPoints()
-	access, _ := h.userRepo.BatchAccessLists()
-	progress, _ := h.progressRepo.BatchUserProgressSummary()
-	accessible, _ := h.episodeRepo.BatchAccessibleEpisodeCounts()
-	badges, _ := h.badgeRepo.BatchUnlockedBadgeCounts()
-	totalBadges, _ := h.badgeRepo.CountBadges()
+	// user id; missing entries read as zero-values. A failure in any single
+	// batch degrades gracefully (its stats show as zero) rather than 500-ing
+	// the whole list — but we log the error so silent breakage (the kind that
+	// previously hid the BatchUserProgressSummary SQLite timestamp bug for a
+	// whole release) can't recur unnoticed.
+	points, err := h.progressRepo.BatchPoints()
+	if err != nil {
+		log.Printf("ListUsers: BatchPoints failed: %v", err)
+	}
+	access, err := h.userRepo.BatchAccessLists()
+	if err != nil {
+		log.Printf("ListUsers: BatchAccessLists failed: %v", err)
+	}
+	progress, err := h.progressRepo.BatchUserProgressSummary()
+	if err != nil {
+		log.Printf("ListUsers: BatchUserProgressSummary failed: %v", err)
+	}
+	accessible, err := h.episodeRepo.BatchAccessibleEpisodeCounts()
+	if err != nil {
+		log.Printf("ListUsers: BatchAccessibleEpisodeCounts failed: %v", err)
+	}
+	badges, err := h.badgeRepo.BatchUnlockedBadgeCounts()
+	if err != nil {
+		log.Printf("ListUsers: BatchUnlockedBadgeCounts failed: %v", err)
+	}
+	totalBadges, err := h.badgeRepo.CountBadges()
+	if err != nil {
+		log.Printf("ListUsers: CountBadges failed: %v", err)
+	}
 
 	batch := userStatsBatch{
 		points:      points,
