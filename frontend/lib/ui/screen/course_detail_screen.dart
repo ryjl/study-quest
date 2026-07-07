@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../model/course.dart';
 import '../../model/progress.dart';
+import '../../model/subject.dart';
 import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
@@ -34,10 +35,25 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   final Map<int, AILessonContent?> _aiCache = {};
   final Map<int, List<Attachment>> _attachmentCache = {};
 
+  // Subject catalog for resolving the course's subject key → label/color.
+  List<Subject> _subjectsCatalog = const [];
+
   @override
   void initState() {
     super.initState();
     _refreshData();
+    // Resolve the subject catalog so the header chip shows the configured
+    // label/emoji and the hero gradient matches the subject color. Non-fatal.
+    ApiService.fetchSubjects(widget.activeUserId).then((list) {
+      if (mounted) setState(() => _subjectsCatalog = list);
+    });
+  }
+
+  Subject _subjectMeta(String key) {
+    for (final s in _subjectsCatalog) {
+      if (s.key == key) return s;
+    }
+    return Subject(key: key, label: key.isEmpty ? '科目' : key, emoji: '📦', color: '#9ca3af');
   }
 
   void _refreshData() {
@@ -68,7 +84,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final subjectGradient = AppTheme.getSubjectGradient(widget.course.subject);
+    final subjectGradient = AppTheme.getSubjectGradientFromColor(_subjectMeta(widget.course.subject).color);
     // Use the course's real first tag if defined (no more mock tags).
     final tagsList = widget.course.tagsList;
     final firstTag = tagsList.isNotEmpty ? tagsList.first : null;
@@ -170,7 +186,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                   children: [
                                     Row(
                                       children: [
-                                        _buildHeaderChip(widget.course.subject),
+                                        _buildHeaderChip('${_subjectMeta(widget.course.subject).emoji} ${_subjectMeta(widget.course.subject).label}'.trim()),
                                         const SizedBox(width: 10),
                                         _buildHeaderChip(widget.course.grade == 'universal' ? '通用' : '${widget.course.grade}年级'),
                                         if (firstTag != null) ...[

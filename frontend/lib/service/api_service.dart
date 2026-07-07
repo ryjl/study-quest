@@ -3,6 +3,8 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../model/user.dart';
 import '../model/course.dart';
+import '../model/subject.dart';
+import '../model/tag.dart';
 import '../model/progress.dart';
 import '../model/badge.dart';
 
@@ -60,6 +62,35 @@ class ApiService {
       return list.map((e) => Course.fromJson(e)).toList();
     }
     throw Exception('获取课程库失败: ${response.statusCode}');
+  }
+
+  // 3b. Fetch the subject catalog (for filter chips + card labels/gradients).
+  // Requires the student's auth header since /api/v1/subjects is restricted.
+  static Future<List<Subject>> fetchSubjects(int activeUserId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/subjects'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list.map((e) => Subject.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    // Non-fatal: callers fall back to the raw subject key string.
+    return const [];
+  }
+
+  // 3c. Fetch the tag catalog (for multi-select filter chips). Tags are
+  // DB-driven and editable from the admin Tags page.
+  static Future<List<Tag>> fetchTags(int activeUserId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/tags'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list.map((e) => Tag.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    return const [];
   }
 
   // 4. Fetch episodes for a given course

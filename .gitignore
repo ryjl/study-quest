@@ -7,6 +7,11 @@ backend/backend
 *.db-wal
 *.db-shm
 
+# Admin SPA build output — keep the committed .gitkeep sentinel, ignore real artifacts.
+backend/internal/admin/spa/dist/*
+!backend/internal/admin/spa/dist/.gitkeep
+frontend-admin/node_modules/
+
 # Flutter
 .metadata
 .packages

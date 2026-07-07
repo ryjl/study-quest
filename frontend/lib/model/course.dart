@@ -7,6 +7,7 @@ class Course {
   final String subject;
   final String coverUrl;
   final String tags;
+  final List<int> tagIds;
 
   Course({
     required this.id,
@@ -15,9 +16,11 @@ class Course {
     required this.subject,
     required this.coverUrl,
     this.tags = '',
+    this.tagIds = const [],
   });
 
   factory Course.fromJson(Map<String, dynamic> json) {
+    final rawTagIds = json['TagIDs'] ?? json['tag_ids'];
     return Course(
       id: json['ID'] ?? json['id'] ?? 0,
       title: json['Title'] ?? json['title'] ?? '',
@@ -25,6 +28,9 @@ class Course {
       subject: json['Subject'] ?? json['subject'] ?? '',
       coverUrl: json['CoverURL'] ?? json['cover_url'] ?? '',
       tags: json['Tags'] ?? json['tags'] ?? '',
+      tagIds: rawTagIds is List
+          ? rawTagIds.map((e) => (e as num).toInt()).toList()
+          : const [],
     );
   }
 

@@ -42,19 +42,50 @@ class AppTheme {
   );
 
   static Gradient getSubjectGradient(String subject) {
+    // Subject is now a stable key (e.g. "math"), not a Chinese display name.
+    // The caller should prefer getSubjectGradientFromColor(subject.color) so
+    // the gradient matches the admin-configured palette. This key-based
+    // fallback only covers the canonical defaults and degrades to emerald.
     switch (subject) {
-      case '语文':
+      case 'chinese':
         return blueGradient;
-      case '数学':
-      case '兴趣':
+      case 'math':
+      case 'extra':
         return indigoGradient;
-      case '英语':
-      case '综合':
+      case 'english':
+      case 'general':
         return skyGradient;
-      case '科学':
+      case 'physics':
       default:
         return emeraldGradient;
-      }
+    }
+  }
+
+  /// Builds a diagonal gradient from a hex color (e.g. "#f59e0b"). Used so the
+  /// course card banner matches the admin-configured subject color instead of
+  /// a hardcoded per-name switch. Falls back to the primary gradient.
+  static Gradient getSubjectGradientFromColor(String hexColor) {
+    final base = _parseHex(hexColor) ?? primaryColor;
+    return LinearGradient(
+      colors: [
+        Color.alphaBlend(base.withValues(alpha: 0.55), Colors.white),
+        base,
+      ],
+      begin: Alignment.topLeft,
+      end: Alignment.bottomRight,
+    );
+  }
+
+  static Color? _parseHex(String hex) {
+    var h = hex.trim();
+    if (h.isEmpty) return null;
+    if (h.startsWith('#')) h = h.substring(1);
+    if (h.length == 3) {
+      h = h.split('').map((c) => '$c$c').join();
+    }
+    if (h.length == 6) h = 'FF$h';
+    final value = int.tryParse(h, radix: 16);
+    return value == null ? null : Color(value);
   }
 
   static ThemeData get lightTheme {

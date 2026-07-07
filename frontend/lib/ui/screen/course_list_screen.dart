@@ -2,11 +2,25 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../model/course.dart';
 import '../../model/progress.dart';
+import '../../model/subject.dart';
+import '../../model/tag.dart';
 import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/button_3d.dart';
 import 'course_detail_screen.dart';
+
+// Backend stores grade as a stable key ("1".."9", "universal"); the UI shows
+// Chinese labels. These maps bridge the two so filtering compares keys and
+// display resolves to labels (fixes the old "'3'+'年级'='3年级' ≠ '三年级'" bug).
+const Map<String, String> _gradeLabels = {
+  '1': '一年级', '2': '二年级', '3': '三年级', '4': '四年级',
+  '5': '五年级', '6': '六年级', '7': '七年级', '8': '八年级', '9': '九年级',
+  'universal': '通用',
+};
+String gradeLabelOf(String key) => _gradeLabels[key] ?? '$key 年级';
+// Filter chips: "全部" + each grade key, shown via gradeLabelOf.
+final List<String> _gradeFilterKeys = ['全部', ..._gradeLabels.keys];
 
 class CourseListScreen extends StatefulWidget {
   final int activeUserId;
@@ -20,15 +34,42 @@ class CourseListScreen extends StatefulWidget {
 class _CourseListScreenState extends State<CourseListScreen> {
   late Future<List<Course>> _coursesFuture;
   late Future<List<UserProgress>> _progressFuture;
-  
+  // Cached combined future — FutureBuilder must see a STABLE future reference
+  // across rebuilds, otherwise each setState (e.g. typing in the search box)
+  // makes FutureBuilder re-subscribe, flip to ConnectionState.waiting, rebuild
+  // the whole subtree, and blow away the TextField's focus/input mid-keystroke.
+  late final Future<List<dynamic>> _combinedFuture;
+
   String _selectedSubject = '全部';
   String _selectedGrade = '全部';
-  String _selectedTag = '全部';
   String _searchQuery = '';
-  
-  final List<String> _subjects = ['全部', '语文', '数学', '英语', '科学', '兴趣', '综合'];
-  final List<String> _grades = ['全部', '三年级', '四年级', '五年级', '六年级', '通用'];
-  final List<String> _tags = ['全部', '必修', '思维', '拓展', '探索', '课外', '逻辑', '视野'];
+
+  // Subject catalog fetched from /api/v1/subjects. Drives the filter chips and
+  // the key→label/emoji/color lookups on each card. Empty until loaded; the
+  // fallback in _subjectMeta keeps the UI working pre-load / on fetch failure.
+  List<Subject> _subjectsCatalog = const [];
+  static const Subject _fallbackSubject = Subject(
+    key: '', label: '科目', emoji: '📦', color: '#9ca3af',
+  );
+
+  // Tag catalog fetched from /api/v1/tags. Drives the multi-select filter
+  // chips. Selection stores tag IDs and matches against Course.tagIds, so it
+  // stays correct even if a tag's label is later renamed.
+  List<Tag> _tagsCatalog = const [];
+  final Set<int> _selectedTagIDs = {};
+
+  /// "全部" + one entry per subject key. Refreshed when the catalog loads.
+  List<String> get _subjectFilters => [
+    '全部',
+    ..._subjectsCatalog.map((s) => s.key),
+  ];
+
+  Subject _subjectMeta(String key) {
+    for (final s in _subjectsCatalog) {
+      if (s.key == key) return s;
+    }
+    return _fallbackSubject.copyWith(label: key.isEmpty ? '科目' : key, key: key);
+  }
 
   @override
   void initState() {
@@ -37,9 +78,20 @@ class _CourseListScreenState extends State<CourseListScreen> {
   }
 
   void _loadData() {
-    setState(() {
-      _coursesFuture = ApiService.fetchCourses(widget.activeUserId);
-      _progressFuture = ApiService.fetchProgressOverview(widget.activeUserId);
+    _coursesFuture = ApiService.fetchCourses(widget.activeUserId);
+    _progressFuture = ApiService.fetchProgressOverview(widget.activeUserId);
+    // Build the combined future ONCE per load; the FutureBuilder reads this
+    // stable reference on every rebuild instead of constructing a new
+    // Future.wait (which would re-subscribe and reset the subtree).
+    _combinedFuture = Future.wait([_coursesFuture, _progressFuture]);
+    setState(() {});
+    // Load the subject catalog in the background; non-fatal on failure.
+    ApiService.fetchSubjects(widget.activeUserId).then((list) {
+      if (mounted) setState(() => _subjectsCatalog = list);
+    });
+    // Load the tag catalog the same way (drives the multi-select chips).
+    ApiService.fetchTags(widget.activeUserId).then((list) {
+      if (mounted) setState(() => _tagsCatalog = list);
     });
   }
 
@@ -48,7 +100,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: FutureBuilder(
-        future: Future.wait([_coursesFuture, _progressFuture]),
+        future: _combinedFuture,
         builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor));
@@ -66,10 +118,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
           final filteredCourses = courses.where((c) {
             final matchSearch = c.title.toLowerCase().contains(_searchQuery.toLowerCase());
             final matchSubject = _selectedSubject == '全部' || c.subject == _selectedSubject;
-            final matchGrade = _selectedGrade == '全部' ||
-                (c.grade == 'universal' && _selectedGrade == '通用') ||
-                '${c.grade}年级' == _selectedGrade;
-            final matchTag = _selectedTag == '全部' || c.tagsList.contains(_selectedTag);
+            final matchGrade = _selectedGrade == '全部' || c.grade == _selectedGrade;
+            // Tag multi-select: course matches if it carries ANY of the
+            // selected tag IDs (intersection of selected set and course tagIds).
+            final matchTag = _selectedTagIDs.isEmpty ||
+                c.tagIds.any((id) => _selectedTagIDs.contains(id));
             return matchSearch && matchSubject && matchGrade && matchTag;
           }).toList();
 
@@ -161,66 +214,60 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 ),
                 const SizedBox(height: 32),
 
-                // Search & Subject Row
-                Row(
-                  children: [
-                    // Subject List Scroll View
-                    Expanded(
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        physics: const BouncingScrollPhysics(),
-                        child: Row(
-                          children: _subjects.map((subj) {
-                            final active = _selectedSubject == subj;
-                            return Padding(
-                              padding: const EdgeInsets.only(right: 12.0),
-                              child: active
-                                  ? Button3D.dark(
-                                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                      onPressed: () => setState(() => _selectedSubject = subj),
-                                      child: Text(subj, style: const TextStyle(fontSize: 14)),
-                                    )
-                                  : Button3D.white(
-                                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                      onPressed: () => setState(() => _selectedSubject = subj),
-                                      child: Text(subj, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
-                                    ),
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 20),
+                // Subject chips (full width, horizontally scrollable)
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  physics: const BouncingScrollPhysics(),
+                  child: Row(
+                    children: _subjectFilters.map((subj) {
+                      final active = _selectedSubject == subj;
+                      final label = subj == '全部'
+                          ? '全部'
+                          : _subjectMeta(subj).label;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 12.0),
+                        child: active
+                            ? Button3D.dark(
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                onPressed: () => setState(() => _selectedSubject = subj),
+                                child: Text(label, style: const TextStyle(fontSize: 14)),
+                              )
+                            : Button3D.white(
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                                onPressed: () => setState(() => _selectedSubject = subj),
+                                child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
+                              ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                const SizedBox(height: 12),
 
-                    // Search input
-                    SizedBox(
-                      width: 280,
-                      child: TextField(
-                        onChanged: (val) => setState(() => _searchQuery = val),
-                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
-                        decoration: InputDecoration(
-                          hintText: '搜索课程名称...',
-                          hintStyle: const TextStyle(color: AppTheme.textMuted),
-                          prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textMuted),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2.0),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(16),
-                            borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
-                          ),
-                        ),
-                      ),
+                // Search input (own row, full width — no longer squeezes the
+                // subject chips above it).
+                TextField(
+                  onChanged: (val) => setState(() => _searchQuery = val),
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
+                  decoration: InputDecoration(
+                    hintText: '搜索课程名称...',
+                    hintStyle: const TextStyle(color: AppTheme.textMuted),
+                    prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textMuted),
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
                     ),
-                  ],
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2.0),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(16),
+                      borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 24),
 
@@ -240,19 +287,55 @@ class _CourseListScreenState extends State<CourseListScreen> {
                         icon: Icons.school_rounded,
                         color: Colors.blue,
                         value: _selectedGrade,
-                        items: _grades,
+                        items: _gradeFilterKeys,
+                        labelOf: gradeLabelOf,
                         onChanged: (val) => setState(() => _selectedGrade = val!),
                       ),
                       Container(width: 2, height: 24, color: const Color(0xFFE2E8F0), margin: const EdgeInsets.symmetric(horizontal: 16)),
 
-                      // Tag Selector
-                      _buildDropdown(
-                        icon: Icons.tag_rounded,
-                        color: Colors.green,
-                        value: _selectedTag,
-                        items: _tags,
-                        onChanged: (val) => setState(() => _selectedTag = val!),
-                      ),
+                      // Tag multi-select chips (tappable to toggle). Empty when
+                      // the catalog hasn't loaded yet — falls back to nothing.
+                      if (_tagsCatalog.isNotEmpty)
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: _tagsCatalog.map((t) {
+                                final selected = _selectedTagIDs.contains(t.id);
+                                return Padding(
+                                  padding: const EdgeInsets.only(right: 8),
+                                  child: Button3D.white(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    onPressed: () => setState(() {
+                                      if (selected) {
+                                        _selectedTagIDs.remove(t.id);
+                                      } else {
+                                        _selectedTagIDs.add(t.id);
+                                      }
+                                    }),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          t.label,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: selected ? const Color(0xFF10B981) : AppTheme.textMuted,
+                                          ),
+                                        ),
+                                        if (selected) ...[
+                                          const SizedBox(width: 4),
+                                          const Icon(Icons.check, size: 14, color: Color(0xFF10B981)),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ),
+                        ),
 
                       const SizedBox(width: 24),
                       Text(
@@ -304,6 +387,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
     required String value,
     required List<String> items,
     required ValueChanged<String?> onChanged,
+    String Function(String)? labelOf,
   }) {
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -318,9 +402,10 @@ class _CourseListScreenState extends State<CourseListScreen> {
           style: TextStyle(color: color.shade800, fontWeight: FontWeight.bold, fontSize: 14),
           dropdownColor: Colors.white,
           items: items.map((item) {
+            final label = labelOf != null ? labelOf(item) : item;
             return DropdownMenuItem<String>(
               value: item,
-              child: Text(item == '全部' ? '所有' : item),
+              child: Text(item == '全部' ? '所有' : label),
             );
           }).toList(),
         ),
@@ -379,7 +464,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
     // Real first tag (replaces mock tag rotation).
     final tags = course.tagsList;
     final tag = tags.isNotEmpty ? tags.first : '';
-    final gradeLabel = course.grade == 'universal' ? '通用' : '${course.grade}年级';
+    final gradeLabel = gradeLabelOf(course.grade);
     final cardLabel = tag.isEmpty ? gradeLabel : '$tag | $gradeLabel';
 
     return FocusButton(
@@ -405,7 +490,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
             flex: 5,
             child: Container(
               decoration: BoxDecoration(
-                gradient: AppTheme.getSubjectGradient(course.subject),
+                gradient: AppTheme.getSubjectGradientFromColor(_subjectMeta(course.subject).color),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(26),
                   topRight: Radius.circular(26),
@@ -516,29 +601,8 @@ class _CourseListScreenState extends State<CourseListScreen> {
   }
 
   String _getSubjectName(String key) {
-    switch (key.toLowerCase()) {
-      case 'chinese':
-      case '语文':
-        return '语文 📚';
-      case 'math':
-      case '数学':
-        return '数学 📐';
-      case 'english':
-      case '英语':
-        return '英语 🔠';
-      case 'physics':
-      case '科学':
-        return '科学 🧪';
-      case 'extra':
-      case '百科':
-        return '百科 🌎';
-      case '兴趣':
-        return '兴趣 ♟️';
-      case '综合':
-        return '综合 🗺️';
-      default:
-        return key.toUpperCase();
-    }
+    final meta = _subjectMeta(key);
+    return '${meta.label} ${meta.emoji}'.trim();
   }
 
   Widget _buildErrorBox(String error) {
