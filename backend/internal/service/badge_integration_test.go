@@ -24,6 +24,7 @@ func setupIntegrationDB(t *testing.T) *gorm.DB {
 
 func TestBadgeAndProgressIntegration(t *testing.T) {
 	db := setupIntegrationDB(t)
+	subjects := seedTestSubjects(t, db)
 
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
@@ -52,7 +53,7 @@ func TestBadgeAndProgressIntegration(t *testing.T) {
 		t.Fatalf("Failed to create user: %v", err)
 	}
 
-	course := &model.Course{Title: "快乐数学", Grade: "3", Subject: "math"}
+	course := &model.Course{Title: "快乐数学", Grade: "3", SubjectID: subjects["math"].ID}
 	if err := courseRepo.Create(course); err != nil {
 		t.Fatalf("Failed to create course: %v", err)
 	}

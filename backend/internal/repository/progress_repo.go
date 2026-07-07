@@ -8,6 +8,15 @@ import (
 	"gorm.io/gorm"
 )
 
+// UserProgressSummary is the per-user aggregate computed in one batch query
+// for the admin user list. All fields are 0 when the user has no progress
+// rows yet.
+type UserProgressSummary struct {
+	CompletedEpisodes int64
+	TotalWatchSeconds int64
+	LastActiveAt      *time.Time
+}
+
 // ProgressRepository handles UserProgress updates, UserPoints, and PointsLedger transaction auditing.
 type ProgressRepository interface {
 	GetProgress(userID, episodeID uint) (*model.UserProgress, error)
@@ -17,6 +26,13 @@ type ProgressRepository interface {
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
 	GetLastWatchedEpisode(userID, courseID uint) (*model.UserProgress, error)
 	GetPointsLedger(userID uint, limit, offset int) ([]model.PointsLedger, error)
+
+	// BatchUserProgressSummary returns completed-episode count, accumulated
+	// watch seconds, and last-active timestamp per user — in a single query,
+	// keyed by user id. Used by the admin user list to avoid N+1.
+	BatchUserProgressSummary() (map[uint]UserProgressSummary, error)
+	// BatchPoints loads current+total points for many users in one query.
+	BatchPoints() (map[uint]model.UserPoint, error)
 }
 
 type progressRepo struct {
@@ -141,4 +157,53 @@ func (r *progressRepo) GetPointsLedger(userID uint, limit, offset int) ([]model.
 	}
 	err := query.Find(&ledger).Error
 	return ledger, err
+}
+
+// BatchUserProgressSummary aggregates per-user: completed-episode count
+// (SUM CASE), total watch seconds, and the most recent updated_at. One query
+// regardless of user count. Users with no progress rows are absent from the
+// map (callers treat missing as zero).
+func (r *progressRepo) BatchUserProgressSummary() (map[uint]UserProgressSummary, error) {
+	type row struct {
+		UserID            uint
+		CompletedEpisodes int64
+		TotalWatchSeconds int64
+		LastActiveAt      *time.Time
+	}
+	var rows []row
+	err := r.db.Table("user_progresses").
+		Select(`
+			user_id AS user_id,
+			SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END) AS completed_episodes,
+			COALESCE(SUM(watch_seconds), 0) AS total_watch_seconds,
+			MAX(updated_at) AS last_active_at
+		`).
+		Group("user_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uint]UserProgressSummary, len(rows))
+	for _, r := range rows {
+		out[r.UserID] = UserProgressSummary{
+			CompletedEpisodes: r.CompletedEpisodes,
+			TotalWatchSeconds: r.TotalWatchSeconds,
+			LastActiveAt:      r.LastActiveAt,
+		}
+	}
+	return out, nil
+}
+
+// BatchPoints loads every user's UserPoint in one query. Absent for users
+// with no points row (shouldn't happen since Create seeds one, but be safe).
+func (r *progressRepo) BatchPoints() (map[uint]model.UserPoint, error) {
+	var pts []model.UserPoint
+	if err := r.db.Find(&pts).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[uint]model.UserPoint, len(pts))
+	for _, p := range pts {
+		out[p.UserID] = p
+	}
+	return out, nil
 }

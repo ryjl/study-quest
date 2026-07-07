@@ -26,6 +26,12 @@ type BadgeRepository interface {
 	GetCompletedEpisodesCountBySubject(userID uint, subject string) (int, error)
 	GetNightOwlCompletedCount(userID uint) (int, error)
 	GetConsecutiveActiveDays(userID uint) (int, error)
+
+	// Batch aggregates for the admin user list.
+	// BatchUnlockedBadgeCounts returns user_id → unlocked badge count in one
+	// query. CountBadges returns the global badge total (denominator for "X/Y").
+	BatchUnlockedBadgeCounts() (map[uint]int64, error)
+	CountBadges() (int64, error)
 }
 
 type badgeRepo struct {
@@ -123,7 +129,8 @@ func (r *badgeRepo) GetCompletedEpisodesCountBySubject(userID uint, subject stri
 	err := r.db.Table("user_progresses").
 		Joins("JOIN episodes ON episodes.id = user_progresses.episode_id").
 		Joins("JOIN courses ON courses.id = episodes.course_id").
-		Where("user_progresses.user_id = ? AND user_progresses.is_completed = 1 AND courses.subject = ?", userID, subject).
+		Joins("JOIN subjects ON subjects.id = courses.subject_id").
+		Where("user_progresses.user_id = ? AND user_progresses.is_completed = 1 AND subjects.key = ?", userID, subject).
 		Count(&count).Error
 	return int(count), err
 }
@@ -176,4 +183,34 @@ func (r *badgeRepo) GetConsecutiveActiveDays(userID uint) (int, error) {
 		}
 	}
 	return streak, nil
+}
+
+// BatchUnlockedBadgeCounts returns user_id → unlocked badge count in one
+// query, for the admin user list's "X/Y 徽章" column.
+func (r *badgeRepo) BatchUnlockedBadgeCounts() (map[uint]int64, error) {
+	type row struct {
+		UserID uint
+		Count  int64
+	}
+	var rows []row
+	err := r.db.Model(&model.UserBadge{}).
+		Select("user_id, COUNT(*) AS count").
+		Group("user_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uint]int64, len(rows))
+	for _, r := range rows {
+		out[r.UserID] = r.Count
+	}
+	return out, nil
+}
+
+// CountBadges returns the total number of defined badges (the denominator for
+// "X/Y unlocked").
+func (r *badgeRepo) CountBadges() (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Badge{}).Count(&count).Error
+	return count, err
 }

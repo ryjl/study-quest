@@ -22,8 +22,31 @@ func setupTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// seedTestSubjects inserts the canonical subject set and returns a key→Subject
+// map, so test fixtures can reference a real SubjectID when building Courses.
+func seedTestSubjects(t *testing.T, db *gorm.DB) map[string]model.Subject {
+	t.Helper()
+	defaults := []model.Subject{
+		{Key: "chinese", Label: "语文", SortOrder: 1},
+		{Key: "math", Label: "数学", SortOrder: 2},
+		{Key: "english", Label: "英语", SortOrder: 3},
+		{Key: "physics", Label: "物理/科学", SortOrder: 4},
+	}
+	for i := range defaults {
+		if err := db.Create(&defaults[i]).Error; err != nil {
+			t.Fatalf("seed subject %s: %v", defaults[i].Key, err)
+		}
+	}
+	out := make(map[string]model.Subject, len(defaults))
+	for _, s := range defaults {
+		out[s.Key] = s
+	}
+	return out
+}
+
 func TestUserService(t *testing.T) {
 	db := setupTestDB(t)
+	subjects := seedTestSubjects(t, db)
 	userRepo := repository.NewUserRepository(db)
 	svc := NewUserService(userRepo)
 
@@ -137,8 +160,8 @@ func TestUserService(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
 		courseSvc := NewCourseService(courseRepo, userRepo)
 
-		_, _ = courseSvc.CreateCourse("Course1", "3", "math", "", "", "")
-		_, _ = courseSvc.CreateCourse("Course2", "4", "physics", "", "", "")
+		_, _ = courseSvc.CreateCourse("Course1", "3", subjects["math"].ID, "", nil, "")
+		_, _ = courseSvc.CreateCourse("Course2", "4", subjects["physics"].ID, "", nil, "")
 
 		// Grant all
 		err = svc.BulkCourseAccess(user.ID, "grant_all")

@@ -68,33 +68,63 @@ func (g Grade) Valid() bool {
 	return true
 }
 
+// Subject represents a user-editable course subject (科目), e.g. 语文/数学/英语.
+// Stored as its own table so it can be renamed or deleted independently of
+// courses. `Key` is the stable identifier referenced by badge rules; Label /
+// Emoji / Color carry the display metadata the frontend needs.
+type Subject struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement"`
+	Key       string    `gorm:"size:100;uniqueIndex;not null"` // stable identifier, e.g. "math"
+	Label     string    `gorm:"size:100;not null"`             // display name, e.g. "数学"
+	Emoji     string    `gorm:"size:32"`                       // e.g. "📐"
+	Color     string    `gorm:"size:32"`                       // hex e.g. "#f59e0b"
+	SortOrder int       `gorm:"default:0"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Tag represents a user-editable course tag (标签), e.g. 必修/思维训练/拓展.
+// Stored as its own table with a many-to-many relation to courses, so a tag
+// can be renamed/deleted independently and applied to many courses.
+type Tag struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement"`
+	Key       string    `gorm:"size:100;uniqueIndex;not null"` // stable identifier, e.g. "required"
+	Label     string    `gorm:"size:100;not null"`             // display name, e.g. "必修"
+	Color     string    `gorm:"size:32"`                       // hex e.g. "#ef4444"
+	SortOrder int       `gorm:"default:0"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // Course represents a multi-episode course.
 type Course struct {
 	ID             uint      `gorm:"primaryKey;autoIncrement"`
 	Title          string    `gorm:"size:255;not null"`
 	Grade          Grade     `gorm:"type:varchar(50);not null"`   // "1" to "9" or "universal" (or comma-separated)
-	Subject        string    `gorm:"size:100;not null"`  // e.g., "chinese", "math", "english", "physics"
+	SubjectID      uint      `gorm:"not null;index"`              // FK → subjects.id (ON DELETE RESTRICT)
+	Subject        Subject   `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
 	CoverURL       string    `gorm:"size:1024"`
-	Tags           string    `gorm:"type:text"`          // Comma-separated tags, e.g. "上学期,作文,重难点"
+	Tags           []Tag     `gorm:"many2many:course_tags;constraint:OnDelete:CASCADE"`
 	AttachmentJSON string    `gorm:"type:text"`          // JSON array of attachments
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
 
-// TagsList splits comma-separated tags into a slice.
+// TagsList returns the display labels of the course's tags, in tag sort order.
+// Kept for DTO back-compat (the /api/v1 contract emits a string array) and
+// for any caller that still wants the legacy "comma string" via TagsJoined().
 func (c Course) TagsList() []string {
-	if c.Tags == "" {
-		return []string{}
+	out := make([]string, 0, len(c.Tags))
+	for _, t := range c.Tags {
+		out = append(out, t.Label)
 	}
-	parts := strings.Split(c.Tags, ",")
-	var result []string
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
+	return out
+}
+
+// TagsJoined returns the comma-joined tag labels, matching the legacy
+// Course.Tags string field shape that older Flutter clients still parse.
+func (c Course) TagsJoined() string {
+	return strings.Join(c.TagsList(), ",")
 }
 
 // Grades splits a comma-separated grade list into a slice.
@@ -265,6 +295,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&Setting{},
 		&User{},
 		&UserCourseAccess{},
+		&Subject{},
+		&Tag{},
 		&Course{},
 		&Chapter{},
 		&Episode{},

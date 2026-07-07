@@ -24,13 +24,14 @@ func setupEpisodeTestDB(t *testing.T) *gorm.DB {
 
 func TestEpisodeService(t *testing.T) {
 	db := setupEpisodeTestDB(t)
+	subjects := seedTestSubjects(t, db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
 	svc := NewEpisodeService(episodeRepo, settingsRepo)
 
 	t.Run("ReorderEpisodes", func(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
-		c := &model.Course{Title: "Sort Course", Grade: "3", Subject: "math"}
+		c := &model.Course{Title: "Sort Course", Grade: "3", SubjectID: subjects["math"].ID}
 		_ = courseRepo.Create(c)
 
 		ep1, _ := svc.CreateEpisode(c.ID, 0, "Episode A", "/path/a.mp4", "[]", 1, "", "", nil, nil)
@@ -67,7 +68,7 @@ func TestEpisodeService(t *testing.T) {
 
 	t.Run("SubtitlesAndAutoMatch", func(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
-		c := &model.Course{Title: "Sub Course", Grade: "4", Subject: "english"}
+		c := &model.Course{Title: "Sub Course", Grade: "4", SubjectID: subjects["english"].ID}
 		_ = courseRepo.Create(c)
 
 		// Create an episode
@@ -126,6 +127,62 @@ func TestEpisodeService(t *testing.T) {
 		subs, _ = svc.ListSubtitles(ep.ID)
 		if len(subs) != 1 {
 			t.Errorf("Expected 1 subtitle after deletion, got %d", len(subs))
+		}
+	})
+
+	t.Run("UpdateEpisodeAdminPreservesMedia", func(t *testing.T) {
+		courseRepo := repository.NewCourseRepository(db)
+		c := &model.Course{Title: "Patch Course", Grade: "5", SubjectID: subjects["physics"].ID}
+		_ = courseRepo.Create(c)
+
+		// Create an episode with full media metadata (as if ffprobe had run).
+		size := int64(2048576)
+		dur := 750
+		ep, err := svc.CreateEpisode(c.ID, 0, "原始标题", "/physics/orig.mp4", "[]", 1, "abc123hash", "/physics/orig.mp4", &size, &dur)
+		if err != nil {
+			t.Fatalf("CreateEpisode failed: %v", err)
+		}
+		// Simulate a probed media_meta_json being written directly.
+		ep.MediaMetaJSON = `{"duration_seconds":750,"width":1920,"height":1080,"video_codec":"h264"}`
+		if err := episodeRepo.Update(ep); err != nil {
+			t.Fatalf("update media_meta: %v", err)
+		}
+
+		// Admin edits only the title + path. The PATCH-style update must NOT
+		// touch file_hash / file_size / duration / media_meta_json.
+		updated, err := svc.UpdateEpisodeAdmin(ep.ID, 0, "新标题", "/physics/renamed.mp4", 1)
+		if err != nil {
+			t.Fatalf("UpdateEpisodeAdmin failed: %v", err)
+		}
+		if updated == nil {
+			t.Fatal("UpdateEpisodeAdmin returned nil")
+		}
+
+		// Editable fields changed.
+		if updated.Title != "新标题" || updated.VideoRelativePath != "/physics/renamed.mp4" {
+			t.Errorf("editable fields not updated: title=%q path=%q", updated.Title, updated.VideoRelativePath)
+		}
+		// Media fields preserved.
+		if updated.FileHash != "abc123hash" {
+			t.Errorf("file_hash clobbered: got %q want %q", updated.FileHash, "abc123hash")
+		}
+		if updated.FileSize == nil || *updated.FileSize != size {
+			t.Errorf("file_size clobbered: got %v want %d", updated.FileSize, size)
+		}
+		if updated.DurationSeconds == nil || *updated.DurationSeconds != dur {
+			t.Errorf("duration_seconds clobbered: got %v want %d", updated.DurationSeconds, dur)
+		}
+		if updated.MediaMetaJSON == "" {
+			t.Error("media_meta_json was cleared by admin update")
+		}
+
+		// UpdateEpisodeAdmin on a non-existent episode returns nil, nil.
+		missing, err := svc.UpdateEpisodeAdmin(99999, 0, "x", "/x.mp4", 1)
+		if err != nil {
+			t.Errorf("expected nil error for missing episode, got %v", err)
+		}
+		if missing != nil {
+			t.Errorf("expected nil for missing episode, got %+v", missing)
 		}
 	})
 }

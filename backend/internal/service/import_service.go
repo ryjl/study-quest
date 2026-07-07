@@ -29,9 +29,9 @@ type ExecuteTreeImportRequest struct {
 type NewCourseRequest struct {
 	Title    string `json:"title"`
 	Grade    string `json:"grade"`
-	Subject  string `json:"subject"`
+	Subject  string `json:"subject"`  // subject key (resolved to subject_id at import time)
 	CoverURL string `json:"cover_url"`
-	Tags     string `json:"tags"`
+	TagIDs   []uint `json:"tag_ids"`  // tag ids to attach to the new course
 }
 
 // ImportService coordinates scanning AList/WebDAV and registering episodes.
@@ -48,6 +48,7 @@ type importService struct {
 	courseRepo    repository.CourseRepository
 	settingsRepo  repository.SettingsRepository
 	chapterRepo   repository.ChapterRepository
+	subjectRepo   repository.SubjectRepository
 	enqueueProbe  func(uint) // optional: backfill media metadata after import
 }
 
@@ -59,6 +60,7 @@ func NewImportService(
 	cr repository.CourseRepository,
 	sr repository.SettingsRepository,
 	ch repository.ChapterRepository,
+	subj repository.SubjectRepository,
 	enqueueProbe func(uint),
 ) ImportService {
 	return &importService{
@@ -66,6 +68,7 @@ func NewImportService(
 		courseRepo:   cr,
 		settingsRepo: sr,
 		chapterRepo:  ch,
+		subjectRepo:  subj,
 		enqueueProbe: enqueueProbe,
 	}
 }
@@ -205,19 +208,40 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 		if req.NewCourse == nil || req.NewCourse.Title == "" {
 			return errors.New("new course title is required")
 		}
-		g := model.Grade(req.NewCourse.Grade)
+		// Grade is optional on import — default to "universal" so admins can
+		// import a course without first picking a grade in the wizard.
+		gradeStr := strings.TrimSpace(req.NewCourse.Grade)
+		if gradeStr == "" {
+			gradeStr = "universal"
+		}
+		g := model.Grade(gradeStr)
 		if !g.Valid() {
 			return errors.New("invalid course grade value: " + req.NewCourse.Grade)
 		}
+		// Resolve the subject key to its ID. Fall back to the first subject
+		// when the key is missing/unknown so import never fails on this.
+		var subjectID uint
+		if subj, _ := s.subjectRepo.FindByKey(req.NewCourse.Subject); subj != nil {
+			subjectID = subj.ID
+		} else if list, err := s.subjectRepo.List(); err == nil && len(list) > 0 {
+			subjectID = list[0].ID
+		} else {
+			return errors.New("no subject available; create a subject first")
+		}
 		c := &model.Course{
-			Title:    req.NewCourse.Title,
-			Grade:    g,
-			Subject:  req.NewCourse.Subject,
-			CoverURL: req.NewCourse.CoverURL,
-			Tags:     req.NewCourse.Tags,
+			Title:     req.NewCourse.Title,
+			Grade:     g,
+			SubjectID: subjectID,
+			CoverURL:  req.NewCourse.CoverURL,
 		}
 		if err := s.courseRepo.Create(c); err != nil {
 			return err
+		}
+		// Attach any requested tags via the many2many association.
+		if len(req.NewCourse.TagIDs) > 0 {
+			if err := s.courseRepo.SetTags(c.ID, req.NewCourse.TagIDs); err != nil {
+				return err
+			}
 		}
 		courseID = c.ID
 	}

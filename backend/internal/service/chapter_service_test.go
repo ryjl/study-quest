@@ -24,6 +24,7 @@ func setupChapterTestDB(t *testing.T) *gorm.DB {
 
 func TestChapterService(t *testing.T) {
 	db := setupChapterTestDB(t)
+	subjects := seedTestSubjects(t, db)
 	chapterRepo := repository.NewChapterRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
@@ -31,7 +32,7 @@ func TestChapterService(t *testing.T) {
 	chapterSvc := NewChapterService(chapterRepo)
 	episodeSvc := NewEpisodeService(episodeRepo, repository.NewSettingsRepository(db))
 
-	course := &model.Course{Title: "Test Course", Grade: "3", Subject: "chinese"}
+	course := &model.Course{Title: "Test Course", Grade: "3", SubjectID: subjects["chinese"].ID}
 	_ = courseRepo.Create(course)
 
 	var ch1 *model.Chapter

@@ -23,6 +23,9 @@ type UserRepository interface {
 	RevokeAccess(userID, courseID uint) error
 	RevokeAllAccess(userID uint) error
 	GetAccessList(userID uint) ([]uint, error)
+	// BatchAccessLists returns user_id → granted course-id slice in one query,
+	// so the admin user list can show per-user access without N+1.
+	BatchAccessLists() (map[uint][]uint, error)
 }
 
 type userRepo struct {
@@ -149,4 +152,19 @@ func (r *userRepo) GetAccessList(userID uint) ([]uint, error) {
 		ids[i] = a.CourseID
 	}
 	return ids, nil
+}
+
+// BatchAccessLists loads every user's granted course ids in one query. The
+// admin user list uses this to render the per-user access count without
+// issuing one GetAccessList per row.
+func (r *userRepo) BatchAccessLists() (map[uint][]uint, error) {
+	var rows []model.UserCourseAccess
+	if err := r.db.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[uint][]uint)
+	for _, a := range rows {
+		out[a.UserID] = append(out[a.UserID], a.CourseID)
+	}
+	return out, nil
 }

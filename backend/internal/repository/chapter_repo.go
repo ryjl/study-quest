@@ -14,6 +14,7 @@ type ChapterRepository interface {
 	Create(chapter *model.Chapter) error
 	Update(chapter *model.Chapter) error
 	Delete(id uint) error
+	CountByCourse(courseID uint) (int64, error)
 }
 
 type chapterRepo struct {
@@ -58,4 +59,12 @@ func (r *chapterRepo) Delete(id uint) error {
 		}
 		return tx.Delete(&model.Chapter{}, id).Error
 	})
+}
+
+// CountByCourse returns the number of chapters in a course — used for the
+// chapter_count stat shown on each course card.
+func (r *chapterRepo) CountByCourse(courseID uint) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Chapter{}).Where("course_id = ?", courseID).Count(&count).Error
+	return count, err
 }

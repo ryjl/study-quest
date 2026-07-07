@@ -1,4 +1,23 @@
-# Stage 1: Build binary using golang alpine with CGO enabled (required for SQLite)
+# Build context for this Dockerfile is the REPOSITORY ROOT (not backend/),
+# so that the frontend-admin/ sources are accessible to the SPA build stage.
+# Build with:  docker build -f backend/Dockerfile -t studyquest-backend .   (from repo root)
+# The Makefile docker-build target already does this.
+
+# Stage 0: Build the admin SPA (React + Vite + TypeScript).
+# Output: /build/backend/internal/admin/spa/dist — mirrors the embed path
+# inside the repo so the next stage can COPY it verbatim.
+FROM node:20-alpine AS spa
+WORKDIR /build
+COPY frontend-admin/package.json frontend-admin/package-lock.json ./
+RUN npm ci
+COPY frontend-admin/ ./
+# vite.config.ts sets outDir to ../backend/internal/admin/spa/dist (relative
+# to frontend-admin/). Create that target dir so the build can write into it.
+RUN mkdir -p /build/backend/internal/admin/spa/dist && npm run build
+
+# Stage 1: Build the Go binary with CGO enabled (required for SQLite).
+# The SPA dist from stage 0 is placed at internal/admin/spa/dist so go:embed
+# bakes it into the single resulting binary.
 FROM golang:1.23-alpine AS builder
 
 # Install build dependencies for CGO compilation
@@ -7,11 +26,14 @@ RUN apk add --no-cache gcc musl-dev
 WORKDIR /app
 
 # Copy dependency manifests
-COPY go.mod go.sum ./
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
-# Copy source code and templates
-COPY . .
+# Copy backend source code
+COPY backend/ ./
+
+# Drop the SPA build output into the embed path, then compile.
+COPY --from=spa /build/backend/internal/admin/spa/dist ./internal/admin/spa/dist
 
 # Build statically linked binary with optimization flags
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o server cmd/server/main.go
@@ -23,9 +45,8 @@ RUN apk add --no-cache ca-certificates tzdata
 
 WORKDIR /app
 
-# Copy binary and template files from the build container
+# Copy the self-contained binary (templates no longer needed — SPA is embedded)
 COPY --from=builder /app/server .
-COPY --from=builder /app/internal/admin/templates ./internal/admin/templates
 
 # Create volume folders for persistent SQLite and Subtitles storage
 RUN mkdir -p /app/data/subtitles

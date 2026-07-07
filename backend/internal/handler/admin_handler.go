@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
 	"studyquest/backend/internal/storage"
@@ -21,59 +20,69 @@ import (
 
 // AdminHandler handles backend administrator views and control APIs.
 type AdminHandler interface {
-	// View controllers
-	LoginGet(c *gin.Context)
-	LoginPost(c *gin.Context)
-	Logout(c *gin.Context)
-	Dashboard(c *gin.Context)
-	UsersGet(c *gin.Context)
-	CoursesGet(c *gin.Context)
-	ImportGet(c *gin.Context)
-	SettingsGet(c *gin.Context)
-	BadgesGet(c *gin.Context)
+	// Auth (public)
+	LoginAPI(c *gin.Context)
+	LogoutAPI(c *gin.Context)
+	Me(c *gin.Context)
 
-	// API controllers
+	// Stats / probe
+	DashboardStats(c *gin.Context)
+	ScanMissingDurations(c *gin.Context)
+	ProbeProgress(c *gin.Context)
+
+	// Users
+	ListUsers(c *gin.Context)
 	CreateUser(c *gin.Context)
 	UpdateUser(c *gin.Context)
 	DeleteUser(c *gin.Context)
 	BulkAccess(c *gin.Context)
+	UserLedger(c *gin.Context)
+	UserBadges(c *gin.Context)
+
+	// Courses
+	ListCourses(c *gin.Context)
+	GetCourseDetail(c *gin.Context)
 	CreateCourse(c *gin.Context)
 	UpdateCourse(c *gin.Context)
 	DeleteCourse(c *gin.Context)
+
+	// Episodes
+	ListEpisodesByCourse(c *gin.Context)
 	CreateEpisode(c *gin.Context)
 	UpdateEpisode(c *gin.Context)
 	DeleteEpisode(c *gin.Context)
 	ReorderEpisodes(c *gin.Context)
 	BulkDeleteEpisodes(c *gin.Context)
 	BulkMoveEpisodes(c *gin.Context)
-	GrantAccess(c *gin.Context)
-	RevokeAccess(c *gin.Context)
-	Scan(c *gin.Context)
-	PreviewTree(c *gin.Context)
-	ExecuteImport(c *gin.Context)
-	ScanAttachments(c *gin.Context)
-	UpdateSettings(c *gin.Context)
-	PingStorage(c *gin.Context)
 
-	// Chapter API controllers
+	// Chapters
+	ListChaptersByCourse(c *gin.Context)
 	CreateChapter(c *gin.Context)
 	UpdateChapter(c *gin.Context)
 	DeleteChapter(c *gin.Context)
-	ListChaptersByCourse(c *gin.Context)
-	ListEpisodesByCourse(c *gin.Context)
+	ReorderChapters(c *gin.Context)
 
-	// Subtitle API controllers
+	// Access
+	GrantAccess(c *gin.Context)
+	RevokeAccess(c *gin.Context)
+
+	// Import / Settings / Storage
+	Scan(c *gin.Context)
+	PreviewTree(c *gin.Context)
+	ExecuteImport(c *gin.Context)
+	GetSettings(c *gin.Context)
+	UpdateSettings(c *gin.Context)
+	PingStorage(c *gin.Context)
+
+	// Subtitles
 	ListSubtitles(c *gin.Context)
 	SaveSubtitle(c *gin.Context)
 	DeleteSubtitle(c *gin.Context)
 	AutoMatchSubtitle(c *gin.Context)
 
-	// Image upload controller
+	// Attachments + Uploads
+	ScanAttachments(c *gin.Context)
 	UploadImage(c *gin.Context)
-
-	// Media probe (ffprobe) backfill — manual scan + progress polling
-	ScanMissingDurations(c *gin.Context)
-	ProbeProgress(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -81,11 +90,16 @@ type adminHandler struct {
 	userRepo       repository.UserRepository
 	courseRepo     repository.CourseRepository
 	episodeRepo    repository.EpisodeRepository
+	chapterRepo    repository.ChapterRepository
+	progressRepo   repository.ProgressRepository
+	subjectRepo    repository.SubjectRepository
+	badgeRepo      repository.BadgeRepository
 	userService    service.UserService
 	courseService  service.CourseService
 	importService  service.ImportService
 	episodeService service.EpisodeService
 	chapterService service.ChapterService
+	badgeService   service.BadgeService
 	probeWorker    *service.ProbeWorker
 }
 
@@ -95,11 +109,16 @@ func NewAdminHandler(
 	ur repository.UserRepository,
 	cr repository.CourseRepository,
 	er repository.EpisodeRepository,
+	chrep repository.ChapterRepository,
+	prep repository.ProgressRepository,
+	subj repository.SubjectRepository,
+	br repository.BadgeRepository,
 	us service.UserService,
 	cs service.CourseService,
 	is service.ImportService,
 	es service.EpisodeService,
 	chs service.ChapterService,
+	bs service.BadgeService,
 	pw *service.ProbeWorker,
 ) AdminHandler {
 	return &adminHandler{
@@ -107,187 +126,271 @@ func NewAdminHandler(
 		userRepo:       ur,
 		courseRepo:     cr,
 		episodeRepo:    er,
+		chapterRepo:    chrep,
+		progressRepo:   prep,
+		subjectRepo:    subj,
+		badgeRepo:      br,
 		userService:    us,
 		courseService:  cs,
 		importService:  is,
 		episodeService: es,
 		chapterService: chs,
+		badgeService:   bs,
 		probeWorker:    pw,
 	}
 }
 
-func (h *adminHandler) LoginGet(c *gin.Context) {
-	c.HTML(http.StatusOK, "login.html", nil)
-}
-
-func (h *adminHandler) LoginPost(c *gin.Context) {
-	password := c.PostForm("password")
+// LoginAPI authenticates the admin password and sets the session cookie.
+// Replaces the old form-based LoginPost with a JSON endpoint for the SPA.
+func (h *adminHandler) LoginAPI(c *gin.Context) {
+	var req struct {
+		Password string `json:"password"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
 
 	savedHash, err := h.settingsRepo.Get("admin_password_hash")
 	if err != nil {
-		c.HTML(http.StatusInternalServerError, "login.html", gin.H{"error": "Database error checking password"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error checking password"})
 		return
 	}
 
 	// Default fallback password for initial setup
 	if savedHash == "" {
-		// Default password is "admin"
 		defaultHash, _ := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
 		_ = h.settingsRepo.Set("admin_password_hash", string(defaultHash), "Admin panel password hash")
 		savedHash = string(defaultHash)
 	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(savedHash), []byte(password))
-	if err != nil {
-		c.HTML(http.StatusUnauthorized, "login.html", gin.H{"error": "Invalid admin password"})
+	if err := bcrypt.CompareHashAndPassword([]byte(savedHash), []byte(req.Password)); err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "密码错误"})
 		return
 	}
 
-	// Set session cookie (valid for 1 day)
 	c.SetCookie("admin_session", savedHash, 86400, "/", "", false, true)
-	c.Redirect(http.StatusFound, "/admin/")
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (h *adminHandler) Logout(c *gin.Context) {
+// LogoutAPI clears the admin session cookie (JSON version).
+func (h *adminHandler) LogoutAPI(c *gin.Context) {
 	c.SetCookie("admin_session", "", -1, "/", "", false, true)
-	c.Redirect(http.StatusFound, "/admin/login")
+	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-func (h *adminHandler) Dashboard(c *gin.Context) {
-	users, _ := h.userRepo.List()
-	courses, _ := h.courseRepo.List("", "", nil)
+// Me reports the current admin session state. The SPA calls this on boot to
+// decide between routing to the login page or the dashboard.
+func (h *adminHandler) Me(c *gin.Context) {
+	cookie, err := c.Cookie("admin_session")
+	if err != nil || cookie == "" {
+		c.JSON(http.StatusOK, gin.H{"authenticated": false})
+		return
+	}
+	savedHash, _ := h.settingsRepo.Get("admin_password_hash")
+	if savedHash == "" || cookie != savedHash {
+		c.JSON(http.StatusOK, gin.H{"authenticated": false})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"authenticated": true})
+}
 
-	var episodeCount int64
-	// Fetch sum of all episodes
-	for _, cr := range courses {
-		eps, _ := h.episodeRepo.ListByCourse(cr.ID)
-		episodeCount += int64(len(eps))
+// DashboardStats aggregates the headline numbers + charts shown on the
+// admin landing page. Each stat is a single SQL query so the page stays snappy.
+func (h *adminHandler) DashboardStats(c *gin.Context) {
+	users, _ := h.userRepo.List()
+	courses, _ := h.courseRepo.List("", 0, nil)
+	episodeCount, _ := h.episodeRepo.CountAll()
+	totalDur, _ := h.episodeRepo.SumTotalDurationSeconds()
+	pending, _ := h.episodeRepo.CountByNullDuration()
+	subjectMap, _ := h.episodeRepo.CountBySubject()
+	recent, _ := h.episodeRepo.RecentDailyCount(7)
+
+	subjectDist := make([]subjectCountDTO, 0, len(subjectMap))
+	for subj, cnt := range subjectMap {
+		s := subj
+		if s == "" {
+			s = "unknown"
+		}
+		subjectDist = append(subjectDist, subjectCountDTO{Subject: s, Count: cnt})
 	}
 
-	c.HTML(http.StatusOK, "dashboard.html", gin.H{
-		"UserCount":    len(users),
-		"CourseCount":  len(courses),
-		"EpisodeCount": episodeCount,
+	recentOut := make([]repositoryDailyCountAlias, 0, len(recent))
+	for _, r := range recent {
+		recentOut = append(recentOut, repositoryDailyCountAlias{Date: r.Date, Count: r.Count})
+	}
+
+	c.JSON(http.StatusOK, dashboardStatsDTO{
+		UserCount:            int64(len(users)),
+		CourseCount:          int64(len(courses)),
+		EpisodeCount:         episodeCount,
+		TotalDurationSeconds: totalDur,
+		PendingProbeCount:    pending,
+		SubjectDistribution:  subjectDist,
+		RecentDailyEpisodes:  recentOut,
 	})
 }
 
-func (h *adminHandler) UsersGet(c *gin.Context) {
-	users, _ := h.userRepo.List()
-	courses, _ := h.courseRepo.List("", "", nil)
+// ListUsers returns all users as snake_case DTOs (with points + course access).
+func (h *adminHandler) ListUsers(c *gin.Context) {
+	users, err := h.userRepo.List()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 
-	// Map to list which courses are allowed for each user
-	userPermissions := make(map[uint][]uint)
+	// Batch-fetch all per-user aggregates in a fixed number of queries so the
+	// list stays O(users) and not O(users × stats). Each map is keyed by
+	// user id; missing entries read as zero-values.
+	points, _ := h.progressRepo.BatchPoints()
+	access, _ := h.userRepo.BatchAccessLists()
+	progress, _ := h.progressRepo.BatchUserProgressSummary()
+	accessible, _ := h.episodeRepo.BatchAccessibleEpisodeCounts()
+	badges, _ := h.badgeRepo.BatchUnlockedBadgeCounts()
+	totalBadges, _ := h.badgeRepo.CountBadges()
+
+	batch := userStatsBatch{
+		points:      points,
+		access:      access,
+		progress:    progress,
+		accessible:  accessible,
+		badges:      badges,
+		totalBadges: totalBadges,
+	}
+
+	out := make([]userDTO, 0, len(users))
 	for _, u := range users {
-		ids, _ := h.userRepo.GetAccessList(u.ID)
-		userPermissions[u.ID] = ids
+		out = append(out, h.toUserDTO(u, batch))
 	}
-
-	gradesList := []struct {
-		Key  string
-		Name string
-	}{
-		{"1", "一年级"},
-		{"2", "二年级"},
-		{"3", "三年级"},
-		{"4", "四年级"},
-		{"5", "五年级"},
-		{"6", "六年级"},
-		{"7", "七年级/初一"},
-		{"8", "八年级/初二"},
-		{"9", "九年级/初三"},
-		{"universal", "全学段通用"},
-	}
-
-	c.HTML(http.StatusOK, "users.html", gin.H{
-		"Users":       users,
-		"Courses":     courses,
-		"Permissions": userPermissions,
-		"GradesList":  gradesList,
-	})
+	c.JSON(http.StatusOK, out)
 }
 
-func getUniqueCourseTags(courses []model.Course) []string {
-	tagMap := make(map[string]bool)
+// ListCourses returns all courses with per-course episode/chapter counts and
+// total duration, ready for the course-library grid.
+func (h *adminHandler) ListCourses(c *gin.Context) {
+	courses, err := h.courseRepo.List("", 0, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	out := make([]courseDTO, 0, len(courses))
 	for _, cr := range courses {
-		if cr.Tags != "" {
-			parts := strings.Split(cr.Tags, ",")
-			for _, p := range parts {
-				trimmed := strings.TrimSpace(p)
-				if trimmed != "" {
-					tagMap[trimmed] = true
-				}
-			}
+		out = append(out, h.toCourseDTO(cr))
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// GetCourseDetail returns a single course plus its episodes and chapters in one
+// round-trip — used when expanding a course card.
+func (h *adminHandler) GetCourseDetail(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
+		return
+	}
+	cr, err := h.courseRepo.FindByID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if cr == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
+	eps, _ := h.episodeRepo.ListByCourse(id)
+	chs, _ := h.chapterService.GetChaptersByCourse(id)
+
+	epDTOs := make([]episodeDTO, 0, len(eps))
+	for _, e := range eps {
+		epDTOs = append(epDTOs, toEpisodeDTO(e))
+	}
+	chDTOs := make([]chapterDTO, 0, len(chs))
+	for _, ch := range chs {
+		chDTOs = append(chDTOs, toChapterDTO(ch))
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"course":   h.toCourseDTO(*cr),
+		"episodes": epDTOs,
+		"chapters": chDTOs,
+	})
+}
+
+// GetSettings returns the storage + (non-sensitive) admin config as JSON.
+func (h *adminHandler) GetSettings(c *gin.Context) {
+	all, err := h.settingsRepo.GetAll()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	get := func(k string) string {
+		if v, ok := all[k]; ok {
+			return v
+		}
+		return ""
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"storage_type":     get("storage_type"),
+		"storage_url":      get("storage_url"),
+		"storage_username": get("storage_username"),
+		"storage_password": get("storage_password"),
+		"storage_token":    get("storage_token"),
+	})
+}
+
+// UserLedger returns a paginated slice of a user's point transactions.
+func (h *adminHandler) UserLedger(c *gin.Context) {
+	userID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
+	}
+	limit := 20
+	if l := c.Query("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
+			limit = n
 		}
 	}
-	var tags []string
-	for t := range tagMap {
-		tags = append(tags, t)
+	ledger, err := h.progressRepo.GetPointsLedger(userID, limit, 0)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
-	return tags
+	out := make([]ledgerDTO, 0, len(ledger))
+	for _, l := range ledger {
+		out = append(out, toLedgerDTO(l))
+	}
+	c.JSON(http.StatusOK, out)
 }
 
-func (h *adminHandler) CoursesGet(c *gin.Context) {
-	courses, _ := h.courseRepo.List("", "", nil)
-	existingTags := getUniqueCourseTags(courses)
-
-	type courseView struct {
-		model.Course
-		Episodes []model.Episode
-		Chapters []model.Chapter
+// UserBadges returns every badge with an `unlocked` flag for the given user.
+// ListUserBadges already returns only the unlocked subset, so we build a set
+// of unlocked badge IDs from it.
+func (h *adminHandler) UserBadges(c *gin.Context) {
+	userID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
+		return
 	}
-
-	viewList := make([]courseView, len(courses))
-	for i, cr := range courses {
-		eps, _ := h.episodeRepo.ListByCourse(cr.ID)
-		chaps, _ := h.chapterService.GetChaptersByCourse(cr.ID)
-		viewList[i] = courseView{
-			Course:   cr,
-			Episodes: eps,
-			Chapters: chaps,
-		}
+	all, _ := h.badgeService.List()
+	unlockedList, _ := h.badgeService.ListUserBadges(userID)
+	unlockedSet := make(map[uint]bool, len(unlockedList))
+	for _, b := range unlockedList {
+		unlockedSet[b.ID] = true
 	}
-
-	gradesList := []struct {
-		Key  string
-		Name string
-	}{
-		{"1", "一年级"},
-		{"2", "二年级"},
-		{"3", "三年级"},
-		{"4", "四年级"},
-		{"5", "五年级"},
-		{"6", "六年级"},
-		{"7", "七年级/初一"},
-		{"8", "八年级/初二"},
-		{"9", "九年级/初三"},
-		{"universal", "全学段通用"},
+	out := make([]badgeDTO, 0, len(all))
+	for _, b := range all {
+		out = append(out, toBadgeDTO(b, unlockedSet[b.ID], ""))
 	}
-
-	c.HTML(http.StatusOK, "courses.html", gin.H{
-		"Courses":      viewList,
-		"GradesList":   gradesList,
-		"ExistingTags": existingTags,
-	})
+	c.JSON(http.StatusOK, out)
 }
 
-func (h *adminHandler) ImportGet(c *gin.Context) {
-	courses, _ := h.courseRepo.List("", "", nil)
-	existingTags := getUniqueCourseTags(courses)
-	c.HTML(http.StatusOK, "import.html", gin.H{
-		"Courses":      courses,
-		"ExistingTags": existingTags,
-	})
-}
-
-func (h *adminHandler) SettingsGet(c *gin.Context) {
-	settings, _ := h.settingsRepo.GetAll()
-	c.HTML(http.StatusOK, "settings.html", gin.H{
-		"Settings": settings,
-	})
-}
-
-func (h *adminHandler) BadgesGet(c *gin.Context) {
-	c.HTML(http.StatusOK, "badges.html", nil)
+// parseUintParam is a tiny helper to read a :id path param as uint.
+func parseUintParam(c *gin.Context, name string) (uint, error) {
+	id, err := strconv.ParseUint(c.Param(name), 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint(id), nil
 }
 
 // API CONTROLLERS
@@ -311,18 +414,17 @@ func (h *adminHandler) CreateUser(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, h.toUserDTO(*user, userStatsBatch{}))
 }
 
 func (h *adminHandler) DeleteUser(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
 	}
 
-	if err := h.userService.DeleteUser(uint(id)); err != nil {
+	if err := h.userService.DeleteUser(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -336,7 +438,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		Grade          string `json:"grade" binding:"required"`
 		Subject        string `json:"subject" binding:"required"`
 		CoverURL       string `json:"cover_url"`
-		Tags           string `json:"tags"`
+		TagIDs         []uint `json:"tag_ids"`
 		AttachmentJSON string `json:"attachment_json"`
 	}
 
@@ -345,24 +447,48 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags, req.AttachmentJSON)
+	subjectID, err := h.resolveSubjectID(req.Subject)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	course, err := h.courseService.CreateCourse(req.Title, req.Grade, subjectID, req.CoverURL, req.TagIDs, req.AttachmentJSON)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, course)
+	c.JSON(http.StatusOK, h.toCourseDTO(*course))
+}
+
+// resolveSubjectID maps a subject key (e.g. "math") to its subjects.id. Returns
+// a user-facing error string if the key doesn't match any subject.
+func (h *adminHandler) resolveSubjectID(subjectKey string) (uint, error) {
+	subjectKey = strings.TrimSpace(subjectKey)
+	if subjectKey == "" {
+		return 0, fmt.Errorf("subject is required")
+	}
+	subj, err := h.subjectRepo.FindByKey(subjectKey)
+	if err != nil {
+		// A real DB error (not "not found") — surface it distinctly so it
+		// isn't masked as a bad subject key.
+		return 0, fmt.Errorf("failed to look up subject: %w", err)
+	}
+	if subj == nil {
+		return 0, fmt.Errorf("unknown subject: %s", subjectKey)
+	}
+	return subj.ID, nil
 }
 
 func (h *adminHandler) DeleteCourse(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
 
-	if err := h.courseService.DeleteCourse(uint(id)); err != nil {
+	if err := h.courseService.DeleteCourse(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -530,8 +656,7 @@ func (h *adminHandler) PingStorage(c *gin.Context) {
 }
 
 func (h *adminHandler) UpdateUser(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
@@ -549,18 +674,21 @@ func (h *adminHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
-	user, err := h.userService.UpdateUser(uint(id), req.Nickname, req.AvatarURL, req.Pin, req.Role)
+	user, err := h.userService.UpdateUser(id, req.Nickname, req.AvatarURL, req.Pin, req.Role)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if user == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
 
-	c.JSON(http.StatusOK, user)
+	c.JSON(http.StatusOK, h.toUserDTO(*user, userStatsBatch{}))
 }
 
 func (h *adminHandler) BulkAccess(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
@@ -575,7 +703,7 @@ func (h *adminHandler) BulkAccess(c *gin.Context) {
 		return
 	}
 
-	if err := h.userService.BulkCourseAccess(uint(id), req.Action); err != nil {
+	if err := h.userService.BulkCourseAccess(id, req.Action); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -584,8 +712,7 @@ func (h *adminHandler) BulkAccess(c *gin.Context) {
 }
 
 func (h *adminHandler) UpdateCourse(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
@@ -596,7 +723,7 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		Grade          string `json:"grade" binding:"required"`
 		Subject        string `json:"subject" binding:"required"`
 		CoverURL       string `json:"cover_url"`
-		Tags           string `json:"tags"`
+		TagIDs         []uint `json:"tag_ids"`
 		AttachmentJSON string `json:"attachment_json"`
 	}
 
@@ -605,33 +732,38 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.UpdateCourse(uint(id), req.Title, req.Grade, req.Subject, req.CoverURL, req.Tags, req.AttachmentJSON)
+	subjectID, err := h.resolveSubjectID(req.Subject)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	course, err := h.courseService.UpdateCourse(id, req.Title, req.Grade, subjectID, req.CoverURL, req.TagIDs, req.AttachmentJSON)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if course == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
+		return
+	}
 
-	c.JSON(http.StatusOK, course)
+	c.JSON(http.StatusOK, h.toCourseDTO(*course))
 }
 
 func (h *adminHandler) CreateEpisode(c *gin.Context) {
-	courseIDStr := c.Param("id")
-	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	courseID, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
 
 	var req struct {
-		ChapterID            uint   `json:"chapter_id"`
-		Title                string `json:"title" binding:"required"`
-		VideoRelativePath    string `json:"video_relative_path" binding:"required"`
-		AttachmentJSON       string `json:"attachment_json"`
-		SortOrder            int    `json:"sort_order"`
-		FileHash             string `json:"file_hash"`
-		OriginalRelativePath string `json:"original_relative_path"`
-		FileSize             *int64 `json:"file_size"`
-		DurationSeconds      *int   `json:"duration_seconds"`
+		ChapterID         uint   `json:"chapter_id"`
+		Title             string `json:"title" binding:"required"`
+		VideoRelativePath string `json:"video_relative_path" binding:"required"`
+		AttachmentJSON    string `json:"attachment_json"`
+		SortOrder         int    `json:"sort_order"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -644,43 +776,34 @@ func (h *adminHandler) CreateEpisode(c *gin.Context) {
 	}
 
 	ep, err := h.episodeService.CreateEpisode(
-		uint(courseID),
+		courseID,
 		req.ChapterID,
 		req.Title,
 		req.VideoRelativePath,
 		req.AttachmentJSON,
 		req.SortOrder,
-		req.FileHash,
-		req.OriginalRelativePath,
-		req.FileSize,
-		req.DurationSeconds,
+		"", "", nil, nil,
 	)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, ep)
+	c.JSON(http.StatusOK, toEpisodeDTO(*ep))
 }
 
 func (h *adminHandler) UpdateEpisode(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
 	}
 
 	var req struct {
-		ChapterID            uint   `json:"chapter_id"`
-		Title                string `json:"title" binding:"required"`
-		VideoRelativePath    string `json:"video_relative_path" binding:"required"`
-		AttachmentJSON       string `json:"attachment_json"`
-		SortOrder            int    `json:"sort_order"`
-		FileHash             string `json:"file_hash"`
-		OriginalRelativePath string `json:"original_relative_path"`
-		FileSize             *int64 `json:"file_size"`
-		DurationSeconds      *int   `json:"duration_seconds"`
+		ChapterID         uint   `json:"chapter_id"`
+		Title             string `json:"title" binding:"required"`
+		VideoRelativePath string `json:"video_relative_path" binding:"required"`
+		SortOrder         int    `json:"sort_order"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -688,39 +811,28 @@ func (h *adminHandler) UpdateEpisode(c *gin.Context) {
 		return
 	}
 
-	if req.AttachmentJSON == "" {
-		req.AttachmentJSON = "[]"
-	}
-
-	ep, err := h.episodeService.UpdateEpisode(
-		uint(id),
-		req.ChapterID,
-		req.Title,
-		req.VideoRelativePath,
-		req.AttachmentJSON,
-		req.SortOrder,
-		req.FileHash,
-		req.OriginalRelativePath,
-		req.FileSize,
-		req.DurationSeconds,
-	)
+	// Use the PATCH-style admin update so media metadata is never clobbered.
+	ep, err := h.episodeService.UpdateEpisodeAdmin(id, req.ChapterID, req.Title, req.VideoRelativePath, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if ep == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Episode not found"})
+		return
+	}
 
-	c.JSON(http.StatusOK, ep)
+	c.JSON(http.StatusOK, toEpisodeDTO(*ep))
 }
 
 func (h *adminHandler) DeleteEpisode(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
 	}
 
-	if err := h.episodeService.DeleteEpisode(uint(id)); err != nil {
+	if err := h.episodeService.DeleteEpisode(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -797,8 +909,7 @@ func (h *adminHandler) BulkMoveEpisodes(c *gin.Context) {
 
 // Chapter Controllers
 func (h *adminHandler) CreateChapter(c *gin.Context) {
-	courseIDStr := c.Param("id")
-	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	courseID, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
@@ -817,18 +928,17 @@ func (h *adminHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
-	ch, err := h.chapterService.CreateChapter(uint(courseID), req.Title, req.Description, req.CoverURL, req.AttachmentJSON, req.SortOrder)
+	ch, err := h.chapterService.CreateChapter(courseID, req.Title, req.Description, req.CoverURL, req.AttachmentJSON, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, ch)
+	c.JSON(http.StatusOK, toChapterDTO(*ch))
 }
 
 func (h *adminHandler) UpdateChapter(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter ID"})
 		return
@@ -847,13 +957,44 @@ func (h *adminHandler) UpdateChapter(c *gin.Context) {
 		return
 	}
 
-	ch, err := h.chapterService.UpdateChapter(uint(id), req.Title, req.Description, req.CoverURL, req.AttachmentJSON, req.SortOrder)
+	ch, err := h.chapterService.UpdateChapter(id, req.Title, req.Description, req.CoverURL, req.AttachmentJSON, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if ch == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Chapter not found"})
+		return
+	}
 
-	c.JSON(http.StatusOK, ch)
+	c.JSON(http.StatusOK, toChapterDTO(*ch))
+}
+
+// ReorderChapters rewrites sort_order for the given chapter IDs (in order).
+func (h *adminHandler) ReorderChapters(c *gin.Context) {
+	var req struct {
+		IDs []uint `json:"ids" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return
+	}
+	for i, id := range req.IDs {
+		ch, err := h.chapterService.GetChapterByID(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if ch == nil {
+			continue
+		}
+		ch.SortOrder = i + 1
+		if _, err := h.chapterService.UpdateChapter(id, ch.Title, ch.Description, ch.CoverURL, ch.AttachmentJSON, ch.SortOrder); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "reordered"})
 }
 
 func (h *adminHandler) ScanAttachments(c *gin.Context) {
@@ -925,14 +1066,13 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 }
 
 func (h *adminHandler) DeleteChapter(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter ID"})
 		return
 	}
 
-	if err := h.chapterService.DeleteChapter(uint(id)); err != nil {
+	if err := h.chapterService.DeleteChapter(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -941,60 +1081,68 @@ func (h *adminHandler) DeleteChapter(c *gin.Context) {
 }
 
 func (h *adminHandler) ListChaptersByCourse(c *gin.Context) {
-	courseIDStr := c.Param("id")
-	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	courseID, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
 
-	chapters, err := h.chapterService.GetChaptersByCourse(uint(courseID))
+	chapters, err := h.chapterService.GetChaptersByCourse(courseID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, chapters)
+	out := make([]chapterDTO, 0, len(chapters))
+	for _, ch := range chapters {
+		out = append(out, toChapterDTO(ch))
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *adminHandler) ListEpisodesByCourse(c *gin.Context) {
-	courseIDStr := c.Param("id")
-	courseID, err := strconv.ParseUint(courseIDStr, 10, 32)
+	courseID, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid course ID"})
 		return
 	}
 
-	episodes, err := h.episodeService.GetEpisodesByCourse(uint(courseID))
+	episodes, err := h.episodeService.GetEpisodesByCourse(courseID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, episodes)
+	out := make([]episodeDTO, 0, len(episodes))
+	for _, ep := range episodes {
+		out = append(out, toEpisodeDTO(ep))
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // Subtitle Controllers
 func (h *adminHandler) ListSubtitles(c *gin.Context) {
-	episodeIDStr := c.Param("id")
-	episodeID, err := strconv.ParseUint(episodeIDStr, 10, 32)
+	episodeID, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
 	}
 
-	subs, err := h.episodeService.ListSubtitles(uint(episodeID))
+	subs, err := h.episodeService.ListSubtitles(episodeID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, subs)
+	out := make([]subtitleDTO, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, toSubtitleDTO(s))
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *adminHandler) SaveSubtitle(c *gin.Context) {
-	episodeIDStr := c.Param("id")
-	episodeID, err := strconv.ParseUint(episodeIDStr, 10, 32)
+	episodeID, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
 		return
@@ -1011,7 +1159,7 @@ func (h *adminHandler) SaveSubtitle(c *gin.Context) {
 		return
 	}
 
-	err = h.episodeService.SaveSubtitle(uint(episodeID), req.Language, req.Label, req.SrtContent)
+	err = h.episodeService.SaveSubtitle(episodeID, req.Language, req.Label, req.SrtContent)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

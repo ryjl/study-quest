@@ -1,9 +1,10 @@
 package router
 
 import (
-	"fmt"
-	"html/template"
+	"io/fs"
+	"net/http"
 	"strings"
+	"studyquest/backend/internal/admin/spa"
 	"studyquest/backend/internal/handler"
 	"studyquest/backend/internal/middleware"
 	"studyquest/backend/internal/repository"
@@ -22,6 +23,8 @@ func RegisterRoutes(
 	ingest handler.IngestHandler,
 	admin handler.AdminHandler,
 	badge handler.BadgeHandler,
+	subject handler.SubjectHandler,
+	tag handler.TagHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
 ) {
@@ -29,31 +32,6 @@ func RegisterRoutes(
 	r.Use(gin.Recovery())
 	r.Use(middleware.CORSMiddleware())
 
-	// Custom template functions
-	r.SetFuncMap(template.FuncMap{
-		"contains": func(s interface{}, substr string) bool {
-			var str string
-			if s != nil {
-				switch v := s.(type) {
-				case string:
-					str = v
-				default:
-					str = string(fmt.Sprintf("%v", s))
-				}
-			}
-			parts := strings.Split(str, ",")
-			for _, p := range parts {
-				if strings.TrimSpace(p) == substr {
-					return true
-				}
-			}
-			return false
-		},
-	})
-
-	// Load Admin HTML templates
-	r.LoadHTMLGlob("internal/admin/templates/*.html")
-	
 	// Map local uploads folder
 	r.Static("/uploads", "./data/uploads")
 
@@ -93,6 +71,8 @@ func RegisterRoutes(
 		v1Restricted.GET("/progress/ledger", progress.GetPointsLedger)
 		v1Restricted.GET("/progress/points", progress.GetPoints)
 		v1Restricted.GET("/users/:id/badges", badge.GetUserBadges)
+		v1Restricted.GET("/subjects", subject.ClientListSubjects)
+		v1Restricted.GET("/tags", tag.ClientListTags)
 	}
 
 	// 3. Local Python Toolchain ingestion points (Public)
@@ -102,33 +82,32 @@ func RegisterRoutes(
 		v1Ingest.POST("/ingest/ai-content", ingest.IngestAIContent)
 	}
 
-	// 4. Admin panel session routes (Public)
-	r.GET("/admin/login", admin.LoginGet)
-	r.POST("/admin/login", admin.LoginPost)
-	r.GET("/admin/logout", admin.Logout)
+	// 4. Admin auth APIs (Public — used by the SPA before session cookie exists)
+	r.POST("/admin/api/login", admin.LoginAPI)
+	r.POST("/admin/api/logout", admin.LogoutAPI)
+	r.GET("/admin/api/me", admin.Me)
 
-	// 5. Protected Admin dashboard panel and APIs
+	// 5. Protected Admin JSON APIs
 	adm := r.Group("/admin")
 	adm.Use(middleware.AdminAuthMiddleware(settingsRepo))
 	{
-		// Render pages
-		adm.GET("/", admin.Dashboard)
-		adm.GET("/users", admin.UsersGet)
-		adm.GET("/courses", admin.CoursesGet)
-		adm.GET("/import", admin.ImportGet)
-		adm.GET("/settings", admin.SettingsGet)
-		adm.GET("/badges", admin.BadgesGet)
-
-		// Backend actions
+		// Users
+		adm.GET("/api/users", admin.ListUsers)
 		adm.POST("/api/users", admin.CreateUser)
 		adm.PUT("/api/users/:id", admin.UpdateUser)
 		adm.DELETE("/api/users/:id", admin.DeleteUser)
 		adm.POST("/api/users/:id/access/bulk", admin.BulkAccess)
-		
+		adm.GET("/api/users/:id/ledger", admin.UserLedger)
+		adm.GET("/api/users/:id/badges", admin.UserBadges)
+
+		// Courses
+		adm.GET("/api/courses", admin.ListCourses)
+		adm.GET("/api/courses/:id/detail", admin.GetCourseDetail)
 		adm.POST("/api/courses", admin.CreateCourse)
 		adm.PUT("/api/courses/:id", admin.UpdateCourse)
 		adm.DELETE("/api/courses/:id", admin.DeleteCourse)
-		
+
+		// Episodes
 		adm.GET("/api/courses/:id/episodes", admin.ListEpisodesByCourse)
 		adm.POST("/api/courses/:id/episodes", admin.CreateEpisode)
 		adm.PUT("/api/episodes/:id", admin.UpdateEpisode)
@@ -136,43 +115,148 @@ func RegisterRoutes(
 		adm.POST("/api/episodes/reorder", admin.ReorderEpisodes)
 		adm.POST("/api/episodes/bulk-delete", admin.BulkDeleteEpisodes)
 		adm.POST("/api/episodes/bulk-move", admin.BulkMoveEpisodes)
-		
-		adm.POST("/api/access", admin.GrantAccess)
-		adm.POST("/api/access/revoke", admin.RevokeAccess)
-		
-		adm.GET("/api/import/scan", admin.Scan)
-		adm.GET("/api/import/preview-tree", admin.PreviewTree)
-		adm.POST("/api/import/execute", admin.ExecuteImport)
-		adm.PUT("/api/settings", admin.UpdateSettings)
-		adm.GET("/api/storage/ping", admin.PingStorage)
-		adm.POST("/api/storage/ping", admin.PingStorage)
 
-		// Media probe (ffprobe) — backfill missing durations / metadata
-		adm.POST("/api/probe/scan-missing", admin.ScanMissingDurations)
-		adm.GET("/api/probe/progress", admin.ProbeProgress)
-
-		// Chapter API routes
+		// Chapters
 		adm.GET("/api/courses/:id/chapters", admin.ListChaptersByCourse)
 		adm.POST("/api/courses/:id/chapters", admin.CreateChapter)
 		adm.PUT("/api/chapters/:id", admin.UpdateChapter)
 		adm.DELETE("/api/chapters/:id", admin.DeleteChapter)
+		adm.POST("/api/chapters/reorder", admin.ReorderChapters)
 
-		// Subtitle API routes
+		// Access
+		adm.POST("/api/access", admin.GrantAccess)
+		adm.POST("/api/access/revoke", admin.RevokeAccess)
+
+		// Import / Storage / Settings
+		adm.GET("/api/import/scan", admin.Scan)
+		adm.GET("/api/import/preview-tree", admin.PreviewTree)
+		adm.POST("/api/import/execute", admin.ExecuteImport)
+		adm.GET("/api/settings", admin.GetSettings)
+		adm.PUT("/api/settings", admin.UpdateSettings)
+		adm.GET("/api/storage/ping", admin.PingStorage)
+		adm.POST("/api/storage/ping", admin.PingStorage)
+
+		// Stats / Probe
+		adm.GET("/api/stats/dashboard", admin.DashboardStats)
+		adm.POST("/api/probe/scan-missing", admin.ScanMissingDurations)
+		adm.GET("/api/probe/progress", admin.ProbeProgress)
+
+		// Subtitles
 		adm.GET("/api/episodes/:id/subtitles", admin.ListSubtitles)
 		adm.POST("/api/episodes/:id/subtitles", admin.SaveSubtitle)
 		adm.DELETE("/api/subtitles/:id", admin.DeleteSubtitle)
 		adm.POST("/api/subtitles/auto-match", admin.AutoMatchSubtitle)
 
-		// Attachment scanning route
+		// Attachments
 		adm.GET("/api/scan-attachments", admin.ScanAttachments)
 
-		// Badge CRUD routes
+		// Badges
 		adm.GET("/api/badges", badge.AdminListBadges)
 		adm.POST("/api/badges", badge.AdminCreateBadge)
 		adm.PUT("/api/badges/:id", badge.AdminUpdateBadge)
 		adm.DELETE("/api/badges/:id", badge.AdminDeleteBadge)
 
-		// Image upload route
+		// Subjects
+		adm.GET("/api/subjects", subject.AdminListSubjects)
+		adm.POST("/api/subjects", subject.AdminCreateSubject)
+		adm.PUT("/api/subjects/:id", subject.AdminUpdateSubject)
+		adm.DELETE("/api/subjects/:id", subject.AdminDeleteSubject)
+
+		// Tags
+		adm.GET("/api/tags", tag.AdminListTags)
+		adm.POST("/api/tags", tag.AdminCreateTag)
+		adm.PUT("/api/tags/:id", tag.AdminUpdateTag)
+		adm.DELETE("/api/tags/:id", tag.AdminDeleteTag)
+
+		// Uploads
 		adm.POST("/api/upload/image", admin.UploadImage)
+	}
+
+	// 6. Serve the embedded SPA. We expose hashed assets under /admin/assets
+	// (registered BEFORE the SPA-index fallback) and treat any other /admin
+	// path as a client-side route, returning index.html.
+	registerAdminSPA(r)
+}
+
+// registerAdminSPA serves the React build embedded via spa.Assets. Any path
+// under /admin that isn't an /admin/api/* route or a hashed asset falls through
+// to index.html so the SPA router can take over (deep links, refreshes).
+//
+// On a fresh clone (before `make build`), dist/ is empty, so every /admin
+// request falls back to spa.NotBuiltHTML — a friendly "please build the SPA"
+// page. The Go binary still compiles and boots; only the admin UI is unavailable.
+func registerAdminSPA(r *gin.Engine) {
+	assets, err := fs.Sub(spa.Assets, "dist")
+	if err != nil {
+		// Should never happen (embed always succeeds), but guard anyway.
+		serveNotBuilt(r)
+		return
+	}
+
+	// Check whether a real build exists. If not, register the "not built"
+	// fallback for all admin routes.
+	if _, statErr := fs.Stat(assets, "index.html"); statErr != nil {
+		serveNotBuilt(r)
+		return
+	}
+
+	// Hashed static assets (JS/CSS/images) — long-cacheable.
+	r.StaticFS("/admin/assets", http.FS(subFS(assets, "assets")))
+
+	// Explicit root + login routes return index.html.
+	r.GET("/admin", serveSPAIndex(assets))
+	r.GET("/admin/login", serveSPAIndex(assets))
+
+	// Catch-all for any other /admin/* path that wasn't matched above (deep
+	// links like /admin/courses/123). Gin's NoRoute handles all unmatched
+	// routes app-wide; we restrict to /admin so other 404s still work.
+	// /admin/api/* misses are NOT SPA routes — they get a JSON 404.
+	r.NoRoute(func(c *gin.Context) {
+		p := c.Request.URL.Path
+		if strings.HasPrefix(p, "/admin/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		if strings.HasPrefix(p, "/admin") {
+			serveSPAIndex(assets)(c)
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+	})
+}
+
+// serveNotBuilt registers /admin and a /admin/* catch-all that returns the
+// "SPA not yet built" page, used when dist/index.html is missing.
+func serveNotBuilt(r *gin.Engine) {
+	r.GET("/admin", func(c *gin.Context) {
+		c.Data(http.StatusServiceUnavailable, "text/html; charset=utf-8", spa.NotBuiltHTML)
+	})
+	r.NoRoute(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/admin") {
+			c.Data(http.StatusServiceUnavailable, "text/html; charset=utf-8", spa.NotBuiltHTML)
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+	})
+}
+
+// subFS returns a sub-filesystem rooted at dir if it exists, otherwise the
+// original fs (StaticFS handles a missing dir gracefully enough for boot).
+func subFS(fsys fs.FS, dir string) fs.FS {
+	sub, err := fs.Sub(fsys, dir)
+	if err != nil {
+		return fsys
+	}
+	return sub
+}
+
+func serveSPAIndex(assets fs.FS) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		data, err := fs.ReadFile(assets, "index.html")
+		if err != nil {
+			c.Data(http.StatusServiceUnavailable, "text/html; charset=utf-8", spa.NotBuiltHTML)
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
 	}
 }

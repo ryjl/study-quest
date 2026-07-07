@@ -25,6 +25,7 @@ func setupProgressTestDB(t *testing.T) *gorm.DB {
 
 func TestProgressServiceLastWatched(t *testing.T) {
 	db := setupProgressTestDB(t)
+	subjects := seedTestSubjects(t, db)
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
@@ -37,7 +38,7 @@ func TestProgressServiceLastWatched(t *testing.T) {
 		_ = userRepo.Create(user)
 
 		// Create Course
-		course := &model.Course{Title: "Resume Course", Grade: "3", Subject: "math"}
+		course := &model.Course{Title: "Resume Course", Grade: "3", SubjectID: subjects["math"].ID}
 		_ = courseRepo.Create(course)
 
 		// Create Episodes

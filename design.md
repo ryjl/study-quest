@@ -132,14 +132,15 @@
    * **答题交互**：答对选项时，选项卡片向上弹跳，并向周围喷洒出彩带粒子；答错时卡片左右晃动 (Shake Animation) 提示错误。
    * **金币飞入**：答题完全通过后，奖励的积分数值应以滚数字 (Number Counter) 的形式跳动，金币/星星伴随声效从屏幕中央飞入左上角或右上角的学生积分统计池。
 
-### 4.4 管理后台 (Admin Web) 彻底升级为现代化 SPA 看板
+### 4.4 管理后台 (Admin Web) 彻底升级为现代化 SPA 看板 ✅ 已落地
 
-* **高颜值现代化 Dashboard**：
-  * 后台应当脱离古板的 HTML 表单。采用以 Tailwind CSS / Vanilla CSS 深度优化的现代控制台布局。
-  * **数据可视化**：在首页仪表盘中，绘制精美的学习时长趋势图（折线图/柱状图），统计各科目的积分比重（环形图/雷达图）。
-* **智能导入树的重构**：
-  * 重新设计云盘扫描与导入界面。左侧显示直观的文件树，支持折叠、一键勾选/反选；右侧同步显示映射后的“逻辑章节-课时”预览。
-  * 用不同颜色的徽章（如 [新导入]、[路径已变更/认亲中]、[已存在]、[已穿透]）标示各物理文件的状态，支持快捷双击行内编辑逻辑名称，提升家长的运维便利性。
+> **实现状态（2026-07）**：管理后台已从 Gin 服务端渲染的 HTML 模板（`internal/admin/templates/*.html`）完整重写为 **React 18 + TypeScript + Vite + Tailwind CSS** 单页应用，源码位于 [`frontend-admin/`](../frontend-admin)，构建产物通过 `go:embed` 内嵌进 Go 二进制（[`backend/internal/admin/spa/`](../backend/internal/admin/spa)）。运行时仍是**单端口、单二进制、零额外依赖**——访问 `http://<服务器IP>:8080/admin` 即进入后台。旧的 10 个 HTML 模板已全部删除，`router.go` 不再加载任何 Go 模板。
+
+* **高颜值现代化 Dashboard** ✅：
+  * 后台已脱离古板的 HTML 表单，采用 Tailwind CSS 深度优化的暗色控制台布局，设计 token（`#0B0F19` 底 / `#8B5CF6` 主题紫 / `#10B981` 完成绿等）与 Flutter 客户端 `theme.dart` 保持同源。
+  * **数据可视化**：首页仪表盘展示 StatCard 网格（用户数 / 课程数 / 课时数 / 视频总时长 / 待探测数）+ 各科目课时分布条形图 + 近 7 天新增课时柱状图，数据由 `/admin/api/stats/dashboard` 一次聚合返回。
+* **智能导入树的重构** ✅：三步向导（选路径 → 配置导入目标 → 预览确认），左侧目录折叠树、右侧逐节点类型下拉（课程/章节/穿透/课时/跳过），支持行内重命名。
+* **课程管理深度重构**（重点）：可折叠课程卡片、封面缩略图、章节-课时树、每课时展示 ffprobe 探测出的时长 / 分辨率 / 编码徽章 / 文件大小 / Hash 状态；批量勾选移动/删除；字幕管理从嵌套 modal 改为右侧抽屉；搜索 + 科目 + 学段三维过滤；编辑课时走 PATCH 风格接口，**不会覆盖** ffprobe 探测的媒体元数据。
 
 ---
 
@@ -149,6 +150,8 @@
    * 采用 `Flutter Animate` 或 `Lottie` 导入精美轻量动画，提升欢庆界面的趣味性。
    * 使用 `CustomPainter` 或 `flutter_map_path` 构建多邻国关卡地图组件。
    * 保持现有的 `FocusNode` 与 `FocusScope` 机制，在此之上用 `AnimatedContainer` 承接焦点事件，实现有过渡动画的焦点发光环。
-2. **后台管理端 (Admin)**：
-   * 探索基于 SPA 框架（如 React / Vite / Vue）构建高颜值看板。
-   * 打包后的静态资源通过 Go 的 `go:embed` 统一内嵌编译至 Go 后端可执行文件中，继续保持“单文件、零依赖”的极简服务器运维体验。
+2. **后台管理端 (Admin)** ✅ 已落地：
+   * 基于 **React + Vite + Tailwind CSS** 构建高颜值看板，源码在 `frontend-admin/`。
+   * 打包后的静态资源通过 Go 的 `go:embed`（`backend/internal/admin/spa/embed.go`）统一内嵌编译至 Go 后端可执行文件中，继续保持「单文件、单端口、零依赖」的极简服务器运维体验。
+   * 构建流水线：`make build` 先 `npm ci && npm run build`（输出到 `backend/internal/admin/spa/dist`），再 `go build`；Dockerfile 为三阶段（Node → Go → Alpine 运行时）。
+   * 所有 `/admin/api/*` 接口返回干净的 snake_case JSON（见 `backend/internal/handler/admin_dto.go`），与客户端用的 `/api/v1/*`（Flutter）完全隔离，互不影响。

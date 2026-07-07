@@ -9,11 +9,14 @@ import (
 
 // CourseRepository handles SQL operations for Courses entity.
 type CourseRepository interface {
-	List(grade, subject string, allowedIDs []uint) ([]model.Course, error)
+	List(grade string, subjectID uint, allowedIDs []uint) ([]model.Course, error)
 	FindByID(id uint) (*model.Course, error)
 	Create(course *model.Course) error
 	Update(course *model.Course) error
 	Delete(id uint) error
+	// SetTags replaces a course's tags with the given tag IDs (syncs the
+	// course_tags join table). Pass nil/empty to clear all tags.
+	SetTags(courseID uint, tagIDs []uint) error
 }
 
 type courseRepo struct {
@@ -25,7 +28,7 @@ func NewCourseRepository(db *gorm.DB) CourseRepository {
 	return &courseRepo{db: db}
 }
 
-func (r *courseRepo) List(grade, subject string, allowedIDs []uint) ([]model.Course, error) {
+func (r *courseRepo) List(grade string, subjectID uint, allowedIDs []uint) ([]model.Course, error) {
 	var courses []model.Course
 	query := r.db.Model(&model.Course{})
 
@@ -41,17 +44,17 @@ func (r *courseRepo) List(grade, subject string, allowedIDs []uint) ([]model.Cou
 	if grade != "" {
 		query = query.Where("grade LIKE ? OR grade = 'universal' OR grade = 'all'", "%"+grade+"%")
 	}
-	if subject != "" {
-		query = query.Where("subject = ?", subject)
+	if subjectID != 0 {
+		query = query.Where("subject_id = ?", subjectID)
 	}
 
-	err := query.Find(&courses).Error
+	err := query.Preload("Tags").Find(&courses).Error
 	return courses, err
 }
 
 func (r *courseRepo) FindByID(id uint) (*model.Course, error) {
 	var course model.Course
-	if err := r.db.First(&course, id).Error; err != nil {
+	if err := r.db.Preload("Tags").First(&course, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -82,4 +85,35 @@ func (r *courseRepo) Delete(id uint) error {
 		tx.Delete(&model.UserCourseAccess{}, "course_id = ?", id)
 		return tx.Delete(&model.Course{}, id).Error
 	})
+}
+
+// SetTags replaces the course's tag associations. It uses GORM's association
+// Replace which diffs the join table — rows no longer in tagIDs are removed,
+// new ones are inserted, unchanged ones stay.
+func (r *courseRepo) SetTags(courseID uint, tagIDs []uint) error {
+	var course model.Course
+	if err := r.db.First(&course, courseID).Error; err != nil {
+		return err
+	}
+	tagIDs = dedupUint(tagIDs)
+	var tags []model.Tag
+	if len(tagIDs) > 0 {
+		if err := r.db.Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
+			return err
+		}
+	}
+	return r.db.Model(&course).Association("Tags").Replace(&tags)
+}
+
+// dedupUint returns ids with duplicates removed, preserving order.
+func dedupUint(ids []uint) []uint {
+	seen := make(map[uint]bool, len(ids))
+	out := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }

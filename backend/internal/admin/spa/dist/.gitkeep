@@ -1,0 +1,7 @@
+This sentinel file is committed so that `//go:embed all:dist` in embed.go
+always matches at least one file, even on a fresh clone before any
+`npm run build` has been run. Without it, `go build` fails with
+"pattern all:dist: cannot embed directory dist: contains no embeddable files".
+
+It is never served to clients — router.go only serves index.html and assets/.
+vite.config.ts sets emptyOutDir: false so this file survives every build.
