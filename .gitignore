@@ -44,3 +44,9 @@ tools/video-pipeline/whisper-env/
 *.njsproj
 *.sln
 *.swp
+
+
+
+# tsc -b artifacts (compiled from vite.config.ts)
+/frontend-admin/vite.config.js
+/frontend-admin/vite.config.d.ts
