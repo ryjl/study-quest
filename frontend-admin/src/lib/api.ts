@@ -1,0 +1,265 @@
+import type {
+  AdminBadge,
+  Badge,
+  Chapter,
+  Course,
+  CourseDetail,
+  DashboardStats,
+  Episode,
+  FileInfo,
+  ImportPreviewNode,
+  PointsLedgerEntry,
+  ProbeStats,
+  Settings,
+  SubjectMeta,
+  TagMeta,
+  Subtitle,
+  User,
+} from './types';
+
+// Centralized API client. Same-origin cookies carry the admin session. All
+// endpoints return typed data; errors throw an ApiError with the server msg.
+
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = 'ApiError';
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+    ...init,
+  });
+
+  // Empty bodies (e.g. 204) — return as-is
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : null;
+
+  if (!res.ok) {
+    const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
+    throw new ApiError(res.status, msg);
+  }
+  return data as T;
+}
+
+function qs(params: Record<string, string | number | boolean | undefined>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== '') sp.set(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : '';
+}
+
+// ---- Auth ----
+export const api = {
+  async me(): Promise<{ authenticated: boolean }> {
+    return request('/admin/api/me');
+  },
+  async login(password: string): Promise<{ status: string }> {
+    return request('/admin/api/login', { method: 'POST', body: JSON.stringify({ password }) });
+  },
+  async logout(): Promise<{ status: string }> {
+    return request('/admin/api/logout', { method: 'POST' });
+  },
+
+  // ---- Dashboard ----
+  async dashboardStats(): Promise<DashboardStats> {
+    return request('/admin/api/stats/dashboard');
+  },
+
+  // ---- Courses ----
+  async listCourses(): Promise<Course[]> {
+    return request('/admin/api/courses');
+  },
+  async getCourse(id: number): Promise<CourseDetail> {
+    return request(`/admin/api/courses/${id}/detail`);
+  },
+  async createCourse(body: Partial<Course>): Promise<Course> {
+    return request('/admin/api/courses', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateCourse(id: number, body: Partial<Course>): Promise<Course> {
+    return request(`/admin/api/courses/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteCourse(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/courses/${id}`, { method: 'DELETE' });
+  },
+
+  // ---- Episodes ----
+  async listEpisodes(courseId: number): Promise<Episode[]> {
+    return request(`/admin/api/courses/${courseId}/episodes`);
+  },
+  async createEpisode(courseId: number, body: Partial<Episode>): Promise<Episode> {
+    return request(`/admin/api/courses/${courseId}/episodes`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateEpisode(id: number, body: Partial<Episode>): Promise<Episode> {
+    return request(`/admin/api/episodes/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteEpisode(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/episodes/${id}`, { method: 'DELETE' });
+  },
+  async reorderEpisodes(ids: number[]): Promise<{ status: string }> {
+    return request('/admin/api/episodes/reorder', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async bulkDeleteEpisodes(ids: number[]): Promise<{ status: string }> {
+    return request('/admin/api/episodes/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+  async bulkMoveEpisodes(ids: number[], chapterId: number): Promise<{ status: string }> {
+    return request('/admin/api/episodes/bulk-move', { method: 'POST', body: JSON.stringify({ ids, chapter_id: chapterId }) });
+  },
+
+  // ---- Chapters ----
+  async listChapters(courseId: number): Promise<Chapter[]> {
+    return request(`/admin/api/courses/${courseId}/chapters`);
+  },
+  async createChapter(courseId: number, body: Partial<Chapter>): Promise<Chapter> {
+    return request(`/admin/api/courses/${courseId}/chapters`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateChapter(id: number, body: Partial<Chapter>): Promise<Chapter> {
+    return request(`/admin/api/chapters/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteChapter(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/chapters/${id}`, { method: 'DELETE' });
+  },
+  async reorderChapters(ids: number[]): Promise<{ status: string }> {
+    return request('/admin/api/chapters/reorder', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+
+  // ---- Users ----
+  async listUsers(): Promise<User[]> {
+    return request('/admin/api/users');
+  },
+  async createUser(body: { nickname: string; avatar_url?: string; pin: string; role: string }): Promise<User> {
+    return request('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateUser(id: number, body: { nickname: string; avatar_url?: string; pin?: string; role: string }): Promise<User> {
+    return request(`/admin/api/users/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteUser(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/users/${id}`, { method: 'DELETE' });
+  },
+  async grantAccess(userId: number, courseId: number): Promise<{ status: string }> {
+    return request('/admin/api/access', { method: 'POST', body: JSON.stringify({ user_id: userId, course_id: courseId }) });
+  },
+  async revokeAccess(userId: number, courseId: number): Promise<{ status: string }> {
+    return request('/admin/api/access/revoke', { method: 'POST', body: JSON.stringify({ user_id: userId, course_id: courseId }) });
+  },
+  async bulkAccess(userId: number, action: 'grant_all' | 'revoke_all'): Promise<{ status: string }> {
+    return request(`/admin/api/users/${userId}/access/bulk`, { method: 'POST', body: JSON.stringify({ action }) });
+  },
+  async userLedger(userId: number, limit = 20): Promise<PointsLedgerEntry[]> {
+    return request(`/admin/api/users/${userId}/ledger${qs({ limit })}`);
+  },
+  async userBadges(userId: number): Promise<Badge[]> {
+    return request(`/admin/api/users/${userId}/badges`);
+  },
+
+  // ---- Badges ----
+  // Admin endpoints return the raw Go model (PascalCase fields), but create/
+  // update accept snake_case keys matching the Go handler's json tags, so the
+  // request body is left loosely typed.
+  async listBadges(): Promise<AdminBadge[]> {
+    return request('/admin/api/badges');
+  },
+  async createBadge(body: Record<string, unknown>): Promise<AdminBadge> {
+    return request('/admin/api/badges', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateBadge(id: number, body: Record<string, unknown>): Promise<AdminBadge> {
+    return request(`/admin/api/badges/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteBadge(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/badges/${id}`, { method: 'DELETE' });
+  },
+
+  // ---- Subjects ----
+  async listSubjects(): Promise<SubjectMeta[]> {
+    return request('/admin/api/subjects');
+  },
+  async createSubject(body: Partial<SubjectMeta>): Promise<SubjectMeta> {
+    return request('/admin/api/subjects', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateSubject(id: number, body: Partial<SubjectMeta>): Promise<SubjectMeta> {
+    return request(`/admin/api/subjects/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteSubject(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/subjects/${id}`, { method: 'DELETE' });
+  },
+
+  // ---- Tags ----
+  async listTags(): Promise<TagMeta[]> {
+    return request('/admin/api/tags');
+  },
+  async createTag(body: Partial<TagMeta>): Promise<TagMeta> {
+    return request('/admin/api/tags', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateTag(id: number, body: Partial<TagMeta>): Promise<TagMeta> {
+    return request(`/admin/api/tags/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteTag(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/tags/${id}`, { method: 'DELETE' });
+  },
+
+  // ---- Subtitles ----
+  async listSubtitles(episodeId: number): Promise<Subtitle[]> {
+    return request(`/admin/api/episodes/${episodeId}/subtitles`);
+  },
+  async saveSubtitle(episodeId: number, body: { language: string; label: string; srt_content: string }): Promise<{ status: string }> {
+    return request(`/admin/api/episodes/${episodeId}/subtitles`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async deleteSubtitle(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/subtitles/${id}`, { method: 'DELETE' });
+  },
+  async autoMatchSubtitle(form: FormData): Promise<{ status: string; episode_id: number; title: string }> {
+    return request('/admin/api/subtitles/auto-match', { method: 'POST', headers: {} as Record<string, string>, body: form });
+  },
+
+  // ---- Import / Storage ----
+  async scanPath(path: string): Promise<FileInfo[]> {
+    return request(`/admin/api/import/scan${qs({ path })}`);
+  },
+  async previewTree(path: string): Promise<ImportPreviewNode> {
+    return request(`/admin/api/import/preview-tree${qs({ path })}`);
+  },
+  async executeImport(body: unknown): Promise<{ status: string }> {
+    return request('/admin/api/import/execute', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async pingStorage(body: Partial<Settings>): Promise<{ status: string; message: string }> {
+    return request('/admin/api/storage/ping', { method: 'POST', body: JSON.stringify(body) });
+  },
+
+  // ---- Settings ----
+  async getSettings(): Promise<Settings> {
+    return request('/admin/api/settings');
+  },
+  async updateSettings(body: Partial<Settings> & { admin_password?: string }): Promise<{ status: string; message: string }> {
+    return request('/admin/api/settings', { method: 'PUT', body: JSON.stringify(body) });
+  },
+
+  // ---- Attachments ----
+  async scanAttachments(type: 'course' | 'chapter' | 'episode', id: number): Promise<{ path: string; files: FileInfo[] }> {
+    return request(`/admin/api/scan-attachments${qs({ type, id })}`);
+  },
+
+  // ---- Probe ----
+  async scanMissingDurations(): Promise<{ status: string; queued: number; total: number; message: string }> {
+    return request('/admin/api/probe/scan-missing', { method: 'POST' });
+  },
+  async probeProgress(): Promise<ProbeStats> {
+    return request('/admin/api/probe/progress');
+  },
+
+  // ---- Uploads ----
+  async uploadImage(file: File): Promise<{ url: string }> {
+    const fd = new FormData();
+    fd.append('file', file);
+    return request('/admin/api/upload/image', { method: 'POST', headers: {} as Record<string, string>, body: fd });
+  },
+};
