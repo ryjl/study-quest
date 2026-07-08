@@ -19,6 +19,11 @@ type courseDTO struct {
 	Subject             string   `json:"subject"`     // subject key, e.g. "math" (resolved from SubjectID)
 	SubjectID           uint     `json:"subject_id"`  // FK → subjects.id
 	CoverURL            string   `json:"cover_url"`
+	// CoverFallbackURL is a derived thumbnail used only when CoverURL is empty:
+	// the first episode's cover (by sort_order). Lets newly-imported courses
+	// show a real frame instead of an emoji placeholder before an admin picks
+	// a dedicated cover. Not persisted — computed per-listing.
+	CoverFallbackURL    string   `json:"cover_fallback_url"`
 	Tags                string   `json:"tags"`        // comma-joined labels (back-compat for old clients)
 	TagsList            []string `json:"tags_list"`   // tag labels in sort order
 	TagIDs              []uint   `json:"tag_ids"`     // tag ids (for admin edit forms)
@@ -42,6 +47,21 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 	if subj, _ := h.subjectRepo.FindByID(c.SubjectID); subj != nil {
 		subjectKey = subj.Key
 	}
+	// Cover fallback: when the course has no dedicated cover, borrow the first
+	// episode's cover (by sort_order) so the card shows a real frame instead of
+	// an emoji. Only computed when CoverURL is empty, and never persisted.
+	coverFallback := ""
+	if c.CoverURL == "" {
+		if epList, _ := h.episodeRepo.ListByCourse(c.ID); len(epList) > 0 {
+			for _, e := range epList {
+				if e.CoverURL != "" {
+					coverFallback = e.CoverURL
+					break
+				}
+			}
+		}
+	}
+
 	return courseDTO{
 		ID:                   c.ID,
 		Title:                c.Title,
@@ -49,6 +69,7 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		Subject:              subjectKey,
 		SubjectID:            c.SubjectID,
 		CoverURL:             c.CoverURL,
+		CoverFallbackURL:     coverFallback,
 		Tags:                 c.TagsJoined(),   // comma-joined labels (legacy)
 		TagsList:             c.TagsList(),     // []string labels
 		TagIDs:               tagIDsOf(c.Tags), // []uint tag ids
@@ -138,7 +159,8 @@ type userDTO struct {
 	// user list avoids N+1). All default to 0 when the user has no data.
 	CompletedEpisodes   int    `json:"completed_episodes"`   // 完成课时数
 	AccessibleEpisodes  int    `json:"accessible_episodes"`  // 已授权课程总课时数
-	WatchMinutes        int    `json:"watch_minutes"`        // 累计学习分钟
+	WatchSeconds        int64  `json:"watch_seconds"`        // 累计学习秒（前端按此显示，避免 <60s 误显示 0）
+	WatchMinutes        int    `json:"watch_minutes"`        // 累计学习分钟（= watch_seconds/60，保留兼容）
 	UnlockedBadges      int    `json:"unlocked_badges"`      // 已解锁徽章
 	TotalBadges         int    `json:"total_badges"`         // 全局徽章总数
 	LastActiveAt        string `json:"last_active_at"`       // 最近一次上报进度（空=从未学习）
@@ -182,6 +204,7 @@ func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
 		CourseAccess:       access,
 		CompletedEpisodes:  int(prog.CompletedEpisodes),
 		AccessibleEpisodes: int(b.accessible[u.ID]),
+		WatchSeconds:       prog.TotalWatchSeconds,
 		WatchMinutes:       int(prog.TotalWatchSeconds / 60),
 		UnlockedBadges:     int(b.badges[u.ID]),
 		TotalBadges:        int(b.totalBadges),
@@ -200,6 +223,8 @@ type badgeDTO struct {
 	RuleType    string `json:"rule_type"`
 	RuleTarget  string `json:"rule_target"`
 	Threshold   int    `json:"threshold"`
+	RuleJSON    string `json:"rule_json"` // composite rule tree; empty = single rule (RuleType/Target/Threshold)
+	IsSystem    bool   `json:"is_system"` // true = seeded default, protected from deletion
 	Unlocked    bool   `json:"unlocked"`
 	UnlockedAt  string `json:"unlocked_at"`
 }
@@ -214,6 +239,8 @@ func toBadgeDTO(b model.Badge, unlocked bool, unlockedAt string) badgeDTO {
 		RuleType:    b.RuleType,
 		RuleTarget:  b.RuleTarget,
 		Threshold:   b.Threshold,
+		RuleJSON:    b.RuleJSON,
+		IsSystem:    b.IsSystem,
 		Unlocked:    unlocked,
 		UnlockedAt:  unlockedAt,
 	}
@@ -226,6 +253,7 @@ type subjectDTO struct {
 	Emoji     string `json:"emoji"`
 	Color     string `json:"color"`
 	SortOrder int    `json:"sort_order"`
+	IsSystem  bool   `json:"is_system"` // true = seeded default, protected from deletion
 }
 
 func toSubjectDTO(s model.Subject) subjectDTO {
@@ -236,15 +264,18 @@ func toSubjectDTO(s model.Subject) subjectDTO {
 		Emoji:     s.Emoji,
 		Color:     s.Color,
 		SortOrder: s.SortOrder,
+		IsSystem:  s.IsSystem,
 	}
 }
 
 type tagDTO struct {
-	ID        uint   `json:"id"`
-	Key       string `json:"key"`
-	Label     string `json:"label"`
-	Color     string `json:"color"`
-	SortOrder int    `json:"sort_order"`
+	ID          uint   `json:"id"`
+	Key         string `json:"key"`
+	Label       string `json:"label"`
+	Color       string `json:"color"`
+	SortOrder   int    `json:"sort_order"`
+	IsSystem    bool   `json:"is_system"`    // true = seeded default, protected from deletion
+	CourseCount int64  `json:"course_count"` // how many courses use this tag (blast radius for delete-confirm)
 }
 
 func toTagDTO(t model.Tag) tagDTO {
@@ -254,7 +285,19 @@ func toTagDTO(t model.Tag) tagDTO {
 		Label:     t.Label,
 		Color:     t.Color,
 		SortOrder: t.SortOrder,
+		IsSystem:  t.IsSystem,
 	}
+}
+
+// toTagDTOWithCount is the list-path variant that also fills CourseCount from
+// a precomputed tag_id → count map (so the tag table can show "used by N
+// courses" without an N+1 lookup per row).
+func toTagDTOWithCount(t model.Tag, counts map[uint]int64) tagDTO {
+	dto := toTagDTO(t)
+	if counts != nil {
+		dto.CourseCount = counts[t.ID]
+	}
+	return dto
 }
 
 // tagIDsOf extracts the IDs from a course's loaded Tags relation.
@@ -315,11 +358,30 @@ type dashboardStatsDTO struct {
 	PendingProbeCount    int64                       `json:"pending_probe_count"`
 	SubjectDistribution  []subjectCountDTO           `json:"subject_distribution"`
 	RecentDailyEpisodes  []repositoryDailyCountAlias `json:"recent_daily_episodes"`
+
+	// Learning-activity aggregates (new).
+	TotalWatchSeconds    int64                       `json:"total_watch_seconds"`    // platform-wide accumulated learning time
+	CompletedEpisodes    int64                       `json:"completed_episodes"`     // total completed progress rows
+	ActiveUsersToday     int64                       `json:"active_users_today"`     // distinct users active since 00:00 today
+	UnlockedBadgeCount   int64                       `json:"unlocked_badge_count"`   // total badge unlocks across all users
+	RecentDailyWatch     []repositoryDailyWatchAlias `json:"recent_daily_watch"`     // last-7-days learning-time trend
+	TopUsers             []dashboardLeaderRow        `json:"top_users"`              // most active users by watch_seconds
+	TopCourses           []dashboardLeaderRow        `json:"top_courses"`            // popular courses by completions
 }
 
 type subjectCountDTO struct {
 	Subject string `json:"subject"`
 	Count   int    `json:"count"`
+}
+
+// dashboardLeaderRow is a generic {id, label, value} leaderboard entry,
+// reused for both top-users (id=user_id, value=watch_seconds) and top-courses
+// (id=course_id, value=completed_episodes). Label carries the friendly name
+// (nickname / course title) resolved in the handler.
+type dashboardLeaderRow struct {
+	ID    uint   `json:"id"`
+	Label string `json:"label"`
+	Value int64  `json:"value"`
 }
 
 // repositoryDailyCountAlias lets us emit the repository.DailyCount type
@@ -328,6 +390,13 @@ type subjectCountDTO struct {
 type repositoryDailyCountAlias = struct {
 	Date  string `json:"date"`
 	Count int    `json:"count"`
+}
+
+// repositoryDailyWatchAlias mirrors repository.DailyWatch ({date,seconds}) for
+// the dashboard learning-trend chart.
+type repositoryDailyWatchAlias = struct {
+	Date    string `json:"date"`
+	Seconds int64  `json:"seconds"`
 }
 
 // formatTime normalizes a time.Time into an RFC3339 string. Empty times become

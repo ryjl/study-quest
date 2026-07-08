@@ -18,6 +18,9 @@ type TagService interface {
 	Update(t *model.Tag) error
 	Delete(id uint) error
 	SeedDefaultTags() error
+	// BatchCourseCounts returns tag_id → course count in one query, so the tag
+	// list can show a "used by N courses" column without N+1 lookups.
+	BatchCourseCounts() (map[uint]int64, error)
 }
 
 type tagService struct {
@@ -31,6 +34,10 @@ func NewTagService(repo repository.TagRepository) TagService {
 
 func (s *tagService) List() ([]model.Tag, error) {
 	return s.repo.List()
+}
+
+func (s *tagService) BatchCourseCounts() (map[uint]int64, error) {
+	return s.repo.BatchCourseCountsByTag()
 }
 
 func (s *tagService) FindByID(id uint) (*model.Tag, error) {
@@ -68,13 +75,28 @@ func (s *tagService) Update(tag *model.Tag) error {
 	return s.repo.Update(tag)
 }
 
+// Delete refuses to remove a system-seeded tag (IsSystem=true) so the
+// canonical starter set always survives; everything else is deletable and the
+// course_tags join is cleared by ON DELETE CASCADE.
 func (s *tagService) Delete(id uint) error {
+	t, err := s.repo.FindByID(id)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return nil
+	}
+	if t.IsSystem {
+		return ErrSystemProtected
+	}
 	return s.repo.Delete(id)
 }
 
 // SeedDefaultTags populates a starter tag set on first run. Idempotent: skips
 // when any tag already exists. Keys are stable identifiers; labels mirror the
 // tags the Flutter client used to hardcode so existing UX stays familiar.
+// All seeded rows are marked IsSystem so they can be renamed/recolored but
+// never deleted.
 func (s *tagService) SeedDefaultTags() error {
 	list, err := s.repo.List()
 	if err != nil {
@@ -85,13 +107,13 @@ func (s *tagService) SeedDefaultTags() error {
 	}
 
 	defaults := []model.Tag{
-		{Key: "required", Label: "必修", Color: "#ef4444", SortOrder: 1},
-		{Key: "thinking", Label: "思维", Color: "#f59e0b", SortOrder: 2},
-		{Key: "extension", Label: "拓展", Color: "#8b5cf6", SortOrder: 3},
-		{Key: "explore", Label: "探索", Color: "#06b6d4", SortOrder: 4},
-		{Key: "extracurricular", Label: "课外", Color: "#10b981", SortOrder: 5},
-		{Key: "logic", Label: "逻辑", Color: "#ec4899", SortOrder: 6},
-		{Key: "horizon", Label: "视野", Color: "#3b82f6", SortOrder: 7},
+		{Key: "required", Label: "必修", Color: "#ef4444", SortOrder: 1, IsSystem: true},
+		{Key: "thinking", Label: "思维", Color: "#f59e0b", SortOrder: 2, IsSystem: true},
+		{Key: "extension", Label: "拓展", Color: "#8b5cf6", SortOrder: 3, IsSystem: true},
+		{Key: "explore", Label: "探索", Color: "#06b6d4", SortOrder: 4, IsSystem: true},
+		{Key: "extracurricular", Label: "课外", Color: "#10b981", SortOrder: 5, IsSystem: true},
+		{Key: "logic", Label: "逻辑", Color: "#ec4899", SortOrder: 6, IsSystem: true},
+		{Key: "horizon", Label: "视野", Color: "#3b82f6", SortOrder: 7, IsSystem: true},
 	}
 
 	for i := range defaults {

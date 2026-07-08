@@ -44,12 +44,16 @@ func TestSmoke(t *testing.T) {
 // cannot be deleted (the GORM OnDelete:RESTRICT → ErrSubjectInUse → 409 path).
 func TestSubjectDeleteWithCourse(t *testing.T) {
 	env := newTestEnv(t)
-	mathID := env.findSubjectID(t, "math")
+	// Use a custom (non-system) subject so the delete actually reaches the
+	// FK-RESTRICT guard. The seeded "math" is now IsSystem=true and would be
+	// refused with 403 before the RESTRICT check runs (covered separately by
+	// TestSystemSubjectNotDeletable).
+	customID := env.createSubject(t, "custom", "自建科目", "🧩", "#abc123")
 
-	// Create a course bound to math. Its subject_id FK now RESTRICTs deletion.
-	env.createCourse(t, "数学课", "math", nil)
+	// Create a course bound to the custom subject. Its subject_id FK now RESTRICTs deletion.
+	env.createCourse(t, "自建科目课", "custom", nil)
 
-	resp := env.do(t, http.MethodDelete, "/admin/api/subjects/"+itoa(mathID), nil)
+	resp := env.do(t, http.MethodDelete, "/admin/api/subjects/"+itoa(customID), nil)
 	if resp.Code != http.StatusConflict {
 		t.Fatalf("delete subject in use: expected 409, got %d (body: %s)", resp.Code, resp.Body.String())
 	}
@@ -62,6 +66,19 @@ func TestSubjectDeleteWithCourse(t *testing.T) {
 	const want = "该科目下还有课程，无法删除；请先迁移或删除这些课程后再试。"
 	if body.Error != want {
 		t.Fatalf("error message: got %q, want %q", body.Error, want)
+	}
+}
+
+// TestSystemSubjectNotDeletable locks in that seeded-default subjects (IsSystem)
+// are refused with 403, even when no course references them — the protection
+// is intentional so the canonical catalog always survives.
+func TestSystemSubjectNotDeletable(t *testing.T) {
+	env := newTestEnv(t)
+	mathID := env.findSubjectID(t, "math")
+
+	resp := env.do(t, http.MethodDelete, "/admin/api/subjects/"+itoa(mathID), nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("delete system subject: expected 403, got %d (body: %s)", resp.Code, resp.Body.String())
 	}
 }
 
@@ -124,8 +141,11 @@ func badgeRuleTarget(t *testing.T, env *testEnv, code string) string {
 // course DTO reflects the removal on the next read.
 func TestTagDeleteDetachesFromCourse(t *testing.T) {
 	env := newTestEnv(t)
-	tag1 := env.findTagID(t, "required")
-	tag2 := env.findTagID(t, "thinking")
+	// Use custom (non-system) tags so the delete actually fires the CASCADE.
+	// Seeded tags are IsSystem=true and refused with 403 (covered by
+	// TestSystemTagNotDeletable).
+	tag1 := env.createTag(t, "custom1", "自建标签1", "#111111")
+	tag2 := env.createTag(t, "custom2", "自建标签2", "#222222")
 
 	cid := env.createCourse(t, "标签课", "math", []uint{tag1, tag2})
 
@@ -139,6 +159,18 @@ func TestTagDeleteDetachesFromCourse(t *testing.T) {
 	want := []uint{tag2}
 	if !reflect.DeepEqual(got.TagIDs, want) {
 		t.Fatalf("tag_ids after cascade delete: got %v, want %v", got.TagIDs, want)
+	}
+}
+
+// TestSystemTagNotDeletable locks in that seeded-default tags (IsSystem) are
+// refused with 403 regardless of usage.
+func TestSystemTagNotDeletable(t *testing.T) {
+	env := newTestEnv(t)
+	requiredID := env.findTagID(t, "required")
+
+	resp := env.do(t, http.MethodDelete, "/admin/api/tags/"+itoa(requiredID), nil)
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("delete system tag: expected 403, got %d (body: %s)", resp.Code, resp.Body.String())
 	}
 }
 
@@ -400,5 +432,53 @@ func TestImportEmptyGradeFallsBackToUniversal(t *testing.T) {
 	}
 	if course.Grade != model.GradeUniversal {
 		t.Errorf("imported course grade: got %q, want %q", course.Grade, model.GradeUniversal)
+	}
+}
+
+// TestCourseCoverFallback verifies the course DTO derives cover_fallback_url
+// from the first episode (by sort_order) when the course itself has no cover,
+// and leaves it empty when the course already has its own cover_url.
+func TestCourseCoverFallback(t *testing.T) {
+	env := newTestEnv(t)
+
+	// Course with NO own cover; give its first episode a cover.
+	cid := env.createCourse(t, "封面回退课", "math", nil)
+	ep1 := env.createEpisode(t, cid, "第1集")
+	env.setEpisodeCover(t, ep1, "/covers/ep1.jpg")
+
+	// A second course that HAS its own cover — fallback must stay empty.
+	cidOwn := env.createCourse(t, "自带封面课", "math", nil)
+	env.db.Model(&model.Course{}).Where("id = ?", cidOwn).Update("cover_url", "/covers/own.jpg")
+
+	// A third course with no cover AND no episode covers — fallback empty.
+	cidBare := env.createCourse(t, "无封面无课时课", "math", nil)
+	env.createEpisode(t, cidBare, "空集") // episode created without a cover
+
+	resp := env.do(t, http.MethodGet, "/admin/api/courses", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("list courses: %d %s", resp.Code, resp.Body.String())
+	}
+	var list []struct {
+		ID              uint   `json:"id"`
+		Title           string `json:"title"`
+		CoverURL        string `json:"cover_url"`
+		CoverFallbackURL string `json:"cover_fallback_url"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := make(map[uint]struct{ Cover, Fallback string }, len(list))
+	for _, c := range list {
+		byID[c.ID] = struct{ Cover, Fallback string }{c.CoverURL, c.CoverFallbackURL}
+	}
+
+	if got := byID[cid]; got.Cover != "" || got.Fallback != "/covers/ep1.jpg" {
+		t.Errorf("course with no own cover: cover=%q fallback=%q, want cover=\"\" fallback=/covers/ep1.jpg", got.Cover, got.Fallback)
+	}
+	if got := byID[cidOwn]; got.Cover != "/covers/own.jpg" || got.Fallback != "" {
+		t.Errorf("course with own cover: cover=%q fallback=%q, want fallback empty when cover present", got.Cover, got.Fallback)
+	}
+	if got := byID[cidBare]; got.Cover != "" || got.Fallback != "" {
+		t.Errorf("course with no covers anywhere: cover=%q fallback=%q, want both empty", got.Cover, got.Fallback)
 	}
 }

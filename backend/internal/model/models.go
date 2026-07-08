@@ -72,6 +72,11 @@ func (g Grade) Valid() bool {
 // Stored as its own table so it can be renamed or deleted independently of
 // courses. `Key` is the stable identifier referenced by badge rules; Label /
 // Emoji / Color carry the display metadata the frontend needs.
+//
+// IsSystem marks rows seeded by SeedDefaultSubjects: they can be renamed or
+// recolored but never deleted (so the catalog always retains the canonical
+// core subjects). User-created rows have IsSystem=false and are freely
+// deletable (subject to the course-FK guard).
 type Subject struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Key       string    `gorm:"size:100;uniqueIndex;not null"` // stable identifier, e.g. "math"
@@ -79,6 +84,7 @@ type Subject struct {
 	Emoji     string    `gorm:"size:32"`                       // e.g. "📐"
 	Color     string    `gorm:"size:32"`                       // hex e.g. "#f59e0b"
 	SortOrder int       `gorm:"default:0"`
+	IsSystem  bool      `gorm:"default:false"` // true = seeded default, protected from deletion
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -86,12 +92,16 @@ type Subject struct {
 // Tag represents a user-editable course tag (标签), e.g. 必修/思维训练/拓展.
 // Stored as its own table with a many-to-many relation to courses, so a tag
 // can be renamed/deleted independently and applied to many courses.
+//
+// IsSystem mirrors Subject: seeded defaults are protected from deletion but
+// may be renamed/recolored.
 type Tag struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
 	Key       string    `gorm:"size:100;uniqueIndex;not null"` // stable identifier, e.g. "required"
 	Label     string    `gorm:"size:100;not null"`             // display name, e.g. "必修"
 	Color     string    `gorm:"size:32"`                       // hex e.g. "#ef4444"
 	SortOrder int       `gorm:"default:0"`
+	IsSystem  bool      `gorm:"default:false"` // true = seeded default, protected from deletion
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -268,17 +278,38 @@ type UserProgress struct {
 }
 
 // Badge represents an achievement badge that can be earned by a student.
+//
+// Two evaluation modes:
+//   - Single rule (legacy + simple badges): RuleType + RuleTarget + Threshold.
+//   - Composite rule: RuleJSON holds a serialized CompositeRule tree, and the
+//     top-level RuleType/Threshold are kept only for display/back-compat
+//     (set to "composite" when RuleJSON is populated).
+//
+// IsSystem marks seeded defaults (protected from deletion, still editable).
 type Badge struct {
 	ID          uint      `gorm:"primaryKey;autoIncrement"`
 	Code        string    `gorm:"size:100;uniqueIndex;not null"`
 	Title       string    `gorm:"size:255;not null"`
 	Description string    `gorm:"type:text"`
 	IconName    string    `gorm:"size:255;not null"`
-	RuleType    string    `gorm:"size:50;not null"` // watch_duration, consecutive_days, subject_count, night_owl_count, points_earned
+	RuleType    string    `gorm:"size:50;not null"` // watch_duration, consecutive_days, subject_count, night_owl_count, points_earned, distinct_subject_count, composite
 	RuleTarget  string    `gorm:"size:100"`         // target e.g. "math" or empty
 	Threshold   int       `gorm:"not null"`         // threshold to reach e.g. 100, 7, 5
+	RuleJSON    string    `gorm:"type:text"`        // composite rule tree (empty = single rule)
+	IsSystem    bool      `gorm:"default:false"`    // true = seeded default, protected from deletion
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// CompositeRule is the parsed shape of Badge.RuleJSON. Logic joins sub-rules
+// with AND (all must pass) or OR (any passes). A leaf rule mirrors the
+// single-rule fields. A rule with no SubRules is a leaf evaluated by Type.
+type CompositeRule struct {
+	Logic   string          `json:"logic"`              // "and" | "or"
+	SubRules []CompositeRule `json:"rules,omitempty"`    // for group nodes
+	Type     string          `json:"type,omitempty"`     // leaf: watch_duration | consecutive_days | ...
+	Target   string          `json:"target,omitempty"`   // leaf: subject key for subject_count
+	Threshold int           `json:"threshold,omitempty"` // leaf: threshold
 }
 
 // UserBadge stores which badges have been unlocked by which users.

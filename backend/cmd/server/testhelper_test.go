@@ -193,6 +193,44 @@ func (e *testEnv) doAsUser(t *testing.T, userID uint, method, path string, body 
 
 // ---- business helpers (shared by the A–E tests) ----
 
+// createSubject POSTs a custom (non-system) subject and returns its id. Used
+// by tests that need a deletable subject — seeded subjects are IsSystem=true.
+func (e *testEnv) createSubject(t *testing.T, key, label, emoji, color string) uint {
+	t.Helper()
+	resp := e.do(t, http.MethodPost, "/admin/api/subjects", map[string]any{
+		"key": key, "label": label, "emoji": emoji, "color": color,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("create subject %q: expected 200, got %d (body: %s)", key, resp.Code, resp.Body.String())
+	}
+	var created struct {
+		ID uint `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created subject: %v (body: %s)", err, resp.Body.String())
+	}
+	return created.ID
+}
+
+// createTag POSTs a custom (non-system) tag and returns its id. Used by tests
+// that need a deletable tag — seeded tags are IsSystem=true.
+func (e *testEnv) createTag(t *testing.T, key, label, color string) uint {
+	t.Helper()
+	resp := e.do(t, http.MethodPost, "/admin/api/tags", map[string]any{
+		"key": key, "label": label, "color": color,
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("create tag %q: expected 200, got %d (body: %s)", key, resp.Code, resp.Body.String())
+	}
+	var created struct {
+		ID uint `json:"id"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode created tag: %v (body: %s)", err, resp.Body.String())
+	}
+	return created.ID
+}
+
 // createCourse POSTs to /admin/api/courses and returns the created course's ID
 // by re-listing (the create endpoint returns the full DTO, but re-listing is
 // the contract we actually want to lock in).
@@ -281,6 +319,17 @@ func (e *testEnv) setEpisodeDuration(t *testing.T, episodeID uint, seconds int) 
 	if err := e.db.Model(&model.Episode{}).Where("id = ?", episodeID).
 		Update("duration_seconds", seconds).Error; err != nil {
 		t.Fatalf("set episode %d duration: %v", episodeID, err)
+	}
+}
+
+// setEpisodeCover writes cover_url directly to the DB, bypassing the probe
+// worker. Used to test the course DTO's cover_fallback_url (which borrows the
+// first episode's cover when the course itself has none).
+func (e *testEnv) setEpisodeCover(t *testing.T, episodeID uint, coverURL string) {
+	t.Helper()
+	if err := e.db.Model(&model.Episode{}).Where("id = ?", episodeID).
+		Update("cover_url", coverURL).Error; err != nil {
+		t.Fatalf("set episode %d cover: %v", episodeID, err)
 	}
 }
 

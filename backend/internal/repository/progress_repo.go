@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"studyquest/backend/internal/appclock"
 	"studyquest/backend/internal/model"
 	"time"
 
@@ -21,6 +22,24 @@ type UserProgressSummary struct {
 type ProgressRepository interface {
 	GetProgress(userID, episodeID uint) (*model.UserProgress, error)
 	SaveProgress(progress *model.UserProgress) error
+	// UpsertAndAccumulateWatch atomically adds deltaWatchSec to a progress
+	// row's watch_seconds and sets its last_position_seconds, creating the row
+	// if missing. Unlike the old GetProgress → mutate → SaveProgress sequence
+	// (which lost watch_seconds under concurrent reports — the player's 5s
+	// timer and the quiz ping can interleave), this performs the increment in
+	// a single UPDATE so concurrent writers never clobber each other's delta.
+	// It does NOT touch IsCompleted (completion gating still happens via
+	// MarkCompleted in the service layer). Returns the post-update row.
+	UpsertAndAccumulateWatch(userID, episodeID uint, positionSec, deltaWatchSec int) (*model.UserProgress, error)
+	// MarkCompleted flips is_completed to 1 for a (user, episode) WITHOUT
+	// rewriting watch_seconds — completion is the one place the service layer
+	// still writes a progress row, and doing it via SaveProgress (full-row
+	// write) would re-introduce the very lost-update race UpsertAndAccumulateWatch
+	// fixed: two requests crossing the 90% threshold near-simultaneously would
+	// each Save a stale watch_seconds and clobber the atomic increment. This
+	// single-column UPDATE touches only is_completed, so watch_seconds is never
+	// regressed by the completion path.
+	MarkCompleted(userID, episodeID uint) error
 	GetPoints(userID uint) (*model.UserPoint, error)
 	AddPoints(ledger *model.PointsLedger) error
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
@@ -33,6 +52,44 @@ type ProgressRepository interface {
 	BatchUserProgressSummary() (map[uint]UserProgressSummary, error)
 	// BatchPoints loads current+total points for many users in one query.
 	BatchPoints() (map[uint]model.UserPoint, error)
+
+	// Dashboard aggregates.
+	// SumTotalWatchSeconds sums watch_seconds across ALL users (platform-wide
+	// total learning time). Used by the admin dashboard headline cards.
+	SumTotalWatchSeconds() (int64, error)
+	// CountCompletedEpisodes counts completed progress rows platform-wide.
+	CountCompletedEpisodes() (int64, error)
+	// CountActiveUsersSince returns how many distinct users have a progress
+	// row updated since the given time (e.g. "today" / "last 7 days").
+	CountActiveUsersSince(since time.Time) (int64, error)
+	// RecentDailyWatchSeconds returns per-day summed watch_seconds for the last
+	// `days` days, oldest first — the dashboard's "learning trend" chart.
+	RecentDailyWatchSeconds(days int) ([]DailyWatch, error)
+	// TopUsersByWatchSeconds returns the top-N users by total watch_seconds,
+	// for the dashboard "most active users" leaderboard.
+	TopUsersByWatchSeconds(limit int) ([]UserLeaderboardRow, error)
+	// TopCoursesByCompletions returns the top-N courses by completed-episode
+	// count, for the dashboard "popular courses" card.
+	TopCoursesByCompletions(limit int) ([]CourseLeaderboardRow, error)
+}
+
+// DailyWatch is one day's aggregate learning time for the dashboard trend chart.
+type DailyWatch struct {
+	Date    string `json:"date"`
+	Seconds int64  `json:"seconds"`
+}
+
+// UserLeaderboardRow is one row of the "most active users" leaderboard.
+type UserLeaderboardRow struct {
+	UserID      uint   `json:"user_id"`
+	WatchSeconds int64 `json:"watch_seconds"`
+}
+
+// CourseLeaderboardRow is one row of the "popular courses" card, keyed by
+// course id with a completed-episode count.
+type CourseLeaderboardRow struct {
+	CourseID            uint   `json:"course_id"`
+	CompletedEpisodes   int64  `json:"completed_episodes"`
 }
 
 type progressRepo struct {
@@ -73,6 +130,62 @@ func (r *progressRepo) SaveProgress(progress *model.UserProgress) error {
 		prog.UnlockedAt = progress.UnlockedAt
 	}
 	return r.db.Save(&prog).Error
+}
+
+// UpsertAndAccumulateWatch atomically increments watch_seconds by delta and
+// sets last_position_seconds. Uses SQLite's INSERT ... ON CONFLICT so the
+// read-modify-write race between concurrent reports (5s player timer vs quiz
+// ping) can't lose deltas: the increment happens inside a single statement.
+// unlocked_at is seeded on first insert; is_completed is left at its existing
+// value (completion gating lives in the service layer via SaveProgress).
+func (r *progressRepo) UpsertAndAccumulateWatch(userID, episodeID uint, positionSec, deltaWatchSec int) (*model.UserProgress, error) {
+	// Clamp: a single report should never carry a huge delta (player sends ~5s
+	// at a time). Anything larger smells like a bug or abuse, so cap it.
+	if deltaWatchSec < 0 {
+		deltaWatchSec = 0
+	}
+	if deltaWatchSec > 600 {
+		deltaWatchSec = 600
+	}
+	if positionSec < 0 {
+		positionSec = 0
+	}
+
+	// ON CONFLICT upsert keyed on (user_id, episode_id). The uniqueIndex on
+	// those columns guarantees the conflict target.
+	now := time.Now()
+	err := r.db.Exec(`
+		INSERT INTO user_progresses (user_id, episode_id, last_position_seconds, watch_seconds, is_completed, unlocked_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+		ON CONFLICT(user_id, episode_id) DO UPDATE SET
+			watch_seconds = watch_seconds + excluded.watch_seconds,
+			last_position_seconds = excluded.last_position_seconds,
+			updated_at = excluded.updated_at
+	`, userID, episodeID, positionSec, deltaWatchSec, now, now, now).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// Re-read to return the authoritative post-update row (watch_seconds is
+	// computed server-side, so we can't just reuse the input).
+	var prog model.UserProgress
+	if err := r.db.Where("user_id = ? AND episode_id = ?", userID, episodeID).First(&prog).Error; err != nil {
+		return nil, err
+	}
+	return &prog, nil
+}
+
+// MarkCompleted sets is_completed=1 for a (user, episode) via a single-column
+// UPDATE. It deliberately does NOT touch watch_seconds: the completion path is
+// the one spot the service still writes a progress row, and a full-row Save
+// there would let two requests crossing the 90% threshold near-simultaneously
+// each write a stale watch_seconds and clobber the atomic increment from
+// UpsertAndAccumulateWatch. Touching only is_completed means watch_seconds is
+// never regressed here, regardless of concurrent completions.
+func (r *progressRepo) MarkCompleted(userID, episodeID uint) error {
+	return r.db.Model(&model.UserProgress{}).
+		Where("user_id = ? AND episode_id = ?", userID, episodeID).
+		Update("is_completed", 1).Error
 }
 
 func (r *progressRepo) GetPoints(userID uint) (*model.UserPoint, error) {
@@ -235,4 +348,98 @@ func (r *progressRepo) BatchPoints() (map[uint]model.UserPoint, error) {
 		out[p.UserID] = p
 	}
 	return out, nil
+}
+
+// --- Dashboard aggregates ---
+
+// SumTotalWatchSeconds sums every user's watch_seconds platform-wide. Used by
+// the dashboard "total learning time" headline card.
+func (r *progressRepo) SumTotalWatchSeconds() (int64, error) {
+	var sum int64
+	err := r.db.Model(&model.UserProgress{}).
+		Select("COALESCE(SUM(watch_seconds), 0)").Scan(&sum).Error
+	return sum, err
+}
+
+// CountCompletedEpisodes counts progress rows marked completed platform-wide.
+func (r *progressRepo) CountCompletedEpisodes() (int64, error) {
+	var count int64
+	err := r.db.Model(&model.UserProgress{}).Where("is_completed = 1").Count(&count).Error
+	return count, err
+}
+
+// CountActiveUsersSince returns the distinct count of users with a progress
+// row updated at/after `since`. Used for "active today" / "active this week".
+func (r *progressRepo) CountActiveUsersSince(since time.Time) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.UserProgress{}).
+		Where("updated_at >= ?", since).
+		Distinct("user_id").
+		Count(&count).Error
+	return count, err
+}
+
+// RecentDailyWatchSeconds sums watch_seconds grouped by the day of updated_at,
+// for the last `days` days, oldest first. Powers the dashboard learning-trend
+// chart (as opposed to the existing "new episodes per day" chart).
+func (r *progressRepo) RecentDailyWatchSeconds(days int) ([]DailyWatch, error) {
+	type row struct {
+		Date    string
+		Seconds int64
+	}
+	// Bucket by BUSINESS-zone day so the chart's "today" matches the user's
+	// calendar (UTC bucketing would split a Beijing day across two bars).
+	mod := sqliteOffsetModifier(businessZoneOffsetMinutes())
+	since := appclock.Now().AddDate(0, 0, -days+1)
+	sinceMidnight := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, since.Location())
+	var rows []row
+	err := r.db.Model(&model.UserProgress{}).
+		Select("strftime('%Y-%m-%d', datetime(updated_at, ?)) AS date, COALESCE(SUM(watch_seconds), 0) AS seconds", mod).
+		Where("updated_at >= ?", sinceMidnight.UTC()).
+		Group("date").
+		Order("date asc").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]DailyWatch, len(rows))
+	for i, r := range rows {
+		out[i] = DailyWatch{Date: r.Date, Seconds: r.Seconds}
+	}
+	return out, nil
+}
+
+// TopUsersByWatchSeconds returns the top-N users by total watch_seconds,
+// descending. Used by the dashboard "most active users" leaderboard.
+func (r *progressRepo) TopUsersByWatchSeconds(limit int) ([]UserLeaderboardRow, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	var rows []UserLeaderboardRow
+	err := r.db.Model(&model.UserProgress{}).
+		Select("user_id, SUM(watch_seconds) AS watch_seconds").
+		Group("user_id").
+		Order("watch_seconds DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	return rows, err
+}
+
+// TopCoursesByCompletions returns the top-N courses by completed-episode
+// count (user_progresses.is_completed=1 JOIN episodes ON course_id),
+// descending. Used by the dashboard "popular courses" card.
+func (r *progressRepo) TopCoursesByCompletions(limit int) ([]CourseLeaderboardRow, error) {
+	if limit <= 0 {
+		limit = 5
+	}
+	var rows []CourseLeaderboardRow
+	err := r.db.Table("user_progresses").
+		Select("episodes.course_id AS course_id, COUNT(*) AS completed_episodes").
+		Joins("JOIN episodes ON episodes.id = user_progresses.episode_id").
+		Where("user_progresses.is_completed = 1").
+		Group("episodes.course_id").
+		Order("completed_episodes DESC").
+		Limit(limit).
+		Scan(&rows).Error
+	return rows, err
 }

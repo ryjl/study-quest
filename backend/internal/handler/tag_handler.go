@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"studyquest/backend/internal/service"
@@ -26,16 +27,23 @@ func NewTagHandler(svc service.TagService) TagHandler {
 	return &tagHandler{svc: svc}
 }
 
-// AdminListTags GET /admin/api/tags
+// AdminListTags GET /admin/api/tags — includes a per-tag course_count (how
+// many courses use each tag) so the admin table can show the delete blast
+// radius without an N+1 lookup.
 func (h *tagHandler) AdminListTags(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	counts, err := h.svc.BatchCourseCounts()
+	if err != nil {
+		// Non-fatal: counts just read as 0 everywhere.
+		counts = nil
+	}
 	out := make([]tagDTO, 0, len(list))
 	for _, t := range list {
-		out = append(out, toTagDTO(t))
+		out = append(out, toTagDTOWithCount(t, counts))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -113,8 +121,9 @@ func (h *tagHandler) AdminUpdateTag(c *gin.Context) {
 }
 
 // AdminDeleteTag DELETE /admin/api/tags/:id
-// The course_tags join rows are cleared by ON DELETE CASCADE, so deleting a
-// tag simply detaches it from every course (no "in use" guard needed).
+// System-seeded tags (IsSystem=true) are refused with 403; everything else is
+// deletable and the course_tags join rows are cleared by ON DELETE CASCADE
+// (i.e. the tag is detached from every course that used it).
 func (h *tagHandler) AdminDeleteTag(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -122,6 +131,10 @@ func (h *tagHandler) AdminDeleteTag(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
+		if errors.Is(err, service.ErrSystemProtected) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "系统默认标签，不可删除（可在编辑里改名/改色）"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

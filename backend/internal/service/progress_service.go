@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
-	"time"
 )
 
 // ProgressService manages playback tracking, completing lessons, and points accumulation.
@@ -37,6 +36,18 @@ func (s *progressService) GetProgress(userID, episodeID uint) (*model.UserProgre
 	return s.progressRepo.GetProgress(userID, episodeID)
 }
 
+// ReportProgress records a playback heartbeat from the client.
+//
+// watch_seconds accumulation is done atomically via UpsertAndAccumulateWatch
+// (a single INSERT ... ON CONFLICT DO UPDATE), NOT the old
+// GetProgress → mutate → SaveProgress sequence. The old path lost
+// watch_seconds whenever two reports interleaved (the player's 5s timer and
+// the quiz ping can overlap): both read the same WatchSeconds, each added its
+// own delta, and the second SaveProgress clobbered the first — so the admin
+// "learning time" column could stay at 0 even after minutes of watching.
+// Completion gating still runs after the atomic upsert and persists only the
+// IsCompleted flag (plus the resume position) via SaveProgress; it never
+// rewrites watch_seconds, so the increment survives.
 func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, deltaWatchSec int) (*model.UserProgress, error) {
 	ep, err := s.episodeRepo.FindByID(episodeID)
 	if err != nil {
@@ -46,40 +57,31 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 		return nil, errors.New("episode not found")
 	}
 
-	prog, err := s.progressRepo.GetProgress(userID, episodeID)
+	// 1. Atomically accumulate watch_seconds + set resume position. This is the
+	//    authoritative watch-time write; it cannot lose deltas to concurrency.
+	prog, err := s.progressRepo.UpsertAndAccumulateWatch(userID, episodeID, positionSec, deltaWatchSec)
 	if err != nil {
 		return nil, err
 	}
 
-	if prog == nil {
-		// New progress record
-		now := time.Now()
-		prog = &model.UserProgress{
-			UserID:              userID,
-			EpisodeID:           episodeID,
-			LastPositionSeconds: positionSec,
-			WatchSeconds:        deltaWatchSec,
-			IsCompleted:         0,
-			UnlockedAt:          &now,
-		}
-	} else {
-		// Update existing
-		prog.LastPositionSeconds = positionSec
-		prog.WatchSeconds += deltaWatchSec
-	}
-
-	// Completeness verification: mark complete only when the playhead has
-	// actually reached ≥90% of the video. The previous logic summed WatchSeconds
-	// (cumulative delta) which falsely marked episodes complete if the user
-	// re-watched the first 80% in many short sessions without ever reaching
-	// the end. Position-based gating matches what "watched" intuitively means.
-	// Note: completion does NOT reset the resume position — reopening a
-	// completed episode still resumes at the saved position.
+	// 2. Completeness verification: mark complete only when the playhead has
+	//    actually reached ≥90% of the video. Position-based gating matches what
+	//    "watched" intuitively means and avoids false completes from re-watching
+	//    the first 80% in many short sessions. We persist ONLY the is_completed
+	//    flag via MarkCompleted (a single-column UPDATE) — NOT SaveProgress,
+	//    which rewrites the whole row and would let two requests crossing 90%
+	//    near-simultaneously each write a stale watch_seconds and clobber the
+	//    atomic increment above. watch_seconds is never touched here.
+	//    Note: completion does NOT reset the resume position — reopening a
+	//    completed episode still resumes at the saved position.
 	if prog.IsCompleted == 0 && ep.DurationSeconds != nil && *ep.DurationSeconds > 0 {
 		duration := *ep.DurationSeconds
 		threshold := int(float64(duration) * 0.9)
 		if prog.LastPositionSeconds >= threshold {
 			prog.IsCompleted = 1
+			if err := s.progressRepo.MarkCompleted(userID, episodeID); err != nil {
+				return nil, err
+			}
 
 			// Reward user points (10 points per episode watched)
 			pointsLedger := &model.PointsLedger{
@@ -95,10 +97,6 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 				fmt.Printf("Error adding user points: %v\n", err)
 			}
 		}
-	}
-
-	if err := s.progressRepo.SaveProgress(prog); err != nil {
-		return nil, err
 	}
 
 	// Trigger Badge rules evaluation on every watch activity update

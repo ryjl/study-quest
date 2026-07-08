@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"studyquest/backend/internal/appclock"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
 	"studyquest/backend/internal/storage"
@@ -158,11 +159,21 @@ func (h *adminHandler) LoginAPI(c *gin.Context) {
 		return
 	}
 
-	// Default fallback password for initial setup
+	// Default fallback password for initial setup. Only generate when there's
+	// truly no hash yet, AND require the write to succeed before using it — if
+	// we generated a fresh random hash every login (salt differs each call) but
+	// Set silently failed, the cookie (the generated hash) would never match
+	// what's in the DB and the session would be rejected on the next request.
+	// Re-reading after Set guarantees cookie == stored value.
 	if savedHash == "" {
 		defaultHash, _ := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
-		_ = h.settingsRepo.Set("admin_password_hash", string(defaultHash), "Admin panel password hash")
-		savedHash = string(defaultHash)
+		if err := h.settingsRepo.Set("admin_password_hash", string(defaultHash), "Admin panel password hash"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "初始化默认密码失败"})
+			return
+		}
+		// Re-read so we set the cookie to exactly what's persisted (avoids any
+		// divergence between the in-memory hash and the DB row).
+		savedHash, _ = h.settingsRepo.Get("admin_password_hash")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(savedHash), []byte(req.Password)); err != nil {
@@ -230,6 +241,73 @@ func (h *adminHandler) DashboardStats(c *gin.Context) {
 		log.Printf("DashboardStats: episodeRepo.RecentDailyCount failed: %v", err)
 	}
 
+	// Learning-activity aggregates. Each degrades to a zero value on error
+	// (logged) so one broken stat never takes down the whole dashboard.
+	totalWatch, err := h.progressRepo.SumTotalWatchSeconds()
+	if err != nil {
+		log.Printf("DashboardStats: SumTotalWatchSeconds failed: %v", err)
+	}
+	completed, err := h.progressRepo.CountCompletedEpisodes()
+	if err != nil {
+		log.Printf("DashboardStats: CountCompletedEpisodes failed: %v", err)
+	}
+	// "Today" = midnight in the BUSINESS timezone (Asia/Shanghai), not the
+	// server's host zone — a Beijing student's "今天" follows the Beijing
+	// calendar. The host zone (often UTC in containers) would've shifted the
+	// day boundary and under/over-counted.
+	now := appclock.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, appclock.Zone())
+	activeToday, err := h.progressRepo.CountActiveUsersSince(todayStart)
+	if err != nil {
+		log.Printf("DashboardStats: CountActiveUsersSince failed: %v", err)
+	}
+	unlockedBadges, err := h.badgeRepo.BatchUnlockedBadgeCounts()
+	if err != nil {
+		log.Printf("DashboardStats: BatchUnlockedBadgeCounts failed: %v", err)
+	}
+	var totalUnlocks int64
+	for _, n := range unlockedBadges {
+		totalUnlocks += n
+	}
+	recentWatch, err := h.progressRepo.RecentDailyWatchSeconds(7)
+	if err != nil {
+		log.Printf("DashboardStats: RecentDailyWatchSeconds failed: %v", err)
+	}
+	topUserRows, err := h.progressRepo.TopUsersByWatchSeconds(5)
+	if err != nil {
+		log.Printf("DashboardStats: TopUsersByWatchSeconds failed: %v", err)
+	}
+	topCourseRows, err := h.progressRepo.TopCoursesByCompletions(5)
+	if err != nil {
+		log.Printf("DashboardStats: TopCoursesByCompletions failed: %v", err)
+	}
+
+	// Resolve friendly labels for the leaderboards (nickname / course title).
+	userNameByID := make(map[uint]string, len(users))
+	for _, u := range users {
+		userNameByID[u.ID] = u.Nickname
+	}
+	courseTitleByID := make(map[uint]string, len(courses))
+	for _, cr := range courses {
+		courseTitleByID[cr.ID] = cr.Title
+	}
+	topUsers := make([]dashboardLeaderRow, 0, len(topUserRows))
+	for _, r := range topUserRows {
+		topUsers = append(topUsers, dashboardLeaderRow{
+			ID:    r.UserID,
+			Label: userNameByID[r.UserID],
+			Value: r.WatchSeconds,
+		})
+	}
+	topCourses := make([]dashboardLeaderRow, 0, len(topCourseRows))
+	for _, r := range topCourseRows {
+		topCourses = append(topCourses, dashboardLeaderRow{
+			ID:    r.CourseID,
+			Label: courseTitleByID[r.CourseID],
+			Value: r.CompletedEpisodes,
+		})
+	}
+
 	subjectDist := make([]subjectCountDTO, 0, len(subjectMap))
 	for subj, cnt := range subjectMap {
 		s := subj
@@ -243,6 +321,10 @@ func (h *adminHandler) DashboardStats(c *gin.Context) {
 	for _, r := range recent {
 		recentOut = append(recentOut, repositoryDailyCountAlias{Date: r.Date, Count: r.Count})
 	}
+	recentWatchOut := make([]repositoryDailyWatchAlias, 0, len(recentWatch))
+	for _, r := range recentWatch {
+		recentWatchOut = append(recentWatchOut, repositoryDailyWatchAlias{Date: r.Date, Seconds: r.Seconds})
+	}
 
 	c.JSON(http.StatusOK, dashboardStatsDTO{
 		UserCount:            int64(len(users)),
@@ -252,6 +334,13 @@ func (h *adminHandler) DashboardStats(c *gin.Context) {
 		PendingProbeCount:    pending,
 		SubjectDistribution:  subjectDist,
 		RecentDailyEpisodes:  recentOut,
+		TotalWatchSeconds:    totalWatch,
+		CompletedEpisodes:    completed,
+		ActiveUsersToday:     activeToday,
+		UnlockedBadgeCount:   totalUnlocks,
+		RecentDailyWatch:     recentWatchOut,
+		TopUsers:             topUsers,
+		TopCourses:           topCourses,
 	})
 }
 

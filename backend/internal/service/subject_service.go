@@ -85,8 +85,21 @@ func (s *subjectService) Update(subj *model.Subject, oldKey string) error {
 	return s.repo.Update(subj)
 }
 
+// Delete refuses system-seeded subjects first (IsSystem check), then falls
+// through to the DB-level FK RESTRICT guard (ErrSubjectInUse) when a course
+// still references the subject.
 func (s *subjectService) Delete(id uint) error {
-	err := s.repo.Delete(id)
+	subj, err := s.repo.FindByID(id)
+	if err != nil {
+		return err
+	}
+	if subj == nil {
+		return nil
+	}
+	if subj.IsSystem {
+		return ErrSystemProtected
+	}
+	err = s.repo.Delete(id)
 	if err != nil {
 		// SQLite emits "FOREIGN KEY constraint failed"; other drivers phrase it
 		// differently, so we match loosely on "foreign key" / "constraint".
@@ -101,7 +114,8 @@ func (s *subjectService) Delete(id uint) error {
 // SeedDefaultSubjects populates the canonical subject set on first run.
 // Idempotent: skips when any subject already exists. Keys MUST stay aligned
 // with badge_service.go's subject_count default RuleTarget values ("math",
-// "english") or those badge rules silently stop matching.
+// "english") or those badge rules silently stop matching. All seeded rows are
+// marked IsSystem so they can be renamed/recolored but never deleted.
 func (s *subjectService) SeedDefaultSubjects() error {
 	list, err := s.repo.List()
 	if err != nil {
@@ -112,11 +126,11 @@ func (s *subjectService) SeedDefaultSubjects() error {
 	}
 
 	defaults := []model.Subject{
-		{Key: "chinese", Label: "语文", Emoji: "📚", Color: "#60a5fa", SortOrder: 1},
-		{Key: "math", Label: "数学", Emoji: "📐", Color: "#f59e0b", SortOrder: 2},
-		{Key: "english", Label: "英语", Emoji: "🔠", Color: "#34d399", SortOrder: 3},
-		{Key: "physics", Label: "物理/科学", Emoji: "🧪", Color: "#a78bfa", SortOrder: 4},
-		{Key: "extra", Label: "课外百科", Emoji: "🌎", Color: "#f43f5e", SortOrder: 5},
+		{Key: "chinese", Label: "语文", Emoji: "📚", Color: "#60a5fa", SortOrder: 1, IsSystem: true},
+		{Key: "math", Label: "数学", Emoji: "📐", Color: "#f59e0b", SortOrder: 2, IsSystem: true},
+		{Key: "english", Label: "英语", Emoji: "🔠", Color: "#34d399", SortOrder: 3, IsSystem: true},
+		{Key: "physics", Label: "物理/科学", Emoji: "🧪", Color: "#a78bfa", SortOrder: 4, IsSystem: true},
+		{Key: "extra", Label: "课外百科", Emoji: "🌎", Color: "#f43f5e", SortOrder: 5, IsSystem: true},
 	}
 
 	for i := range defaults {

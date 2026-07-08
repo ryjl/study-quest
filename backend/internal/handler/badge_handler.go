@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"studyquest/backend/internal/model"
@@ -89,11 +90,24 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		IconName    string `json:"icon_name" binding:"required"`
 		RuleType    string `json:"rule_type" binding:"required"`
 		RuleTarget  string `json:"rule_target"`
-		Threshold   int    `json:"threshold" binding:"required"`
+		Threshold   int    `json:"threshold"`
+		RuleJSON    string `json:"rule_json"` // composite rule tree; when set, RuleType="composite"
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	// When a composite rule JSON is supplied, normalize RuleType to "composite"
+	// so list views can distinguish composite from single-rule badges. The
+	// legacy single-rule fields are kept as-is for back-compat display.
+	ruleType := req.RuleType
+	if req.RuleJSON != "" {
+		ruleType = "composite"
+	}
+	if req.Threshold == 0 && ruleType != "composite" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold is required for single-rule badges"})
 		return
 	}
 
@@ -102,9 +116,10 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		Title:       req.Title,
 		Description: req.Description,
 		IconName:    req.IconName,
-		RuleType:    req.RuleType,
+		RuleType:    ruleType,
 		RuleTarget:  req.RuleTarget,
 		Threshold:   req.Threshold,
+		RuleJSON:    req.RuleJSON,
 	}
 
 	if err := h.badgeService.Create(badge); err != nil {
@@ -130,11 +145,21 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 		IconName    string `json:"icon_name" binding:"required"`
 		RuleType    string `json:"rule_type" binding:"required"`
 		RuleTarget  string `json:"rule_target"`
-		Threshold   int    `json:"threshold" binding:"required"`
+		Threshold   int    `json:"threshold"`
+		RuleJSON    string `json:"rule_json"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	ruleType := req.RuleType
+	if req.RuleJSON != "" {
+		ruleType = "composite"
+	}
+	if req.Threshold == 0 && ruleType != "composite" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold is required for single-rule badges"})
 		return
 	}
 
@@ -152,9 +177,12 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 	badge.Title = req.Title
 	badge.Description = req.Description
 	badge.IconName = req.IconName
-	badge.RuleType = req.RuleType
+	badge.RuleType = ruleType
 	badge.RuleTarget = req.RuleTarget
 	badge.Threshold = req.Threshold
+	badge.RuleJSON = req.RuleJSON
+	// IsSystem is preserved from the loaded row — admins can't flip it via the
+	// update endpoint, only the seeder marks defaults.
 
 	if err := h.badgeService.Update(badge); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update badge: " + err.Error()})
@@ -173,6 +201,10 @@ func (h *badgeHandler) AdminDeleteBadge(c *gin.Context) {
 	}
 
 	if err := h.badgeService.Delete(uint(badgeID)); err != nil {
+		if errors.Is(err, service.ErrSystemProtected) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "系统默认勋章，不可删除（可在编辑里修改）"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

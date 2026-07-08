@@ -100,6 +100,14 @@ func main() {
 		log.Printf("Warning: failed to seed default badges: %v", err)
 	}
 
+	// Backfill is_system on pre-existing seeded rows. On instances that were
+	// seeded BEFORE the IsSystem column existed, the starter rows have
+	// is_system=false (the column's default), so the delete-protection guard
+	// wouldn't apply to them. This one-shot UPDATE marks the canonical default
+	// keys as system so old installs converge to the same protected state as
+	// fresh ones. Idempotent — running it repeatedly just re-asserts the flag.
+	markSystemDefaults(db)
+
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
 	userHandler := handler.NewUserHandler(userService)
@@ -183,4 +191,34 @@ func hasLegacySubjectColumn(db *gorm.DB) bool {
 		}
 	}
 	return false
+}
+
+// markSystemDefaults flags the canonical seeded subject/tag/badge rows as
+// IsSystem=true. This is a backfill for instances seeded before the IsSystem
+// column existed: their starter rows otherwise carry is_system=false and
+// wouldn't be delete-protected. Idempotent. Keys must stay in sync with the
+// SeedDefault* lists in the service layer.
+func markSystemDefaults(db *gorm.DB) {
+	systemSubjectKeys := []string{"chinese", "math", "english", "physics", "extra"}
+	systemTagKeys := []string{"required", "thinking", "extension", "explore", "extracurricular", "logic", "horizon"}
+	systemBadgeCodes := []string{
+		"first_blood", "seven_days_pioneer", "math_expert", "english_star",
+		"hard_worker", "explorer",
+	}
+
+	tables := []struct {
+		table string
+		col   string // the key/code column name
+		keys  []string
+	}{
+		{"subjects", "key", systemSubjectKeys},
+		{"tags", "key", systemTagKeys},
+		{"badges", "code", systemBadgeCodes},
+	}
+	for _, t := range tables {
+		if err := db.Table(t.table).Where(t.col+" IN ?", t.keys).
+			Update("is_system", true).Error; err != nil {
+			log.Printf("Warning: failed to mark system %s defaults: %v", t.table, err)
+		}
+	}
 }

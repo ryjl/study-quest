@@ -2,7 +2,9 @@ package repository
 
 import (
 	"errors"
+	"studyquest/backend/internal/appclock"
 	"studyquest/backend/internal/model"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -318,11 +320,18 @@ func (r *episodeRepo) RecentDailyCount(days int) ([]DailyCount, error) {
 		Date  string
 		Count int
 	}
+	// Window and day-bucketing in the BUSINESS timezone so "today" lines up
+	// with the Beijing calendar (and with the streak/today cutoffs elsewhere).
+	// We compute the cutoff as a Go instant and bucket via the business offset
+	// instead of SQLite's date('now'), which is UTC-only.
+	mod := sqliteOffsetModifier(businessZoneOffsetMinutes())
+	since := appclock.Now().AddDate(0, 0, -days+1)
+	sinceMidnight := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, since.Location())
 	var rows []row
 	err := r.db.Table("episodes").
-		Select("date(created_at) AS date, COUNT(*) AS count").
-		Where("created_at >= date('now', ?)", "-"+itoa(days)+" days").
-		Group("date(created_at)").
+		Select("strftime('%Y-%m-%d', datetime(created_at, ?)) AS date, COUNT(*) AS count", mod).
+		Where("created_at >= ?", sinceMidnight.UTC()).
+		Group("date").
 		Order("date asc").
 		Scan(&rows).Error
 	if err != nil {

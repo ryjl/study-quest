@@ -127,7 +127,8 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 }
 
 // AdminDeleteSubject DELETE /admin/api/subjects/:id
-// Returns 409 when courses still reference the subject (FK ON DELETE RESTRICT).
+// Returns 403 for system-seeded subjects (IsSystem), 409 when courses still
+// reference the subject (FK ON DELETE RESTRICT).
 func (h *subjectHandler) AdminDeleteSubject(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -137,6 +138,10 @@ func (h *subjectHandler) AdminDeleteSubject(c *gin.Context) {
 	}
 
 	if err := h.svc.Delete(uint(id)); err != nil {
+		if errors.Is(err, service.ErrSystemProtected) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "系统默认科目，不可删除（可在编辑里改名/改色）"})
+			return
+		}
 		if errors.Is(err, service.ErrSubjectInUse) {
 			c.JSON(http.StatusConflict, gin.H{
 				"error": "该科目下还有课程，无法删除；请先迁移或删除这些课程后再试。",
