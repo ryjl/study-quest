@@ -322,8 +322,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (!_player.state.playing) return;
       final currentPos = _player.state.position.inSeconds;
       final delta = currentPos - _lastLoggedPosition;
-      // Only credit forward-watching deltas (skip seeks / pauses).
-      if (delta > 0 && delta <= 10) {
+      // Only credit forward-watching deltas (skip seeks / pauses). The upper
+      // bound is generous (30) vs the 5s cadence so a momentary stall (buffer,
+      // GC, resume re-seek) that delays one tick doesn't discard a legit 6-10s
+      // delta — a previous 10 cap silently dropped watch time and left the
+      // admin "learning time" column stuck at 0. The backend still clamps each
+      // report (600s) and only credits monotonic forward progress, so a big
+      // accidental jump can't inflate the total.
+      if (delta > 0 && delta <= 30) {
         try {
           await ApiService.reportProgress(
             activeUserId: widget.activeUserId,
@@ -333,7 +339,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
           );
           _lastLoggedPosition = currentPos;
         } catch (_) {}
+      } else if (delta < 0) {
+        // Position went backwards (typically a CDN reconnect reset to 0 during
+        // resume). Don't anchor the baseline at the low point — that would let
+        // the subsequent re-seek forward register a huge false delta. Just skip
+        // this tick; the resume-seek watchdog re-establishes the real position.
+        // Leave _lastLoggedPosition unchanged so the next forward tick compares
+        // against the last genuine forward position.
+        return;
       } else {
+        // delta == 0 or delta > 30 (a seek / jump): resync the baseline so we
+        // don't credit the jump as watch time.
         _lastLoggedPosition = currentPos;
       }
     });

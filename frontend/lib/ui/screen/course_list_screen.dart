@@ -135,7 +135,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
           }
 
           return Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 30.0),
+            padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
             // Wrap the whole layout in a vertical scroller. Without this the
             // fixed-height Column overflows ("bottom overflowed by N pixels")
             // whenever the course grid + filters exceed the viewport (e.g.
@@ -362,9 +362,9 @@ class _CourseListScreenState extends State<CourseListScreen> {
                             itemCount: filteredCourses.length,
                             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: crossAxisCount,
-                              crossAxisSpacing: 24,
-                              mainAxisSpacing: 24,
-                              childAspectRatio: 0.72,
+                              crossAxisSpacing: 16,
+                              mainAxisSpacing: 16,
+                              childAspectRatio: 0.86,
                             ),
                             itemBuilder: (context, index) {
                               return _buildCourseCard(filteredCourses[index]);
@@ -485,9 +485,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Dynamic gradient banner header
+          // Dynamic gradient banner header. Banner:info ratio is 1:1 (was 5:4)
+          // so the card reads as balanced rather than top-heavy now that the
+          // overall card is shorter (aspectRatio 0.86).
           Expanded(
-            flex: 5,
+            flex: 1,
             child: Container(
               decoration: BoxDecoration(
                 gradient: AppTheme.getSubjectGradientFromColor(_subjectMeta(course.subject).color),
@@ -547,16 +549,18 @@ class _CourseListScreenState extends State<CourseListScreen> {
             ),
           ),
 
-          // Course info
+          // Course info — flex 1:1 with the banner now (was 4, matching the 5
+          // above). Tightened padding (12→10) and a couple font sizes so the
+          // shorter card doesn't feel cramped.
           Expanded(
-            flex: 4,
+            flex: 1,
             child: Padding(
-              padding: const EdgeInsets.all(12.0),
+              padding: const EdgeInsets.all(10.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
                       color: const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(8),
@@ -564,15 +568,15 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     ),
                     child: Text(
                       _getSubjectName(course.subject),
-                      style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                      style: const TextStyle(fontSize: 9, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   Text(
                     course.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 14, color: AppTheme.textWhite),
+                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textWhite),
                   ),
                   const Spacer(),
 
@@ -585,10 +589,10 @@ class _CourseListScreenState extends State<CourseListScreen> {
                         style: TextStyle(
                           color: AppTheme.primaryColor,
                           fontWeight: FontWeight.w900,
-                          fontSize: 11,
+                          fontSize: 10,
                         ),
                       ),
-                      const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 16),
+                      const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 14),
                     ],
                   ),
                 ],
