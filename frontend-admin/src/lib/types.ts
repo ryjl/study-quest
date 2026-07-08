@@ -8,6 +8,7 @@ export interface SubjectMeta {
   emoji: string;
   color: string;
   sort_order?: number;
+  is_system?: boolean; // true = seeded default, protected from deletion (still editable)
 }
 
 // Subject catalog cache. The admin SPA used to ship a hardcoded SUBJECTS
@@ -38,6 +39,8 @@ export interface TagMeta {
   label: string;
   color: string;
   sort_order?: number;
+  is_system?: boolean; // true = seeded default, protected from deletion
+  course_count?: number; // how many courses use this tag (delete-confirm blast radius)
 }
 
 // Tag catalog cache — same pattern as subjects. Warmed by useTags() in
@@ -130,6 +133,7 @@ export interface Course {
   subject: string;
   subject_id?: number;
   cover_url: string;
+  cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
   tags: string;
   attachment_json: string;
   tags_list?: string[];
@@ -162,6 +166,7 @@ export interface User {
   completed_episodes?: number;
   accessible_episodes?: number;
   watch_minutes?: number;
+  watch_seconds?: number; // raw accumulated seconds (for sub-minute precision display)
   unlocked_badges?: number;
   total_badges?: number;
   last_active_at?: string;
@@ -194,6 +199,8 @@ export interface AdminBadge {
   RuleType: string;
   RuleTarget: string;
   Threshold: number;
+  RuleJSON?: string; // composite rule tree; present when RuleType === 'composite'
+  IsSystem?: boolean; // true = seeded default, protected from deletion
 }
 
 export interface Subtitle {
@@ -223,6 +230,14 @@ export interface DashboardStats {
   pending_probe_count: number;
   subject_distribution: { subject: string; count: number }[];
   recent_daily_episodes: { date: string; count: number }[];
+  // Learning-activity aggregates (may be absent on older backends).
+  total_watch_seconds?: number;
+  completed_episodes?: number;
+  active_users_today?: number;
+  unlocked_badge_count?: number;
+  recent_daily_watch?: { date: string; seconds: number }[];
+  top_users?: { id: number; label: string; value: number }[];
+  top_courses?: { id: number; label: string; value: number }[];
 }
 
 export interface FileInfo {

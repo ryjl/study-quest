@@ -85,3 +85,72 @@ frontend-admin/ ──npm run build──▶ backend/internal/admin/spa/dist/
 If the SPA hasn't been built yet, visiting `/admin` returns a friendly
 "Admin SPA 尚未构建" page instead of crashing — run `make build` (or
 `cd frontend-admin && npm run build`) to fix it.
+
+## Conventions
+
+A short list of hard-won rules. Each exists because a real bug violated it.
+
+### 1. After any mutation, invalidate the caches it changes
+
+This is the single most important rule in this codebase. React Query is the
+**immediate** source of truth for the UI — not cookies, not the DB, not "what
+the server said last request." When an action changes server state, the
+in-memory cache for that state is now *stale* and must be invalidated, or the
+UI will keep reading the old value and behave as if the action never happened.
+
+**The bug this comes from:** logging in set the `admin_session` cookie on the
+server, but the SPA's `['me']` query was still cached as `authenticated:false`
+(within the 10s `staleTime`). `navigate('/admin/')` re-mounted `AuthGuard`,
+which read the stale `false` and bounced the user back to `/admin/login`.
+Symptom: "I click login and nothing happens; after 4-5 tries I get in." The
+fix was `qc.setQueryData(['me'], {authenticated:true})` + `invalidateQueries`
+in `Login.tsx` before navigating.
+
+**Rule:**
+```ts
+const mut = useMutation({
+  mutationFn: api.someWrite,
+  onSuccess: () => qc.invalidateQueries({ queryKey: ['the-data-it-changed'] }),
+})
+```
+
+Applies to **every** write: login/logout (invalidate `['me']`), CRUD on
+courses/tags/subjects/badges/users (invalidate the matching list key),
+reorder, probe, settings save. When in doubt, invalidate more, not less.
+
+### 2. SPA navigation ≠ page refresh
+
+`navigate('/x')` swaps components within the same JS runtime; it does **not**
+clear caches or re-establish "the world." Operations that change the
+*identity* of the session (login, logout, switching admin account) should
+either invalidate all derived caches or use a hard `window.location` reload.
+Plain page navigation can stay a soft `navigate`.
+
+### 3. Test the operation chain, not just the operation
+
+A unit test asserting "clicking login calls `api.login`" passes even when
+login is broken (the bug above did). Tests must cover the *chain*:
+`login success → navigate → AuthGuard reads ['me'] → should be authenticated`.
+For auth/stateful flows, render the whole routing tree with a real
+`QueryClient` and assert the end state the user observes, not just which API
+was called.
+
+### 4. Module-level caches are not reactive — subscribe in render paths
+
+`subjectMeta(key)` / `tagMeta` in `lib/types.ts` read a module-level cache that
+`Layout` warms via `useSubjects()`/`useTags()`. That cache is fine for
+non-React code paths, but **reading it during render is a race**: if your
+component paints before the catalog query resolves, it gets the raw key
+(`"english"`) + grey fallback, and filling the cache later does NOT re-render
+your component (the cache isn't React state). The dashboard's subject
+distribution chart had exactly this bug.
+
+When you need catalog metadata in render, either:
+- resolve from the reactive query (`useSubjects().data.find(...)`), so the
+  component re-renders when the data lands; or
+- for shared components, call the hook inside the component
+  (`SubjectBadge` does this) so it's correct on every page.
+
+`subjectMeta(key)` is acceptable only as a **fallback** (when the reactive list
+hasn't matched) or outside React entirely.
+

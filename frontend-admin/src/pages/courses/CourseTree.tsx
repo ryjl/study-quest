@@ -5,9 +5,23 @@ import type { Chapter, Course, Episode } from '../../lib/types';
 import { LoadingState, EmptyState } from '../../components/ui';
 import { codecLabel, formatDuration, formatFileSize, resolutionLabel } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
+import { sortBy, timeValue, type SortDir, type SortOption } from '../../lib/sort';
 import { EpisodeEditor } from './EpisodeEditor';
 import { ChapterEditor } from './ChapterEditor';
 import { SubtitleDrawer } from './SubtitleDrawer';
+
+// Display-sort options for episodes WITHIN a chapter (or the uncategorized
+// bucket). "Apply as order" persists the displayed sequence via the existing
+// reorder endpoint; pure display otherwise.
+const EPISODE_SORT_OPTIONS: SortOption<Episode>[] = [
+  { key: 'manual', label: '手动顺序', value: (e) => e.sort_order },
+  { key: 'title', label: '标题', value: (e) => e.title },
+  { key: 'path', label: '文件名/路径', value: (e) => e.video_relative_path },
+  { key: 'duration', label: '时长', value: (e) => e.duration_seconds ?? 0 },
+  { key: 'size', label: '文件大小', value: (e) => e.file_size ?? 0 },
+  { key: 'updated', label: '修改时间', value: (e) => timeValue(e.updated_at) },
+  { key: 'created', label: '创建时间', value: (e) => timeValue(e.created_at) },
+];
 
 export function CourseTree({ course, onChanged }: { course: Course; onChanged: () => void }) {
   const qc = useQueryClient();
@@ -27,19 +41,31 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
   const [editingChapter, setEditingChapter] = useState<Chapter | null>(null);
   const [addingChapter, setAddingChapter] = useState(false);
   const [subtitleFor, setSubtitleFor] = useState<Episode | null>(null);
+  // Episode display-sort (applies to every chapter + the uncategorized bucket).
+  const [epSortKey, setEpSortKey] = useState('manual');
+  const [epSortDir, setEpSortDir] = useState<SortDir>('asc');
 
   const selectedIds = Array.from(selected);
 
   const grouped = useMemo(() => {
-    // Episodes grouped by chapterId
+    // Episodes grouped by chapterId, each group sorted by the active display
+    // sort (manual = native sort_order; the rest re-order for display only).
+    const opt = EPISODE_SORT_OPTIONS.find((o) => o.key === epSortKey) ?? EPISODE_SORT_OPTIONS[0];
     const byChapter = new Map<number, Episode[]>();
     for (const ep of episodes) {
       const arr = byChapter.get(ep.chapter_id) ?? [];
       arr.push(ep);
       byChapter.set(ep.chapter_id, arr);
     }
+    // Preserve manual order when epSortKey==='manual' (episodes already come
+    // back ordered by sort_order from the repo). Only re-sort for other keys.
+    if (epSortKey !== 'manual') {
+      for (const [k, arr] of byChapter) {
+        byChapter.set(k, sortBy(arr, opt, epSortDir));
+      }
+    }
     return byChapter;
-  }, [episodes]);
+  }, [episodes, epSortKey, epSortDir]);
 
   const invalidateAll = () => {
     qc.invalidateQueries({ queryKey: ['episodes', course.id] });
@@ -147,6 +173,30 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
     }
   };
 
+  // applyDisplaySortAsOrder writes the currently-displayed order back to
+  // sort_order (via the existing reorder endpoint), so a display sort can be
+  // made permanent. The reorder endpoint rewrites sort_order for the given ids
+  // in array order; we feed it every episode id in display order so the whole
+  // course converges to the shown sequence.
+  const applyDisplaySortAsOrder = async () => {
+    // Flatten grouped map in a stable order: chapters first (their order), then
+    // the uncategorized bucket (chapter_id === 0) last.
+    const orderedIds: number[] = [];
+    for (const ch of chapters) {
+      orderedIds.push(...(grouped.get(ch.id) ?? []).map((e) => e.id));
+    }
+    orderedIds.push(...(grouped.get(0) ?? []).map((e) => e.id));
+    if (orderedIds.length === 0) return;
+    try {
+      await api.reorderEpisodes(orderedIds);
+      toast.success('已将当前排序保存为课时顺序');
+      setEpSortKey('manual');
+      qc.invalidateQueries({ queryKey: ['episodes', course.id] });
+    } catch (e) {
+      toast.error('保存排序失败: ' + (e as Error).message);
+    }
+  };
+
   const toggleChapterCollapse = (id: number) => {
     setCollapsedChapters((prev) => {
       const next = new Set(prev);
@@ -162,9 +212,9 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
     <div className="border-t border-border bg-card p-4">
       {/* Bulk toolbar */}
       {selectedIds.length > 0 && (
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/30 bg-primary/10 p-2.5">
+        <div className="mb-3 flex items-center justify-between gap-2 rounded-xl border border-primary/30 bg-primary/10 p-2.5">
           <span className="text-sm text-primary">已选中 {selectedIds.length} 个课时</span>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-shrink-0 items-center gap-2">
             <select className="input !py-1 !text-xs max-w-[180px]" defaultValue="" onChange={(e) => e.target.value && onBulkMove(Number(e.target.value))}>
               <option value="">移到章节...</option>
               <option value="0">默认/未分类</option>
@@ -184,9 +234,13 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
         </div>
       )}
 
-      {/* Tree header */}
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+      {/* Tree header. The right-side control cluster (sort dropdown + arrow +
+          apply + probe + add chapter/episode) must stay on ONE line when there's
+          room; whitespace-nowrap + flex-nowrap on the group keeps it from
+          wrapping, and overflow-x-auto on the header lets it scroll instead of
+          folding when the viewport is genuinely too narrow. */}
+      <div className="mb-3 flex items-center justify-between gap-3 overflow-x-auto">
+        <div className="flex flex-shrink-0 items-center gap-3 whitespace-nowrap">
           <label className="flex items-center gap-1.5 text-xs text-muted">
             <input type="checkbox" className="h-3.5 w-3.5 accent-primary" checked={selected.size > 0 && selected.size === episodes.length} onChange={selectAllInCourse} />
             全选
@@ -195,7 +249,33 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
             {chapters.length} 章节 · {episodes.length} 课时
           </span>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-shrink-0 items-center gap-2 whitespace-nowrap">
+          {/* Episode display-sort. "Apply" persists the shown order to sort_order. */}
+          <span className="text-xs text-muted">课时排序</span>
+          <select
+            className="input !py-1 !text-xs max-w-[130px]"
+            value={epSortKey}
+            onChange={(e) => setEpSortKey(e.target.value)}
+          >
+            {EPISODE_SORT_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn-ghost btn-sm"
+            onClick={() => setEpSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+            title={epSortDir === 'asc' ? '当前：正序' : '当前：倒序'}
+          >
+            {epSortDir === 'asc' ? '↑' : '↓'}
+          </button>
+          {epSortKey !== 'manual' && (
+            <button className="btn-secondary btn-sm" onClick={applyDisplaySortAsOrder} title="把当前显示顺序保存为课时顺序">
+              保存为顺序
+            </button>
+          )}
+          <div className="mx-1 h-4 w-px bg-border" />
           <button className="btn-secondary btn-sm" onClick={() => probeMissingMut.mutate()} title="探测缺失时长/封面的课时">
             📡 探测缺失时长
           </button>
@@ -382,16 +462,22 @@ function EpisodeRow({
         )}
       </div>
 
-      {/* Title + path */}
+      {/* Title + path. Both wrap (break-words / break-all) instead of
+          truncating with …, so long names/paths are fully readable. The title
+          column is flex-1 + min-w-0 so it absorbs width changes while the
+          metadata and action columns to its right hold FIXED widths — that
+          fixed-width pairing is what makes every row's right side align
+          vertically across the list. */}
       <div className="min-w-0 flex-1">
-        <div className="truncate font-medium text-txt">{ep.title}</div>
-        <div className="truncate font-mono text-[11px] text-muted" title={ep.video_relative_path}>
+        <div className="break-words font-medium text-txt">{ep.title}</div>
+        <div className="break-all font-mono text-[11px] text-muted" title={ep.video_relative_path}>
           {ep.video_relative_path}
         </div>
       </div>
 
-      {/* Metadata badges */}
-      <div className="hidden flex-shrink-0 items-center gap-1.5 md:flex">
+      {/* Metadata badges — fixed-width column so duration/codec/size line up
+          row over row regardless of how long the title above is. */}
+      <div className="hidden w-[200px] flex-shrink-0 items-center justify-end gap-1.5 md:flex">
         {ep.duration_seconds ? (
           <span className="rounded bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn" title="视频时长">
             ⏱ {formatDuration(ep.duration_seconds)}
@@ -415,8 +501,8 @@ function EpisodeRow({
         ) : null}
       </div>
 
-      {/* Actions */}
-      <div className="flex flex-shrink-0 gap-1">
+      {/* Actions — fixed-width column so 编辑/删除 buttons align across rows. */}
+      <div className="flex w-[120px] flex-shrink-0 justify-end gap-1">
         <button className="btn-ghost btn-sm" onClick={onSubtitles} title="字幕管理">
           💬
         </button>

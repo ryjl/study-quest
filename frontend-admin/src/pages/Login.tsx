@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../lib/api';
 import { useToast } from '../lib/toast';
 
@@ -8,12 +9,22 @@ export function Login() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
   const { error } = useToast();
+  const qc = useQueryClient();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     try {
       await api.login(password);
+      // CRITICAL: invalidate the ['me'] cache so AuthGuard refetches. The boot
+      // check (on first visit to /admin) caches authenticated:false for up to
+      // staleTime (10s). Without this, navigating to /admin/ after a successful
+      // login reads that stale false and bounces back to /admin/login — which
+      // is exactly the "first few clicks do nothing, eventually get in" bug.
+      // We also set the optimistic value so the very first render after
+      // navigation already sees authenticated:true (no flash of the login page).
+      qc.setQueryData(['me'], { authenticated: true });
+      await qc.invalidateQueries({ queryKey: ['me'] });
       navigate('/admin/');
     } catch (e) {
       error((e as ApiError).message || '密码错误');

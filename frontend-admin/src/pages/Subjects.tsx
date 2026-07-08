@@ -80,6 +80,9 @@ export function Subjects() {
                     <span className="inline-flex items-center gap-2 font-medium text-txt">
                       <span className="text-base">{s.emoji}</span>
                       {s.label}
+                      {s.is_system && (
+                        <span title="系统默认科目，不可删除（可在编辑里改名/改色）" className="text-xs">🔒</span>
+                      )}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -94,13 +97,19 @@ export function Subjects() {
                   <td className="px-4 py-3 text-muted">{s.sort_order ?? '-'}</td>
                   <td className="px-4 py-3 text-right">
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(s)}>编辑</button>
-                    <button
-                      className="btn-ghost btn-sm text-bad hover:bg-bad/10"
-                      onClick={() => onDelete(s)}
-                      disabled={deleteMut.isPending}
-                    >
-                      删除
-                    </button>
+                    {s.is_system ? (
+                      <button className="btn-ghost btn-sm opacity-40" disabled title="系统默认科目，不可删除">
+                        删除
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-ghost btn-sm text-bad hover:bg-bad/10"
+                        onClick={() => onDelete(s)}
+                        disabled={deleteMut.isPending}
+                      >
+                        删除
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}

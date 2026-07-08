@@ -1,5 +1,6 @@
 import { useEffect, type ReactNode } from 'react';
-import { subjectMeta } from '../lib/types';
+import { subjectMeta, type SubjectMeta } from '../lib/types';
+import { useSubjects } from '../lib/useSubjects';
 
 // Reusable UI primitives shared across all admin pages.
 
@@ -98,9 +99,16 @@ export function Drawer({
 
 // ---- Badge helpers ----
 export function SubjectBadge({ subject }: { subject: string }) {
-  // subjectMeta reads the module-level cache warmed by useSubjects() in
-  // Layout, so this stays a plain function with no hook dependency.
-  const s = subjectMeta(subject);
+  // Subscribe to the subjects query so this component re-renders when the
+  // catalog lands. The old version read the non-reactive module cache only,
+  // which meant a first paint before the query resolved showed the raw key
+  // ("english") + grey fallback and never corrected (the cache filling doesn't
+  // trigger a re-render). Resolving from the reactive list first closes that
+  // race on every page that uses this badge, regardless of whether the page
+  // itself calls useSubjects().
+  const subjectsQ = useSubjects();
+  const found = subjectsQ.data?.find((x) => x.key === subject) as SubjectMeta | undefined;
+  const s = found ?? subjectMeta(subject);
   return (
     <span className="inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold" style={{ backgroundColor: `${s.color}20`, color: s.color }}>
       <span>{s.emoji}</span>

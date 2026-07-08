@@ -6,9 +6,20 @@ import { Modal, LoadingState, EmptyState, Drawer, Tag } from '../components/ui';
 import { ImageUpload } from '../components/inputs';
 import { relativeTime } from '../lib/format';
 
-// Compact "Xh Ym" / "Ym" formatter for accumulated watch minutes.
-function formatMinutes(min: number | undefined): string {
-  const m = Math.max(0, Math.floor(min ?? 0));
+// Compact watch-time formatter. Prefers raw seconds (sub-minute precision) so
+// a user who watched e.g. 40 seconds doesn't show a misleading "0 分". Falls
+// back to whole minutes only when seconds aren't available.
+function formatWatchTime(seconds?: number, minutes?: number): string {
+  if (seconds !== undefined && seconds > 0) {
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const rem = s % 60;
+    if (h > 0) return rem === 0 ? (m === 0 ? `${h} 时` : `${h} 时 ${m} 分`) : `${h} 时 ${m} 分`;
+    if (m > 0) return rem === 0 ? `${m} 分` : `${m} 分 ${rem} 秒`;
+    return `${rem} 秒`;
+  }
+  const m = Math.max(0, Math.floor(minutes ?? 0));
   if (m < 60) return `${m} 分`;
   const h = Math.floor(m / 60);
   const rem = m % 60;
@@ -145,7 +156,7 @@ export function Users() {
                         </div>
                       )}
                     </td>
-                    <td className="p-3 text-muted">{formatMinutes(u.watch_minutes)}</td>
+                    <td className="p-3 text-muted">{formatWatchTime(u.watch_seconds, u.watch_minutes)}</td>
                     <td className="p-3">
                       <span className="text-warn">⭐ {u.current_points ?? 0}</span>
                     </td>

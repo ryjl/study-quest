@@ -6,12 +6,27 @@ import { useSubjects } from '../../lib/useSubjects';
 import { EmptyState, LoadingState, SubjectBadge, Tag } from '../../components/ui';
 import { formatDurationShort, relativeTime } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
+import { sortBy, timeValue, type SortDir, type SortOption } from '../../lib/sort';
 import { CourseTree } from './CourseTree';
+
+// Display-sort options for the course list. Pure display — does NOT rewrite
+// sort_order; "apply as order" persistence is out of scope here (the manual
+// ▲/▼ controls on episodes are the persistent path).
+const COURSE_SORT_OPTIONS: SortOption<Course>[] = [
+  { key: 'updated', label: '更新时间', value: (c) => timeValue(c.updated_at) },
+  { key: 'created', label: '创建时间', value: (c) => timeValue(c.created_at) },
+  { key: 'title', label: '标题', value: (c) => c.title },
+  { key: 'duration', label: '总时长', value: (c) => c.total_duration_seconds ?? 0 },
+  { key: 'episodes', label: '课时数', value: (c) => c.episode_count ?? 0 },
+  { key: 'subject', label: '科目', value: (c) => c.subject },
+];
 
 export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => void; onChanged: () => void }) {
   const [search, setSearch] = useState('');
   const [gradeFilter, setGradeFilter] = useState('all');
   const [subjectFilter, setSubjectFilter] = useState('all');
+  const [sortKey, setSortKey] = useState('updated');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const qc = useQueryClient();
   const toast = useToast();
@@ -23,7 +38,7 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
   const courses = coursesQ.data ?? [];
 
   const filtered = useMemo(() => {
-    return courses.filter((c) => {
+    const f = courses.filter((c) => {
       if (gradeFilter !== 'all') {
         const grades = (c.grade || '').split(',').map((g) => g.trim());
         if (!grades.includes(gradeFilter)) return false;
@@ -36,7 +51,9 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
       }
       return true;
     });
-  }, [courses, gradeFilter, subjectFilter, search]);
+    const opt = COURSE_SORT_OPTIONS.find((o) => o.key === sortKey) ?? COURSE_SORT_OPTIONS[0];
+    return sortBy(f, opt, sortDir);
+  }, [courses, gradeFilter, subjectFilter, search, sortKey, sortDir]);
 
   const deleteCourseMut = useMutation({
     mutationFn: (id: number) => api.deleteCourse(id),
@@ -101,7 +118,28 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
             </FilterChip>
           ))}
         </div>
-        <div className="ml-auto text-sm text-muted">
+        <div className="ml-auto flex items-center gap-2">
+          <span className="text-xs text-muted">排序</span>
+          <select
+            className="input !py-1 !text-xs max-w-[140px]"
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value)}
+          >
+            {COURSE_SORT_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <button
+            className="btn-ghost btn-sm"
+            onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+            title={sortDir === 'asc' ? '当前：正序（点击切换为倒序）' : '当前：倒序（点击切换为正序）'}
+          >
+            {sortDir === 'asc' ? '↑ 正序' : '↓ 倒序'}
+          </button>
+        </div>
+        <div className="text-sm text-muted">
           {filtered.length} / {courses.length} 门课程
         </div>
       </div>
@@ -112,16 +150,33 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
         <div className="flex flex-col gap-5 pb-8">
           {filtered.map((c) => {
             const isOpen = expanded.has(c.id);
+            // Effective cover: explicit cover → backend-derived first-episode
+            // fallback → styled CSS placeholder (subject gradient + first char).
+            // The placeholder is generated in-browser so there's no font/storage
+            // cost; it just looks better than a bare emoji. Resolve the subject
+            // meta from the reactive subjects list (not the module cache) so the
+            // first-paint-before-catalog-loads race doesn't render the raw key +
+            // grey fallback here either.
+            const meta = subjects.find((x) => x.key === c.subject) ?? subjectMeta(c.subject);
+            const cover = c.cover_url || c.cover_fallback_url || '';
             return (
               <div key={c.id} className="card !p-0 overflow-hidden">
                 {/* Card header */}
                 <div className="flex items-center gap-4 p-5">
                   {/* Cover thumbnail */}
                   <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl border border-border bg-card-2">
-                    {c.cover_url ? (
-                      <img src={c.cover_url} alt="" className="h-full w-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
+                    {cover ? (
+                      <img src={cover} alt="" className="h-full w-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
                     ) : (
-                      <div className="flex h-full w-full items-center justify-center text-2xl opacity-40">{subjectMeta(c.subject).emoji}</div>
+                      <div
+                        className="flex h-full w-full flex-col items-center justify-center"
+                        style={{ background: `linear-gradient(135deg, ${meta.color}40, ${meta.color}10)` }}
+                      >
+                        <span className="text-xl leading-none opacity-80">{meta.emoji}</span>
+                        <span className="mt-0.5 max-w-full truncate text-[10px] font-bold" style={{ color: meta.color }}>
+                          {(c.title || '').slice(0, 1)}
+                        </span>
+                      </div>
                     )}
                   </div>
 

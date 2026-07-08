@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { useTags, useInvalidateTags } from '../lib/useTags';
 import type { TagMeta } from '../lib/types';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
-import { useToast } from '../lib/toast';
+import { useToast, useConfirm } from '../lib/toast';
 
 const COLOR_CHOICES = [
   '#ef4444', '#f59e0b', '#8b5cf6', '#06b6d4', '#10b981',
@@ -14,13 +14,32 @@ const COLOR_CHOICES = [
 export function Tags() {
   const tagsQ = useTags();
   const invalidate = useInvalidateTags();
+  const toast = useToast();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<TagMeta | null>(null);
   const [creating, setCreating] = useState(false);
 
   const deleteMut = useMutation({
     mutationFn: (id: number) => api.deleteTag(id),
-    onSuccess: () => invalidate(),
+    onSuccess: () => {
+      toast.success('标签已删除');
+      invalidate();
+    },
+    onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '删除失败'),
   });
+
+  const onDelete = async (t: TagMeta) => {
+    const usedBy = t.course_count ?? 0;
+    const ok = await confirm({
+      message: `删除标签「${t.label}」？`,
+      detail:
+        usedBy > 0
+          ? `该标签正被 ${usedBy} 门课程使用，删除后将自动从这些课程上移除（课程本身不受影响）。`
+          : '该标签当前未被任何课程使用。',
+      danger: true,
+    });
+    if (ok) deleteMut.mutate(t.id!);
+  };
 
   if (tagsQ.isLoading) return <LoadingState />;
   const tags = tagsQ.data ?? [];
@@ -47,6 +66,7 @@ export function Tags() {
                 <th className="px-4 py-3 font-medium">标签</th>
                 <th className="px-4 py-3 font-medium">Key</th>
                 <th className="px-4 py-3 font-medium">颜色</th>
+                <th className="px-4 py-3 font-medium">使用课程</th>
                 <th className="px-4 py-3 font-medium">排序</th>
                 <th className="px-4 py-3 text-right font-medium">操作</th>
               </tr>
@@ -60,6 +80,9 @@ export function Tags() {
                       style={{ backgroundColor: `${t.color}20`, color: t.color }}
                     >
                       {t.label}
+                      {t.is_system && (
+                        <span title="系统默认标签，不可删除（可在编辑里改名/改色）" className="text-xs">🔒</span>
+                      )}
                     </span>
                   </td>
                   <td className="px-4 py-3">
@@ -71,16 +94,23 @@ export function Tags() {
                       <span className="text-xs text-muted">{t.color}</span>
                     </span>
                   </td>
+                  <td className="px-4 py-3 text-muted">{t.course_count ?? 0} 门</td>
                   <td className="px-4 py-3 text-muted">{t.sort_order ?? '-'}</td>
                   <td className="px-4 py-3 text-right">
                     <button className="btn-ghost btn-sm" onClick={() => setEditing(t)}>编辑</button>
-                    <button
-                      className="btn-ghost btn-sm text-bad hover:bg-bad/10"
-                      onClick={() => deleteMut.mutate(t.id!)}
-                      disabled={deleteMut.isPending}
-                    >
-                      删除
-                    </button>
+                    {t.is_system ? (
+                      <button className="btn-ghost btn-sm opacity-40" disabled title="系统默认标签，不可删除">
+                        删除
+                      </button>
+                    ) : (
+                      <button
+                        className="btn-ghost btn-sm text-bad hover:bg-bad/10"
+                        onClick={() => onDelete(t)}
+                        disabled={deleteMut.isPending}
+                      >
+                        删除
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
