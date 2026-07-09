@@ -471,6 +471,72 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     final hasSummary = (_aiCache[ep.id]?.preAdventureCards.isNotEmpty ?? false) ||
         (_aiCache[ep.id]?.postReviewQuiz.isNotEmpty ?? false);
 
+    // Locked episodes render as a greyed-out row with a lock affordance and
+    // refuse to open the player — the unlock schedule (drip) keeps them
+    // invisible to play-info anyway, so this just stops the tap from producing
+    // a confusing 403.
+    if (ep.locked) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12.0),
+        child: FocusButton(
+          padding: const EdgeInsets.all(16.0),
+          borderRadius: 20,
+          borderColor: const Color(0xFFE2E8F0),
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('🔒 这一节还没解锁，耐心等待吧～'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          },
+          child: Row(
+            children: [
+              Container(
+                width: 120,
+                height: 68,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  color: const Color(0xFFF1F5F9),
+                  border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
+                ),
+                child: const Center(
+                  child: Icon(Icons.lock_outline_rounded, color: Color(0xFF94A3B8), size: 26),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      ep.title,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 16,
+                        color: Color(0xFF94A3B8),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: const [
+                        Icon(Icons.lock_clock_outlined, size: 12, color: Color(0xFF94A3B8)),
+                        SizedBox(width: 4),
+                        Text(
+                          '等待解锁',
+                          style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12.0),
       child: FocusButton(

@@ -580,25 +580,97 @@ class _CourseListScreenState extends State<CourseListScreen> {
                   ),
                   const Spacer(),
 
-                  // Entry prompt — real per-course progress is shown on the detail page.
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        '点击进入学习',
-                        style: TextStyle(
-                          color: AppTheme.primaryColor,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 10,
+                  // Entry prompt — replaced by a drip-unlock badge when the
+                  // course runs under a schedule, so the student sees the
+                  // cadence + next unlock from the grid. Falls back to the
+                  // plain "点击进入学习" cue for all-open courses.
+                  if (course.hasUnlockSchedule)
+                    _buildUnlockBadge(course)
+                  else
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '点击进入学习',
+                          style: TextStyle(
+                            color: AppTheme.primaryColor,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 10,
+                          ),
                         ),
-                      ),
-                      const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 14),
-                    ],
-                  ),
+                        const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 14),
+                      ],
+                    ),
                 ],
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  /// Compact drip-unlock badge for the course card: strategy label + visible
+  /// progress, and the next auto-unlock instant when one is scheduled.
+  /// Layout is tuned to fit the card's narrow bottom row (one line, ellipsized).
+  Widget _buildUnlockBadge(Course course) {
+    // nextUnlockAt is RFC3339 (business tz). Show a friendly "周日 03/12 19:00".
+    String nextLabel = '';
+    if (course.nextUnlockAt.isNotEmpty) {
+      try {
+        final dt = DateTime.parse(course.nextUnlockAt);
+        const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+        // DateTime.weekday is 1=Mon..7=Sun; map to the 0-based array above.
+        final wd = weekdays[(dt.weekday - 1) % 7];
+        final mm = dt.month.toString().padLeft(2, '0');
+        final dd = dt.day.toString().padLeft(2, '0');
+        final hh = dt.hour.toString().padLeft(2, '0');
+        final mi = dt.minute.toString().padLeft(2, '0');
+        nextLabel = '$wd $mm/$dd $hh:$mi';
+      } catch (_) {
+        nextLabel = '';
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFFFDE68A), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock_clock_outlined, size: 10, color: Color(0xFFD97706)),
+              const SizedBox(width: 3),
+              Flexible(
+                child: Text(
+                  '${course.unlockStrategyLabel} · ${course.unlockedCount}/${course.episodeTotal}',
+                  style: const TextStyle(
+                    fontSize: 9,
+                    color: Color(0xFF92400E),
+                    fontWeight: FontWeight.bold,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          if (nextLabel.isNotEmpty) ...[
+            const SizedBox(height: 1),
+            Text(
+              '下次解锁 $nextLabel',
+              style: const TextStyle(fontSize: 8, color: Color(0xFFB45309)),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
         ],
       ),
     );

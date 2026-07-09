@@ -59,6 +59,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	badgeRepo := repository.NewBadgeRepository(db)
 	subjectRepo := repository.NewSubjectRepository(db)
 	tagRepo := repository.NewTagRepository(db)
+	unlockRepo := repository.NewUnlockRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
@@ -75,6 +76,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
 	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
+	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 
 	// seed (subjects → tags → badges, same order as main.go; subjects must
 	// come first so the subject_count badge rules resolve against a populated
@@ -92,8 +94,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	// handlers
 	healthH := handler.NewHealthHandler()
 	userH := handler.NewUserHandler(userService)
-	courseH := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo)
-	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo)
+	courseH := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
+	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
 	progressH := handler.NewProgressHandler(progressService)
 	ingestH := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
 	adminH := handler.NewAdminHandler(
@@ -104,9 +106,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
+	unlockH := handler.NewUnlockHandler(unlockService)
 
 	r := gin.New()
-	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, userRepo, settingsRepo)
+	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, userRepo, settingsRepo)
 
 	// Pre-seed the admin password hash so login only pays for one bcrypt
 	// compare instead of the lazy-init generate+compare (~120ms → ~60ms).

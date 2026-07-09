@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import type { User } from '../lib/types';
 import { Modal, LoadingState, EmptyState, Drawer, Tag } from '../components/ui';
 import { ImageUpload } from '../components/inputs';
+import { UserCourseUnlockRow } from '../components/UserCourseUnlockRow';
 import { relativeTime } from '../lib/format';
 
 // Compact watch-time formatter. Prefers raw seconds (sub-minute precision) so
@@ -309,6 +310,9 @@ function UserDetailDrawer({
   const ledger = ledgerQ.data ?? [];
   const badges = badgesQ.data ?? [];
   const unlocked = badges.filter((b) => b.unlocked);
+  // Granted course ids in catalog order (so the unlock rows match the checkbox
+  // list above, not the raw access array order).
+  const granted = courses.filter((c) => access.has(c.id)).map((c) => c.id);
 
   return (
     <Drawer open onClose={onClose} title={`${user.nickname} · 课程授权`} width="lg">
@@ -338,6 +342,28 @@ function UserDetailDrawer({
           ))}
         </div>
       </section>
+
+      {/* Per-course unlock controls — only for granted courses. Lets the admin
+          manually bump the water level, cherry-pick episodes (selected mode),
+          or override the strategy for this specific student. */}
+      {granted.length > 0 && (
+        <section className="mb-6">
+          <h3 className="mb-2 text-sm font-semibold text-txt">🔓 解锁节奏（已授权课程）</h3>
+          <div className="space-y-1.5">
+            {granted.map((cid) => {
+              const c = courses.find((x) => x.id === cid);
+              return (
+                <UserCourseUnlockRow
+                  key={cid}
+                  userId={user.id}
+                  courseId={cid}
+                  courseTitle={c?.title ?? `#${cid}`}
+                />
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="mb-6">
         <h3 className="mb-2 text-sm font-semibold text-txt">积分流水（近 10 条）</h3>

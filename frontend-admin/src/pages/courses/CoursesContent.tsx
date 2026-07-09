@@ -3,7 +3,9 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import { GRADES, subjectMeta, type Course } from '../../lib/types';
 import { useSubjects } from '../../lib/useSubjects';
+import { useUnlockTemplate, strategyLabel } from '../../lib/useUnlock';
 import { EmptyState, LoadingState, SubjectBadge, Tag } from '../../components/ui';
+import { CourseUnlockTemplateModal } from '../../components/CourseUnlockTemplateModal';
 import { formatDurationShort, relativeTime } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
 import { sortBy, timeValue, type SortDir, type SortOption } from '../../lib/sort';
@@ -28,6 +30,7 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
   const [sortKey, setSortKey] = useState('updated');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [unlockForCourse, setUnlockForCourse] = useState<Course | null>(null);
   const qc = useQueryClient();
   const toast = useToast();
   const subjectsQ = useSubjects();
@@ -184,6 +187,7 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
                     <h3 className="truncate text-lg font-bold text-txt">{c.title}</h3>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                       <SubjectBadge subject={c.subject} />
+                      <CourseUnlockBadge courseId={c.id} />
                       <span className="text-muted">{c.grade_display}</span>
                       <span className="text-muted">·</span>
                       <span className="text-muted">{c.chapter_count ?? 0} 章</span>
@@ -215,6 +219,9 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
                     <button className="btn-secondary btn-sm" onClick={() => toggleExpand(c.id)} title={isOpen ? '折叠' : '展开'}>
                       {isOpen ? '▲ 收起' : '▼ 展开'}
                     </button>
+                    <button className="btn-secondary btn-sm" onClick={() => setUnlockForCourse(c)} title="设置视频按需解锁节奏">
+                      ⏱ 解锁节奏
+                    </button>
                     <button className="btn-secondary btn-sm" onClick={() => onEdit(c)}>
                       ✏ 编辑
                     </button>
@@ -230,7 +237,35 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
           })}
         </div>
       )}
+
+      {unlockForCourse && (
+        <CourseUnlockTemplateModal
+          courseId={unlockForCourse.id}
+          courseTitle={unlockForCourse.title}
+          onClose={() => setUnlockForCourse(null)}
+          onSaved={() => qc.invalidateQueries({ queryKey: ['unlock-template'] })}
+        />
+      )}
     </div>
+  );
+}
+
+// CourseUnlockBadge shows the effective unlock cadence as a small pill on the
+// course card header (e.g. "🔓 每周解锁"). Hidden for all_open / no-template
+// (the default backward-compat state) so default courses stay visually clean.
+// This is a separate component because each course needs its own query hook —
+// you can't call useUnlockTemplate inside the map callback.
+function CourseUnlockBadge({ courseId }: { courseId: number }) {
+  const tplQ = useUnlockTemplate(courseId);
+  const t = tplQ.data;
+  if (!t || !t.exists || t.strategy === 'all_open') return null;
+  return (
+    <span
+      className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-600"
+      title="该课程设置了视频按需解锁节奏"
+    >
+      🔓 {strategyLabel(t.strategy)}
+    </span>
   );
 }
 

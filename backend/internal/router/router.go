@@ -25,6 +25,7 @@ func RegisterRoutes(
 	badge handler.BadgeHandler,
 	subject handler.SubjectHandler,
 	tag handler.TagHandler,
+	unlock handler.UnlockHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
 ) {
@@ -56,6 +57,7 @@ func RegisterRoutes(
 		v1Restricted.GET("/courses/:id", course.GetCourseByID)
 		v1Restricted.GET("/courses/:id/episodes", course.GetEpisodesByCourse)
 		v1Restricted.GET("/courses/:id/chapters", course.GetChaptersByCourse)
+		v1Restricted.GET("/courses/:id/unlock-status", course.GetUnlockStatus)
 		v1Restricted.GET("/courses/:id/last-watched", progress.GetLastWatched)
 		
 		v1Restricted.GET("/episodes/:id", episode.GetEpisodeByID)
@@ -167,6 +169,21 @@ func RegisterRoutes(
 		adm.POST("/api/tags", tag.AdminCreateTag)
 		adm.PUT("/api/tags/:id", tag.AdminUpdateTag)
 		adm.DELETE("/api/tags/:id", tag.AdminDeleteTag)
+
+		// Unlock templates (course-level default strategy)
+		adm.GET("/api/courses/:id/unlock-template", unlock.GetTemplate)
+		adm.PUT("/api/courses/:id/unlock-template", unlock.SaveTemplate)
+		adm.DELETE("/api/courses/:id/unlock-template", unlock.DeleteTemplate)
+
+		// Unlock overrides (per user, course)
+		adm.GET("/api/users/:id/unlock-overrides", unlock.ListUserOverrides)
+		adm.GET("/api/users/:id/courses/:cid/unlock-override", unlock.GetOverride)
+		adm.PUT("/api/users/:id/courses/:cid/unlock-override", unlock.SaveOverride)
+		adm.DELETE("/api/users/:id/courses/:cid/unlock-override", unlock.DeleteOverride)
+		adm.POST("/api/users/:id/courses/:cid/manual-unlock", unlock.ManualUnlock)
+		adm.POST("/api/users/:id/courses/:cid/manual-unlock-undo", unlock.ManualUnlockUndo)
+		adm.PUT("/api/users/:id/courses/:cid/allowed-episodes", unlock.SetAllowedEpisodes)
+		adm.GET("/api/users/:id/courses/:cid/unlock-preview", unlock.UnlockPreview)
 
 		// Uploads
 		adm.POST("/api/upload/image", admin.UploadImage)
