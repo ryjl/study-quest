@@ -28,11 +28,12 @@ type episodeHandler struct {
 	episodeService  service.EpisodeService
 	progressService service.ProgressService
 	settingsRepo    repository.SettingsRepository
+	unlockService   service.UnlockService
 }
 
 // NewEpisodeHandler creates an instance of EpisodeHandler.
-func NewEpisodeHandler(es service.EpisodeService, ps service.ProgressService, sr repository.SettingsRepository) EpisodeHandler {
-	return &episodeHandler{episodeService: es, progressService: ps, settingsRepo: sr}
+func NewEpisodeHandler(es service.EpisodeService, ps service.ProgressService, sr repository.SettingsRepository, us service.UnlockService) EpisodeHandler {
+	return &episodeHandler{episodeService: es, progressService: ps, settingsRepo: sr, unlockService: us}
 }
 
 func (h *episodeHandler) GetEpisodeByID(c *gin.Context) {
@@ -121,6 +122,41 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID format"})
 		return
+	}
+
+	// Unlock gate: a student/teen must have the episode visible under their
+	// (user, course) unlock resolution before we hand out the stream URL.
+	// Without this, the episode-list filtering could be bypassed by simply
+	// guessing an episode id. Admin/parent roles bypass the gate (they manage
+	// content, not consume it under a drip schedule).
+	//
+	// This gate must FAIL CLOSED: if we can't establish a valid userID for a
+	// non-admin role, we reject (401) rather than fall through to GetStreamURL.
+	// The route sits behind UserAuthMiddleware which normally injects userID,
+	// but the gate as a security control must not depend on that always being
+	// true — a missing/invalid userID on a non-admin request is treated as an
+	// access denial, never an implicit grant.
+	if h.unlockService != nil {
+		roleVal, hasRole := c.Get("userRole")
+		role, _ := roleVal.(string)
+		if role != "admin" && role != "parent" {
+			uidVal, hasUID := c.Get("userID")
+			uid, uidOK := uidVal.(uint)
+			if !hasRole || !hasUID || !uidOK {
+				// No trustworthy identity on a non-admin request → deny.
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+				return
+			}
+			visible, gerr := h.unlockService.IsEpisodeVisible(uid, uint(id))
+			if gerr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check episode access"})
+				return
+			}
+			if !visible {
+				c.JSON(http.StatusForbidden, gin.H{"error": "episode is locked"})
+				return
+			}
+		}
 	}
 
 	link, err := h.episodeService.GetStreamURL(uint(id), c.Request.UserAgent())

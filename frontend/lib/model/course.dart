@@ -8,6 +8,13 @@ class Course {
   final String coverUrl;
   final String tags;
   final List<int> tagIds;
+  // Drip-unlock summary shown on the course card (student roles only). Populated
+  // by GetCourses; empty/zero values mean "no drip cadence" → card hides the badge.
+  final String unlockStrategy;
+  final String unlockStrategyLabel;
+  final int unlockedCount;
+  final int episodeTotal;
+  final String nextUnlockAt;
 
   Course({
     required this.id,
@@ -17,6 +24,11 @@ class Course {
     required this.coverUrl,
     this.tags = '',
     this.tagIds = const [],
+    this.unlockStrategy = '',
+    this.unlockStrategyLabel = '',
+    this.unlockedCount = 0,
+    this.episodeTotal = 0,
+    this.nextUnlockAt = '',
   });
 
   factory Course.fromJson(Map<String, dynamic> json) {
@@ -31,8 +43,17 @@ class Course {
       tagIds: rawTagIds is List
           ? rawTagIds.map((e) => (e as num).toInt()).toList()
           : const [],
+      unlockStrategy: json['UnlockStrategy'] ?? json['unlock_strategy'] ?? '',
+      unlockStrategyLabel: json['UnlockStrategyLabel'] ?? json['unlock_strategy_label'] ?? '',
+      unlockedCount: (json['UnlockedCount'] ?? json['unlocked_count'] ?? 0) as int,
+      episodeTotal: (json['EpisodeTotal'] ?? json['episode_total'] ?? 0) as int,
+      nextUnlockAt: json['NextUnlockAt'] ?? json['next_unlock_at'] ?? '',
     );
   }
+
+  /// Whether this course runs under a drip-unlock schedule (vs all-open). Drives
+  /// the badge visibility on the course card.
+  bool get hasUnlockSchedule => unlockStrategy.isNotEmpty && unlockStrategy != 'all_open';
 
   List<String> get tagsList {
     if (tags.isEmpty) return const [];
@@ -86,6 +107,7 @@ class Episode {
   final String fileHash;
   final int fileSize;
   final int durationSeconds;
+  final bool locked;
 
   Episode({
     required this.id,
@@ -99,6 +121,7 @@ class Episode {
     required this.fileHash,
     required this.fileSize,
     required this.durationSeconds,
+    this.locked = false,
   });
 
   factory Episode.fromJson(Map<String, dynamic> json) {
@@ -115,6 +138,10 @@ class Episode {
       fileHash: json['FileHash'] ?? json['file_hash'] ?? '',
       fileSize: json['FileSize'] ?? json['file_size'] ?? 0,
       durationSeconds: json['DurationSeconds'] ?? json['duration_seconds'] ?? 0,
+      // The student-facing episodes endpoint annotates each episode with a
+      // `locked` flag derived from the unlock resolution. Default false so a
+      // missing field (older backends) treats everything as visible.
+      locked: json['locked'] == true,
     );
   }
 

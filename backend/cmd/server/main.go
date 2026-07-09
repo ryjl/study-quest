@@ -72,6 +72,7 @@ func main() {
 	badgeRepo := repository.NewBadgeRepository(db)
 	subjectRepo := repository.NewSubjectRepository(db)
 	tagRepo := repository.NewTagRepository(db)
+	unlockRepo := repository.NewUnlockRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
@@ -86,6 +87,7 @@ func main() {
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
 	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
+	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 
 	// Seed default badges and subjects (idempotent). Subjects must seed BEFORE
 	// badges so the subject_count badge rules' rule_target keys ("math",
@@ -111,8 +113,8 @@ func main() {
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
 	userHandler := handler.NewUserHandler(userService)
-	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo)
-	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo)
+	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
+	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
 	progressHandler := handler.NewProgressHandler(progressService)
 	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
 	adminHandler := handler.NewAdminHandler(
@@ -135,6 +137,7 @@ func main() {
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)
 	tagHandler := handler.NewTagHandler(tagService)
+	unlockHandler := handler.NewUnlockHandler(unlockService)
 
 	// 9. Boot up Gin Server Router
 	gin.SetMode(gin.ReleaseMode)
@@ -153,6 +156,7 @@ func main() {
 		badgeHandler,
 		subjectHandler,
 		tagHandler,
+		unlockHandler,
 		userRepo,
 		settingsRepo,
 	)

@@ -320,6 +320,73 @@ type UserBadge struct {
 	UnlockedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
 
+// Unlock strategy constants. A strategy decides how the "unlock water level"
+// (how many of the course's episodes, in SortOrder, are visible) and the
+// explicit allowlist combine for a (user, course) pair. See unlock_service.go
+// for the resolution logic.
+const (
+	// StrategyAllOpen: every episode visible (default; backward compatible —
+	// courses/assignments with no template behave this way).
+	StrategyAllOpen = "all_open"
+	// StrategyManual: only episode 1 is visible initially; each admin
+	// "manual unlock" bumps the water level by 1. No automatic progression.
+	StrategyManual = "manual"
+	// StrategyInterval: water level = 1 + floor((now-granted_at)/interval) +
+	// manual_count. Interval is stored in seconds (interval_seconds).
+	StrategyInterval = "interval"
+	// StrategyWeekly: water level = 1 + (number of configured weekly time
+	// points elapsed between granted_at and now) + manual_count. Time points
+	// are stored in weekly_times_json.
+	StrategyWeekly = "weekly"
+	// StrategySelected: water level is always 0; visibility comes entirely
+	// from the admin-curated allowlist stored on the user override. Supports
+	// arbitrary/cherry-picked episode selection.
+	StrategySelected = "selected"
+)
+
+// WeeklyTime is one configured unlock time point for the weekly strategy.
+// Weekday follows Go's time.Weekday convention: 0=Sunday ... 6=Saturday.
+// Hour/Minute are interpreted in the business timezone (appclock).
+type WeeklyTime struct {
+	Weekday int `json:"weekday"` // 0 (Sunday) .. 6 (Saturday)
+	Hour    int `json:"hour"`    // 0..23 (business timezone)
+	Minute  int `json:"minute"`  // 0..59
+}
+
+// CourseUnlockTemplate is the course-level default unlock strategy. At most
+// one row per course; absence means StrategyAllOpen (backward compatible).
+// Templates do NOT carry an allowlist — the allowlist is per (user, course)
+// on UserUnlockOverride, since "which exact episodes" is a per-student choice.
+type CourseUnlockTemplate struct {
+	CourseID        uint      `gorm:"primaryKey"`
+	Strategy        string    `gorm:"size:20;not null;default:'all_open'"`
+	IntervalSeconds int       `gorm:"default:0"` // StrategyInterval
+	WeeklyTimesJSON string    `gorm:"type:text"` // StrategyWeekly: []WeeklyTime
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// UserUnlockOverride stores a per-(user, course) unlock configuration that
+// overrides the course template. Absence means "inherit the template" (or
+// AllOpen if there's no template either).
+//
+// AllowedEpisodeIDsJSON holds the admin-curated allowlist (JSON []uint of
+// episode ids). It is the SOLE source of visibility under StrategySelected,
+// and an ADDITIVE source (unioned with the water level) under the other
+// strategies — so an admin can always hand-unlock a specific episode without
+// disturbing the drip schedule.
+type UserUnlockOverride struct {
+	UserID                uint      `gorm:"primaryKey"`
+	CourseID              uint      `gorm:"primaryKey"`
+	Strategy              string    `gorm:"size:20;not null;default:'all_open'"`
+	IntervalSeconds       int       `gorm:"default:0"`
+	WeeklyTimesJSON       string    `gorm:"type:text"`
+	ManualUnlockCount     int       `gorm:"default:0"` // bumps water level under manual/interval/weekly
+	AllowedEpisodeIDsJSON string    `gorm:"type:text"` // JSON []uint allowlist
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+}
+
 // AutoMigrate runs GORM schema auto-migration for all tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
@@ -338,5 +405,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserProgress{},
 		&Badge{},
 		&UserBadge{},
+		&CourseUnlockTemplate{},
+		&UserUnlockOverride{},
 	)
 }

@@ -275,3 +275,54 @@ export interface PointsLedgerEntry {
   description: string;
   created_at: string;
 }
+
+// ---- Unlock (drip schedule) ----
+
+// One configured weekly unlock time point. Weekday follows Go's time.Weekday:
+// 0 = Sunday ... 6 = Saturday. Hour/Minute are in the business timezone.
+export interface WeeklyTime {
+  weekday: number;
+  hour: number;
+  minute: number;
+}
+
+// Strategy values mirror backend model.Strategy* constants.
+export type UnlockStrategy =
+  | 'all_open'
+  | 'manual'
+  | 'interval'
+  | 'weekly'
+  | 'selected';
+
+// Course-level default unlock strategy template. Absence (exists=false) means
+// all_open (backward compatible — every episode visible).
+export interface UnlockTemplate {
+  course_id: number;
+  strategy: UnlockStrategy;
+  interval_seconds: number;
+  weekly_times: WeeklyTime[];
+  exists: boolean;
+}
+
+// Per-(user, course) override. Absence means "inherit the template".
+export interface UnlockOverride {
+  user_id: number;
+  course_id: number;
+  strategy: UnlockStrategy;
+  interval_seconds: number;
+  weekly_times: WeeklyTime[];
+  manual_unlock_count: number;
+  allowed_episode_ids: number[];
+  exists: boolean;
+}
+
+// Resolved visibility preview for a (user, course), from unlock-preview.
+export interface UnlockPreview {
+  visible_ids: number[];
+  visible_count: number;
+  total: number;
+  unlocked_n: number;
+  strategy: UnlockStrategy;
+  strategy_label: string;
+  next_unlock_at: string;
+}

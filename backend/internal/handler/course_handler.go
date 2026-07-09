@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"studyquest/backend/internal/appclock"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,6 +20,7 @@ type CourseHandler interface {
 	GetCourseByID(c *gin.Context)
 	GetEpisodesByCourse(c *gin.Context)
 	GetChaptersByCourse(c *gin.Context)
+	GetUnlockStatus(c *gin.Context)
 }
 
 type courseHandler struct {
@@ -24,15 +28,17 @@ type courseHandler struct {
 	episodeService service.EpisodeService
 	chapterService service.ChapterService
 	subjectRepo    repository.SubjectRepository
+	unlockService  service.UnlockService
 }
 
 // NewCourseHandler creates an instance of CourseHandler.
-func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs service.ChapterService, subj repository.SubjectRepository) CourseHandler {
+func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs service.ChapterService, subj repository.SubjectRepository, us service.UnlockService) CourseHandler {
 	return &courseHandler{
 		courseService:  cs,
 		episodeService: es,
 		chapterService: chs,
 		subjectRepo:    subj,
+		unlockService:  us,
 	}
 }
 
@@ -51,6 +57,15 @@ type clientCourseDTO struct {
 	TagIDs         []uint   `json:"TagIDs"`    // tag ids (for ID-based filtering)
 	GradeDisplay   string   `json:"GradeDisplay"`
 	AttachmentJSON string   `json:"AttachmentJSON"`
+	// Unlock summary — populated for student/teen roles only (admin/parent see
+	// everything, so the drip state is meaningless for them). Zero values
+	// (UnlockStrategy="" / UnlockedCount=0) signal "no drip schedule" to the
+	// client, which then hides the badge. See annotateWithUnlock.
+	UnlockStrategy    string `json:"UnlockStrategy"`
+	UnlockStrategyLabel string `json:"UnlockStrategyLabel"`
+	UnlockedCount     int    `json:"UnlockedCount"`
+	EpisodeTotal      int    `json:"EpisodeTotal"`
+	NextUnlockAt      string `json:"NextUnlockAt"`
 	CreatedAt      string   `json:"CreatedAt"`
 	UpdatedAt      string   `json:"UpdatedAt"`
 }
@@ -93,7 +108,44 @@ func (h *courseHandler) GetCourses(c *gin.Context) {
 	for _, course := range courses {
 		out = append(out, h.toClientDTO(course))
 	}
+
+	// Annotate each course card with the drip-unlock summary so the student can
+	// see the cadence + next unlock from the course grid without entering each
+	// course. Only resolved for student/teen roles: admins/parents manage
+	// content and the drip schedule is irrelevant to their view (and resolving
+	// per-course would do needless work). Cheap enough for typical course-list
+	// sizes (<~20), each resolve is in-memory math + one small query.
+	if userRole != "admin" && userRole != "parent" && h.unlockService != nil {
+		for i := range out {
+			annotateWithUnlock(&out[i], h.unlockService, userID)
+		}
+	}
+
 	c.JSON(http.StatusOK, out)
+}
+
+// annotateWithUnlock fills the Unlock* fields on a course DTO by resolving the
+// per-(user, course) visibility. all_open / empty-strategy courses are left
+// unannotated (zero values) so the client can hide the badge — there's nothing
+// to tell the student. Errors degrade silently to no-annotation (the card just
+// won't show a badge) rather than failing the whole list.
+func annotateWithUnlock(dto *clientCourseDTO, us service.UnlockService, userID uint) {
+	vis, err := us.ResolveVisibleEpisodes(userID, dto.ID)
+	if err != nil {
+		return
+	}
+	// all_open with the full catalog visible = no drip cadence to advertise.
+	// Hide the badge in that case (and when strategy is empty/unknown).
+	if vis.Strategy == "" || vis.Strategy == model.StrategyAllOpen {
+		return
+	}
+	dto.UnlockStrategy = vis.Strategy
+	dto.UnlockStrategyLabel = vis.StrategyLabel
+	dto.UnlockedCount = len(vis.VisibleIDs)
+	dto.EpisodeTotal = vis.Total
+	if vis.NextUnlockAt != nil {
+		dto.NextUnlockAt = vis.NextUnlockAt.In(appclock.Zone()).Format(time.RFC3339)
+	}
 }
 
 // toClientDTO projects a model.Course into the flat shape the Flutter client
@@ -155,7 +207,97 @@ func (h *courseHandler) GetEpisodesByCourse(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, episodes)
+	// Apply unlock gating for student/teen roles. Admin/parent see everything
+	// (they manage content, not consume it under a drip schedule). For gated
+	// roles we resolve the visible-episode set and mark the rest locked so the
+	// client can render them greyed-out with a lock affordance.
+	userRoleVal, _ := c.Get("userRole")
+	userIDVal, _ := c.Get("userID")
+	role, _ := userRoleVal.(string)
+	if role == "admin" || role == "parent" {
+		c.JSON(http.StatusOK, episodes)
+		return
+	}
+
+	visibleSet := map[uint]struct{}{}
+	if uid, ok := userIDVal.(uint); ok && h.unlockService != nil {
+		vis, err := h.unlockService.ResolveVisibleEpisodes(uid, uint(id))
+		if err != nil {
+			// Fail CLOSED on resolver error: an empty visible set renders every
+			// episode locked rather than accidentally leaking locked content.
+			// Log so the failure is diagnosable instead of silently locking
+			// students out. (The resolver itself rarely errors — it degrades to
+			// "no access" via a zero GrantedAt, which yields empty visibility.)
+			log.Printf("[unlock] ResolveVisibleEpisodes(user=%d course=%d): %v", uid, id, err)
+		} else {
+			for _, eid := range vis.VisibleIDs {
+				visibleSet[eid] = struct{}{}
+			}
+		}
+	}
+
+	out := make([]gin.H, 0, len(episodes))
+	for _, ep := range episodes {
+		_, visible := visibleSet[ep.ID]
+		out = append(out, gin.H{
+			"ID":                   ep.ID,
+			"CourseID":             ep.CourseID,
+			"ChapterID":            ep.ChapterID,
+			"SortOrder":            ep.SortOrder,
+			"Title":                ep.Title,
+			"VideoRelativePath":    ep.VideoRelativePath,
+			"CoverURL":             ep.CoverURL,
+			"AttachmentJSON":       ep.AttachmentJSON,
+			"FileHash":             ep.FileHash,
+			"OriginalRelativePath": ep.OriginalRelativePath,
+			"FileSize":             ep.FileSize,
+			"DurationSeconds":      ep.DurationSeconds,
+			"MediaMetaJSON":        ep.MediaMetaJSON,
+			"CreatedAt":            ep.CreatedAt,
+			"UpdatedAt":            ep.UpdatedAt,
+			"locked":               !visible,
+		})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+// GetUnlockStatus returns the per-(user, course) unlock resolution: how many
+// of the course's episodes are visible, the effective strategy label, and the
+// next scheduled automatic-unlock instant (for interval/weekly). Drives the
+// Flutter course-detail header ("已解锁 X/Y · 下次解锁：周日 19:00").
+func (h *courseHandler) GetUnlockStatus(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID format"})
+		return
+	}
+
+	userIDVal, _ := c.Get("userID")
+	uid, ok := userIDVal.(uint)
+	if !ok || h.unlockService == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user authentication required"})
+		return
+	}
+
+	vis, err := h.unlockService.ResolveVisibleEpisodes(uid, uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to resolve unlock status: " + err.Error()})
+		return
+	}
+
+	nextStr := ""
+	if vis.NextUnlockAt != nil {
+		nextStr = vis.NextUnlockAt.In(appclock.Zone()).Format(time.RFC3339)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"visible_count":  len(vis.VisibleIDs),
+		"total":          vis.Total,
+		"unlocked_n":     vis.UnlockedN,
+		"strategy":       vis.Strategy,
+		"strategy_label": vis.StrategyLabel,
+		"next_unlock_at": nextStr,
+	})
 }
 
 // GetChaptersByCourse returns the chapter tree for a course (client-facing).
