@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { User } from '../lib/types';
+import type { User, ReadingTargetType } from '../lib/types';
 import { Modal, LoadingState, EmptyState, Drawer, Tag } from '../components/ui';
 import { ImageUpload } from '../components/inputs';
 import { UserCourseUnlockRow } from '../components/UserCourseUnlockRow';
@@ -81,6 +81,18 @@ export function Users() {
     mutationFn: ({ userId, courseId, grant }: { userId: number; courseId: number; grant: boolean }) =>
       grant ? api.grantAccess(userId, courseId) : api.revokeAccess(userId, courseId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onError: (e) => toast.error((e as Error).message),
+  });
+  // Reading Room access — one mutation for all three target types.
+  const readingAccessMut = useMutation({
+    mutationFn: ({ userId, targetType, targetId, grant }: { userId: number; targetType: ReadingTargetType; targetId: number; grant: boolean }) =>
+      grant ? api.grantReadingAccess(userId, targetType, targetId) : api.revokeReadingAccess(userId, targetType, targetId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
+    onError: (e) => toast.error((e as Error).message),
+  });
+  const readingBulkMut = useMutation({
+    mutationFn: ({ id, action }: { id: number; action: 'grant_all' | 'revoke_all' }) => api.bulkReadingAccess(id, action),
+    onSuccess: () => { toast.success('阅读室授权已更新'); qc.invalidateQueries({ queryKey: ['users'] }); },
     onError: (e) => toast.error((e as Error).message),
   });
 
@@ -219,6 +231,8 @@ export function Users() {
             onClose={() => setDetailForId(null)}
             onToggleCourse={(courseId, grant) => accessMut.mutate({ userId: detailUser.id, courseId, grant })}
             onBulk={(action) => bulkMut.mutate({ id: detailUser.id, action })}
+            onToggleReading={(targetType, targetId, grant) => readingAccessMut.mutate({ userId: detailUser.id, targetType, targetId, grant })}
+            onReadingBulk={(action) => readingBulkMut.mutate({ id: detailUser.id, action })}
           />
         );
       })()}
@@ -295,18 +309,32 @@ function UserDetailDrawer({
   onClose,
   onToggleCourse,
   onBulk,
+  onToggleReading,
+  onReadingBulk,
 }: {
   user: User;
   onClose: () => void;
   onToggleCourse: (courseId: number, grant: boolean) => void;
   onBulk: (action: 'grant_all' | 'revoke_all') => void;
+  onToggleReading: (targetType: ReadingTargetType, targetId: number, grant: boolean) => void;
+  onReadingBulk: (action: 'grant_all' | 'revoke_all') => void;
 }) {
   const coursesQ = useQuery({ queryKey: ['courses'], queryFn: api.listCourses });
   const ledgerQ = useQuery({ queryKey: ['ledger', user.id], queryFn: () => api.userLedger(user.id, 10) });
   const badgesQ = useQuery({ queryKey: ['user-badges', user.id], queryFn: () => api.userBadges(user.id) });
+  // Reading Room catalogs — for the checkbox lists.
+  const readingSeriesQ = useQuery({ queryKey: ['reading-series'], queryFn: api.listReadingSeries });
+  const readingBooksQ = useQuery({ queryKey: ['reading-books'], queryFn: api.listReadingBooks });
+  const readingArticlesQ = useQuery({ queryKey: ['reading-articles'], queryFn: api.listReadingArticles });
 
   const access = new Set(user.course_access ?? []);
   const courses = coursesQ.data ?? [];
+  const seriesAccess = new Set(user.reading_series_access ?? []);
+  const bookAccess = new Set(user.reading_book_access ?? []);
+  const articleAccess = new Set(user.reading_article_access ?? []);
+  const readingSeries = readingSeriesQ.data ?? [];
+  const readingBooks = readingBooksQ.data ?? [];
+  const readingArticles = readingArticlesQ.data ?? [];
   const ledger = ledgerQ.data ?? [];
   const badges = badgesQ.data ?? [];
   const unlocked = badges.filter((b) => b.unlocked);
@@ -341,6 +369,65 @@ function UserDetailDrawer({
             </label>
           ))}
         </div>
+      </section>
+
+      {/* Reading Room access — series / books / articles, mirroring the course
+          checkbox section above. Three collapsible sub-lists, one bulk bar. */}
+      <section className="mb-6">
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-txt">📖 阅读室授权</h3>
+          <div className="flex gap-1.5">
+            <button className="btn-secondary btn-sm" onClick={() => onReadingBulk('grant_all')}>全部授权</button>
+            <button className="btn-danger btn-sm" onClick={() => onReadingBulk('revoke_all')}>全部撤销</button>
+          </div>
+        </div>
+
+        {readingSeries.length > 0 && (
+          <div className="mb-2">
+            <p className="mb-1 text-xs text-muted">系列 ({seriesAccess.size}/{readingSeries.length})</p>
+            <div className="max-h-40 space-y-1 overflow-auto">
+              {readingSeries.map((s) => (
+                <label key={s.id} className="flex items-center gap-2 rounded-lg border border-border bg-card-2 px-3 py-1.5 text-sm">
+                  <input type="checkbox" checked={seriesAccess.has(s.id)} onChange={(e) => onToggleReading('series', s.id, e.target.checked)} className="h-4 w-4 accent-primary" />
+                  <span className="flex-1 text-txt">{s.title}</span>
+                  <span className="text-xs text-muted">{s.book_count + s.article_count} 项</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {readingBooks.length > 0 && (
+          <div className="mb-2">
+            <p className="mb-1 text-xs text-muted">书籍 PDF ({bookAccess.size}/{readingBooks.length})</p>
+            <div className="max-h-40 space-y-1 overflow-auto">
+              {readingBooks.map((b) => (
+                <label key={b.id} className="flex items-center gap-2 rounded-lg border border-border bg-card-2 px-3 py-1.5 text-sm">
+                  <input type="checkbox" checked={bookAccess.has(b.id)} onChange={(e) => onToggleReading('book', b.id, e.target.checked)} className="h-4 w-4 accent-primary" />
+                  <span className="flex-1 text-txt">📕 {b.title}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {readingArticles.length > 0 && (
+          <div className="mb-2">
+            <p className="mb-1 text-xs text-muted">文章 ({articleAccess.size}/{readingArticles.length})</p>
+            <div className="max-h-40 space-y-1 overflow-auto">
+              {readingArticles.map((a) => (
+                <label key={a.id} className="flex items-center gap-2 rounded-lg border border-border bg-card-2 px-3 py-1.5 text-sm">
+                  <input type="checkbox" checked={articleAccess.has(a.id)} onChange={(e) => onToggleReading('article', a.id, e.target.checked)} className="h-4 w-4 accent-primary" />
+                  <span className="flex-1 text-txt">🌐 {a.title}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {readingSeries.length === 0 && readingBooks.length === 0 && readingArticles.length === 0 && (
+          <p className="text-sm text-muted">阅读室还没有内容，请先到阅读室页面添加。</p>
+        )}
       </section>
 
       {/* Per-course unlock controls — only for granted courses. Lets the admin

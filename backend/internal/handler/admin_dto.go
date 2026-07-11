@@ -155,6 +155,11 @@ type userDTO struct {
 	CurrentPoints      int      `json:"current_points"`
 	TotalEarnedPoints  int      `json:"total_earned_points"`
 	CourseAccess       []uint   `json:"course_access"`
+	// Reading Room access arrays — used by the Users drawer to render the
+	// "阅读室授权" checkbox sections. Each is a list of granted resource IDs.
+	ReadingSeriesAccess  []uint `json:"reading_series_access"`
+	ReadingBookAccess    []uint `json:"reading_book_access"`
+	ReadingArticleAccess []uint `json:"reading_article_access"`
 	// Learning stats (populated from batch aggregates in ListUsers so the
 	// user list avoids N+1). All default to 0 when the user has no data.
 	CompletedEpisodes   int    `json:"completed_episodes"`   // 完成课时数
@@ -171,12 +176,15 @@ type userDTO struct {
 // userStatsBatch holds the batch-aggregated maps that ListUsers computes
 // once and feeds into toUserDTO, so per-user projection is O(1) map lookups.
 type userStatsBatch struct {
-	points      map[uint]model.UserPoint
-	access      map[uint][]uint
-	progress    map[uint]repository.UserProgressSummary
-	accessible  map[uint]int64
-	badges      map[uint]int64
-	totalBadges int64
+	points               map[uint]model.UserPoint
+	access               map[uint][]uint
+	progress             map[uint]repository.UserProgressSummary
+	accessible           map[uint]int64
+	badges               map[uint]int64
+	totalBadges          int64
+	readingSeriesAccess  map[uint][]uint
+	readingBookAccess    map[uint][]uint
+	readingArticleAccess map[uint][]uint
 }
 
 func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
@@ -189,19 +197,34 @@ func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
 	if access == nil {
 		access = []uint{}
 	}
+	seriesAcc := b.readingSeriesAccess[u.ID]
+	if seriesAcc == nil {
+		seriesAcc = []uint{}
+	}
+	bookAcc := b.readingBookAccess[u.ID]
+	if bookAcc == nil {
+		bookAcc = []uint{}
+	}
+	articleAcc := b.readingArticleAccess[u.ID]
+	if articleAcc == nil {
+		articleAcc = []uint{}
+	}
 	prog := b.progress[u.ID]
 	lastActive := ""
 	if prog.LastActiveAt != nil {
 		lastActive = formatTime(*prog.LastActiveAt)
 	}
 	return userDTO{
-		ID:                 u.ID,
-		Nickname:           u.Nickname,
-		AvatarURL:          u.AvatarURL,
-		Role:               u.Role,
-		CurrentPoints:      cp,
-		TotalEarnedPoints:  tp,
-		CourseAccess:       access,
+		ID:                   u.ID,
+		Nickname:             u.Nickname,
+		AvatarURL:            u.AvatarURL,
+		Role:                 u.Role,
+		CurrentPoints:        cp,
+		TotalEarnedPoints:    tp,
+		CourseAccess:         access,
+		ReadingSeriesAccess:  seriesAcc,
+		ReadingBookAccess:    bookAcc,
+		ReadingArticleAccess: articleAcc,
 		CompletedEpisodes:  int(prog.CompletedEpisodes),
 		AccessibleEpisodes: int(b.accessible[u.ID]),
 		WatchSeconds:       prog.TotalWatchSeconds,
@@ -310,6 +333,150 @@ func tagIDsOf(tags []model.Tag) []uint {
 		out[i] = t.ID
 	}
 	return out
+}
+
+// ── Reading Room admin DTOs (snake_case, matching the SPA contract) ──
+
+type readingSeriesDTO struct {
+	ID           uint     `json:"id"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	Grade        string   `json:"grade"`
+	Subject      string   `json:"subject"`
+	SubjectID    uint     `json:"subject_id"`
+	CoverURL     string   `json:"cover_url"`
+	Tags         string   `json:"tags"`
+	TagsList     []string `json:"tags_list"`
+	TagIDs       []uint   `json:"tag_ids"`
+	GradeDisplay string   `json:"grade_display"`
+	SortOrder    int      `json:"sort_order"`
+	BookCount    int64    `json:"book_count"`
+	ArticleCount int64    `json:"article_count"`
+	CreatedAt    string   `json:"created_at"`
+	UpdatedAt    string   `json:"updated_at"`
+}
+
+type readingBookDTO struct {
+	ID               uint   `json:"id"`
+	SeriesID         uint   `json:"series_id"`
+	SortOrder        int    `json:"sort_order"`
+	Title            string `json:"title"`
+	FileRelativePath string `json:"file_relative_path"`
+	FileHash         string `json:"file_hash"`
+	FileSize         *int64 `json:"file_size"`
+	PageCount        *int   `json:"page_count"`
+	CoverURL         string `json:"cover_url"`
+	Grade            string `json:"grade"`
+	Subject          string `json:"subject"`
+	SubjectID        uint   `json:"subject_id"`
+	Tags             string `json:"tags"`
+	TagsList         []string `json:"tags_list"`
+	TagIDs           []uint   `json:"tag_ids"`
+	GradeDisplay     string   `json:"grade_display"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+}
+
+type readingArticleDTO struct {
+	ID               uint   `json:"id"`
+	SeriesID         uint   `json:"series_id"`
+	SortOrder        int    `json:"sort_order"`
+	Title            string `json:"title"`
+	SourceURL        string `json:"source_url"`
+	WhitelistDomains string `json:"whitelist_domains"`
+	MirrorStatus     string `json:"mirror_status"`
+	MirroredURL      string `json:"mirrored_url"`
+	CoverURL         string `json:"cover_url"`
+	Grade            string `json:"grade"`
+	Subject          string `json:"subject"`
+	SubjectID        uint   `json:"subject_id"`
+	Tags             string `json:"tags"`
+	TagsList         []string `json:"tags_list"`
+	TagIDs           []uint   `json:"tag_ids"`
+	GradeDisplay     string   `json:"grade_display"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+}
+
+func (h *adminHandler) toReadingSeriesDTO(s model.ReadingSeries) readingSeriesDTO {
+	books, _ := h.readingBookRepo.ListBySeries(s.ID)
+	articles, _ := h.readingArticleRepo.ListBySeries(s.ID)
+	subjectKey := ""
+	if subj, _ := h.subjectRepo.FindByID(s.SubjectID); subj != nil {
+		subjectKey = subj.Key
+	}
+	return readingSeriesDTO{
+		ID:           s.ID,
+		Title:        s.Title,
+		Description:  s.Description,
+		Grade:        string(s.Grade),
+		Subject:      subjectKey,
+		SubjectID:    s.SubjectID,
+		CoverURL:     s.CoverURL,
+		Tags:         s.TagsJoined(),
+		TagsList:     s.TagsList(),
+		TagIDs:       tagIDsOf(s.Tags),
+		GradeDisplay: s.GradeDisplay(),
+		SortOrder:    s.SortOrder,
+		BookCount:    int64(len(books)),
+		ArticleCount: int64(len(articles)),
+		CreatedAt:    formatTime(s.CreatedAt),
+		UpdatedAt:    formatTime(s.UpdatedAt),
+	}
+}
+
+func (h *adminHandler) toReadingBookDTO(b model.ReadingBook) readingBookDTO {
+	subjectKey := ""
+	if subj, _ := h.subjectRepo.FindByID(b.SubjectID); subj != nil {
+		subjectKey = subj.Key
+	}
+	return readingBookDTO{
+		ID:               b.ID,
+		SeriesID:         b.SeriesID,
+		SortOrder:        b.SortOrder,
+		Title:            b.Title,
+		FileRelativePath: b.FileRelativePath,
+		FileHash:         b.FileHash,
+		FileSize:         b.FileSize,
+		PageCount:        b.PageCount,
+		CoverURL:         b.CoverURL,
+		Grade:            string(b.Grade),
+		Subject:          subjectKey,
+		SubjectID:        b.SubjectID,
+		Tags:             b.TagsJoined(),
+		TagsList:         b.TagsList(),
+		TagIDs:           tagIDsOf(b.Tags),
+		GradeDisplay:     b.GradeDisplay(),
+		CreatedAt:        formatTime(b.CreatedAt),
+		UpdatedAt:        formatTime(b.UpdatedAt),
+	}
+}
+
+func (h *adminHandler) toReadingArticleDTO(a model.ReadingArticle) readingArticleDTO {
+	subjectKey := ""
+	if subj, _ := h.subjectRepo.FindByID(a.SubjectID); subj != nil {
+		subjectKey = subj.Key
+	}
+	return readingArticleDTO{
+		ID:               a.ID,
+		SeriesID:         a.SeriesID,
+		SortOrder:        a.SortOrder,
+		Title:            a.Title,
+		SourceURL:        a.SourceURL,
+		WhitelistDomains: a.WhitelistDomains,
+		MirrorStatus:     a.MirrorStatus,
+		MirroredURL:      a.MirroredURL,
+		CoverURL:         a.CoverURL,
+		Grade:            string(a.Grade),
+		Subject:          subjectKey,
+		SubjectID:        a.SubjectID,
+		Tags:             a.TagsJoined(),
+		TagsList:         a.TagsList(),
+		TagIDs:           tagIDsOf(a.Tags),
+		GradeDisplay:     a.GradeDisplay(),
+		CreatedAt:        formatTime(a.CreatedAt),
+		UpdatedAt:        formatTime(a.UpdatedAt),
+	}
 }
 
 type subtitleDTO struct {

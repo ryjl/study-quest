@@ -38,6 +38,18 @@ dependencies:
   # res/xml/file_paths.xml) so the system installer can read it via content://.
   path_provider: ^2.1.0
 
+  # WebView for the reading room's web articles (公众号 H5 etc.). Uses the
+  # official webview_flutter package (AGP 9 compatible). Its NavigationDelegate
+  # .onNavigationRequest → NavigationDecision.prevent is the equivalent of
+  # Android's shouldOverrideUrlLoading for domain-whitelist interception.
+  # (flutter_inappwebview 1.1.3 is incompatible with AGP 9 — its build.gradle
+  # uses the deprecated proguard-android.txt, see issue #2765.)
+  webview_flutter: ^4.13.0
+
+  # PDF native printing via Android's PrintManager. Only used for the reading
+  # room's "print PDF" button (试卷/绘本 → 纸质).
+  printing: ^5.11.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

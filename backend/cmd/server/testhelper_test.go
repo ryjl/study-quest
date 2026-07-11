@@ -71,6 +71,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	tagRepo := repository.NewTagRepository(db)
 	unlockRepo := repository.NewUnlockRepository(db)
 	releaseRepo := repository.NewReleaseRepository(db)
+	readingSeriesRepo := repository.NewReadingSeriesRepository(db)
+	readingBookRepo := repository.NewReadingBookRepository(db)
+	readingArticleRepo := repository.NewReadingArticleRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
@@ -88,6 +91,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	importService := service.NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
+	readingSeriesService := service.NewReadingSeriesService(readingSeriesRepo, readingBookRepo, readingArticleRepo)
+	readingBookService := service.NewReadingBookService(readingBookRepo, settingsRepo, readingSeriesRepo)
+	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
+	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, settingsRepo)
 
 	// seed (subjects → tags → badges, same order as main.go; subjects must
 	// come first so the subject_count badge rules resolve against a populated
@@ -113,18 +120,22 @@ func newTestEnv(t *testing.T) *testEnv {
 		WithSettings(settingsRepo).WithUsers(userRepo).WithCourses(courseRepo).
 		WithEpisodes(episodeRepo).WithChapters(chapterRepo).WithProgress(progressRepo).
 		WithSubjects(subjectRepo).WithBadges(badgeRepo).
+		WithReadingSeriesRepo(readingSeriesRepo).WithReadingBookRepo(readingBookRepo).WithReadingArticleRepo(readingArticleRepo).
 		WithUserService(userService).WithCourseService(courseService).
 		WithImportService(importService).WithEpisodeService(episodeService).
 		WithChapterService(chapterService).WithBadgeService(badgeService).
+		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
+		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
 	unlockH := handler.NewUnlockHandler(unlockService)
 	releaseH := handler.NewReleaseHandler(releaseRepo)
+	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo)
 
 	r := gin.New()
-	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, userRepo, settingsRepo)
+	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, userRepo, settingsRepo)
 
 	// Pre-seed the admin password hash so login only pays for one bcrypt
 	// compare instead of the lazy-init generate+compare (~120ms → ~60ms).

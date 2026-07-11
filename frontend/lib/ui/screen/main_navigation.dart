@@ -13,6 +13,7 @@ import '../widget/glass_panel.dart';
 import '../widget/dot_pattern_background.dart';
 import '../widget/button_3d.dart';
 import 'course_list_screen.dart';
+import 'reading_room_screen.dart';
 import 'login_screen.dart';
 
 class MainNavigation extends StatefulWidget {
@@ -360,8 +361,9 @@ class _MainNavigationState extends State<MainNavigation> {
           // Menu Navigation Tabs
           const SizedBox(height: 12),
           _buildNavItem(0, Icons.school_rounded, '学习大厅'),
-          _buildNavItem(1, Icons.explore_rounded, '成长足迹'),
-          _buildNavItem(2, Icons.settings_rounded, '系统设置'),
+          _buildNavItem(1, Icons.menu_book_rounded, '阅读室'),
+          _buildNavItem(2, Icons.explore_rounded, '成长足迹'),
+          _buildNavItem(3, Icons.settings_rounded, '系统设置'),
 
           const Spacer(),
 
@@ -448,8 +450,10 @@ class _MainNavigationState extends State<MainNavigation> {
       case 0:
         return CourseListScreen(activeUserId: activeUserId);
       case 1:
-        return _buildProgressScreen(activeUserId);
+        return ReadingRoomScreen(activeUserId: activeUserId);
       case 2:
+        return _buildProgressScreen(activeUserId);
+      case 3:
         return _buildSettingsScreen();
       default:
         return CourseListScreen(activeUserId: activeUserId);

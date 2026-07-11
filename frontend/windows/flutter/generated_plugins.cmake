@@ -4,6 +4,7 @@
 
 list(APPEND FLUTTER_PLUGIN_LIST
   media_kit_video
+  printing
   url_launcher_windows
   volume_controller
 )

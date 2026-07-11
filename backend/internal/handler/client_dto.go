@@ -97,3 +97,54 @@ func toClientEpisodeDTO(ep model.Episode, locked bool) clientEpisodeDTO {
 		Locked:               locked,
 	}
 }
+
+// ── Reading Room DTOs (PascalCase, matching the client contract) ──
+
+type clientReadingSeriesDTO struct {
+	ID           uint     `json:"ID"`
+	Title        string   `json:"Title"`
+	Description  string   `json:"Description"`
+	Grade        string   `json:"Grade"`
+	Subject      string   `json:"Subject"`
+	CoverURL     string   `json:"CoverURL"`
+	Tags         string   `json:"Tags"`
+	TagsList     []string `json:"TagsList"`
+	TagIDs       []uint   `json:"TagIDs"`
+	GradeDisplay string   `json:"GradeDisplay"`
+	SortOrder    int      `json:"SortOrder"`
+	BookCount    int64    `json:"BookCount"`
+	ArticleCount int64    `json:"ArticleCount"`
+}
+
+type clientReadingBookDTO struct {
+	ID        uint   `json:"ID"`
+	SeriesID  uint   `json:"SeriesID"`
+	SortOrder int    `json:"SortOrder"`
+	Title     string `json:"Title"`
+	FileHash  string `json:"FileHash"`
+	PageCount *int   `json:"PageCount"`
+	CoverURL  string `json:"CoverURL"`
+	Grade     string `json:"Grade"`
+	Subject   string `json:"Subject"`
+}
+
+type clientReadingArticleDTO struct {
+	ID               uint     `json:"ID"`
+	SeriesID         uint     `json:"SeriesID"`
+	SortOrder        int      `json:"SortOrder"`
+	Title            string   `json:"Title"`
+	SourceURL        string   `json:"SourceURL"`
+	WhitelistDomains []string `json:"WhitelistDomains"`
+	CoverURL         string   `json:"CoverURL"`
+	Grade            string   `json:"Grade"`
+	Subject          string   `json:"Subject"`
+}
+
+// clientReadingRoomDTO is the aggregated shelf payload. Books/Articles here are
+// the standalone (散本/散文) items only; series-internal items are reachable via
+// the GetSeries endpoint.
+type clientReadingRoomDTO struct {
+	Series   []clientReadingSeriesDTO   `json:"Series"`
+	Books    []clientReadingBookDTO     `json:"Books"`
+	Articles []clientReadingArticleDTO  `json:"Articles"`
+}

@@ -74,6 +74,9 @@ func main() {
 	tagRepo := repository.NewTagRepository(db)
 	unlockRepo := repository.NewUnlockRepository(db)
 	releaseRepo := repository.NewReleaseRepository(db)
+	readingSeriesRepo := repository.NewReadingSeriesRepository(db)
+	readingBookRepo := repository.NewReadingBookRepository(db)
+	readingArticleRepo := repository.NewReadingArticleRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
@@ -89,6 +92,10 @@ func main() {
 	importService := service.NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
+	readingSeriesService := service.NewReadingSeriesService(readingSeriesRepo, readingBookRepo, readingArticleRepo)
+	readingBookService := service.NewReadingBookService(readingBookRepo, settingsRepo, readingSeriesRepo)
+	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
+	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, settingsRepo)
 
 	// Seed default badges and subjects (idempotent). Subjects must seed BEFORE
 	// badges so the subject_count badge rules' rule_target keys ("math",
@@ -128,6 +135,9 @@ func main() {
 		WithProgress(progressRepo).
 		WithSubjects(subjectRepo).
 		WithBadges(badgeRepo).
+		WithReadingSeriesRepo(readingSeriesRepo).
+		WithReadingBookRepo(readingBookRepo).
+		WithReadingArticleRepo(readingArticleRepo).
 		// Services
 		WithUserService(userService).
 		WithCourseService(courseService).
@@ -135,6 +145,10 @@ func main() {
 		WithEpisodeService(episodeService).
 		WithChapterService(chapterService).
 		WithBadgeService(badgeService).
+		WithReadingSeriesService(readingSeriesService).
+		WithReadingBookService(readingBookService).
+		WithReadingArticleService(readingArticleService).
+		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).
 		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
@@ -142,6 +156,7 @@ func main() {
 	tagHandler := handler.NewTagHandler(tagService)
 	unlockHandler := handler.NewUnlockHandler(unlockService)
 	releaseHandler := handler.NewReleaseHandler(releaseRepo)
+	readingHandler := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo)
 
 	// 9. Boot up Gin Server Router
 	gin.SetMode(gin.ReleaseMode)
@@ -162,6 +177,7 @@ func main() {
 		tagHandler,
 		unlockHandler,
 		releaseHandler,
+		readingHandler,
 		userRepo,
 		settingsRepo,
 	)

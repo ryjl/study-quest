@@ -185,14 +185,33 @@ func (h *adminHandler) ListUsers(c *gin.Context) {
 	if err != nil {
 		log.Printf("ListUsers: CountBadges failed: %v", err)
 	}
+	// Reading Room access maps — loaded in one query each, same N+1-avoidance
+	// pattern as the course access batch above. Failures degrade to empty
+	// maps (the drawer just shows no checked boxes) rather than failing the
+	// whole user list.
+	readingSeriesAccess, err := h.readingSeriesRepo.BatchAccessLists()
+	if err != nil {
+		log.Printf("ListUsers: readingSeriesRepo.BatchAccessLists failed: %v", err)
+	}
+	readingBookAccess, err := h.readingBookRepo.BatchAccessLists()
+	if err != nil {
+		log.Printf("ListUsers: readingBookRepo.BatchAccessLists failed: %v", err)
+	}
+	readingArticleAccess, err := h.readingArticleRepo.BatchAccessLists()
+	if err != nil {
+		log.Printf("ListUsers: readingArticleRepo.BatchAccessLists failed: %v", err)
+	}
 
 	batch := userStatsBatch{
-		points:      points,
-		access:      access,
-		progress:    progress,
-		accessible:  accessible,
-		badges:      badges,
-		totalBadges: totalBadges,
+		points:               points,
+		access:               access,
+		progress:             progress,
+		accessible:           accessible,
+		badges:               badges,
+		totalBadges:          totalBadges,
+		readingSeriesAccess:  readingSeriesAccess,
+		readingBookAccess:    readingBookAccess,
+		readingArticleAccess: readingArticleAccess,
 	}
 
 	out := make([]userDTO, 0, len(users))

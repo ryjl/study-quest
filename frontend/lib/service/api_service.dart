@@ -7,6 +7,7 @@ import '../model/subject.dart';
 import '../model/tag.dart';
 import '../model/progress.dart';
 import '../model/badge.dart';
+import '../model/reading.dart';
 
 class ApiService {
   // Common headers builder
@@ -268,5 +269,85 @@ class ApiService {
           .toList();
     }
     throw Exception('获取成就徽章失败: ${response.statusCode}');
+  }
+
+  // ── Reading Room ──
+
+  /// Fetch the aggregated reading-room shelf view (series + standalone books/articles).
+  static Future<ReadingRoomView> fetchReadingRoom(int activeUserId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/readings'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      return ReadingRoomView.fromJson(jsonDecode(response.body));
+    }
+    throw Exception('获取阅读室失败: ${response.statusCode}');
+  }
+
+  /// Fetch a series with its child books and articles.
+  static Future<ReadingSeriesDetail> fetchReadingSeries(
+    int activeUserId,
+    int seriesId,
+  ) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/series/$seriesId'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      return ReadingSeriesDetail.fromJson(jsonDecode(response.body));
+    }
+    throw Exception('获取阅读系列失败: ${response.statusCode}');
+  }
+
+  /// Fetch the last-read page of a PDF book (returns 0 if no progress yet).
+  static Future<int> fetchBookProgress(int activeUserId, int bookId) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/books/$bookId/progress'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return (data['lastPage'] ?? data['last_page'] ?? 0) as int;
+    }
+    throw Exception('获取阅读进度失败: ${response.statusCode}');
+  }
+
+  /// Report the current page of a PDF book (page memory).
+  static Future<void> reportBookProgress({
+    required int activeUserId,
+    required int bookId,
+    required int lastPage,
+  }) async {
+    final response = await http.post(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/books/$bookId/progress'),
+      headers: _headers(activeUserId),
+      body: jsonEncode({'lastPage': lastPage}),
+    );
+    if (response.statusCode != 200) {
+      throw Exception('汇报阅读进度失败: ${response.statusCode}');
+    }
+  }
+
+  /// Fetch a single article (for the WebView reader).
+  static Future<ReadingArticle> fetchArticle(
+    int activeUserId,
+    int articleId,
+  ) async {
+    final response = await http.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/articles/$articleId'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      return ReadingArticle.fromJson(jsonDecode(response.body));
+    }
+    throw Exception('获取文章失败: ${response.statusCode}');
+  }
+
+  /// Build the PDF stream URL for a book (302 → Alist direct link).
+  /// The PDF reader downloads via http with the X-User-ID header, then opens
+  /// the local cached file with pdfrx (not PdfDocumentRefUri).
+  static String bookStreamUrl(int bookId) {
+    return '${AppConfig.baseUrlRef}/api/v1/readings/books/$bookId/stream';
   }
 }

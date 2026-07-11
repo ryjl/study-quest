@@ -9,6 +9,7 @@ const NAV = [
   { to: '/admin/', label: '控制台', icon: '📊', end: true },
   { to: '/admin/users', label: '用户与授权', icon: '👥' },
   { to: '/admin/courses', label: '课程库管理', icon: '📚' },
+  { to: '/admin/reading-room', label: '阅读室', icon: '📖' },
   { to: '/admin/subjects', label: '科目管理', icon: '🏷️' },
   { to: '/admin/tags', label: '标签管理', icon: '🔖' },
   { to: '/admin/import', label: '文件导入', icon: '📥' },

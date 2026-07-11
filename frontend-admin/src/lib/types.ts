@@ -162,6 +162,9 @@ export interface User {
   current_points?: number;
   total_earned_points?: number;
   course_access?: number[];
+  reading_series_access?: number[];
+  reading_book_access?: number[];
+  reading_article_access?: number[];
   // Per-user learning stats (populated by the batch-aggregated ListUsers).
   completed_episodes?: number;
   accessible_episodes?: number;
@@ -342,3 +345,78 @@ export interface UnlockPreview {
   strategy_label: string;
   next_unlock_at: string;
 }
+
+// ---- Reading Room ----
+
+// ReadingSeries is the container/series for reading material (mirrors Course).
+export interface ReadingSeries {
+  id: number;
+  title: string;
+  description: string;
+  grade: string;
+  subject: string; // subject key
+  subject_id: number;
+  cover_url: string;
+  tags: string;
+  tags_list: string[];
+  tag_ids: number[];
+  grade_display: string;
+  sort_order: number;
+  book_count: number;
+  article_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+// ReadingBook is a PDF document (mirrors Episode).
+export interface ReadingBook {
+  id: number;
+  series_id: number; // 0 = standalone
+  sort_order: number;
+  title: string;
+  file_relative_path: string;
+  file_hash: string;
+  file_size: number | null;
+  page_count: number | null;
+  cover_url: string;
+  grade: string;
+  subject: string;
+  subject_id: number;
+  tags: string;
+  tags_list: string[];
+  tag_ids: number[];
+  grade_display: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ReadingArticle is a web/rich-text article. mirror_status/mirrored_url are
+// Phase 2 offline-mirror reservations (not used by the UI today).
+export interface ReadingArticle {
+  id: number;
+  series_id: number;
+  sort_order: number;
+  title: string;
+  source_url: string;
+  whitelist_domains: string; // JSON []string
+  mirror_status: string; // none | pending | ready | failed
+  mirrored_url: string;
+  cover_url: string;
+  grade: string;
+  subject: string;
+  subject_id: number;
+  tags: string;
+  tags_list: string[];
+  tag_ids: number[];
+  grade_display: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReadingSeriesDetail {
+  series: ReadingSeries;
+  books: ReadingBook[];
+  articles: ReadingArticle[];
+}
+
+export type ReadingTargetType = 'series' | 'book' | 'article';

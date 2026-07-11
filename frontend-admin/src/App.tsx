@@ -12,6 +12,7 @@ import { Settings } from './pages/Settings';
 import { Subjects } from './pages/Subjects';
 import { Tags } from './pages/Tags';
 import { Releases } from './pages/Releases';
+import { ReadingRoom } from './pages/ReadingRoom';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -46,6 +47,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="users" element={<Users />} />
         <Route path="courses" element={<Courses />} />
+        <Route path="reading-room" element={<ReadingRoom />} />
         <Route path="subjects" element={<Subjects />} />
         <Route path="tags" element={<Tags />} />
         <Route path="import" element={<Import />} />

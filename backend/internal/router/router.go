@@ -27,6 +27,7 @@ func RegisterRoutes(
 	tag handler.TagHandler,
 	unlock handler.UnlockHandler,
 	release handler.ReleaseHandler,
+	reading handler.ReadingHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
 ) {
@@ -82,6 +83,14 @@ func RegisterRoutes(
 		v1Restricted.GET("/users/:id/badges", badge.GetUserBadges)
 		v1Restricted.GET("/subjects", subject.ClientListSubjects)
 		v1Restricted.GET("/tags", tag.ClientListTags)
+
+		// Reading Room — PDF books + web articles
+		v1Restricted.GET("/readings", reading.GetReadingRoom)
+		v1Restricted.GET("/readings/series/:id", reading.GetSeries)
+		v1Restricted.GET("/readings/books/:id/stream", reading.StreamBook)
+		v1Restricted.GET("/readings/books/:id/progress", reading.GetBookProgress)
+		v1Restricted.POST("/readings/books/:id/progress", reading.ReportBookProgress)
+		v1Restricted.GET("/readings/articles/:id", reading.GetArticle)
 	}
 
 	// 3. Local Python Toolchain ingestion points (Public)
@@ -135,6 +144,27 @@ func RegisterRoutes(
 		// Access
 		adm.POST("/api/access", admin.GrantAccess)
 		adm.POST("/api/access/revoke", admin.RevokeAccess)
+
+		// Reading Room — series / books / articles
+		adm.GET("/api/reading-series", admin.ListReadingSeries)
+		adm.GET("/api/reading-series/:id/detail", admin.GetReadingSeriesDetail)
+		adm.POST("/api/reading-series", admin.CreateReadingSeries)
+		adm.PUT("/api/reading-series/:id", admin.UpdateReadingSeries)
+		adm.DELETE("/api/reading-series/:id", admin.DeleteReadingSeries)
+		adm.GET("/api/reading-books", admin.ListReadingBooks)
+		adm.POST("/api/reading-books", admin.CreateReadingBook)
+		adm.PUT("/api/reading-books/:id", admin.UpdateReadingBook)
+		adm.DELETE("/api/reading-books/:id", admin.DeleteReadingBook)
+		adm.GET("/api/reading-articles", admin.ListReadingArticles)
+		adm.POST("/api/reading-articles", admin.CreateReadingArticle)
+		adm.PUT("/api/reading-articles/:id", admin.UpdateReadingArticle)
+		adm.DELETE("/api/reading-articles/:id", admin.DeleteReadingArticle)
+		adm.POST("/api/reading-articles/suggest-whitelist", admin.SuggestWhitelist)
+		adm.POST("/api/reading-access", admin.GrantReadingAccess)
+		adm.POST("/api/reading-access/revoke", admin.RevokeReadingAccess)
+		adm.POST("/api/users/:id/reading-access/bulk", admin.BulkReadingAccess)
+		adm.GET("/api/reading-import/preview-tree", admin.PreviewReadingImport)
+		adm.POST("/api/reading-import/execute", admin.ExecuteReadingImport)
 
 		// Import / Storage / Settings
 		adm.GET("/api/import/scan", admin.Scan)

@@ -414,6 +414,160 @@ type AppRelease struct {
 	UpdatedAt    time.Time
 }
 
+// ReadingSeries is the container/series for reading material — a curated
+// collection of related books and articles (e.g. "上博展厅系列"). Mirrors the
+// Course role in the video module: it carries its own cover/subject/grade/tags
+// and can be assigned to users independently. A book/article with SeriesID=0 is
+// a standalone item (散本/散文) shown outside any series.
+type ReadingSeries struct {
+	ID          uint    `gorm:"primaryKey;autoIncrement"`
+	Title       string  `gorm:"size:255;not null"`
+	Description string  `gorm:"type:text"`
+	SubjectID   uint    `gorm:"not null;index"`
+	Subject     Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
+	Grade       Grade   `gorm:"type:varchar(50);not null"`
+	CoverURL    string  `gorm:"size:1024"`
+	Tags        []Tag   `gorm:"many2many:reading_series_tags;constraint:OnDelete:CASCADE"`
+	SortOrder   int     `gorm:"default:0;not null"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// readingGradeDisplay formats a Grade for the reading-room UI, mirroring
+// Course.GradeDisplay. Shared by all three reading models since they all carry
+// the same Grade semantics.
+func readingGradeDisplay(g Grade) string {
+	if g == "universal" {
+		return "全学段通用"
+	}
+	parts := strings.Split(string(g), ",")
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "universal" {
+			parts[i] = "通用"
+		} else {
+			parts[i] = p + "年级"
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (s ReadingSeries) TagsList() []string {
+	out := make([]string, 0, len(s.Tags))
+	for _, t := range s.Tags {
+		out = append(out, t.Label)
+	}
+	return out
+}
+func (s ReadingSeries) TagsJoined() string  { return strings.Join(s.TagsList(), ",") }
+func (s ReadingSeries) GradeDisplay() string { return readingGradeDisplay(s.Grade) }
+
+func (b ReadingBook) TagsList() []string {
+	out := make([]string, 0, len(b.Tags))
+	for _, t := range b.Tags {
+		out = append(out, t.Label)
+	}
+	return out
+}
+func (b ReadingBook) TagsJoined() string  { return strings.Join(b.TagsList(), ",") }
+func (b ReadingBook) GradeDisplay() string { return readingGradeDisplay(b.Grade) }
+
+func (a ReadingArticle) TagsList() []string {
+	out := make([]string, 0, len(a.Tags))
+	for _, t := range a.Tags {
+		out = append(out, t.Label)
+	}
+	return out
+}
+func (a ReadingArticle) TagsJoined() string  { return strings.Join(a.TagsList(), ",") }
+func (a ReadingArticle) GradeDisplay() string { return readingGradeDisplay(a.Grade) }
+
+// ReadingBook is a PDF document in the reading room. Mirrors the Episode role:
+// FileRelativePath + FileHash + FileSize follow the exact same Alist 302-stream
+// + disaster-recovery pattern as Episode.VideoRelativePath. PageCount is
+// nullable (unknown until the client opens the PDF and reports it back — there
+// is no backend probe worker, unlike the ffprobe pipeline for episodes).
+type ReadingBook struct {
+	ID               uint    `gorm:"primaryKey;autoIncrement"`
+	SeriesID         uint    `gorm:"index;not null;default:0"` // 0 = standalone (散本)
+	SortOrder        int     `gorm:"default:0;not null"`
+	Title            string  `gorm:"size:255;not null"`
+	FileRelativePath string  `gorm:"type:text;not null"` // Alist/WebDAV relative path
+	FileHash         string  `gorm:"size:255;index"`     // cache-invalidation + disaster-recovery key
+	FileSize         *int64                              // nullable, not yet probed
+	PageCount        *int                                // nullable, client reports on first open
+	CoverURL         string  `gorm:"size:1024"`
+	SubjectID        uint    `gorm:"not null;index"`
+	Subject          Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
+	Grade            Grade   `gorm:"type:varchar(50);not null"`
+	Tags             []Tag   `gorm:"many2many:reading_books_tags;constraint:OnDelete:CASCADE"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// ReadingArticle is a web/rich-text article (e.g. a WeChat 公众号 H5) loaded
+// in-app via WebView with domain-whitelist navigation interception.
+//
+// Phase 2 offline-mirror fields (MirrorStatus / MirroredURL) are reserved here
+// but NOT used by Phase 1 logic: GetArticle always returns SourceURL. When a
+// future scraper service populates MirroredURL and flips MirrorStatus to
+// "ready", the article reader will load the self-hosted mirror instead — the
+// reading path is transparent to the status today.
+type ReadingArticle struct {
+	ID               uint    `gorm:"primaryKey;autoIncrement"`
+	SeriesID         uint    `gorm:"index;not null;default:0"` // 0 = standalone (散文)
+	SortOrder        int     `gorm:"default:0;not null"`
+	Title            string  `gorm:"size:255;not null"`
+	SourceURL        string  `gorm:"type:text;not null"`
+	WhitelistDomains string  `gorm:"type:text"` // JSON []string; empty = use global default whitelist
+	// —— Phase 2 offline-mirror reservation (no logic today) ——
+	MirrorStatus string `gorm:"size:20;not null;default:'none'"` // none | pending | ready | failed
+	MirroredURL  string `gorm:"type:text"`
+	// —— reservation end ——
+	CoverURL   string  `gorm:"size:1024"`
+	SubjectID  uint    `gorm:"not null;index"`
+	Subject    Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
+	Grade      Grade   `gorm:"type:varchar(50);not null"`
+	Tags       []Tag   `gorm:"many2many:reading_articles_tags;constraint:OnDelete:CASCADE"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// UserReadingSeriesAccess / UserReadingBookAccess / UserReadingArticleAccess
+// define which reading resources a user can see. Mirrors UserCourseAccess:
+// composite PK on (UserID, resourceID), no auto-increment. Three separate
+// tables (rather than one polymorphic table) keep foreign keys clean and match
+// the per-aggregate access-table convention of the video module.
+type UserReadingSeriesAccess struct {
+	UserID    uint      `gorm:"primaryKey"`
+	SeriesID  uint      `gorm:"primaryKey"`
+	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+}
+
+type UserReadingBookAccess struct {
+	UserID    uint      `gorm:"primaryKey"`
+	BookID    uint      `gorm:"primaryKey"`
+	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+}
+
+type UserReadingArticleAccess struct {
+	UserID    uint      `gorm:"primaryKey"`
+	ArticleID uint      `gorm:"primaryKey"`
+	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+}
+
+// ReadingBookProgress remembers the last-read page of a PDF book. Mirrors the
+// UserProgress atomic-upsert pattern: composite PK (UserID, BookID), upsert via
+// INSERT ... ON CONFLICT DO UPDATE. Unlike watch_seconds there is no concurrent
+// accumulation — last page is a simple overwrite, so the upsert does not add.
+type ReadingBookProgress struct {
+	UserID    uint   `gorm:"primaryKey"`
+	BookID    uint   `gorm:"primaryKey"`
+	LastPage  int    `gorm:"default:0;not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 // AutoMigrate runs GORM schema auto-migration for all tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
@@ -435,5 +589,13 @@ func AutoMigrate(db *gorm.DB) error {
 		&CourseUnlockTemplate{},
 		&UserUnlockOverride{},
 		&AppRelease{},
+		// Reading Room module
+		&ReadingSeries{},
+		&ReadingBook{},
+		&ReadingArticle{},
+		&UserReadingSeriesAccess{},
+		&UserReadingBookAccess{},
+		&UserReadingArticleAccess{},
+		&ReadingBookProgress{},
 	)
 }

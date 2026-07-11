@@ -59,6 +59,27 @@ type AdminHandler interface {
 	GrantAccess(c *gin.Context)
 	RevokeAccess(c *gin.Context)
 
+	// Reading Room — series / books / articles CRUD + access
+	ListReadingSeries(c *gin.Context)
+	GetReadingSeriesDetail(c *gin.Context)
+	CreateReadingSeries(c *gin.Context)
+	UpdateReadingSeries(c *gin.Context)
+	DeleteReadingSeries(c *gin.Context)
+	ListReadingBooks(c *gin.Context)
+	CreateReadingBook(c *gin.Context)
+	UpdateReadingBook(c *gin.Context)
+	DeleteReadingBook(c *gin.Context)
+	ListReadingArticles(c *gin.Context)
+	CreateReadingArticle(c *gin.Context)
+	UpdateReadingArticle(c *gin.Context)
+	DeleteReadingArticle(c *gin.Context)
+	SuggestWhitelist(c *gin.Context)
+	GrantReadingAccess(c *gin.Context)
+	RevokeReadingAccess(c *gin.Context)
+	BulkReadingAccess(c *gin.Context)
+	PreviewReadingImport(c *gin.Context)
+	ExecuteReadingImport(c *gin.Context)
+
 	// Import / Settings / Storage
 	Scan(c *gin.Context)
 	PreviewTree(c *gin.Context)
@@ -79,21 +100,28 @@ type AdminHandler interface {
 }
 
 type adminHandler struct {
-	settingsRepo   repository.SettingsRepository
-	userRepo       repository.UserRepository
-	courseRepo     repository.CourseRepository
-	episodeRepo    repository.EpisodeRepository
-	chapterRepo    repository.ChapterRepository
-	progressRepo   repository.ProgressRepository
-	subjectRepo    repository.SubjectRepository
-	badgeRepo      repository.BadgeRepository
-	userService    service.UserService
-	courseService  service.CourseService
-	importService  service.ImportService
-	episodeService service.EpisodeService
-	chapterService service.ChapterService
-	badgeService   service.BadgeService
-	probeWorker    *service.ProbeWorker
+	settingsRepo        repository.SettingsRepository
+	userRepo            repository.UserRepository
+	courseRepo          repository.CourseRepository
+	episodeRepo         repository.EpisodeRepository
+	chapterRepo         repository.ChapterRepository
+	progressRepo        repository.ProgressRepository
+	subjectRepo         repository.SubjectRepository
+	badgeRepo           repository.BadgeRepository
+	readingSeriesRepo   repository.ReadingSeriesRepository
+	readingBookRepo     repository.ReadingBookRepository
+	readingArticleRepo  repository.ReadingArticleRepository
+	userService         service.UserService
+	courseService       service.CourseService
+	importService       service.ImportService
+	episodeService      service.EpisodeService
+	chapterService      service.ChapterService
+	badgeService        service.BadgeService
+	readingSeriesService service.ReadingSeriesService
+	readingBookService   service.ReadingBookService
+	readingArticleService service.ReadingArticleService
+	readingImportService service.ReadingImportService
+	probeWorker         *service.ProbeWorker
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -112,13 +140,21 @@ type AdminHandlerDeps struct {
 	SubjectRepo  repository.SubjectRepository
 	BadgeRepo    repository.BadgeRepository
 
-	UserService    service.UserService
-	CourseService  service.CourseService
-	ImportService  service.ImportService
-	EpisodeService service.EpisodeService
-	ChapterService service.ChapterService
-	BadgeService   service.BadgeService
-	ProbeWorker    *service.ProbeWorker
+	ReadingSeriesRepo  repository.ReadingSeriesRepository
+	ReadingBookRepo    repository.ReadingBookRepository
+	ReadingArticleRepo repository.ReadingArticleRepository
+
+	UserService          service.UserService
+	CourseService        service.CourseService
+	ImportService        service.ImportService
+	EpisodeService       service.EpisodeService
+	ChapterService       service.ChapterService
+	BadgeService         service.BadgeService
+	ReadingSeriesService service.ReadingSeriesService
+	ReadingBookService   service.ReadingBookService
+	ReadingArticleService service.ReadingArticleService
+	ReadingImportService service.ReadingImportService
+	ProbeWorker          *service.ProbeWorker
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -135,32 +171,46 @@ func (d *AdminHandlerDeps) WithChapters(r repository.ChapterRepository) *AdminHa
 func (d *AdminHandlerDeps) WithProgress(r repository.ProgressRepository) *AdminHandlerDeps         { d.ProgressRepo = r; return d }
 func (d *AdminHandlerDeps) WithSubjects(r repository.SubjectRepository) *AdminHandlerDeps          { d.SubjectRepo = r; return d }
 func (d *AdminHandlerDeps) WithBadges(r repository.BadgeRepository) *AdminHandlerDeps              { d.BadgeRepo = r; return d }
+func (d *AdminHandlerDeps) WithReadingSeriesRepo(r repository.ReadingSeriesRepository) *AdminHandlerDeps  { d.ReadingSeriesRepo = r; return d }
+func (d *AdminHandlerDeps) WithReadingBookRepo(r repository.ReadingBookRepository) *AdminHandlerDeps      { d.ReadingBookRepo = r; return d }
+func (d *AdminHandlerDeps) WithReadingArticleRepo(r repository.ReadingArticleRepository) *AdminHandlerDeps { d.ReadingArticleRepo = r; return d }
 func (d *AdminHandlerDeps) WithUserService(s service.UserService) *AdminHandlerDeps                { d.UserService = s; return d }
 func (d *AdminHandlerDeps) WithCourseService(s service.CourseService) *AdminHandlerDeps            { d.CourseService = s; return d }
 func (d *AdminHandlerDeps) WithImportService(s service.ImportService) *AdminHandlerDeps            { d.ImportService = s; return d }
 func (d *AdminHandlerDeps) WithEpisodeService(s service.EpisodeService) *AdminHandlerDeps          { d.EpisodeService = s; return d }
 func (d *AdminHandlerDeps) WithChapterService(s service.ChapterService) *AdminHandlerDeps          { d.ChapterService = s; return d }
 func (d *AdminHandlerDeps) WithBadgeService(s service.BadgeService) *AdminHandlerDeps              { d.BadgeService = s; return d }
+func (d *AdminHandlerDeps) WithReadingSeriesService(s service.ReadingSeriesService) *AdminHandlerDeps   { d.ReadingSeriesService = s; return d }
+func (d *AdminHandlerDeps) WithReadingBookService(s service.ReadingBookService) *AdminHandlerDeps       { d.ReadingBookService = s; return d }
+func (d *AdminHandlerDeps) WithReadingArticleService(s service.ReadingArticleService) *AdminHandlerDeps { d.ReadingArticleService = s; return d }
+func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportService) *AdminHandlerDeps  { d.ReadingImportService = s; return d }
 func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps               { d.ProbeWorker = w; return d }
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
 	return &adminHandler{
-		settingsRepo:   d.SettingsRepo,
-		userRepo:       d.UserRepo,
-		courseRepo:     d.CourseRepo,
-		episodeRepo:    d.EpisodeRepo,
-		chapterRepo:    d.ChapterRepo,
-		progressRepo:   d.ProgressRepo,
-		subjectRepo:    d.SubjectRepo,
-		badgeRepo:      d.BadgeRepo,
-		userService:    d.UserService,
-		courseService:  d.CourseService,
-		importService:  d.ImportService,
-		episodeService: d.EpisodeService,
-		chapterService: d.ChapterService,
-		badgeService:   d.BadgeService,
-		probeWorker:    d.ProbeWorker,
+		settingsRepo:         d.SettingsRepo,
+		userRepo:             d.UserRepo,
+		courseRepo:           d.CourseRepo,
+		episodeRepo:          d.EpisodeRepo,
+		chapterRepo:          d.ChapterRepo,
+		progressRepo:         d.ProgressRepo,
+		subjectRepo:          d.SubjectRepo,
+		badgeRepo:            d.BadgeRepo,
+		readingSeriesRepo:    d.ReadingSeriesRepo,
+		readingBookRepo:      d.ReadingBookRepo,
+		readingArticleRepo:   d.ReadingArticleRepo,
+		userService:          d.UserService,
+		courseService:        d.CourseService,
+		importService:        d.ImportService,
+		episodeService:       d.EpisodeService,
+		chapterService:       d.ChapterService,
+		badgeService:         d.BadgeService,
+		readingSeriesService:  d.ReadingSeriesService,
+		readingBookService:    d.ReadingBookService,
+		readingArticleService: d.ReadingArticleService,
+		readingImportService: d.ReadingImportService,
+		probeWorker:          d.ProbeWorker,
 	}
 }
 
