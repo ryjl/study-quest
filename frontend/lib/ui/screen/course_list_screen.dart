@@ -353,7 +353,13 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     : LayoutBuilder(
                         builder: (context, constraints) {
                           final width = constraints.maxWidth;
-                          final crossAxisCount = width > 1200 ? 4 : (width > 800 ? 3 : 2);
+                          // Include a single-column fallback for very narrow
+                          // portrait widths (handset) so cards aren't crushed.
+                          final crossAxisCount = width > 1200
+                              ? 4
+                              : (width > 800
+                                  ? 3
+                                  : (width > 400 ? 2 : 1));
                           return GridView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),

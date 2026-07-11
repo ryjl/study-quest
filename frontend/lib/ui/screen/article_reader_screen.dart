@@ -1,16 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import '../../model/reading.dart';
 import '../../theme.dart';
 
 /// Full-screen WebView reader for web articles (公众号 H5, interactive pages).
 ///
-/// **Portrait lock**: web articles are designed for phone portrait screens. In
-/// landscape the layout breaks (fonts oversized, audio controls pushed
-/// off-screen, viewport scripts miscompute). This screen forces portrait on
-/// push and restores the app's default orientations on pop. No CSS injection,
-/// no text zoom — the page renders at its intended design width.
+/// **Orientation**: follows the system orientation. Web articles are designed
+/// for phone portrait width, so on a tablet the user can simply rotate to
+/// portrait for the best reading experience; landscape is allowed too.
 ///
 /// **Navigation interception**: only domains in the article's whitelist (plus
 /// the article's own host) are allowed; everything else is blocked via
@@ -70,11 +67,6 @@ class _ArticleReaderScreenState extends State<ArticleReaderScreen> {
   @override
   void initState() {
     super.initState();
-    // Force portrait — these pages are designed for phone portrait width.
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-    ]);
-
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
@@ -111,13 +103,6 @@ class _ArticleReaderScreenState extends State<ArticleReaderScreen> {
 
   @override
   void dispose() {
-    // Restore all orientations when leaving the reader.
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
     super.dispose();
   }
 

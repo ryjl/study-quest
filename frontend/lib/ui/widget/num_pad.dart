@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../theme.dart';
 import 'button_3d.dart';
-import 'focus_button.dart';
 import 'glass_panel.dart';
 
 class NumPad extends StatefulWidget {
@@ -59,8 +58,11 @@ class _NumPadState extends State<NumPad> {
       borderColor: Colors.white,
       borderWidth: 1.5,
       padding: const EdgeInsets.all(24),
-      child: SizedBox(
-        width: 330,
+      child: ConstrainedBox(
+        // Cap at 330 on wide screens, but allow shrinking on narrow portrait
+        // screens so the pad never overflows (360px screen − 48px panel padding
+        // leaves 312px; a fixed 330 would overflow by ~18px).
+        constraints: const BoxConstraints(maxWidth: 330),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [

@@ -102,6 +102,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   @override
   void initState() {
     super.initState();
+    // Force landscape: video is widescreen content and the 70/30 split layout
+    // (video + helper panel) is designed for landscape. Restored to all
+    // orientations on dispose so the rest of the app can rotate freely.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
     // Create the player up front so the Video widget has something to render
     // into while we resolve the stream URL asynchronously.
     _player = Player(
@@ -162,6 +169,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _progressTimer?.cancel();
     _hideTimer?.cancel();
     _player.dispose();
+    // Restore all orientations so the rest of the app can rotate freely.
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
     super.dispose();
   }
 
