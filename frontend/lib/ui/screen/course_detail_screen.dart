@@ -9,6 +9,7 @@ import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
 import '../widget/state_widgets.dart';
+import '../responsive.dart';
 import 'player_screen.dart';
 
 class CourseDetailScreen extends StatefulWidget {
@@ -135,7 +136,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 // Sticky Top Bar with White 3D Back button
                 Container(
                   color: Colors.white.withOpacity(0.7),
-                  padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 16.0),
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isPortrait(context) ? 16.0 : 40.0,
+                    vertical: 16.0,
+                  ),
                   child: Row(
                     children: [
                       Button3D.white(
@@ -157,7 +161,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 Expanded(
                   child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 40.0, vertical: 24.0),
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isPortrait(context) ? 16.0 : 40.0,
+                      vertical: 24.0,
+                    ),
                     child: Column(
                       children: [
                         // Hero Header Gradient Card
@@ -175,97 +182,19 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                               )
                             ],
                           ),
-                          padding: const EdgeInsets.all(48.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              // Left content details
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        _buildHeaderChip('${resolveSubject(widget.course.subject, _subjectsCatalog).emoji} ${resolveSubject(widget.course.subject, _subjectsCatalog).label}'.trim()),
-                                        const SizedBox(width: 10),
-                                        _buildHeaderChip(widget.course.grade == 'universal' ? '通用' : '${widget.course.grade}年级'),
-                                        if (firstTag != null) ...[
-                                          const SizedBox(width: 10),
-                                          _buildHeaderChip(firstTag),
-                                        ],
-                                      ],
-                                    ),
-                                    const SizedBox(height: 24),
-                                    Text(
-                                      widget.course.title,
-                                      style: const TextStyle(
-                                        fontSize: 36,
-                                        fontWeight: FontWeight.w900,
-                                        color: Colors.white,
-                                        fontFamily: 'Quicksand',
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Row(
-                                      children: [
-                                        const Icon(Icons.video_library_rounded, color: Colors.white70, size: 20),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          '共 ${episodes.length} 讲挑战任务',
-                                          style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-
-                              // Right rotated progress card
-                              Transform.rotate(
-                                angle: 3 * pi / 180, // Rotate slightly (3 degrees)
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(28),
-                                    boxShadow: const [
-                                      BoxShadow(color: Colors.black12, blurRadius: 10)
-                                    ],
-                                    border: Border.all(color: Colors.white, width: 2),
-                                  ),
-                                  child: Column(
-                                    children: [
-                                      const Text(
-                                        '学习进度',
-                                        style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w900),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        crossAxisAlignment: CrossAxisAlignment.baseline,
-                                        textBaseline: TextBaseline.alphabetic,
-                                        children: [
-                                          Text(
-                                            '$progressPercent',
-                                            style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)),
-                                          ),
-                                          const Text(
-                                            '%',
-                                            style: TextStyle(fontSize: 18, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ],
+                          padding: EdgeInsets.all(isPortrait(context) ? 20.0 : 48.0),
+                          child: _buildHeroContent(
+                            context,
+                            episodes: episodes,
+                            firstTag: firstTag,
+                            progressPercent: progressPercent,
                           ),
                         ),
                         const SizedBox(height: 40),
 
                         // Chapter Directory Panel
                         Container(
-                          padding: const EdgeInsets.all(32),
+                          padding: EdgeInsets.all(isPortrait(context) ? 16 : 32),
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(36),
@@ -369,6 +298,112 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           },
         ),
       ),
+    );
+  }
+
+  /// Hero card content: course details + progress card. Wide: side-by-side
+  /// row. Narrow (portrait): stacked vertically, details on top and the
+  /// progress card below.
+  Widget _buildHeroContent(
+    BuildContext context, {
+    required List<Episode> episodes,
+    required String? firstTag,
+    required int progressPercent,
+  }) {
+    final compact = isPortrait(context);
+
+    final details = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 10,
+          runSpacing: 8,
+          children: [
+            _buildHeaderChip('${resolveSubject(widget.course.subject, _subjectsCatalog).emoji} ${resolveSubject(widget.course.subject, _subjectsCatalog).label}'.trim()),
+            _buildHeaderChip(widget.course.grade == 'universal' ? '通用' : '${widget.course.grade}年级'),
+            if (firstTag != null) _buildHeaderChip(firstTag),
+          ],
+        ),
+        const SizedBox(height: 24),
+        Text(
+          widget.course.title,
+          style: TextStyle(
+            fontSize: compact ? 26 : 36,
+            fontWeight: FontWeight.w900,
+            color: Colors.white,
+            fontFamily: 'Quicksand',
+          ),
+        ),
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            const Icon(Icons.video_library_rounded, color: Colors.white70, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              '共 ${episodes.length} 讲挑战任务',
+              style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    final progressCard = Transform.rotate(
+      angle: 3 * pi / 180, // Rotate slightly (3 degrees)
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: const [
+            BoxShadow(color: Colors.black12, blurRadius: 10)
+          ],
+          border: Border.all(color: Colors.white, width: 2),
+        ),
+        child: Column(
+          children: [
+            const Text(
+              '学习进度',
+              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  '$progressPercent',
+                  style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)),
+                ),
+                const Text(
+                  '%',
+                  style: TextStyle(fontSize: 18, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (compact) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          details,
+          const SizedBox(height: 20),
+          Align(alignment: Alignment.centerLeft, child: progressCard),
+        ],
+      );
+    }
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(child: details),
+        const SizedBox(width: 24),
+        progressCard,
+      ],
     );
   }
 
@@ -626,8 +661,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   ),
                   const SizedBox(height: 8),
 
-                  // Resource and Metadata row
-                  Row(
+                  // Resource and Metadata row — Wrap so tags reflow instead of
+                  // overflowing on narrow portrait widths.
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 6,
                     children: [
                       // Duration tag
                       Container(
@@ -638,6 +676,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                           border: Border.all(color: const Color(0xFFE2E8F0)),
                         ),
                         child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             const Icon(Icons.watch_later_outlined, size: 12, color: AppTheme.textMuted),
                             const SizedBox(width: 4),
@@ -648,7 +687,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(width: 10),
 
                       // Orange PDF Button
                       if (hasPdf)
@@ -662,6 +700,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                               border: Border.all(color: const Color(0xFFFED7AA)),
                             ),
                             child: Row(
+                              mainAxisSize: MainAxisSize.min,
                               children: const [
                                 Icon(Icons.picture_as_pdf_rounded, size: 12, color: Color(0xFFF97316)),
                                 SizedBox(width: 4),
@@ -673,7 +712,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                             ),
                           ),
                         ),
-                      const SizedBox(width: 10),
 
                       // Purple AI Summary Button
                       if (hasSummary)
@@ -687,6 +725,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                               border: Border.all(color: const Color(0xFFDDD6FE)),
                             ),
                             child: Row(
+                              mainAxisSize: MainAxisSize.min,
                               children: const [
                                 Icon(Icons.auto_awesome_rounded, size: 12, color: Color(0xFF8B5CF6)),
                                 SizedBox(width: 4),
@@ -857,7 +896,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   Expanded(
                     child: Container(
                       color: const Color(0xFFF8FAFC),
-                      padding: const EdgeInsets.all(32),
+                      padding: EdgeInsets.all(isPortrait(context) ? 16 : 32),
                       child: isPdf
                           ? Container(
                               decoration: BoxDecoration(
