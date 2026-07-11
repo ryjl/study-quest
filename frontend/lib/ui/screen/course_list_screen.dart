@@ -204,140 +204,141 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       ),
                   ],
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
 
-                // Subject chips (full width, horizontally scrollable)
+                // Mainstream App Layout: Top Search + Filter Button, and Text Tab Subjects
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.03),
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
+                            )
+                          ],
+                        ),
+                        child: TextField(
+                          onChanged: (val) => setState(() => _searchQuery = val),
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
+                          decoration: const InputDecoration(
+                            hintText: '搜索课程名称...',
+                            hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+                            prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted, size: 20),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    GestureDetector(
+                      onTap: _showFilterBottomSheet,
+                      child: Container(
+                        height: 48,
+                        width: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(24),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.03),
+                              blurRadius: 10,
+                              offset: const Offset(0, 2),
+                            )
+                          ],
+                        ),
+                        child: Stack(
+                          alignment: Alignment.center,
+                          children: [
+                            const Icon(Icons.tune_rounded, color: AppTheme.textMuted),
+                            if (_selectedGrade != '全部' || _selectedTagIDs.isNotEmpty)
+                              Positioned(
+                                top: 12,
+                                right: 12,
+                                child: Container(
+                                  width: 8,
+                                  height: 8,
+                                  decoration: const BoxDecoration(
+                                    color: Colors.redAccent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+
+                // Subject Tabs (Sleek text-based)
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
                   child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: _subjectFilters.map((subj) {
                       final active = _selectedSubject == subj;
                       final label = subj == '全部'
-                          ? '全部'
+                          ? '推荐'
                           : resolveSubject(subj, _subjectsCatalog).label;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 12.0),
-                        child: active
-                            ? Button3D.dark(
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                onPressed: () => setState(() => _selectedSubject = subj),
-                                child: Text(label, style: const TextStyle(fontSize: 14)),
-                              )
-                            : Button3D.white(
-                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                                onPressed: () => setState(() => _selectedSubject = subj),
-                                child: Text(label, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900)),
+                      return GestureDetector(
+                        onTap: () => setState(() => _selectedSubject = subj),
+                        child: Container(
+                          padding: const EdgeInsets.only(right: 24.0, bottom: 8.0),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                label,
+                                style: TextStyle(
+                                  fontSize: active ? 18 : 16,
+                                  fontWeight: active ? FontWeight.w900 : FontWeight.bold,
+                                  color: active ? AppTheme.textWhite : AppTheme.textMuted.withOpacity(0.6),
+                                ),
                               ),
+                              const SizedBox(height: 6),
+                              if (active)
+                                Container(
+                                  width: 20,
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryColor,
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                )
+                              else
+                                const SizedBox(height: 4),
+                            ],
+                          ),
+                        ),
                       );
                     }).toList(),
                   ),
                 ),
-                const SizedBox(height: 12),
-
-                // Search input (own row, full width — no longer squeezes the
-                // subject chips above it).
-                TextField(
-                  onChanged: (val) => setState(() => _searchQuery = val),
-                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
-                  decoration: InputDecoration(
-                    hintText: '搜索课程名称...',
-                    hintStyle: const TextStyle(color: AppTheme.textMuted),
-                    prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textMuted),
-                    filled: true,
-                    fillColor: Colors.white,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2.0),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(16),
-                      borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 24),
-
-                // Grade & Tag Dropdowns
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE2E8F0), width: 2.0),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // Grade Selector
-                      _buildDropdown(
-                        icon: Icons.school_rounded,
-                        color: Colors.blue,
-                        value: _selectedGrade,
-                        items: _gradeFilterKeys,
-                        labelOf: gradeLabelOf,
-                        onChanged: (val) => setState(() => _selectedGrade = val!),
-                      ),
-                      Container(width: 2, height: 24, color: const Color(0xFFE2E8F0), margin: const EdgeInsets.symmetric(horizontal: 16)),
-
-                      // Tag multi-select chips (tappable to toggle). Empty when
-                      // the catalog hasn't loaded yet — falls back to nothing.
-                      if (_tagsCatalog.isNotEmpty)
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: Row(
-                              children: _tagsCatalog.map((t) {
-                                final selected = _selectedTagIDs.contains(t.id);
-                                return Padding(
-                                  padding: const EdgeInsets.only(right: 8),
-                                  child: Button3D.white(
-                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                                    onPressed: () => setState(() {
-                                      if (selected) {
-                                        _selectedTagIDs.remove(t.id);
-                                      } else {
-                                        _selectedTagIDs.add(t.id);
-                                      }
-                                    }),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Text(
-                                          t.label,
-                                          style: TextStyle(
-                                            fontSize: 13,
-                                            fontWeight: FontWeight.bold,
-                                            color: selected ? const Color(0xFF10B981) : AppTheme.textMuted,
-                                          ),
-                                        ),
-                                        if (selected) ...[
-                                          const SizedBox(width: 4),
-                                          const Icon(Icons.check, size: 14, color: Color(0xFF10B981)),
-                                        ],
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
-                            ),
-                          ),
+                
+                if (_selectedGrade != '全部' || _selectedTagIDs.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16.0),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.filter_alt_outlined, size: 14, color: AppTheme.primaryColor),
+                        const SizedBox(width: 4),
+                        Text(
+                          '已应用高级筛选 · 找到 ${filteredCourses.length} 门',
+                          style: const TextStyle(fontSize: 12, color: AppTheme.primaryColor, fontWeight: FontWeight.bold),
                         ),
-
-                      const SizedBox(width: 24),
-                      Text(
-                        '找到 ${filteredCourses.length} 门',
-                        style: const TextStyle(color: AppTheme.textMuted, fontSize: 13, fontWeight: FontWeight.bold),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 24),
 
                 // Grid view of course cards. shrinkWrap so it sizes to its
                 // content inside the outer SingleChildScrollView (no Expanded
@@ -683,6 +684,127 @@ class _CourseListScreenState extends State<CourseListScreen> {
   String _getSubjectName(String key) {
     final meta = resolveSubject(key, _subjectsCatalog);
     return '${meta.label} ${meta.emoji}'.trim();
+  }
+
+  void _showFilterBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text('高级筛选', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textWhite)),
+                      IconButton(
+                        icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  
+                  const Text('适合年级', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textMuted)),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: _gradeFilterKeys.map((grade) {
+                      final active = _selectedGrade == grade;
+                      return ChoiceChip(
+                        label: Text(
+                          grade == '全部' ? '所有年级' : gradeLabelOf(grade),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                            color: active ? Colors.white : AppTheme.textMuted,
+                          )
+                        ),
+                        selected: active,
+                        selectedColor: AppTheme.primaryColor,
+                        backgroundColor: const Color(0xFFF1F5F9),
+                        showCheckmark: false,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide.none),
+                        onSelected: (val) {
+                          setModalState(() => _selectedGrade = grade);
+                          setState(() => _selectedGrade = grade);
+                        },
+                      );
+                    }).toList(),
+                  ),
+                  
+                  if (_tagsCatalog.isNotEmpty) ...[
+                    const SizedBox(height: 32),
+                    const Text('课程标签', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textMuted)),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: _tagsCatalog.map((t) {
+                        final active = _selectedTagIDs.contains(t.id);
+                        return FilterChip(
+                          label: Text(
+                            t.label,
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: active ? const Color(0xFF047857) : AppTheme.textMuted,
+                            )
+                          ),
+                          selected: active,
+                          selectedColor: const Color(0xFFD1FAE5),
+                          backgroundColor: const Color(0xFFF1F5F9),
+                          showCheckmark: false,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12), 
+                            side: active ? const BorderSide(color: Color(0xFF34D399), width: 1.5) : BorderSide.none
+                          ),
+                          onSelected: (val) {
+                            setModalState(() {
+                              if (val) _selectedTagIDs.add(t.id);
+                              else _selectedTagIDs.remove(t.id);
+                            });
+                            setState(() {}); // update main screen
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                  
+                  const SizedBox(height: 40),
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.primaryColor,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      ),
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('查看结果', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            );
+          }
+        );
+      }
+    );
   }
 
 }
