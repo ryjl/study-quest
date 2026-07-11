@@ -76,6 +76,41 @@ the service `Delete` returns `ErrSystemProtected` (→ HTTP 403). They may be
 renamed/recolored but never deleted. `main.go:markSystemDefaults` backfills
 the flag on pre-existing installs. Never add a delete path that bypasses this.
 
+### APK OTA: the `/api/v1/app/*` client contract is FROZEN
+
+`/api/v1/app/latest?abi=&version_code=` and `/api/v1/app/download?version_code=&abi=`
+are the self-update channel. They are the most stability-sensitive endpoints in
+the codebase because already-shipped APKs depend on them **forever** — if a path,
+query param, or response field changes, those APKs can no longer find updates and
+are stranded on their build. Rules:
+
+- **Never** key a lookup off the DB primary key (`id`) — it changes if the DB is
+  rebuilt. Use the semantic pair `(version_code, abi)`.
+- `download_url` stays a **relative path** so a server IP/domain move doesn't
+  break old clients (they resolve it against their configured baseUrl).
+- Response fields are **add-only**: append new fields, never rename/retype/remove.
+- The endpoints stay **public** (no auth) so a client that can't even reach login
+  can still self-rescue via an update.
+- Withdrawn builds (`is_active=false`) are hidden from `/latest` and return 404
+  on `/download` — that's how a bad release is retracted in the field.
+- `AppRelease.IsActive` has **no `default:true` GORM tag** on purpose: that tag +
+  SQLite's column default silently persists a `false` value as `true`, leaking
+  withdrawn builds to clients. The default is applied in code instead.
+- `FindLatest` binds `is_active = ?` as the integer `1`, not the bool `true` —
+  GORM inlines a bool literal into SQL and SQLite's `true` keyword isn't parsed
+  consistently across driver versions (it matched inactive rows in tests).
+
+The contract is regression-tested by `release_integration_test.go` (TestOTA*).
+
+### Flutter: bump `version_code` on every release
+
+`pubspec.yaml`'s `version: X.Y.Z+N` — the `+N` is the `version_code` (build
+number). The OTA check compares `serverVersionCode > installedVersionCode`, so
+**N must increment on every release** or clients won't see the new version.
+When publishing via the admin Releases page, set version_code = N matching the
+pubspec. Multi-ABI builds (`make build-apk --split-per-abi`) produce one APK
+per ABI; upload each under the matching ABI so all device types get served.
+
 ## Where things live (quick map)
 
 - **Time/timezone:** `backend/internal/appclock/` (the one business zone) + its
@@ -90,6 +125,10 @@ the flag on pre-existing installs. Never add a delete path that bypasses this.
   `Login.tsx` invalidates it on success (see the frontend rule above).
 - **Embedded SPA:** `backend/internal/admin/spa/embed.go` (`//go:embed dist/*`).
   If `/admin` shows "SPA 尚未构建", run `make build` or `make build-admin`.
+- **APK OTA distribution:** backend `release_handler.go` (frozen client
+  contract `/api/v1/app/latest` + `/api/v1/app/download`), `release_repo.go`,
+  admin page `Releases.tsx`, Flutter `update_service.dart`. See the frozen-
+  contract rule below.
 
 ## Deeper docs
 

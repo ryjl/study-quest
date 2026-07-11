@@ -92,7 +92,7 @@ func TestCompositeRuleAND(t *testing.T) {
 	db, user := setupRuleTestDB(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(badgeRepo, progressRepo)
+	svc := NewBadgeService(db, badgeRepo, progressRepo)
 
 	// Rule: watch_duration >= 5 AND points_earned >= 100.
 	ruleJSON := makeRuleJSON(t, "and",
@@ -128,7 +128,7 @@ func TestCompositeRuleOR(t *testing.T) {
 	db, user := setupRuleTestDB(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(badgeRepo, progressRepo)
+	svc := NewBadgeService(db, badgeRepo, progressRepo)
 
 	ruleJSON := makeRuleJSON(t, "or",
 		model.CompositeRule{Type: "watch_duration", Threshold: 60},
@@ -154,7 +154,7 @@ func TestCompositeRuleNested(t *testing.T) {
 	db, user := setupRuleTestDB(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(badgeRepo, progressRepo)
+	svc := NewBadgeService(db, badgeRepo, progressRepo)
 
 	// AND( OR(watch>=30, points>=9999), watch>=1 )
 	tree := model.CompositeRule{
@@ -188,7 +188,7 @@ func TestCompositeRuleBadJSON(t *testing.T) {
 	db, user := setupRuleTestDB(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(badgeRepo, progressRepo)
+	svc := NewBadgeService(db, badgeRepo, progressRepo)
 
 	makeCompositeBadge(t, badgeRepo, "broken_badge", "{not valid json")
 	seedWatchSeconds(t, db, user.ID, 99999)
@@ -208,7 +208,7 @@ func TestCompositeRuleAlreadyUnlocked(t *testing.T) {
 	db, user := setupRuleTestDB(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(badgeRepo, progressRepo)
+	svc := NewBadgeService(db, badgeRepo, progressRepo)
 
 	b := makeCompositeBadge(t, badgeRepo, "idem_badge", makeRuleJSON(t, "and",
 		model.CompositeRule{Type: "watch_duration", Threshold: 1},

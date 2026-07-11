@@ -3,11 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -38,7 +40,15 @@ func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	// Use a shared-cache in-memory DB with a per-test unique name so GORM's
+	// connection pool (which can hand a tx to a DIFFERENT connection) always
+	// lands on the same database. A bare `:memory:` gives each connection its
+	// own private empty DB — so a transaction on a pooled connection saw
+	// "no such table". The unique DSN keeps tests isolated from each other
+	// (a plain `file::memory:?cache=shared` would share ONE db across all
+	// tests and pollute state).
+	dbName := fmt.Sprintf("file:test_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
 	}
@@ -60,13 +70,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	subjectRepo := repository.NewSubjectRepository(db)
 	tagRepo := repository.NewTagRepository(db)
 	unlockRepo := repository.NewUnlockRepository(db)
+	releaseRepo := repository.NewReleaseRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
-	badgeService := service.NewBadgeService(badgeRepo, progressRepo)
-	progressService := service.NewProgressService(progressRepo, episodeRepo, badgeService)
+	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
+	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService)
 	subjectService := service.NewSubjectService(subjectRepo, badgeRepo)
 	tagService := service.NewTagService(tagRepo)
 	// Constructed but never Started: Enqueue is a pure in-memory op (pushes
@@ -74,7 +85,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	// consumer. Only Start() → probeOne → episodeService.Probe would spawn
 	// ffprobe / hit the netdisk, which we don't want in tests.
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
-	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
+	importService := service.NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 
@@ -98,18 +109,22 @@ func newTestEnv(t *testing.T) *testEnv {
 	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
 	progressH := handler.NewProgressHandler(progressService)
 	ingestH := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
-	adminH := handler.NewAdminHandler(
-		settingsRepo, userRepo, courseRepo, episodeRepo, chapterRepo, progressRepo,
-		subjectRepo, badgeRepo, userService, courseService, importService,
-		episodeService, chapterService, badgeService, probeWorker,
-	)
+	adminH := handler.NewAdminHandlerDeps().
+		WithSettings(settingsRepo).WithUsers(userRepo).WithCourses(courseRepo).
+		WithEpisodes(episodeRepo).WithChapters(chapterRepo).WithProgress(progressRepo).
+		WithSubjects(subjectRepo).WithBadges(badgeRepo).
+		WithUserService(userService).WithCourseService(courseService).
+		WithImportService(importService).WithEpisodeService(episodeService).
+		WithChapterService(chapterService).WithBadgeService(badgeService).
+		WithProbeWorker(probeWorker).Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
 	unlockH := handler.NewUnlockHandler(unlockService)
+	releaseH := handler.NewReleaseHandler(releaseRepo)
 
 	r := gin.New()
-	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, userRepo, settingsRepo)
+	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, userRepo, settingsRepo)
 
 	// Pre-seed the admin password hash so login only pays for one bcrypt
 	// compare instead of the lazy-init generate+compare (~120ms → ~60ms).

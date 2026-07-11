@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"studyquest/backend/internal/service"
@@ -33,7 +32,7 @@ func NewTagHandler(svc service.TagService) TagHandler {
 func (h *tagHandler) AdminListTags(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	counts, err := h.svc.BatchCourseCounts()
@@ -52,7 +51,7 @@ func (h *tagHandler) AdminListTags(c *gin.Context) {
 func (h *tagHandler) ClientListTags(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	out := make([]tagDTO, 0, len(list))
@@ -102,7 +101,7 @@ func (h *tagHandler) AdminUpdateTag(c *gin.Context) {
 	}
 	tag, err := h.svc.FindByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	if tag == nil {
@@ -114,7 +113,7 @@ func (h *tagHandler) AdminUpdateTag(c *gin.Context) {
 	tag.Color = req.Color
 	tag.SortOrder = req.SortOrder
 	if err := h.svc.Update(tag); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, toTagDTO(*tag))
@@ -131,11 +130,7 @@ func (h *tagHandler) AdminDeleteTag(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
-		if errors.Is(err, service.ErrSystemProtected) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "系统默认标签，不可删除（可在编辑里改名/改色）"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})

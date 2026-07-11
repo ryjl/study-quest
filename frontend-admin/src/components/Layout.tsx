@@ -13,6 +13,7 @@ const NAV = [
   { to: '/admin/tags', label: '标签管理', icon: '🔖' },
   { to: '/admin/import', label: '文件导入', icon: '📥' },
   { to: '/admin/badges', label: '荣誉徽章', icon: '🏅' },
+  { to: '/admin/releases', label: '版本发布', icon: '📦' },
   { to: '/admin/settings', label: '系统设置', icon: '⚙️' },
 ];
 

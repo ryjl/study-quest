@@ -3,36 +3,28 @@ package service
 import (
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/testutil"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 func setupIntegrationDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Failed to open in-memory SQLite DB: %v", err)
-	}
+	return testutil.NewDB(t)
 
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("Failed to run schema migration: %v", err)
-	}
-
-	return db
 }
 
 func TestBadgeAndProgressIntegration(t *testing.T) {
 	db := setupIntegrationDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 
 	badgeRepo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
 
-	badgeSvc := NewBadgeService(badgeRepo, progressRepo)
-	progressSvc := NewProgressService(progressRepo, episodeRepo, badgeSvc)
+	badgeSvc := NewBadgeService(db, badgeRepo, progressRepo)
+	progressSvc := NewProgressService(db, progressRepo, episodeRepo, badgeSvc)
 
 	// 1. Seed badges
 	err := badgeSvc.SeedDefaultBadges()

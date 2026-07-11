@@ -42,34 +42,6 @@ func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs s
 	}
 }
 
-// clientCourseDTO is the shape the Flutter client expects: a flat object
-// where `subject` is the subject key string (not the GORM relation struct).
-// Without this projection, encoding the Course model would emit the nested
-// Subject{} struct (id/key/label/...) and break `course.fromJson`.
-type clientCourseDTO struct {
-	ID             uint     `json:"ID"`
-	Title          string   `json:"Title"`
-	Grade          string   `json:"Grade"`
-	Subject        string   `json:"Subject"` // subject key, e.g. "math"
-	CoverURL       string   `json:"CoverURL"`
-	Tags           string   `json:"Tags"`      // comma-joined labels (legacy)
-	TagsList       []string `json:"TagsList"`  // tag labels in sort order
-	TagIDs         []uint   `json:"TagIDs"`    // tag ids (for ID-based filtering)
-	GradeDisplay   string   `json:"GradeDisplay"`
-	AttachmentJSON string   `json:"AttachmentJSON"`
-	// Unlock summary — populated for student/teen roles only (admin/parent see
-	// everything, so the drip state is meaningless for them). Zero values
-	// (UnlockStrategy="" / UnlockedCount=0) signal "no drip schedule" to the
-	// client, which then hides the badge. See annotateWithUnlock.
-	UnlockStrategy    string `json:"UnlockStrategy"`
-	UnlockStrategyLabel string `json:"UnlockStrategyLabel"`
-	UnlockedCount     int    `json:"UnlockedCount"`
-	EpisodeTotal      int    `json:"EpisodeTotal"`
-	NextUnlockAt      string `json:"NextUnlockAt"`
-	CreatedAt      string   `json:"CreatedAt"`
-	UpdatedAt      string   `json:"UpdatedAt"`
-}
-
 func (h *courseHandler) GetCourses(c *gin.Context) {
 	grade := c.Query("grade")
 	subjectKey := strings.TrimSpace(c.Query("subject"))
@@ -236,27 +208,10 @@ func (h *courseHandler) GetEpisodesByCourse(c *gin.Context) {
 		}
 	}
 
-	out := make([]gin.H, 0, len(episodes))
+	out := make([]clientEpisodeDTO, 0, len(episodes))
 	for _, ep := range episodes {
 		_, visible := visibleSet[ep.ID]
-		out = append(out, gin.H{
-			"ID":                   ep.ID,
-			"CourseID":             ep.CourseID,
-			"ChapterID":            ep.ChapterID,
-			"SortOrder":            ep.SortOrder,
-			"Title":                ep.Title,
-			"VideoRelativePath":    ep.VideoRelativePath,
-			"CoverURL":             ep.CoverURL,
-			"AttachmentJSON":       ep.AttachmentJSON,
-			"FileHash":             ep.FileHash,
-			"OriginalRelativePath": ep.OriginalRelativePath,
-			"FileSize":             ep.FileSize,
-			"DurationSeconds":      ep.DurationSeconds,
-			"MediaMetaJSON":        ep.MediaMetaJSON,
-			"CreatedAt":            ep.CreatedAt,
-			"UpdatedAt":            ep.UpdatedAt,
-			"locked":               !visible,
-		})
+		out = append(out, toClientEpisodeDTO(ep, !visible))
 	}
 	c.JSON(http.StatusOK, out)
 }

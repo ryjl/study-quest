@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { useBadges, useInvalidateBadges } from '../lib/useBadges';
+import { useDeleteConfirm } from '../lib/useDeleteConfirm';
 import type { AdminBadge } from '../lib/types';
 import { useSubjects } from '../lib/useSubjects';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
-import { useToast, useConfirm } from '../lib/toast';
+import { useToast } from '../lib/toast';
 
 const ICONS = [
   { key: 'badge_first_blood', emoji: '✨', label: '首战告捷' },
@@ -86,22 +88,17 @@ function compositeSummary(node: RuleNode): string {
 }
 
 export function Badges() {
-  const qc = useQueryClient();
-  const toast = useToast();
-  const confirm = useConfirm();
   const [editing, setEditing] = useState<AdminBadge | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const badgesQ = useQuery({ queryKey: ['badges'], queryFn: api.listBadges });
+  const badgesQ = useBadges();
+  const invalidateBadges = useInvalidateBadges();
   const badges = badgesQ.data ?? [];
 
-  const delMut = useMutation({
+  const del = useDeleteConfirm({
     mutationFn: api.deleteBadge,
-    onSuccess: () => {
-      toast.success('徽章已删除');
-      qc.invalidateQueries({ queryKey: ['badges'] });
-    },
-    onError: (e) => toast.error((e as Error).message),
+    noun: '徽章',
+    onDeleted: invalidateBadges,
   });
 
   return (
@@ -145,9 +142,12 @@ export function Badges() {
                     ) : (
                       <button
                         className="btn-danger btn-sm flex-1"
-                        onClick={async () => {
-                          if (await confirm({ message: `删除「${b.Title}」徽章？`, detail: '将清除所有学生的解锁状态。', danger: true })) delMut.mutate(b.ID);
-                        }}
+                        onClick={() => del.confirmAndDelete(
+                          b.ID,
+                          `删除「${b.Title}」徽章？`,
+                          '将清除所有学生的解锁状态。',
+                        )}
+                        disabled={del.isPending}
                       >
                         删除
                       </button>
@@ -183,7 +183,7 @@ export function Badges() {
           onSaved={() => {
             setEditing(null);
             setCreating(false);
-            qc.invalidateQueries({ queryKey: ['badges'] });
+            invalidateBadges();
           }}
         />
       )}
@@ -261,7 +261,7 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
       toast.success(isEdit ? '徽章已更新' : '徽章已创建');
       onSaved();
     },
-    onError: (e) => toast.error((e as Error).message),
+    onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '保存失败'),
   });
 
   return (

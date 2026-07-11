@@ -8,6 +8,8 @@ import (
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
+
+	"gorm.io/gorm"
 )
 
 type ImportPreviewNode struct {
@@ -44,18 +46,33 @@ type ImportService interface {
 }
 
 type importService struct {
-	episodeRepo   repository.EpisodeRepository
-	courseRepo    repository.CourseRepository
-	settingsRepo  repository.SettingsRepository
-	chapterRepo   repository.ChapterRepository
-	subjectRepo   repository.SubjectRepository
-	enqueueProbe  func(uint) // optional: backfill media metadata after import
+	db           *gorm.DB
+	episodeRepo  repository.EpisodeRepository
+	courseRepo   repository.CourseRepository
+	settingsRepo repository.SettingsRepository
+	chapterRepo  repository.ChapterRepository
+	subjectRepo  repository.SubjectRepository
+	enqueueProbe func(uint) // optional: backfill media metadata after import
+
+	// testFailOnEpisodeNth, when > 0, makes the Nth episode Create return an
+	// error — a test-only hook for verifying the import transaction rolls back
+	// on a mid-tree failure. Always 0 in production (the constructor leaves it
+	// unset). Accessed only from ExecuteTreeImport's episode branch.
+	testFailOnEpisodeNth int
+}
+
+// SetTestFailHook is a test-only seam (exported so tests in other packages can
+// set it) that injects a forced failure on the Nth episode creation. Production
+// code never calls this. The zero value means "no failure".
+func (s *importService) SetTestFailHook(failOnEpisodeNth int) {
+	s.testFailOnEpisodeNth = failOnEpisodeNth
 }
 
 // NewImportService creates an instance of ImportService. enqueueProbe is an
 // optional callback (pass nil to skip) invoked after each episode is created
 // or updated, so a background worker can ffprobe its media metadata.
 func NewImportService(
+	db *gorm.DB,
 	er repository.EpisodeRepository,
 	cr repository.CourseRepository,
 	sr repository.SettingsRepository,
@@ -64,6 +81,7 @@ func NewImportService(
 	enqueueProbe func(uint),
 ) ImportService {
 	return &importService{
+		db:           db,
 		episodeRepo:  er,
 		courseRepo:   cr,
 		settingsRepo: sr,
@@ -189,170 +207,246 @@ func pruneEmptyNodes(node *ImportPreviewNode) bool {
 	return len(node.Children) > 0
 }
 
+// ExecuteTreeImport registers a previewed tree as course/chapters/episodes.
+//
+// The entire write set — new course (if any), chapters, episodes, and their
+// auto-matched subtitles — runs inside ONE transaction. A failure partway
+// through (e.g. a bad episode insert) rolls back every prior insert, so we
+// never leave a half-imported course with orphan chapters/episodes. The old
+// code created rows across 3 repos with no rollback. Episode probe enqueueing
+// (a channel send, not a DB write) is deferred until after commit, so a rolled-
+// back episode is never probed.
 func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 	if req.Tree == nil {
 		return errors.New("empty tree payload")
 	}
 
-	var courseID uint
-	if req.TargetCourseID > 0 {
-		course, err := s.courseRepo.FindByID(req.TargetCourseID)
-		if err != nil {
-			return err
-		}
-		if course == nil {
-			return errors.New("target course not found")
-		}
-		courseID = course.ID
-	} else {
-		if req.NewCourse == nil || req.NewCourse.Title == "" {
-			return errors.New("new course title is required")
-		}
-		// Grade is optional on import — default to "universal" so admins can
-		// import a course without first picking a grade in the wizard.
-		gradeStr := strings.TrimSpace(req.NewCourse.Grade)
-		if gradeStr == "" {
-			gradeStr = "universal"
-		}
-		g := model.Grade(gradeStr)
-		if !g.Valid() {
-			return errors.New("invalid course grade value: " + req.NewCourse.Grade)
-		}
-		// Resolve the subject key to its ID. Fall back to the first subject
-		// when the key is missing/unknown so import never fails on this.
-		var subjectID uint
-		if subj, _ := s.subjectRepo.FindByKey(req.NewCourse.Subject); subj != nil {
-			subjectID = subj.ID
-		} else if list, err := s.subjectRepo.List(); err == nil && len(list) > 0 {
-			subjectID = list[0].ID
-		} else {
-			return errors.New("no subject available; create a subject first")
-		}
-		c := &model.Course{
-			Title:     req.NewCourse.Title,
-			Grade:     g,
-			SubjectID: subjectID,
-			CoverURL:  req.NewCourse.CoverURL,
-		}
-		if err := s.courseRepo.Create(c); err != nil {
-			return err
-		}
-		// Attach any requested tags via the many2many association.
-		if len(req.NewCourse.TagIDs) > 0 {
-			if err := s.courseRepo.SetTags(c.ID, req.NewCourse.TagIDs); err != nil {
+	// Collect episode IDs to probe after commit (only if the tx succeeds).
+	var probePending []uint
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		// Bind repos to the transaction for all writes below.
+		courseRepo := s.courseRepo.WithTx(tx)
+		episodeRepo := s.episodeRepo.WithTx(tx)
+		chapterRepo := s.chapterRepo.WithTx(tx)
+
+		var courseID uint
+		if req.TargetCourseID > 0 {
+			course, err := courseRepo.FindByID(req.TargetCourseID)
+			if err != nil {
 				return err
 			}
-		}
-		courseID = c.ID
-	}
-
-	currentEpisodes, err := s.episodeRepo.ListByCourse(courseID)
-	if err != nil {
-		return err
-	}
-
-	existingChapters, _ := s.chapterRepo.ListByCourse(courseID)
-
-	nextSortOrder := 1
-	if len(currentEpisodes) > 0 {
-		nextSortOrder = currentEpisodes[len(currentEpisodes)-1].SortOrder + 1
-	}
-
-	chapterSortOrder := 1
-	if len(existingChapters) > 0 {
-		chapterSortOrder = existingChapters[len(existingChapters)-1].SortOrder + 1
-	}
-
-	var parseNode func(node *ImportPreviewNode, currentChapterID uint) error
-	parseNode = func(node *ImportPreviewNode, currentChapterID uint) error {
-		if node.Type == "exclude" {
-			return nil
-		}
-
-		if node.IsDir {
-			if node.Type == "chapter" {
-				var chap *model.Chapter
-				for i := range existingChapters {
-					if existingChapters[i].Title == node.Name {
-						chap = &existingChapters[i]
-						break
-					}
-				}
-				if chap == nil {
-					chap = &model.Chapter{
-						CourseID:  courseID,
-						Title:     node.Name,
-						SortOrder: chapterSortOrder,
-					}
-					if err := s.chapterRepo.Create(chap); err != nil {
-						return err
-					}
-					chapterSortOrder++
-					existingChapters = append(existingChapters, *chap)
-				}
-				currentChapterID = chap.ID
+			if course == nil {
+				return errors.New("target course not found")
 			}
-
-			for _, child := range node.Children {
-				if err := parseNode(child, currentChapterID); err != nil {
+			courseID = course.ID
+		} else {
+			if req.NewCourse == nil || req.NewCourse.Title == "" {
+				return errors.New("new course title is required")
+			}
+			// Grade is optional on import — default to "universal" so admins can
+			// import a course without first picking a grade in the wizard.
+			gradeStr := strings.TrimSpace(req.NewCourse.Grade)
+			if gradeStr == "" {
+				gradeStr = "universal"
+			}
+			g := model.Grade(gradeStr)
+			if !g.Valid() {
+				return errors.New("invalid course grade value: " + req.NewCourse.Grade)
+			}
+			// Resolve the subject key to its ID. Fall back to the first subject
+			// when the key is missing/unknown so import never fails on this.
+			var subjectID uint
+			if subj, _ := s.subjectRepo.FindByKey(req.NewCourse.Subject); subj != nil {
+				subjectID = subj.ID
+			} else if list, err := s.subjectRepo.List(); err == nil && len(list) > 0 {
+				subjectID = list[0].ID
+			} else {
+				return errors.New("no subject available; create a subject first")
+			}
+			c := &model.Course{
+				Title:     req.NewCourse.Title,
+				Grade:     g,
+				SubjectID: subjectID,
+				CoverURL:  req.NewCourse.CoverURL,
+			}
+			if err := courseRepo.Create(c); err != nil {
+				return err
+			}
+			// Attach any requested tags via the many2many association.
+			if len(req.NewCourse.TagIDs) > 0 {
+				if err := courseRepo.SetTags(c.ID, req.NewCourse.TagIDs); err != nil {
 					return err
 				}
 			}
-			return nil
+			courseID = c.ID
 		}
 
-		if node.Type == "episode" {
-			var existing *model.Episode
-			for i := range currentEpisodes {
-				curr := &currentEpisodes[i]
-				if curr.Title == node.Name || filepath.Base(curr.VideoRelativePath) == filepath.Base(node.Path) || (node.Hash != "" && curr.FileHash == node.Hash) {
-					existing = curr
-					break
-				}
+		currentEpisodes, err := episodeRepo.ListByCourse(courseID)
+		if err != nil {
+			return err
+		}
+
+		existingChapters, _ := chapterRepo.ListByCourse(courseID)
+
+		nextSortOrder := 1
+		if len(currentEpisodes) > 0 {
+			nextSortOrder = currentEpisodes[len(currentEpisodes)-1].SortOrder + 1
+		}
+
+		chapterSortOrder := 1
+		if len(existingChapters) > 0 {
+			chapterSortOrder = existingChapters[len(existingChapters)-1].SortOrder + 1
+		}
+
+		var parseNode func(node *ImportPreviewNode, currentChapterID uint) error
+		parseNode = func(node *ImportPreviewNode, currentChapterID uint) error {
+			if node.Type == "exclude" {
+				return nil
 			}
 
-			if existing != nil {
-				existing.ChapterID = currentChapterID
-				existing.VideoRelativePath = node.Path
-				existing.OriginalRelativePath = node.Path
-				existing.FileHash = node.Hash
-				existing.FileSize = &node.Size
-				if err := s.episodeRepo.Update(existing); err == nil {
-					s.autoMapSubtitle(existing)
-					s.maybeEnqueueProbe(existing)
+			if node.IsDir {
+				if node.Type == "chapter" {
+					var chap *model.Chapter
+					for i := range existingChapters {
+						if existingChapters[i].Title == node.Name {
+							chap = &existingChapters[i]
+							break
+						}
+					}
+					if chap == nil {
+						chap = &model.Chapter{
+							CourseID:  courseID,
+							Title:     node.Name,
+							SortOrder: chapterSortOrder,
+						}
+						if err := chapterRepo.Create(chap); err != nil {
+							return err
+						}
+						chapterSortOrder++
+						existingChapters = append(existingChapters, *chap)
+					}
+					currentChapterID = chap.ID
+				}
+
+				for _, child := range node.Children {
+					if err := parseNode(child, currentChapterID); err != nil {
+						return err
+					}
 				}
 				return nil
 			}
 
-			ep := &model.Episode{
-				CourseID:             courseID,
-				ChapterID:            currentChapterID,
-				SortOrder:            nextSortOrder,
-				Title:                node.Name,
-				VideoRelativePath:    node.Path,
-				AttachmentJSON:       "[]",
-				FileHash:             node.Hash,
-				OriginalRelativePath: node.Path,
-				FileSize:             &node.Size,
+			if node.Type == "episode" {
+				var existing *model.Episode
+				for i := range currentEpisodes {
+					curr := &currentEpisodes[i]
+					if curr.Title == node.Name || filepath.Base(curr.VideoRelativePath) == filepath.Base(node.Path) || (node.Hash != "" && curr.FileHash == node.Hash) {
+						existing = curr
+						break
+					}
+				}
+
+				if existing != nil {
+					existing.ChapterID = currentChapterID
+					existing.VideoRelativePath = node.Path
+					existing.OriginalRelativePath = node.Path
+					existing.FileHash = node.Hash
+					existing.FileSize = &node.Size
+					if err := episodeRepo.Update(existing); err == nil {
+						s.autoMapSubtitleTx(episodeRepo, existing)
+						probePending = append(probePending, existing.ID)
+					}
+					return nil
+				}
+
+				ep := &model.Episode{
+					CourseID:             courseID,
+					ChapterID:            currentChapterID,
+					SortOrder:            nextSortOrder,
+					Title:                node.Name,
+					VideoRelativePath:    node.Path,
+					AttachmentJSON:       "[]",
+					FileHash:             node.Hash,
+					OriginalRelativePath: node.Path,
+					FileSize:             &node.Size,
+				}
+				// Test-only forced failure: simulates a DB error on the Nth
+				// episode create, so the import transaction's rollback path can
+				// be exercised. No-op in production (testFailOnEpisodeNth == 0).
+				if s.testFailOnEpisodeNth > 0 {
+					s.testFailOnEpisodeNth--
+					if s.testFailOnEpisodeNth == 0 {
+						return errors.New("test-injected episode create failure")
+					}
+				}
+				if err := episodeRepo.Create(ep); err != nil {
+					return err
+				}
+				nextSortOrder++
+				s.autoMapSubtitleTx(episodeRepo, ep)
+				probePending = append(probePending, ep.ID)
 			}
-			if err := s.episodeRepo.Create(ep); err != nil {
+
+			return nil
+		}
+
+		for _, child := range req.Tree.Children {
+			if err := parseNode(child, 0); err != nil {
 				return err
 			}
-			nextSortOrder++
-			s.autoMapSubtitle(ep)
-			s.maybeEnqueueProbe(ep)
 		}
 
 		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	for _, child := range req.Tree.Children {
-		if err := parseNode(child, 0); err != nil {
-			return err
+	// Probe enqueueing is deferred until the transaction commits — if the tx
+	// rolled back, those episode IDs don't exist and must not be probed.
+	for _, id := range probePending {
+		s.maybeEnqueueProbeByID(id)
+	}
+	return nil
+}
+
+// autoMapSubtitleTx is the transaction-aware variant of autoMapSubtitle: it
+// saves the matched subtitle through the tx-bound episode repo so the subtitle
+// write participates in the import transaction (rolls back with it on failure).
+func (s *importService) autoMapSubtitleTx(episodeRepo repository.EpisodeRepository, ep *model.Episode) {
+	subtitlesDir := "./data/subtitles"
+	_ = os.MkdirAll(subtitlesDir, 0755)
+
+	var srtPath string
+	if ep.FileHash != "" {
+		srtPath = filepath.Join(subtitlesDir, ep.FileHash+".srt")
+	}
+
+	if srtPath != "" {
+		if _, err := os.Stat(srtPath); err == nil {
+			content, err := os.ReadFile(srtPath)
+			if err == nil {
+				sub := &model.Subtitle{
+					EpisodeID:  ep.ID,
+					SrtContent: string(content),
+				}
+				_ = episodeRepo.SaveSubtitle(sub)
+			}
 		}
 	}
+}
 
-	return nil
+// maybeEnqueueProbeByID enqueues a probe for a single episode ID, gated on the
+// episode actually lacking duration. Used by the post-commit probe flush.
+func (s *importService) maybeEnqueueProbeByID(episodeID uint) {
+	if s.enqueueProbe == nil {
+		return
+	}
+	ep, err := s.episodeRepo.FindByID(episodeID)
+	if err != nil || ep == nil || ep.DurationSeconds != nil {
+		return
+	}
+	s.enqueueProbe(ep.ID)
 }
 
 // maybeEnqueueProbe hands the episode to the background probe worker when

@@ -267,6 +267,22 @@ export interface Settings {
   storage_token: string;
 }
 
+// AppRelease is one published APK build. (version_code, abi) is the identity —
+// the same pair the OTA client contract keys on. is_active=false means the
+// build is withdrawn (hidden from clients, not downloadable) but kept for history.
+export interface AppRelease {
+  id: number;
+  version_code: number;
+  version_name: string;
+  abi: string; // arm64-v8a | armeabi-v7a | x86_64
+  file_size: number;
+  sha256: string;
+  release_notes: string;
+  force_update: boolean;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface PointsLedgerEntry {
   id: number;
   user_id: number;

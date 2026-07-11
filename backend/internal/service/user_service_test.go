@@ -1,52 +1,20 @@
 package service
 
 import (
-	"studyquest/backend/internal/model"
+	"studyquest/backend/internal/testutil"
 	"studyquest/backend/internal/repository"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Failed to open in-memory SQLite DB: %v", err)
-	}
-
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("Failed to run schema migration: %v", err)
-	}
-
-	return db
-}
-
-// seedTestSubjects inserts the canonical subject set and returns a key→Subject
-// map, so test fixtures can reference a real SubjectID when building Courses.
-func seedTestSubjects(t *testing.T, db *gorm.DB) map[string]model.Subject {
-	t.Helper()
-	defaults := []model.Subject{
-		{Key: "chinese", Label: "语文", SortOrder: 1},
-		{Key: "math", Label: "数学", SortOrder: 2},
-		{Key: "english", Label: "英语", SortOrder: 3},
-		{Key: "physics", Label: "物理/科学", SortOrder: 4},
-	}
-	for i := range defaults {
-		if err := db.Create(&defaults[i]).Error; err != nil {
-			t.Fatalf("seed subject %s: %v", defaults[i].Key, err)
-		}
-	}
-	out := make(map[string]model.Subject, len(defaults))
-	for _, s := range defaults {
-		out[s.Key] = s
-	}
-	return out
+	return testutil.NewDB(t)
 }
 
 func TestUserService(t *testing.T) {
 	db := setupTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	userRepo := repository.NewUserRepository(db)
 	svc := NewUserService(userRepo)
 

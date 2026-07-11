@@ -8,6 +8,7 @@ import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/button_3d.dart';
+import '../widget/state_widgets.dart';
 import 'course_detail_screen.dart';
 
 // Backend stores grade as a stable key ("1".."9", "universal"); the UI shows
@@ -46,11 +47,8 @@ class _CourseListScreenState extends State<CourseListScreen> {
 
   // Subject catalog fetched from /api/v1/subjects. Drives the filter chips and
   // the key→label/emoji/color lookups on each card. Empty until loaded; the
-  // fallback in _subjectMeta keeps the UI working pre-load / on fetch failure.
+  // fallback in resolveSubject() keeps the UI working pre-load / on fetch failure.
   List<Subject> _subjectsCatalog = const [];
-  static const Subject _fallbackSubject = Subject(
-    key: '', label: '科目', emoji: '📦', color: '#9ca3af',
-  );
 
   // Tag catalog fetched from /api/v1/tags. Drives the multi-select filter
   // chips. Selection stores tag IDs and matches against Course.tagIds, so it
@@ -63,13 +61,6 @@ class _CourseListScreenState extends State<CourseListScreen> {
     '全部',
     ..._subjectsCatalog.map((s) => s.key),
   ];
-
-  Subject _subjectMeta(String key) {
-    for (final s in _subjectsCatalog) {
-      if (s.key == key) return s;
-    }
-    return _fallbackSubject.copyWith(label: key.isEmpty ? '科目' : key, key: key);
-  }
 
   @override
   void initState() {
@@ -103,10 +94,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
         future: _combinedFuture,
         builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor));
+            return loadingSpinner();
           }
           if (snapshot.hasError) {
-            return _buildErrorBox(snapshot.error.toString());
+            return errorStateBox(snapshot.error.toString(), _loadData,
+                message: '加载失败，请检查网络或后端配置！');
           }
 
           final courses = snapshot.data![0] as List<Course>;
@@ -223,7 +215,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       final active = _selectedSubject == subj;
                       final label = subj == '全部'
                           ? '全部'
-                          : _subjectMeta(subj).label;
+                          : resolveSubject(subj, _subjectsCatalog).label;
                       return Padding(
                         padding: const EdgeInsets.only(right: 12.0),
                         child: active
@@ -351,7 +343,13 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 // content inside the outer SingleChildScrollView (no Expanded
                 // allowed in an unbounded-height scroll view).
                 filteredCourses.isEmpty
-                    ? _buildEmptyBox()
+                    ? emptyStateBox(
+                        icon: Icons.school_outlined,
+                        headline: '没有找到已授权的课程库',
+                        hint: '请让爸爸妈妈在后台给您分配可学习的课程吧！',
+                        refreshLabel: '刷新列表',
+                        onRefresh: _loadData,
+                      )
                     : LayoutBuilder(
                         builder: (context, constraints) {
                           final width = constraints.maxWidth;
@@ -492,7 +490,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
             flex: 1,
             child: Container(
               decoration: BoxDecoration(
-                gradient: AppTheme.getSubjectGradientFromColor(_subjectMeta(course.subject).color),
+                gradient: AppTheme.getSubjectGradientFromColor(resolveSubject(course.subject, _subjectsCatalog).color),
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(26),
                   topRight: Radius.circular(26),
@@ -677,47 +675,8 @@ class _CourseListScreenState extends State<CourseListScreen> {
   }
 
   String _getSubjectName(String key) {
-    final meta = _subjectMeta(key);
+    final meta = resolveSubject(key, _subjectsCatalog);
     return '${meta.label} ${meta.emoji}'.trim();
   }
 
-  Widget _buildErrorBox(String error) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
-          const SizedBox(height: 16),
-          const Text('加载失败，请检查网络或后端配置！', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
-          Text(error, style: const TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
-          const SizedBox(height: 24),
-          Button3D.blue(
-            onPressed: _loadData,
-            child: const Text('重试加载'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyBox() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.school_outlined, size: 48, color: AppTheme.textMuted),
-          const SizedBox(height: 16),
-          const Text('没有找到已授权的课程库', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          const SizedBox(height: 8),
-          const Text('请让爸爸妈妈在后台给您分配可学习的课程吧！', style: TextStyle(color: AppTheme.textMuted)),
-          const SizedBox(height: 24),
-          Button3D.blue(
-            onPressed: _loadData,
-            child: const Text('刷新列表'),
-          ),
-        ],
-      ),
-    );
-  }
 }

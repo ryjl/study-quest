@@ -1,14 +1,11 @@
 package repository
 
 import (
-	"path/filepath"
+	"studyquest/backend/internal/testutil"
 	"sync"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-
-	"studyquest/backend/internal/model"
 )
 
 // These tests cover UpsertAndAccumulateWatch — the atomic INSERT ... ON
@@ -24,16 +21,7 @@ import (
 // file with the default pool keeps all writers on one shared schema. Cleanup is
 // automatic via t.TempDir().
 func setupProgressTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	dsn := filepath.Join(t.TempDir(), "progress_test.db")
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return db
+	return testutil.NewFileDB(t)
 }
 
 // TestUpsertAndAccumulateWatchConcurrent is the regression test for the lost-

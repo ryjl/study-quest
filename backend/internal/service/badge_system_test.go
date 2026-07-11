@@ -13,7 +13,7 @@ func TestBadgeDeleteRefusesSystem(t *testing.T) {
 	db := setupIntegrationDB(t)
 	repo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(repo, progressRepo)
+	svc := NewBadgeService(db, repo, progressRepo)
 
 	system := &model.Badge{Code: "sys_one", Title: "系统", IconName: "x", RuleType: "watch_duration", Threshold: 1, IsSystem: true}
 	if err := repo.Create(system); err != nil {
@@ -51,7 +51,7 @@ func TestRemoveDeprecatedDefaultsNightOwl(t *testing.T) {
 		db := setupIntegrationDB(t)
 		repo := repository.NewBadgeRepository(db)
 		progressRepo := repository.NewProgressRepository(db)
-		svc := NewBadgeService(repo, progressRepo)
+		svc := NewBadgeService(db, repo, progressRepo)
 
 		// Seed a pristine system night_owl (as an old install would have it).
 		if err := repo.Create(&model.Badge{Code: "night_owl", Title: "夜猫学者", IconName: "x", RuleType: "night_owl_count", Threshold: 3, IsSystem: true}); err != nil {
@@ -70,7 +70,7 @@ func TestRemoveDeprecatedDefaultsNightOwl(t *testing.T) {
 		db := setupIntegrationDB(t)
 		repo := repository.NewBadgeRepository(db)
 		progressRepo := repository.NewProgressRepository(db)
-		svc := NewBadgeService(repo, progressRepo)
+		svc := NewBadgeService(db, repo, progressRepo)
 
 		// Same code, but an admin flipped IsSystem off (took ownership). Must
 		// survive the cleanup.
@@ -93,7 +93,7 @@ func TestSeedDefaultBadgesIncludesNewDefaults(t *testing.T) {
 	db := setupIntegrationDB(t)
 	repo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(repo, progressRepo)
+	svc := NewBadgeService(db, repo, progressRepo)
 
 	if err := svc.SeedDefaultBadges(); err != nil {
 		t.Fatalf("SeedDefaultBadges: %v", err)

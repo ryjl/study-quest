@@ -58,3 +58,10 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // FileProvider (used by the OTA APK self-install flow to expose the
+    // downloaded update to the system package installer). Flutter pulls core
+    // transitively, but declaring it explicitly avoids resolution surprises.
+    implementation("androidx.core:core-ktx:1.13.1")
+}

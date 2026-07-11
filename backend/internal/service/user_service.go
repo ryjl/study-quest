@@ -97,8 +97,11 @@ func (s *userService) UpdateUser(id uint, nickname, avatarURL, pin, role string)
 	if err != nil {
 		return nil, err
 	}
+	// Return (nil, nil) for a missing user — the handler maps that to a 404.
+	// The old path returned errors.New("user not found"), which the handler
+	// had no way to distinguish from a real failure, so it became a 500.
 	if u == nil {
-		return nil, errors.New("user not found")
+		return nil, nil
 	}
 
 	u.Nickname = nickname

@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useTags, useInvalidateTags } from '../lib/useTags';
+import { useDeleteConfirm } from '../lib/useDeleteConfirm';
 import type { TagMeta } from '../lib/types';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
-import { useToast, useConfirm } from '../lib/toast';
+import { useToast } from '../lib/toast';
 
 const COLOR_CHOICES = [
   '#ef4444', '#f59e0b', '#8b5cf6', '#06b6d4', '#10b981',
@@ -14,31 +15,24 @@ const COLOR_CHOICES = [
 export function Tags() {
   const tagsQ = useTags();
   const invalidate = useInvalidateTags();
-  const toast = useToast();
-  const confirm = useConfirm();
   const [editing, setEditing] = useState<TagMeta | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const deleteMut = useMutation({
-    mutationFn: (id: number) => api.deleteTag(id),
-    onSuccess: () => {
-      toast.success('标签已删除');
-      invalidate();
-    },
-    onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '删除失败'),
+  const del = useDeleteConfirm({
+    mutationFn: api.deleteTag,
+    noun: '标签',
+    onDeleted: invalidate,
   });
 
-  const onDelete = async (t: TagMeta) => {
+  const onDelete = (t: TagMeta) => {
     const usedBy = t.course_count ?? 0;
-    const ok = await confirm({
-      message: `删除标签「${t.label}」？`,
-      detail:
-        usedBy > 0
-          ? `该标签正被 ${usedBy} 门课程使用，删除后将自动从这些课程上移除（课程本身不受影响）。`
-          : '该标签当前未被任何课程使用。',
-      danger: true,
-    });
-    if (ok) deleteMut.mutate(t.id!);
+    del.confirmAndDelete(
+      t.id!,
+      `删除标签「${t.label}」？`,
+      usedBy > 0
+        ? `该标签正被 ${usedBy} 门课程使用，删除后将自动从这些课程上移除（课程本身不受影响）。`
+        : '该标签当前未被任何课程使用。',
+    );
   };
 
   if (tagsQ.isLoading) return <LoadingState />;
@@ -106,7 +100,7 @@ export function Tags() {
                       <button
                         className="btn-ghost btn-sm text-bad hover:bg-bad/10"
                         onClick={() => onDelete(t)}
-                        disabled={deleteMut.isPending}
+                        disabled={del.isPending}
                       >
                         删除
                       </button>

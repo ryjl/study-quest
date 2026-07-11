@@ -63,7 +63,7 @@ func (h *userHandler) Login(c *gin.Context) {
 
 	valid, err := h.userService.Authenticate(req.UserID, req.Pin)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 

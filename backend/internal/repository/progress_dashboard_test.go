@@ -1,10 +1,10 @@
 package repository
 
 import (
+	"studyquest/backend/internal/testutil"
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"studyquest/backend/internal/model"
@@ -18,16 +18,7 @@ import (
 // — same rationale as progress_atomic_test.go.
 
 func setupDashboardTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	dsn := t.TempDir() + "/dash_test.db"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
-	return db
+	return testutil.NewFileDB(t)
 }
 
 // at is a compact helper to build an explicit timestamp for fixture rows, so

@@ -11,6 +11,8 @@ import (
 
 // EpisodeRepository implements core GORM functions and double-protection search.
 type EpisodeRepository interface {
+	// WithTx returns a copy bound to an in-progress transaction.
+	WithTx(tx *gorm.DB) EpisodeRepository
 	ListByCourse(courseID uint) ([]model.Episode, error)
 	ListByNullDuration() ([]model.Episode, error)
 	FindByID(id uint) (*model.Episode, error)
@@ -60,6 +62,10 @@ type episodeRepo struct {
 // NewEpisodeRepository creates an instance of EpisodeRepository.
 func NewEpisodeRepository(db *gorm.DB) EpisodeRepository {
 	return &episodeRepo{db: db}
+}
+
+func (r *episodeRepo) WithTx(tx *gorm.DB) EpisodeRepository {
+	return &episodeRepo{db: tx}
 }
 
 func (r *episodeRepo) ListByCourse(courseID uint) ([]model.Episode, error) {

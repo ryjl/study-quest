@@ -1,30 +1,22 @@
 package service
 
 import (
+	"studyquest/backend/internal/testutil"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"testing"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 func setupCourseTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Failed to open in-memory SQLite DB: %v", err)
-	}
+	return testutil.NewDB(t)
 
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("Failed to run schema migration: %v", err)
-	}
-
-	return db
 }
 
 func TestCourseService(t *testing.T) {
 	db := setupCourseTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	courseRepo := repository.NewCourseRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	svc := NewCourseService(courseRepo, userRepo)

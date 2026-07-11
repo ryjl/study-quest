@@ -35,6 +35,9 @@ func sqliteOffsetModifier(offsetMin int) string {
 
 // BadgeRepository handles SQL operations for Badge and UserBadge entities.
 type BadgeRepository interface {
+	// WithTx returns a copy of this repository bound to an in-progress
+	// transaction (see ProgressRepository.WithTx for rationale).
+	WithTx(tx *gorm.DB) BadgeRepository
 	List() ([]model.Badge, error)
 	FindByID(id uint) (*model.Badge, error)
 	FindByCode(code string) (*model.Badge, error)
@@ -70,6 +73,11 @@ type badgeRepo struct {
 // NewBadgeRepository creates an instance of BadgeRepository.
 func NewBadgeRepository(db *gorm.DB) BadgeRepository {
 	return &badgeRepo{db: db}
+}
+
+// WithTx returns a repo backed by tx instead of the connection's own DB.
+func (r *badgeRepo) WithTx(tx *gorm.DB) BadgeRepository {
+	return &badgeRepo{db: tx}
 }
 
 func (r *badgeRepo) List() ([]model.Badge, error) {

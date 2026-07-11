@@ -8,3 +8,8 @@ import "errors"
 // core set. The handler layer translates this into a 403 with a friendly
 // Chinese message.
 var ErrSystemProtected = errors.New("system-protected item cannot be deleted")
+
+// ErrSubjectInUse is returned when deleting a subject that still has courses
+// referencing it. The DB-level FK (ON DELETE RESTRICT) is the real guard; this
+// sentinel just lets the handler translate it into a clean 409 response.
+var ErrSubjectInUse = errors.New("subject is still referenced by courses or badges")

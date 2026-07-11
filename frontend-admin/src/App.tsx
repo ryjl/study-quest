@@ -11,6 +11,7 @@ import { Import } from './pages/Import';
 import { Settings } from './pages/Settings';
 import { Subjects } from './pages/Subjects';
 import { Tags } from './pages/Tags';
+import { Releases } from './pages/Releases';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -49,6 +50,7 @@ export default function App() {
         <Route path="tags" element={<Tags />} />
         <Route path="import" element={<Import />} />
         <Route path="badges" element={<Badges />} />
+        <Route path="releases" element={<Releases />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/admin" replace />} />

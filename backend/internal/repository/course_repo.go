@@ -9,6 +9,8 @@ import (
 
 // CourseRepository handles SQL operations for Courses entity.
 type CourseRepository interface {
+	// WithTx returns a copy bound to an in-progress transaction.
+	WithTx(tx *gorm.DB) CourseRepository
 	List(grade string, subjectID uint, allowedIDs []uint) ([]model.Course, error)
 	FindByID(id uint) (*model.Course, error)
 	Create(course *model.Course) error
@@ -26,6 +28,10 @@ type courseRepo struct {
 // NewCourseRepository creates an instance of CourseRepository.
 func NewCourseRepository(db *gorm.DB) CourseRepository {
 	return &courseRepo{db: db}
+}
+
+func (r *courseRepo) WithTx(tx *gorm.DB) CourseRepository {
+	return &courseRepo{db: tx}
 }
 
 func (r *courseRepo) List(grade string, subjectID uint, allowedIDs []uint) ([]model.Course, error) {

@@ -8,6 +8,7 @@ import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
+import '../widget/state_widgets.dart';
 import 'player_screen.dart';
 
 class CourseDetailScreen extends StatefulWidget {
@@ -49,13 +50,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     });
   }
 
-  Subject _subjectMeta(String key) {
-    for (final s in _subjectsCatalog) {
-      if (s.key == key) return s;
-    }
-    return Subject(key: key, label: key.isEmpty ? '科目' : key, emoji: '📦', color: '#9ca3af');
-  }
-
   void _refreshData() {
     setState(() {
       _episodesFuture = ApiService.fetchEpisodes(widget.activeUserId, widget.course.id);
@@ -84,7 +78,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final subjectGradient = AppTheme.getSubjectGradientFromColor(_subjectMeta(widget.course.subject).color);
+    final subjectGradient = AppTheme.getSubjectGradientFromColor(resolveSubject(widget.course.subject, _subjectsCatalog).color);
     // Use the course's real first tag if defined (no more mock tags).
     final tagsList = widget.course.tagsList;
     final firstTag = tagsList.isNotEmpty ? tagsList.first : null;
@@ -96,10 +90,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           future: Future.wait([_episodesFuture, _progressFuture, _chaptersFuture]),
           builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator(color: AppTheme.primaryColor));
+              return loadingSpinner();
             }
             if (snapshot.hasError) {
-              return _buildErrorBox(snapshot.error.toString());
+              return errorStateBox(snapshot.error.toString(), _refreshData);
             }
 
             final episodes = snapshot.data![0] as List<Episode>;
@@ -107,7 +101,13 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             final chapters = snapshot.data![2] as List<Chapter>;
 
             if (episodes.isEmpty) {
-              return _buildEmptyBox();
+              return emptyStateBox(
+                icon: Icons.video_library_outlined,
+                headline: '该课程库下暂无课时视频',
+                hint: '请登录管理后台导入相关的网盘视频资源。',
+                refreshLabel: '刷新页面',
+                onRefresh: _refreshData,
+              );
             }
 
             // Build quick mapping for completion states + resume positions
@@ -186,7 +186,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                   children: [
                                     Row(
                                       children: [
-                                        _buildHeaderChip('${_subjectMeta(widget.course.subject).emoji} ${_subjectMeta(widget.course.subject).label}'.trim()),
+                                        _buildHeaderChip('${resolveSubject(widget.course.subject, _subjectsCatalog).emoji} ${resolveSubject(widget.course.subject, _subjectsCatalog).label}'.trim()),
                                         const SizedBox(width: 10),
                                         _buildHeaderChip(widget.course.grade == 'universal' ? '通用' : '${widget.course.grade}年级'),
                                         if (firstTag != null) ...[
@@ -932,45 +932,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  Widget _buildErrorBox(String error) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
-          const SizedBox(height: 16),
-          const Text('加载失败，请重试！', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
-          Text(error, style: const TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
-          const SizedBox(height: 24),
-          Button3D.blue(
-            onPressed: _refreshData,
-            child: const Text('重试加载'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildEmptyBox() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.video_library_outlined, size: 48, color: AppTheme.textMuted),
-          const SizedBox(height: 16),
-          const Text('该课程库下暂无课时视频', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          const SizedBox(height: 8),
-          const Text('请登录管理后台导入相关的网盘视频资源。', style: TextStyle(color: AppTheme.textMuted)),
-          const SizedBox(height: 24),
-          Button3D.blue(
-            onPressed: _refreshData,
-            child: const Text('刷新页面'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 /// Pre-adventure task card dialog. Shows the AI-generated exploration prompts

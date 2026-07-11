@@ -29,6 +29,15 @@ dependencies:
   # Open attachments in external app / download.
   url_launcher: ^6.2.6
 
+  # Read the app's version_code / version_name at runtime, for the OTA
+  # self-update check (compares installed build number vs. server's latest).
+  package_info_plus: ^8.0.0
+
+  # Resolve app-internal directories for staging a downloaded APK update. We
+  # write the APK under the documents dir, which the FileProvider maps (see
+  # res/xml/file_paths.xml) so the system installer can read it via content://.
+  path_provider: ^2.1.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

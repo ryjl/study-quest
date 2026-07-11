@@ -9,6 +9,8 @@ import (
 
 // ChapterRepository handles database operations for the Chapter model.
 type ChapterRepository interface {
+	// WithTx returns a copy bound to an in-progress transaction.
+	WithTx(tx *gorm.DB) ChapterRepository
 	ListByCourse(courseID uint) ([]model.Chapter, error)
 	FindByID(id uint) (*model.Chapter, error)
 	Create(chapter *model.Chapter) error
@@ -24,6 +26,10 @@ type chapterRepo struct {
 // NewChapterRepository creates a new ChapterRepository.
 func NewChapterRepository(db *gorm.DB) ChapterRepository {
 	return &chapterRepo{db: db}
+}
+
+func (r *chapterRepo) WithTx(tx *gorm.DB) ChapterRepository {
+	return &chapterRepo{db: tx}
 }
 
 func (r *chapterRepo) ListByCourse(courseID uint) ([]model.Chapter, error) {

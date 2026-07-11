@@ -73,19 +73,20 @@ func main() {
 	subjectRepo := repository.NewSubjectRepository(db)
 	tagRepo := repository.NewTagRepository(db)
 	unlockRepo := repository.NewUnlockRepository(db)
+	releaseRepo := repository.NewReleaseRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
-	badgeService := service.NewBadgeService(badgeRepo, progressRepo)
-	progressService := service.NewProgressService(progressRepo, episodeRepo, badgeService)
+	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
+	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService)
 	subjectService := service.NewSubjectService(subjectRepo, badgeRepo)
 	tagService := service.NewTagService(tagRepo)
 	// Probe worker must exist before import/ingest handlers so they can wire
 	// its Enqueue callback. Started as a goroutine below.
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
-	importService := service.NewImportService(episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
+	importService := service.NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 
@@ -117,27 +118,30 @@ func main() {
 	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
 	progressHandler := handler.NewProgressHandler(progressService)
 	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
-	adminHandler := handler.NewAdminHandler(
-		settingsRepo,
-		userRepo,
-		courseRepo,
-		episodeRepo,
-		chapterRepo,
-		progressRepo,
-		subjectRepo,
-		badgeRepo,
-		userService,
-		courseService,
-		importService,
-		episodeService,
-		chapterService,
-		badgeService,
-		probeWorker,
-	)
+	adminHandler := handler.NewAdminHandlerDeps().
+		// Repos
+		WithSettings(settingsRepo).
+		WithUsers(userRepo).
+		WithCourses(courseRepo).
+		WithEpisodes(episodeRepo).
+		WithChapters(chapterRepo).
+		WithProgress(progressRepo).
+		WithSubjects(subjectRepo).
+		WithBadges(badgeRepo).
+		// Services
+		WithUserService(userService).
+		WithCourseService(courseService).
+		WithImportService(importService).
+		WithEpisodeService(episodeService).
+		WithChapterService(chapterService).
+		WithBadgeService(badgeService).
+		WithProbeWorker(probeWorker).
+		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)
 	tagHandler := handler.NewTagHandler(tagService)
 	unlockHandler := handler.NewUnlockHandler(unlockService)
+	releaseHandler := handler.NewReleaseHandler(releaseRepo)
 
 	// 9. Boot up Gin Server Router
 	gin.SetMode(gin.ReleaseMode)
@@ -157,6 +161,7 @@ func main() {
 		subjectHandler,
 		tagHandler,
 		unlockHandler,
+		releaseHandler,
 		userRepo,
 		settingsRepo,
 	)
@@ -200,24 +205,21 @@ func hasLegacySubjectColumn(db *gorm.DB) bool {
 // markSystemDefaults flags the canonical seeded subject/tag/badge rows as
 // IsSystem=true. This is a backfill for instances seeded before the IsSystem
 // column existed: their starter rows otherwise carry is_system=false and
-// wouldn't be delete-protected. Idempotent. Keys must stay in sync with the
-// SeedDefault* lists in the service layer.
+// wouldn't be delete-protected. Idempotent. The key lists are owned by the
+// service package (seed_keys.go) so they can't drift from the SeedDefault*
+// inserts.
 func markSystemDefaults(db *gorm.DB) {
-	systemSubjectKeys := []string{"chinese", "math", "english", "physics", "extra"}
-	systemTagKeys := []string{"required", "thinking", "extension", "explore", "extracurricular", "logic", "horizon"}
-	systemBadgeCodes := []string{
-		"first_blood", "seven_days_pioneer", "math_expert", "english_star",
-		"hard_worker", "explorer",
-	}
-
+	// Keys come from the service package's single source of truth (seed_keys.go)
+	// — no hand-redeclared copies, so they can't drift from the SeedDefault*
+	// lists.
 	tables := []struct {
 		table string
 		col   string // the key/code column name
 		keys  []string
 	}{
-		{"subjects", "key", systemSubjectKeys},
-		{"tags", "key", systemTagKeys},
-		{"badges", "code", systemBadgeCodes},
+		{"subjects", "key", service.SystemSubjectKeys},
+		{"tags", "key", service.SystemTagKeys},
+		{"badges", "code", service.SystemBadgeCodes},
 	}
 	for _, t := range tables {
 		if err := db.Table(t.table).Where(t.col+" IN ?", t.keys).

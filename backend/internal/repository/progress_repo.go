@@ -20,6 +20,12 @@ type UserProgressSummary struct {
 
 // ProgressRepository handles UserProgress updates, UserPoints, and PointsLedger transaction auditing.
 type ProgressRepository interface {
+	// WithTx returns a copy of this repository bound to an in-progress
+	// transaction. Lets callers run multiple repo methods atomically (e.g. a
+	// service that writes progress AND awards points in the same tx) without
+	// giving every repo method a *gorm.DB parameter. The returned repo shares
+	// no mutable state with the original.
+	WithTx(tx *gorm.DB) ProgressRepository
 	GetProgress(userID, episodeID uint) (*model.UserProgress, error)
 	SaveProgress(progress *model.UserProgress) error
 	// UpsertAndAccumulateWatch atomically adds deltaWatchSec to a progress
@@ -99,6 +105,12 @@ type progressRepo struct {
 // NewProgressRepository creates an instance of ProgressRepository.
 func NewProgressRepository(db *gorm.DB) ProgressRepository {
 	return &progressRepo{db: db}
+}
+
+// WithTx returns a repo backed by tx instead of the connection's own DB.
+// Used by services to run several writes atomically across repos.
+func (r *progressRepo) WithTx(tx *gorm.DB) ProgressRepository {
+	return &progressRepo{db: tx}
 }
 
 func (r *progressRepo) GetProgress(userID, episodeID uint) (*model.UserProgress, error) {
@@ -201,40 +213,50 @@ func (r *progressRepo) GetPoints(userID uint) (*model.UserPoint, error) {
 }
 
 func (r *progressRepo) AddPoints(ledger *model.PointsLedger) error {
+	// When r.db is already a transaction (via WithTx), open a savepoint; when
+	// it's the bare connection, start a fresh transaction. Either way the two
+	// writes (ledger + balance) stay atomic.
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 1. Create Ledger entry
-		if err := tx.Create(ledger).Error; err != nil {
-			return err
-		}
+		return addPointsInTx(tx, ledger)
+	})
+}
 
-		// 2. Load User Points
-		var pt model.UserPoint
-		err := tx.First(&pt, "user_id = ?", ledger.UserID).Error
-		if err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				// Initialize structure
-				pt = model.UserPoint{
-					UserID:            ledger.UserID,
-					CurrentPoints:     0,
-					TotalEarnedPoints: 0,
-				}
-				if err := tx.Create(&pt).Error; err != nil {
-					return err
-				}
-			} else {
+// addPointsInTx performs the ledger insert + balance update against the given
+// session. Extracted so it can run inside an outer transaction without nesting
+// a second one.
+func addPointsInTx(tx *gorm.DB, ledger *model.PointsLedger) error {
+	// 1. Create Ledger entry
+	if err := tx.Create(ledger).Error; err != nil {
+		return err
+	}
+
+	// 2. Load User Points
+	var pt model.UserPoint
+	err := tx.First(&pt, "user_id = ?", ledger.UserID).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Initialize structure
+			pt = model.UserPoint{
+				UserID:            ledger.UserID,
+				CurrentPoints:     0,
+				TotalEarnedPoints: 0,
+			}
+			if err := tx.Create(&pt).Error; err != nil {
 				return err
 			}
+		} else {
+			return err
 		}
+	}
 
-		// 3. Update Balance
-		pt.CurrentPoints += ledger.ChangeAmount
-		if ledger.ChangeAmount > 0 {
-			pt.TotalEarnedPoints += ledger.ChangeAmount
-		}
-		pt.UpdatedAt = time.Now()
+	// 3. Update Balance
+	pt.CurrentPoints += ledger.ChangeAmount
+	if ledger.ChangeAmount > 0 {
+		pt.TotalEarnedPoints += ledger.ChangeAmount
+	}
+	pt.UpdatedAt = time.Now()
 
-		return tx.Save(&pt).Error
-	})
+	return tx.Save(&pt).Error
 }
 
 func (r *progressRepo) GetUserProgressOverview(userID uint) ([]model.UserProgress, error) {

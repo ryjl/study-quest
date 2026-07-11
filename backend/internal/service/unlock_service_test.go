@@ -1,6 +1,7 @@
 package service
 
 import (
+	"studyquest/backend/internal/testutil"
 	"sort"
 	"studyquest/backend/internal/appclock"
 	"studyquest/backend/internal/model"
@@ -8,22 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 // setupUnlockServiceTestDB mirrors the repo tests' in-memory DB setup but
 // lives in the service package (tests are black-box against the service).
 func setupUnlockServiceTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
-	}
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("automigrate: %v", err)
-	}
-	return db
+	return testutil.NewDB(t)
+
 }
 
 // seedCourseWithEpisodes builds a course with `n` episodes (sort_order 1..n)

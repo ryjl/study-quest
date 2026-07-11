@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"studyquest/backend/internal/testutil"
 	"studyquest/backend/internal/model"
 	"testing"
 )
@@ -10,7 +11,7 @@ func intp(v int) *int       { return &v }
 
 func TestEpisodeAggregations(t *testing.T) {
 	db := setupTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	courseRepo := NewCourseRepository(db)
 	episodeRepo := NewEpisodeRepository(db)
 	chapterRepo := NewChapterRepository(db)
@@ -126,7 +127,7 @@ func TestEpisodeAggregations(t *testing.T) {
 
 func TestChapterCountByCourse(t *testing.T) {
 	db := setupTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	courseRepo := NewCourseRepository(db)
 	chapterRepo := NewChapterRepository(db)
 

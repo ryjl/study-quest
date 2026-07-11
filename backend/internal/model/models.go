@@ -387,6 +387,33 @@ type UserUnlockOverride struct {
 	UpdatedAt             time.Time
 }
 
+// AppRelease is one Android APK build published for over-the-air distribution.
+// The (version_code, abi) pair is unique: one build per ABI per version.
+//
+// STABILITY INVARIANT — this table backs the frozen client contract
+// /api/v1/app/latest and /api/v1/app/download. Clients are addressed by
+// (version_code, abi) — NEVER by the DB primary key (id), which can change if
+// the database is rebuilt. Physical APKs live at a deterministic path
+// (./data/releases/<version_code>/<abi>.apk) so files survive a DB loss too.
+type AppRelease struct {
+	ID           uint      `gorm:"primaryKey;autoIncrement"`
+	VersionCode  int       `gorm:"uniqueIndex:idx_release_abi;not null"`
+	VersionName  string    `gorm:"size:50;not null"` // display, e.g. "1.2.0"
+	ABI          string    `gorm:"size:20;uniqueIndex:idx_release_abi;not null"` // arm64-v8a / armeabi-v7a / x86_64
+	Filepath     string    `gorm:"type:text;not null"`  // relative to data dir, e.g. "releases/12/arm64-v8a.apk"
+	FileSize     int64     // bytes
+	SHA256       string    `gorm:"size:64;index"`      // hex digest, for integrity checks
+	ReleaseNotes string    `gorm:"type:text"`
+	ForceUpdate  bool      // client must install, dialog not dismissible
+	// IsActive: false = withdrawn (bad build), hidden from OTA clients.
+	// NOTE: no `default:true` GORM tag — that tag makes GORM omit a false value
+	// on INSERT and the column default then persists it as true, so withdrawn
+	// builds leak to clients. Defaults are applied in code (repo/service) instead.
+	IsActive     bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
 // AutoMigrate runs GORM schema auto-migration for all tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
@@ -407,5 +434,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserBadge{},
 		&CourseUnlockTemplate{},
 		&UserUnlockOverride{},
+		&AppRelease{},
 	)
 }

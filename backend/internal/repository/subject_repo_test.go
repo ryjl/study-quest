@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"studyquest/backend/internal/testutil"
 	"studyquest/backend/internal/model"
 	"testing"
 )
@@ -57,7 +58,7 @@ func TestSubjectCRUD(t *testing.T) {
 func TestSubjectDeleteBlockedByCourseFK(t *testing.T) {
 	db := setupTestDB(t)
 	db.Exec("PRAGMA foreign_keys=ON") // RESTRICT is only enforced with FKs on
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	courseRepo := NewCourseRepository(db)
 	subjectRepo := NewSubjectRepository(db)
 
@@ -84,7 +85,7 @@ func TestSubjectDeleteBlockedByCourseFK(t *testing.T) {
 
 func TestSubjectUpdateBadgesRuleTarget(t *testing.T) {
 	db := setupTestDB(t)
-	seedTestSubjects(t, db)
+	testutil.SeedSubjects(t, db)
 	subjectRepo := NewSubjectRepository(db)
 	badgeRepo := NewBadgeRepository(db)
 

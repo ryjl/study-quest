@@ -26,6 +26,7 @@ func RegisterRoutes(
 	subject handler.SubjectHandler,
 	tag handler.TagHandler,
 	unlock handler.UnlockHandler,
+	release handler.ReleaseHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
 ) {
@@ -47,6 +48,12 @@ func RegisterRoutes(
 		// VLC / external player playback streaming is public for format compatibility
 		v1.GET("/episodes/:id/stream", episode.Stream)
 		v1.GET("/subtitles/:id.vtt", episode.GetSubtitleVTT)
+
+		// APK OTA distribution — FROZEN client contract. Public (no auth) so
+		// even a client that can't reach login can still self-update. See
+		// release_handler.go for the stability invariants.
+		v1.GET("/app/latest", release.GetLatest)
+		v1.GET("/app/download", release.Download)
 	}
 
 	// 2. Client restricted operations (UserAuth required)
@@ -187,6 +194,12 @@ func RegisterRoutes(
 
 		// Uploads
 		adm.POST("/api/upload/image", admin.UploadImage)
+
+		// App releases (APK OTA distribution management)
+		adm.GET("/api/releases", release.List)
+		adm.POST("/api/releases/upload", release.Upload)
+		adm.PUT("/api/releases/:id", release.Update)
+		adm.DELETE("/api/releases/:id", release.Delete)
 	}
 
 	// 6. Serve the embedded SPA. We expose hashed assets under /admin/assets

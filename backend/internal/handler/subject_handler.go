@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"studyquest/backend/internal/service"
@@ -34,7 +33,7 @@ func NewSubjectHandler(svc service.SubjectService) SubjectHandler {
 func (h *subjectHandler) AdminListSubjects(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	out := make([]subjectDTO, 0, len(list))
@@ -48,7 +47,7 @@ func (h *subjectHandler) AdminListSubjects(c *gin.Context) {
 func (h *subjectHandler) ClientListSubjects(c *gin.Context) {
 	list, err := h.svc.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	out := make([]subjectDTO, 0, len(list))
@@ -104,7 +103,7 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 
 	subj, err := h.svc.FindByID(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	if subj == nil {
@@ -120,7 +119,7 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 	subj.SortOrder = req.SortOrder
 
 	if err := h.svc.Update(subj, oldKey); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, toSubjectDTO(*subj))
@@ -138,17 +137,7 @@ func (h *subjectHandler) AdminDeleteSubject(c *gin.Context) {
 	}
 
 	if err := h.svc.Delete(uint(id)); err != nil {
-		if errors.Is(err, service.ErrSystemProtected) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "系统默认科目，不可删除（可在编辑里改名/改色）"})
-			return
-		}
-		if errors.Is(err, service.ErrSubjectInUse) {
-			c.JSON(http.StatusConflict, gin.H{
-				"error": "该科目下还有课程，无法删除；请先迁移或删除这些课程后再试。",
-			})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})

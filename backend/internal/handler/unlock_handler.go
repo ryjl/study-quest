@@ -95,7 +95,7 @@ func (h *unlockHandler) GetTemplate(c *gin.Context) {
 	}
 	t, err := h.svc.GetTemplate(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	if t == nil {
@@ -136,7 +136,7 @@ func (h *unlockHandler) DeleteTemplate(c *gin.Context) {
 		return
 	}
 	if err := h.svc.DeleteTemplate(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
@@ -152,7 +152,7 @@ func (h *unlockHandler) ListUserOverrides(c *gin.Context) {
 	}
 	list, err := h.svc.ListOverridesByUser(uid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	out := make([]gin.H, 0, len(list))
@@ -169,7 +169,7 @@ func (h *unlockHandler) GetOverride(c *gin.Context) {
 	}
 	o, err := h.svc.GetOverride(uid, cid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	if o == nil {
@@ -212,7 +212,7 @@ func (h *unlockHandler) DeleteOverride(c *gin.Context) {
 		return
 	}
 	if err := h.svc.DeleteOverride(uid, cid); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
@@ -224,7 +224,7 @@ func (h *unlockHandler) ManualUnlock(c *gin.Context) {
 		return
 	}
 	if err := h.svc.IncrementManualUnlock(uid, cid); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -240,7 +240,7 @@ func (h *unlockHandler) ManualUnlockUndo(c *gin.Context) {
 		return
 	}
 	if err := h.svc.DecrementManualUnlock(uid, cid); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -263,7 +263,7 @@ func (h *unlockHandler) SetAllowedEpisodes(c *gin.Context) {
 		ids = []uint{}
 	}
 	if err := h.svc.SetAllowedEpisodes(uid, cid, ids); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -276,7 +276,7 @@ func (h *unlockHandler) UnlockPreview(c *gin.Context) {
 	}
 	vis, err := h.svc.ResolveVisibleEpisodes(uid, cid)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	nextStr := ""

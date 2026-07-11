@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 	"studyquest/backend/internal/model"
@@ -76,7 +75,7 @@ func (h *badgeHandler) GetUserBadges(c *gin.Context) {
 func (h *badgeHandler) AdminListBadges(c *gin.Context) {
 	list, err := h.badgeService.List()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, list)
@@ -165,7 +164,7 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 
 	badge, err := h.badgeService.FindByID(uint(badgeID))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 	if badge == nil {
@@ -201,11 +200,7 @@ func (h *badgeHandler) AdminDeleteBadge(c *gin.Context) {
 	}
 
 	if err := h.badgeService.Delete(uint(badgeID)); err != nil {
-		if errors.Is(err, service.ErrSystemProtected) {
-			c.JSON(http.StatusForbidden, gin.H{"error": "系统默认勋章，不可删除（可在编辑里修改）"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondError(c, err)
 		return
 	}
 

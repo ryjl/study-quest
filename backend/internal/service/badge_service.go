@@ -6,6 +6,8 @@ import (
 	"log"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+
+	"gorm.io/gorm"
 )
 
 // BadgeService handles badge CRUD, seeding, and event-based rule evaluation.
@@ -26,13 +28,15 @@ type BadgeService interface {
 }
 
 type badgeService struct {
+	db           *gorm.DB
 	badgeRepo    repository.BadgeRepository
 	progressRepo repository.ProgressRepository
 }
 
 // NewBadgeService creates an instance of BadgeService.
-func NewBadgeService(br repository.BadgeRepository, pr repository.ProgressRepository) BadgeService {
+func NewBadgeService(db *gorm.DB, br repository.BadgeRepository, pr repository.ProgressRepository) BadgeService {
 	return &badgeService{
+		db:           db,
 		badgeRepo:    br,
 		progressRepo: pr,
 	}
@@ -101,17 +105,25 @@ func (s *badgeService) EvaluateRules(userID uint) ([]model.Badge, error) {
 		}
 
 		if shouldUnlock {
-			if err := s.badgeRepo.UnlockBadge(userID, badge.ID); err == nil {
-				newlyUnlocked = append(newlyUnlocked, badge)
-
-				// Log points ledger entry for unlocking achievement
-				ledger := &model.PointsLedger{
-					UserID:       userID,
-					ChangeAmount: 0, // Unlocking achievement itself doesn't award points
-					ReasonType:   "badge_unlocked",
-					Description:  fmt.Sprintf("解锁荣誉徽章：%s (%s)", badge.Title, badge.Description),
+			// UnlockBadge + the ledger entry are written in one transaction so a
+			// crash between them can't leave a badge unlocked with no ledger
+			// record (or vice versa). The old code called UnlockBadge then
+			// ignored AddPoints's error with `_ =`, so a ledger failure was
+			// invisible while the unlock persisted.
+			ledger := &model.PointsLedger{
+				UserID:       userID,
+				ChangeAmount: 0, // Unlocking an achievement itself awards no points
+				ReasonType:   "badge_unlocked",
+				Description:  fmt.Sprintf("解锁荣誉徽章：%s (%s)", badge.Title, badge.Description),
+			}
+			err := s.db.Transaction(func(tx *gorm.DB) error {
+				if err := s.badgeRepo.WithTx(tx).UnlockBadge(userID, badge.ID); err != nil {
+					return err
 				}
-				_ = s.progressRepo.AddPoints(ledger)
+				return s.progressRepo.WithTx(tx).AddPoints(ledger)
+			})
+			if err == nil {
+				newlyUnlocked = append(newlyUnlocked, badge)
 			}
 		}
 	}

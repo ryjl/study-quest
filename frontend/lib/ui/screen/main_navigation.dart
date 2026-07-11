@@ -6,6 +6,7 @@ import '../../model/progress.dart';
 import '../../model/badge.dart';
 import '../../service/api_service.dart';
 import '../../service/auth_service.dart';
+import '../../service/update_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
@@ -35,6 +36,35 @@ class _MainNavigationState extends State<MainNavigation> {
     _selectedTab = widget.initialTabIndex;
     _ipController.text = AppConfig.baseUrl;
     _loadUserPoints();
+    // Non-blocking OTA check: runs once after login. Errors are swallowed
+    // inside the service, so this can never break app startup.
+    _checkForUpdate();
+  }
+
+  // Checks the server for a newer APK build and shows an update dialog if one
+  // exists. Force-update builds show a non-dismissible dialog.
+  void _checkForUpdate() async {
+    await Future.delayed(const Duration(milliseconds: 500)); // let UI settle
+    if (!mounted) return;
+    try {
+      final update = await AppUpdateService.checkForUpdate();
+      if (mounted && update.hasUpdate) {
+        _showUpdateDialog(update);
+      }
+    } catch (_) {
+      // Swallow: update checks are best-effort.
+    }
+  }
+
+  void _showUpdateDialog(UpdateInfo update) {
+    showDialog(
+      context: context,
+      // Force-update builds are NOT dismissible: the user must install before
+      // they can use the app (used for critical fixes). Regular updates can be
+      // skipped.
+      barrierDismissible: !update.forceUpdate,
+      builder: (ctx) => _UpdateDialog(update: update, forceUpdate: update.forceUpdate),
+    );
   }
 
   @override
@@ -1133,4 +1163,112 @@ class _MainNavigationState extends State<MainNavigation> {
       ),
     );
   }
+}
+
+/// Update dialog shown when a newer APK build is available. Downloads the APK
+/// with a progress bar, then hands off to the system installer.
+///
+/// When [forceUpdate] is true the dialog cannot be dismissed — the user must
+/// install before continuing (used for critical fixes).
+class _UpdateDialog extends StatefulWidget {
+  final UpdateInfo update;
+  final bool forceUpdate;
+
+  const _UpdateDialog({required this.update, required this.forceUpdate});
+
+  @override
+  State<_UpdateDialog> createState() => _UpdateDialogState();
+}
+
+class _UpdateDialogState extends State<_UpdateDialog> {
+  bool _downloading = false;
+  int _progress = 0;
+  String? _error;
+
+  void _startDownload() async {
+    setState(() {
+      _downloading = true;
+      _error = null;
+      _progress = 0;
+    });
+    try {
+      await AppUpdateService.downloadAndInstall(
+        widget.update.downloadUrl,
+        onProgress: (p) {
+          if (mounted) setState(() => _progress = p);
+        },
+      );
+      // The system installer is now showing; leave the dialog as-is. If the
+      // user cancels the install, they'll re-trigger the check next launch.
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _downloading = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final u = widget.update;
+    return PopScope(
+      // Prevent back-button dismissal when force-update.
+      canPop: !widget.forceUpdate,
+      child: AlertDialog(
+        title: Text(u.forceUpdate ? '需要更新到新版本' : '发现新版本'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('${u.versionName} (build ${u.versionCode})',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            if (u.releaseNotes.isNotEmpty)
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 160),
+                child: SingleChildScrollView(
+                  child: Text(u.releaseNotes, style: const TextStyle(fontSize: 13)),
+                ),
+              ),
+            if (u.downloadSize > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text('大小: ${_formatBytes(u.downloadSize)}',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+              ),
+            if (_downloading) ...[
+              const SizedBox(height: 16),
+              LinearProgressIndicator(value: _progress / 100),
+              const SizedBox(height: 4),
+              Text('下载中 $_progress%', style: const TextStyle(fontSize: 12)),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              Text(_error!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+            ],
+          ],
+        ),
+        actions: [
+          if (!widget.forceUpdate && !_downloading)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('稍后'),
+            ),
+          if (!_downloading)
+            ElevatedButton(
+              onPressed: _startDownload,
+              child: const Text('立即更新'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+String _formatBytes(int n) {
+  if (n < 1024) return '$n B';
+  if (n < 1024 * 1024) return '${(n / 1024).toStringAsFixed(1)} KB';
+  return '${(n / 1024 / 1024).toStringAsFixed(1)} MB';
 }

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+
+	"gorm.io/gorm"
 )
 
 // ProgressService manages playback tracking, completing lessons, and points accumulation.
@@ -18,14 +20,16 @@ type ProgressService interface {
 }
 
 type progressService struct {
+	db           *gorm.DB
 	progressRepo repository.ProgressRepository
 	episodeRepo  repository.EpisodeRepository
 	badgeService BadgeService
 }
 
 // NewProgressService creates an instance of ProgressService.
-func NewProgressService(pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService) ProgressService {
+func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService) ProgressService {
 	return &progressService{
+		db:           db,
 		progressRepo: pr,
 		episodeRepo:  er,
 		badgeService: bs,
@@ -74,28 +78,35 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 	//    atomic increment above. watch_seconds is never touched here.
 	//    Note: completion does NOT reset the resume position — reopening a
 	//    completed episode still resumes at the saved position.
+	//
+	//    The completion flag write AND the points award run inside ONE
+	//    transaction: if awarding points fails, the completion is rolled back
+	//    too. The old code swallowed the AddPoints error via fmt.Printf, which
+	//    could leave an episode "completed" with no points recorded — and the
+	//    next heartbeat wouldn't re-award them (IsCompleted==1 skips this
+	//    block). Wrapping both in a tx guarantees they're all-or-nothing.
 	if prog.IsCompleted == 0 && ep.DurationSeconds != nil && *ep.DurationSeconds > 0 {
 		duration := *ep.DurationSeconds
 		threshold := int(float64(duration) * 0.9)
 		if prog.LastPositionSeconds >= threshold {
-			prog.IsCompleted = 1
-			if err := s.progressRepo.MarkCompleted(userID, episodeID); err != nil {
-				return nil, err
-			}
-
-			// Reward user points (10 points per episode watched)
 			pointsLedger := &model.PointsLedger{
 				UserID:       userID,
 				ChangeAmount: 10,
 				ReasonType:   "system_watch",
 				Description:  fmt.Sprintf("Completed watching episode %d: %s", ep.ID, ep.Title),
 			}
-
-			// AddPoints updates points ledger and updates user_points table in a single transaction
-			if err := s.progressRepo.AddPoints(pointsLedger); err != nil {
-				// Log error but don't fail the progress reporting transaction
-				fmt.Printf("Error adding user points: %v\n", err)
+			// Run the completion flag + points award atomically. On any error
+			// the whole completion is aborted (neither the flag nor points land).
+			if err := s.db.Transaction(func(tx *gorm.DB) error {
+				txProgress := s.progressRepo.WithTx(tx)
+				if err := txProgress.MarkCompleted(userID, episodeID); err != nil {
+					return err
+				}
+				return txProgress.AddPoints(pointsLedger)
+			}); err != nil {
+				return nil, err
 			}
+			prog.IsCompleted = 1
 		}
 	}
 

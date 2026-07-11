@@ -1,35 +1,27 @@
 package service
 
 import (
+	"studyquest/backend/internal/testutil"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
 func setupProgressTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("Failed to open in-memory SQLite DB: %v", err)
-	}
+	return testutil.NewDB(t)
 
-	if err := model.AutoMigrate(db); err != nil {
-		t.Fatalf("Failed to run schema migration: %v", err)
-	}
-
-	return db
 }
 
 func TestProgressServiceLastWatched(t *testing.T) {
 	db := setupProgressTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
-	svc := NewProgressService(progressRepo, episodeRepo, nil)
+	svc := NewProgressService(db, progressRepo, episodeRepo, nil)
 
 	t.Run("GetLastWatchedEpisode", func(t *testing.T) {
 		// Create User
@@ -103,4 +95,74 @@ func TestProgressServiceLastWatched(t *testing.T) {
 			t.Errorf("Expected position 90, got %d", lastProg.LastPositionSeconds)
 		}
 	})
+}
+
+// TestProgressCompletionAtomicity locks in the transaction boundary: when a
+// report crosses the 90% completion threshold, BOTH the is_completed flag AND
+// the 10-point award must land together (same transaction). The old code did
+// these as two separate writes and swallowed the AddPoints error via
+// fmt.Printf, so a points failure left the episode "completed" with no points —
+// and the next heartbeat wouldn't re-award them (IsCompleted==1 skips the
+// block). This test verifies they're now atomic.
+func TestProgressCompletionAtomicity(t *testing.T) {
+	db := setupProgressTestDB(t)
+	subjects := testutil.SeedSubjects(t, db)
+	progressRepo := repository.NewProgressRepository(db)
+	episodeRepo := repository.NewEpisodeRepository(db)
+	courseRepo := repository.NewCourseRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	svc := NewProgressService(db, progressRepo, episodeRepo, nil)
+
+	user := &model.User{Nickname: "Completer", PinHash: "x", Role: "student"}
+	if err := userRepo.Create(user); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	course := &model.Course{Title: "C", Grade: "1", SubjectID: subjects["math"].ID}
+	if err := courseRepo.Create(course); err != nil {
+		t.Fatalf("create course: %v", err)
+	}
+	// 100-second episode → 90% threshold = 90s.
+	dur := 100
+	ep := &model.Episode{CourseID: course.ID, Title: "E1", VideoRelativePath: "/p.mp4", SortOrder: 1, DurationSeconds: &dur}
+	if err := episodeRepo.Create(ep); err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+
+	// Report at position 95s (>90%) — should complete AND award 10 points in
+	// the same transaction.
+	prog, err := svc.ReportProgress(user.ID, ep.ID, 95, 95)
+	if err != nil {
+		t.Fatalf("ReportProgress: %v", err)
+	}
+	if prog.IsCompleted != 1 {
+		t.Fatalf("IsCompleted = %d, want 1", prog.IsCompleted)
+	}
+
+	// Points must be recorded too — proving both writes committed together.
+	points, err := progressRepo.GetPoints(user.ID)
+	if err != nil {
+		t.Fatalf("GetPoints: %v", err)
+	}
+	if points == nil || points.CurrentPoints != 10 {
+		got := 0
+		if points != nil {
+			got = points.CurrentPoints
+		}
+		t.Errorf("CurrentPoints = %d, want 10 (completion + award must be atomic)", got)
+	}
+
+	// A second report at the same position must NOT double-award: IsCompleted
+	// is already 1, so the completion block is skipped entirely.
+	_, err = svc.ReportProgress(user.ID, ep.ID, 95, 10)
+	if err != nil {
+		t.Fatalf("second ReportProgress: %v", err)
+	}
+	points2, _ := progressRepo.GetPoints(user.ID)
+	got := 0
+	if points2 != nil {
+		got = points2.CurrentPoints
+	}
+	if got != 10 {
+		t.Errorf("after second report, CurrentPoints = %d, want 10 (no double-award)", got)
+	}
 }

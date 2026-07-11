@@ -1,6 +1,7 @@
 package service
 
 import (
+	"studyquest/backend/internal/testutil"
 	"errors"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
@@ -59,7 +60,7 @@ func TestSeedDefaultSubjects(t *testing.T) {
 
 func TestSubjectServiceDeleteInUse(t *testing.T) {
 	db := newSubjectTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	subjectRepo := repository.NewSubjectRepository(db)
 	badgeRepo := repository.NewBadgeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
@@ -87,7 +88,7 @@ func TestSubjectServiceDeleteInUse(t *testing.T) {
 
 func TestSubjectServiceRenameKeyCascadesBadge(t *testing.T) {
 	db := newSubjectTestDB(t)
-	subjects := seedTestSubjects(t, db)
+	subjects := testutil.SeedSubjects(t, db)
 	subjectRepo := repository.NewSubjectRepository(db)
 	badgeRepo := repository.NewBadgeRepository(db)
 	svc := NewSubjectService(subjectRepo, badgeRepo)

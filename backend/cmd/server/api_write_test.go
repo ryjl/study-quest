@@ -310,18 +310,16 @@ func TestUserUpdate(t *testing.T) {
 		t.Errorf("role: got %q, want %q", updated.Role, "admin")
 	}
 
-	// Missing user: the service returns an error (rather than nil) for a
-	// missing id, so UpdateUser surfaces this as 500 "user not found"
-	// (lowercase, from the service error) rather than the 404 branch at
-	// admin_handler.go:729 which is currently unreachable. We lock the
-	// actual behavior so a future change is intentional, not accidental.
+	// Missing user: the service returns (nil, nil) and the handler maps that
+	// to a proper 404 (was previously a 500 "user not found" error string —
+	// the handler's nil-user branch was unreachable). Now it returns the
+	// correct status for a missing resource.
 	resp = env.do(t, http.MethodPut, "/admin/api/users/99999", map[string]any{
 		"nickname": "x", "role": "student",
 	})
-	if resp.Code != http.StatusInternalServerError {
-		t.Errorf("update missing user: expected 500 (current behavior), got %d", resp.Code)
+	if resp.Code != http.StatusNotFound {
+		t.Errorf("update missing user: expected 404, got %d (body: %s)", resp.Code, resp.Body.String())
 	}
-	assertErrorMsg(t, resp.Body.Bytes(), "user not found")
 }
 
 // TestUserDelete verifies a user can be deleted and that access rows they owned

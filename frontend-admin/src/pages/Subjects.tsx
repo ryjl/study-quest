@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useSubjects, useInvalidateSubjects } from '../lib/useSubjects';
+import { useDeleteConfirm } from '../lib/useDeleteConfirm';
 import type { SubjectMeta } from '../lib/types';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
-import { useToast, useConfirm } from '../lib/toast';
+import { useToast } from '../lib/toast';
 
 // Color swatch palette offered for new/custom subjects. The admin can also
 // paste any hex value in the dedicated field.
@@ -17,32 +18,19 @@ const EMOJI_CHOICES = ['📚', '📐', '🔠', '🧪', '🌎', '💻', '🎨', '
 
 export function Subjects() {
   const subjectsQ = useSubjects();
-  const toast = useToast();
-  const confirm = useConfirm();
   const invalidate = useInvalidateSubjects();
 
   const [editing, setEditing] = useState<SubjectMeta | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const deleteMut = useMutation({
-    mutationFn: (id: number) => api.deleteSubject(id),
-    onSuccess: () => {
-      toast.success('科目已删除');
-      invalidate();
-    },
-    onError: (e: unknown) => {
-      // Backend returns 409 with a Chinese message when courses still reference
-      // the subject (FK ON DELETE RESTRICT).
-      const msg = (e as { message?: string }).message ?? '删除失败';
-      toast.error(msg);
-    },
+  const del = useDeleteConfirm({
+    mutationFn: api.deleteSubject,
+    noun: '科目',
+    onDeleted: invalidate,
   });
 
-  const onDelete = async (s: SubjectMeta) => {
-    const ok = await confirm({ message: `确认删除科目「${s.label}」？`, detail: '若该科目下仍有课程，删除将被拒绝。', danger: true });
-    if (!ok) return;
-    deleteMut.mutate(s.id!);
-  };
+  const onDelete = (s: SubjectMeta) =>
+    del.confirmAndDelete(s.id!, `确认删除科目「${s.label}」？`, '若该科目下仍有课程，删除将被拒绝。');
 
   if (subjectsQ.isLoading) return <LoadingState />;
   const subjects = subjectsQ.data ?? [];
@@ -105,7 +93,7 @@ export function Subjects() {
                       <button
                         className="btn-ghost btn-sm text-bad hover:bg-bad/10"
                         onClick={() => onDelete(s)}
-                        disabled={deleteMut.isPending}
+                        disabled={del.isPending}
                       >
                         删除
                       </button>

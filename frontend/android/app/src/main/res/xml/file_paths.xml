@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Paths exposed by the FileProvider for OTA APK self-install.
+     The downloaded update is written to the app's files directory, so we map
+     its root so the system installer can resolve the content:// URI to it. -->
+<paths>
+    <files-path name="apk_updates" path="." />
+</paths>
