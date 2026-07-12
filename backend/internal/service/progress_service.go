@@ -54,7 +54,14 @@ func (s *progressService) isEntertainment(episodeID uint) bool {
 	if err != nil || ep == nil {
 		return false
 	}
-	c, err := s.courseRepo.FindByID(ep.CourseID)
+	return s.isEntertainmentCourse(ep.CourseID)
+}
+
+// isEntertainmentCourse reports whether the course is entertainment type.
+// Split out so callers that already have the courseID (e.g. ReportProgress
+// which loaded the episode) avoid a duplicate episode fetch.
+func (s *progressService) isEntertainmentCourse(courseID uint) bool {
+	c, err := s.courseRepo.FindByID(courseID)
 	if err != nil || c == nil {
 		return false
 	}
@@ -114,7 +121,9 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 	// Entertainment branch: record resume position + accumulate watch_seconds
 	// (for the future time-limit feature) in the separate table, then return.
 	// No completion, no points, no badges — learning stats stay uncontaminated.
-	if s.isEntertainment(episodeID) {
+	// Uses isEntertainmentCourse (not isEntertainment) to avoid re-fetching the
+	// episode we already loaded above.
+	if s.isEntertainmentCourse(ep.CourseID) {
 		entProg, err := s.entertainmentRepo.UpsertProgress(userID, episodeID, positionSec, deltaWatchSec)
 		if err != nil {
 			return nil, err

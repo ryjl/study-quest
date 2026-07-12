@@ -315,7 +315,7 @@ type PointsLedger struct {
 	ID           uint      `gorm:"primaryKey;autoIncrement"`
 	UserID       uint      `gorm:"index;not null"`
 	ChangeAmount int       `gorm:"not null"`
-	ReasonType   string    `gorm:"size:50;not null"` // 'system_watch', 'parent_grant', 'redeem_gift'
+	ReasonType   string    `gorm:"size:50;not null"` // see Reason* consts above (system_watch, badge_unlocked, parent_grant)
 	Description  string    `gorm:"size:1024"`
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
@@ -362,8 +362,8 @@ type Badge struct {
 	// a progression: the user advances through each tier as their stat crosses
 	// each tier's threshold, earning that tier's reward points. Adding a new
 	// tier later is just appending to this array — no migration needed.
-	// Subject badges use Code "subject_<key>" so they can be paired with a
-	// subject for auto-create/delete/rename-cascade.
+	// Subject badges are linked to their subject via SubjectID (FK); the Code
+	// "subject_<key>" convention is kept for human-readability only.
 	Tiers    string `gorm:"type:text"`
 	IsSystem bool   `gorm:"default:false"` // true = seeded default, protected from deletion
 	Subject  *Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:SET NULL"`
@@ -601,10 +601,10 @@ func (a ReadingArticle) TagsJoined() string  { return strings.Join(a.TagsList(),
 func (a ReadingArticle) GradeDisplay() string { return readingGradeDisplay(readingArticleGrades(a.Grades)) }
 
 // ReadingBook is a PDF document in the reading room. Mirrors the Episode role:
-// FileRelativePath + FileHash + FileSize follow the exact same Alist 302-stream
-// + disaster-recovery pattern as Episode.VideoRelativePath. PageCount is
-// nullable (unknown until the client opens the PDF and reports it back — there
-// is no backend probe worker, unlike the ffprobe pipeline for episodes).
+// FileRelativePath + FileSize follow the Alist 302-stream + basename-based
+// disaster-recovery pattern. PageCount is nullable (unknown until the client
+// opens the PDF and reports it back — there is no backend probe worker, unlike
+// the ffprobe pipeline for episodes).
 type ReadingBook struct {
 	ID               uint    `gorm:"primaryKey;autoIncrement"`
 	SeriesID         uint    `gorm:"index;not null;default:0"` // 0 = standalone (散本)
