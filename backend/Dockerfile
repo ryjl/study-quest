@@ -20,8 +20,8 @@ RUN mkdir -p /build/backend/internal/admin/spa/dist && npm run build
 # bakes it into the single resulting binary.
 FROM golang:1.23-alpine AS builder
 
-# Install build dependencies for CGO compilation
-RUN apk add --no-cache gcc musl-dev
+# Install build dependencies for CGO compilation and UPX for binary compression
+RUN apk add --no-cache gcc musl-dev upx
 
 WORKDIR /app
 
@@ -38,10 +38,13 @@ COPY --from=spa /build/backend/internal/admin/spa/dist ./internal/admin/spa/dist
 # Build statically linked binary with optimization flags
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o server cmd/server/main.go
 
+# Compress the binary to significantly reduce image size
+RUN upx --best --lzma server
+
 # Stage 2: Runtime image using minimal alpine environment
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata ffmpeg
 
 WORKDIR /app
 

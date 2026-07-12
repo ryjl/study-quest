@@ -81,3 +81,18 @@ clean:
 	@rm -rf backend/internal/admin/spa/dist/*
 	@rm -rf frontend-admin/node_modules/
 	@rm -rf frontend/build/
+
+# 一键部署到远程服务器
+deploy: docker-build
+	@echo "==> Deploying to server (with gzip compression)..."
+	@docker save studyquest-backend:latest | gzip | ssh -p 30901 ry@192.168.8.4 \
+		"mkdir -p ~/data/studyquest-data/subtitles && \
+		docker load && \
+		{ docker stop studyquest-backend 2>/dev/null || true; } && \
+		{ docker rm studyquest-backend 2>/dev/null || true; } && \
+		docker run -d --name studyquest-backend --restart unless-stopped \
+			-p 6001:8080 \
+			--user \`id -u\`:\`id -g\` \
+			-v ~/data/studyquest-data:/app/data \
+			studyquest-backend:latest"
+	@echo "==> Deployment complete!"
