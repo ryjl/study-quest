@@ -4,13 +4,35 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
+	"studyquest/backend/internal/model"
 
 	"github.com/gin-gonic/gin"
 )
 
+// parseGrades splits a comma-separated grade string (e.g. "3,4,5" or "universal")
+// into a []model.Grade. Whitespace is trimmed; invalid values are dropped.
+func parseGrades(s string) []model.Grade {
+	if s == "" {
+		return []model.Grade{model.GradeUniversal}
+	}
+	parts := strings.Split(s, ",")
+	out := make([]model.Grade, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		g := model.Grade(p)
+		if g.Valid() {
+			out = append(out, g)
+		}
+	}
+	if len(out) == 0 {
+		return []model.Grade{model.GradeUniversal}
+	}
+	return out
+}
 
 func (h *adminHandler) ListCourses(c *gin.Context) {
-	courses, err := h.courseRepo.List("", 0, nil)
+	courses, err := h.courseRepo.List("", 0, "", nil)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -61,8 +83,9 @@ func (h *adminHandler) GetCourseDetail(c *gin.Context) {
 func (h *adminHandler) CreateCourse(c *gin.Context) {
 	var req struct {
 		Title          string `json:"title" binding:"required"`
-		Grade          string `json:"grade" binding:"required"`
+		Grades         string `json:"grades"`
 		Subject        string `json:"subject" binding:"required"`
+		ContentType    string `json:"content_type"`
 		CoverURL       string `json:"cover_url"`
 		TagIDs         []uint `json:"tag_ids"`
 		AttachmentJSON string `json:"attachment_json"`
@@ -79,7 +102,13 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, req.Grade, subjectID, req.CoverURL, req.TagIDs, req.AttachmentJSON)
+	grades := parseGrades(req.Grades)
+	contentType := model.ContentType(req.ContentType)
+	if !contentType.Valid() {
+		contentType = model.ContentLearning
+	}
+
+	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -114,8 +143,9 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 
 	var req struct {
 		Title          string `json:"title" binding:"required"`
-		Grade          string `json:"grade" binding:"required"`
+		Grades         string `json:"grades"`
 		Subject        string `json:"subject" binding:"required"`
+		ContentType    string `json:"content_type"`
 		CoverURL       string `json:"cover_url"`
 		TagIDs         []uint `json:"tag_ids"`
 		AttachmentJSON string `json:"attachment_json"`
@@ -132,7 +162,13 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		return
 	}
 
-	course, err := h.courseService.UpdateCourse(id, req.Title, req.Grade, subjectID, req.CoverURL, req.TagIDs, req.AttachmentJSON)
+	grades := parseGrades(req.Grades)
+	contentType := model.ContentType(req.ContentType)
+	if !contentType.Valid() {
+		contentType = model.ContentLearning
+	}
+
+	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -176,7 +212,7 @@ func (h *adminHandler) CreateEpisode(c *gin.Context) {
 		req.VideoRelativePath,
 		req.AttachmentJSON,
 		req.SortOrder,
-		"", "", nil, nil,
+		"", nil, nil,
 	)
 	if err != nil {
 		respondError(c, err)

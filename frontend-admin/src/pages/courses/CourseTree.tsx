@@ -494,11 +494,6 @@ function EpisodeRow({
           </span>
         )}
         {ep.file_size && <span className="text-[11px] text-muted">{formatFileSize(ep.file_size)}</span>}
-        {ep.file_hash ? (
-          <span className="rounded bg-good/10 px-1.5 py-0.5 text-[11px] text-good" title={`SHA: ${ep.file_hash}`}>
-            ✓
-          </span>
-        ) : null}
       </div>
 
       {/* Actions — fixed-width column so 编辑/删除 buttons align across rows. */}

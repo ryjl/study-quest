@@ -29,6 +29,7 @@ export function CreateEditCourseModal({
   const [title, setTitle] = useState('');
   const [grade, setGrade] = useState('');
   const [subject, setSubject] = useState('');
+  const [contentType, setContentType] = useState<'learning' | 'entertainment'>('learning');
   const [coverUrl, setCoverUrl] = useState('');
   const [tagIDs, setTagIDs] = useState<number[]>([]);
 
@@ -36,19 +37,30 @@ export function CreateEditCourseModal({
     if (open) {
       setTitle(course?.title ?? '');
       setGrade(course?.grade ?? '');
-      // Default to the course's existing subject, else the first available.
-      setSubject(course?.subject ?? subjects[0]?.key ?? '');
+      const ct = (course?.content_type === 'entertainment' ? 'entertainment' : 'learning') as 'learning' | 'entertainment';
+      setContentType(ct);
+      // Entertainment courses are pinned to the "entertainment" subject.
+      setSubject(ct === 'entertainment' ? 'entertainment' : (course?.subject ?? subjects[0]?.key ?? ''));
       setCoverUrl(course?.cover_url ?? '');
       setTagIDs(course?.tag_ids ?? []);
     }
   }, [open, course, subjects]);
+
+  const isEntertainment = contentType === 'entertainment';
 
   const saveMut = useMutation({
     mutationFn: async () => {
       if (!title.trim()) throw new Error('请输入课程名称');
       const grades = grade.split(',').map((g) => g.trim()).filter(Boolean);
       if (grades.length === 0) throw new Error('请至少选择一个适用年级');
-      const body = { title: title.trim(), grade, subject, cover_url: coverUrl, tag_ids: tagIDs };
+      const body = {
+        title: title.trim(),
+        grade,
+        subject: isEntertainment ? 'entertainment' : subject,
+        content_type: contentType,
+        cover_url: coverUrl,
+        tag_ids: tagIDs,
+      };
       if (isEdit && course) return api.updateCourse(course.id, body);
       return api.createCourse(body);
     },
@@ -80,15 +92,37 @@ export function CreateEditCourseModal({
         </div>
 
         <div>
-          <label className="mb-1 block text-xs text-muted">类别 / 科目</label>
-          <select className="input" value={subject} onChange={(e) => setSubject(e.target.value)}>
-            {subjects.map((s) => (
-              <option key={s.key} value={s.key}>
-                {s.emoji} {s.label} ({s.key})
-              </option>
-            ))}
-          </select>
+          <label className="mb-1 block text-xs text-muted">内容类型</label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => { setContentType('learning'); setSubject(course?.subject ?? subjects[0]?.key ?? ''); }}
+              className={`flex-1 rounded-lg border px-3 py-2 text-sm ${!isEntertainment ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'}`}
+            >
+              📚 学习
+            </button>
+            <button
+              type="button"
+              onClick={() => { setContentType('entertainment'); setSubject('entertainment'); }}
+              className={`flex-1 rounded-lg border px-3 py-2 text-sm ${isEntertainment ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'}`}
+            >
+              🎬 娱乐
+            </button>
+          </div>
         </div>
+
+        {!isEntertainment && (
+          <div>
+            <label className="mb-1 block text-xs text-muted">类别 / 科目</label>
+            <select className="input" value={subject} onChange={(e) => setSubject(e.target.value)}>
+              {subjects.filter((s) => s.key !== 'entertainment').map((s) => (
+                <option key={s.key} value={s.key}>
+                  {s.emoji} {s.label} ({s.key})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <ImageUpload label="封面图" value={coverUrl} onChange={setCoverUrl} />
 

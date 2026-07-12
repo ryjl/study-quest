@@ -6,6 +6,7 @@ package handler
 // contract that the Flutter client depends on.
 
 import (
+	"strings"
 	"time"
 
 	"studyquest/backend/internal/model"
@@ -15,9 +16,10 @@ import (
 type courseDTO struct {
 	ID                  uint     `json:"id"`
 	Title               string   `json:"title"`
-	Grade               string   `json:"grade"`
+	Grades              string   `json:"grades"`       // comma-joined grade keys (e.g. "3,4,5")
 	Subject             string   `json:"subject"`     // subject key, e.g. "math" (resolved from SubjectID)
 	SubjectID           uint     `json:"subject_id"`  // FK → subjects.id
+	ContentType         string   `json:"content_type"` // learning | entertainment
 	CoverURL            string   `json:"cover_url"`
 	// CoverFallbackURL is a derived thumbnail used only when CoverURL is empty:
 	// the first episode's cover (by sort_order). Lets newly-imported courses
@@ -65,9 +67,10 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 	return courseDTO{
 		ID:                   c.ID,
 		Title:                c.Title,
-		Grade:                string(c.Grade),
+		Grades:               strings.Join(c.GradeKeys(), ","),
 		Subject:              subjectKey,
 		SubjectID:            c.SubjectID,
+		ContentType:          string(c.ContentType),
 		CoverURL:             c.CoverURL,
 		CoverFallbackURL:     coverFallback,
 		Tags:                 c.TagsJoined(),   // comma-joined labels (legacy)
@@ -92,7 +95,6 @@ type episodeDTO struct {
 	VideoRelativePath    string `json:"video_relative_path"`
 	CoverURL             string `json:"cover_url"`
 	AttachmentJSON       string `json:"attachment_json"`
-	FileHash             string `json:"file_hash"`
 	OriginalRelativePath string `json:"original_relative_path"`
 	FileSize             *int64 `json:"file_size"`
 	DurationSeconds      *int   `json:"duration_seconds"`
@@ -111,7 +113,6 @@ func toEpisodeDTO(e model.Episode) episodeDTO {
 		VideoRelativePath:    e.VideoRelativePath,
 		CoverURL:             e.CoverURL,
 		AttachmentJSON:       e.AttachmentJSON,
-		FileHash:             e.FileHash,
 		OriginalRelativePath: e.OriginalRelativePath,
 		FileSize:             e.FileSize,
 		DurationSeconds:      e.DurationSeconds,
@@ -341,7 +342,7 @@ type readingSeriesDTO struct {
 	ID           uint     `json:"id"`
 	Title        string   `json:"title"`
 	Description  string   `json:"description"`
-	Grade        string   `json:"grade"`
+	Grades       string   `json:"grades"`
 	Subject      string   `json:"subject"`
 	SubjectID    uint     `json:"subject_id"`
 	CoverURL     string   `json:"cover_url"`
@@ -362,11 +363,10 @@ type readingBookDTO struct {
 	SortOrder        int    `json:"sort_order"`
 	Title            string `json:"title"`
 	FileRelativePath string `json:"file_relative_path"`
-	FileHash         string `json:"file_hash"`
 	FileSize         *int64 `json:"file_size"`
 	PageCount        *int   `json:"page_count"`
 	CoverURL         string `json:"cover_url"`
-	Grade            string `json:"grade"`
+	Grades           string `json:"grades"`
 	Subject          string `json:"subject"`
 	SubjectID        uint   `json:"subject_id"`
 	Tags             string `json:"tags"`
@@ -387,7 +387,7 @@ type readingArticleDTO struct {
 	MirrorStatus     string `json:"mirror_status"`
 	MirroredURL      string `json:"mirrored_url"`
 	CoverURL         string `json:"cover_url"`
-	Grade            string `json:"grade"`
+	Grades           string `json:"grades"`
 	Subject          string `json:"subject"`
 	SubjectID        uint   `json:"subject_id"`
 	Tags             string `json:"tags"`
@@ -398,6 +398,16 @@ type readingArticleDTO struct {
 	UpdatedAt        string   `json:"updated_at"`
 }
 
+// gradeKeysJoined returns a comma-joined string of grade keys from a loaded
+// CourseGrade set, for DTO projection.
+func gradeKeysJoinedCourse(gs []model.CourseGrade) string {
+	parts := make([]string, 0, len(gs))
+	for _, g := range gs {
+		parts = append(parts, string(g.Grade))
+	}
+	return strings.Join(parts, ",")
+}
+
 func (h *adminHandler) toReadingSeriesDTO(s model.ReadingSeries) readingSeriesDTO {
 	books, _ := h.readingBookRepo.ListBySeries(s.ID)
 	articles, _ := h.readingArticleRepo.ListBySeries(s.ID)
@@ -405,11 +415,15 @@ func (h *adminHandler) toReadingSeriesDTO(s model.ReadingSeries) readingSeriesDT
 	if subj, _ := h.subjectRepo.FindByID(s.SubjectID); subj != nil {
 		subjectKey = subj.Key
 	}
+	parts := make([]string, 0, len(s.Grades))
+	for _, g := range s.Grades {
+		parts = append(parts, string(g.Grade))
+	}
 	return readingSeriesDTO{
 		ID:           s.ID,
 		Title:        s.Title,
 		Description:  s.Description,
-		Grade:        string(s.Grade),
+		Grades:       strings.Join(parts, ","),
 		Subject:      subjectKey,
 		SubjectID:    s.SubjectID,
 		CoverURL:     s.CoverURL,
@@ -430,17 +444,20 @@ func (h *adminHandler) toReadingBookDTO(b model.ReadingBook) readingBookDTO {
 	if subj, _ := h.subjectRepo.FindByID(b.SubjectID); subj != nil {
 		subjectKey = subj.Key
 	}
+	parts := make([]string, 0, len(b.Grades))
+	for _, g := range b.Grades {
+		parts = append(parts, string(g.Grade))
+	}
 	return readingBookDTO{
 		ID:               b.ID,
 		SeriesID:         b.SeriesID,
 		SortOrder:        b.SortOrder,
 		Title:            b.Title,
 		FileRelativePath: b.FileRelativePath,
-		FileHash:         b.FileHash,
 		FileSize:         b.FileSize,
 		PageCount:        b.PageCount,
 		CoverURL:         b.CoverURL,
-		Grade:            string(b.Grade),
+		Grades:           strings.Join(parts, ","),
 		Subject:          subjectKey,
 		SubjectID:        b.SubjectID,
 		Tags:             b.TagsJoined(),
@@ -457,6 +474,10 @@ func (h *adminHandler) toReadingArticleDTO(a model.ReadingArticle) readingArticl
 	if subj, _ := h.subjectRepo.FindByID(a.SubjectID); subj != nil {
 		subjectKey = subj.Key
 	}
+	parts := make([]string, 0, len(a.Grades))
+	for _, g := range a.Grades {
+		parts = append(parts, string(g.Grade))
+	}
 	return readingArticleDTO{
 		ID:               a.ID,
 		SeriesID:         a.SeriesID,
@@ -467,7 +488,7 @@ func (h *adminHandler) toReadingArticleDTO(a model.ReadingArticle) readingArticl
 		MirrorStatus:     a.MirrorStatus,
 		MirroredURL:      a.MirroredURL,
 		CoverURL:         a.CoverURL,
-		Grade:            string(a.Grade),
+		Grades:           strings.Join(parts, ","),
 		Subject:          subjectKey,
 		SubjectID:        a.SubjectID,
 		Tags:             a.TagsJoined(),

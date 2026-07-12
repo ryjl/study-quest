@@ -21,10 +21,12 @@ type ProgressService interface {
 }
 
 type progressService struct {
-	db           *gorm.DB
-	progressRepo repository.ProgressRepository
-	episodeRepo  repository.EpisodeRepository
-	badgeService BadgeService
+	db                *gorm.DB
+	progressRepo      repository.ProgressRepository
+	episodeRepo       repository.EpisodeRepository
+	badgeService      BadgeService
+	courseRepo        repository.CourseRepository
+	entertainmentRepo repository.EntertainmentRepository
 	// userLocks serializes the completion+points path per user. The player's
 	// 5s heartbeat and a quiz-triggered report can overlap; without this, the
 	// daily-first-completion bonus (HasCompletedToday) could fire twice.
@@ -32,13 +34,38 @@ type progressService struct {
 }
 
 // NewProgressService creates an instance of ProgressService.
-func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService) ProgressService {
+func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService, cr repository.CourseRepository, er2 repository.EntertainmentRepository) ProgressService {
 	return &progressService{
-		db:           db,
-		progressRepo: pr,
-		episodeRepo:  er,
-		badgeService: bs,
+		db:                db,
+		progressRepo:      pr,
+		episodeRepo:       er,
+		badgeService:      bs,
+		courseRepo:        cr,
+		entertainmentRepo: er2,
 	}
+}
+
+// isEntertainment reports whether the episode belongs to an entertainment
+// course. Entertainment videos skip completion/points/badges entirely — their
+// progress is tracked in a separate table so learning-stat queries stay
+// zero-contaminated.
+func (s *progressService) isEntertainment(episodeID uint) bool {
+	ep, err := s.episodeRepo.FindByID(episodeID)
+	if err != nil || ep == nil {
+		return false
+	}
+	return s.isEntertainmentCourse(ep.CourseID)
+}
+
+// isEntertainmentCourse reports whether the course is entertainment type.
+// Split out so callers that already have the courseID (e.g. ReportProgress
+// which loaded the episode) avoid a duplicate episode fetch.
+func (s *progressService) isEntertainmentCourse(courseID uint) bool {
+	c, err := s.courseRepo.FindByID(courseID)
+	if err != nil || c == nil {
+		return false
+	}
+	return c.ContentType == model.ContentEntertainment
 }
 
 // lockUser returns (and lazily creates) the per-user mutex, then locks it.
@@ -48,6 +75,25 @@ func (s *progressService) lockUser(userID uint) *sync.Mutex {
 }
 
 func (s *progressService) GetProgress(userID, episodeID uint) (*model.UserProgress, error) {
+	// Entertainment: read from the separate table, project into UserProgress
+	// shape so the handler/DTO layer stays uniform. IsCompleted is always 0
+	// (entertainment has no completion concept).
+	if s.isEntertainment(episodeID) {
+		ep, err := s.entertainmentRepo.GetProgress(userID, episodeID)
+		if err != nil {
+			return nil, err
+		}
+		if ep == nil {
+			return nil, nil
+		}
+		return &model.UserProgress{
+			UserID:              ep.UserID,
+			EpisodeID:           ep.EpisodeID,
+			LastPositionSeconds: ep.LastPositionSeconds,
+			WatchSeconds:        ep.WatchSeconds,
+			IsCompleted:         0,
+		}, nil
+	}
 	return s.progressRepo.GetProgress(userID, episodeID)
 }
 
@@ -70,6 +116,25 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 	}
 	if ep == nil {
 		return nil, errors.New("episode not found")
+	}
+
+	// Entertainment branch: record resume position + accumulate watch_seconds
+	// (for the future time-limit feature) in the separate table, then return.
+	// No completion, no points, no badges — learning stats stay uncontaminated.
+	// Uses isEntertainmentCourse (not isEntertainment) to avoid re-fetching the
+	// episode we already loaded above.
+	if s.isEntertainmentCourse(ep.CourseID) {
+		entProg, err := s.entertainmentRepo.UpsertProgress(userID, episodeID, positionSec, deltaWatchSec)
+		if err != nil {
+			return nil, err
+		}
+		return &model.UserProgress{
+			UserID:              entProg.UserID,
+			EpisodeID:           entProg.EpisodeID,
+			LastPositionSeconds: entProg.LastPositionSeconds,
+			WatchSeconds:        entProg.WatchSeconds,
+			IsCompleted:         0,
+		}, nil
 	}
 
 	// 1. Atomically accumulate watch_seconds + set resume position. This is the

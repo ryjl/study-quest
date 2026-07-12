@@ -19,6 +19,7 @@ type ReadingSeriesRepository interface {
 	Update(series *model.ReadingSeries) error
 	Delete(id uint) error
 	SetTags(seriesID uint, tagIDs []uint) error
+	SetGrades(seriesID uint, grades []model.Grade) error
 
 	// Access control — mirrors UserCourseAccess methods on UserRepository.
 	HasAccess(userID, seriesID uint) (bool, error)
@@ -57,19 +58,22 @@ func (r *readingSeriesRepo) List(grade string, subjectID uint, allowedIDs []uint
 	}
 
 	if grade != "" {
-		query = query.Where("grade LIKE ? OR grade = 'universal' OR grade = 'all'", "%"+grade+"%")
+		query = query.Where(
+			"id IN (SELECT series_id FROM reading_series_grades WHERE grade = ? OR grade = ?)",
+			grade, string(model.GradeUniversal),
+		)
 	}
 	if subjectID != 0 {
 		query = query.Where("subject_id = ?", subjectID)
 	}
 
-	err := query.Preload("Tags").Order("sort_order asc, id asc").Find(&series).Error
+	err := query.Preload("Tags").Preload("Grades").Order("sort_order asc, id asc").Find(&series).Error
 	return series, err
 }
 
 func (r *readingSeriesRepo) FindByID(id uint) (*model.ReadingSeries, error) {
 	var series model.ReadingSeries
-	if err := r.db.Preload("Tags").First(&series, id).Error; err != nil {
+	if err := r.db.Preload("Tags").Preload("Grades").First(&series, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -118,6 +122,26 @@ func (r *readingSeriesRepo) SetTags(seriesID uint, tagIDs []uint) error {
 		}
 	}
 	return r.db.Model(&series).Association("Tags").Replace(&tags)
+}
+
+// SetGrades replaces the series's applicable-grade set.
+func (r *readingSeriesRepo) SetGrades(seriesID uint, grades []model.Grade) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("series_id = ?", seriesID).Delete(&model.ReadingSeriesGrade{}).Error; err != nil {
+			return err
+		}
+		seen := make(map[model.Grade]bool, len(grades))
+		for _, g := range grades {
+			if seen[g] || !g.Valid() {
+				continue
+			}
+			seen[g] = true
+			if err := tx.Create(&model.ReadingSeriesGrade{SeriesID: seriesID, Grade: g}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *readingSeriesRepo) HasAccess(userID, seriesID uint) (bool, error) {

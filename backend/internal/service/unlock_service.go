@@ -25,6 +25,9 @@ type UnlockService interface {
 	SaveOverride(userID, courseID uint, strategy string, intervalSeconds int, weeklyTimes []model.WeeklyTime, allowedIDs []uint) (*model.UserUnlockOverride, error)
 	DeleteOverride(userID, courseID uint) error
 	ListOverridesByUser(userID uint) ([]model.UserUnlockOverride, error)
+	// GetAllowedEpisodes returns the admin-curated allowlist for a (user, course)
+	// from the join table.
+	GetAllowedEpisodes(userID, courseID uint) ([]uint, error)
 
 	// IncrementManualUnlock bumps the water level by 1 for a (user, course).
 	// No-op effect under StrategySelected (water level is always 0 there);
@@ -109,17 +112,12 @@ func (s *unlockService) SaveOverride(userID, courseID uint, strategy string, int
 	if err != nil {
 		return nil, err
 	}
-	aj, err := json.Marshal(allowedIDs)
-	if err != nil {
-		return nil, err
-	}
 	o := &model.UserUnlockOverride{
-		UserID:                userID,
-		CourseID:              courseID,
-		Strategy:              strategy,
-		IntervalSeconds:       intervalSeconds,
-		WeeklyTimesJSON:       wj,
-		AllowedEpisodeIDsJSON: string(aj),
+		UserID:          userID,
+		CourseID:        courseID,
+		Strategy:        strategy,
+		IntervalSeconds: intervalSeconds,
+		WeeklyTimesJSON: wj,
 	}
 	// Preserve the existing manual_unlock_count when overwriting config (don't
 	// reset admin's accumulated manual bumps just because they tweaked the
@@ -128,6 +126,10 @@ func (s *unlockService) SaveOverride(userID, courseID uint, strategy string, int
 		o.ManualUnlockCount = existing.ManualUnlockCount
 	}
 	if err := s.unlockRepo.UpsertOverride(o); err != nil {
+		return nil, err
+	}
+	// Store the allowlist in the join table (replaces the old JSON blob).
+	if err := s.unlockRepo.SetAllowedEpisodes(userID, courseID, allowedIDs); err != nil {
 		return nil, err
 	}
 	return o, nil
@@ -139,6 +141,10 @@ func (s *unlockService) DeleteOverride(userID, courseID uint) error {
 
 func (s *unlockService) ListOverridesByUser(userID uint) ([]model.UserUnlockOverride, error) {
 	return s.unlockRepo.ListOverridesByUser(userID)
+}
+
+func (s *unlockService) GetAllowedEpisodes(userID, courseID uint) ([]uint, error) {
+	return s.unlockRepo.GetAllowedEpisodes(userID, courseID)
 }
 
 func (s *unlockService) IncrementManualUnlock(userID, courseID uint) error {

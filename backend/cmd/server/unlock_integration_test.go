@@ -263,6 +263,11 @@ func TestUnlockStatusEndpoint(t *testing.T) {
 	env := newTestEnv(t)
 	courseID, userID, _ := seedCourseEpisodes(t, env, 5)
 
+	// Pin the clock to a Saturday so the Sunday 19:00 weekly boundary is in
+	// the future. grantedAt is set to yesterday (Friday), so water level = 1
+	// (only the initial episode is unlocked, the Sunday boundary hasn't elapsed).
+	pinClock(t, time.Date(2026, 7, 11, 10, 0, 0, 0, time.FixedZone("CST", 8*3600)))
+
 	// weekly Sun 19:00; granted yesterday (water level still 1, not saturated).
 	env.do(t, http.MethodPut, "/admin/api/courses/"+itoa(courseID)+"/unlock-template", map[string]any{
 		"strategy":     "weekly",

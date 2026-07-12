@@ -49,19 +49,6 @@ func main() {
 		log.Fatalf("Database auto-migration failed: %v", err)
 	}
 
-	// Warn about a legacy schema: the old Course.Subject string column was
-	// replaced by Course.SubjectID + a subjects table with an FK constraint.
-	// SQLite cannot add an FK constraint to an existing column, so a DB that
-	// predates this change needs to be recreated. AutoMigrate has already
-	// added the new subject_id column and created the subjects table, but the
-	// RESTRICT constraint on subject_id will be missing on the legacy table.
-	if hasLegacySubjectColumn(db) {
-		log.Printf("⚠️  检测到旧版 courses.subject 列。本次升级引入了 subjects 表 + 外键约束，")
-		log.Printf("    SQLite 不支持给已有表加 FK 约束。为获得完整的删除保护，请删除数据库文件后重启：")
-		log.Printf("    rm %s", cfg.DBPath)
-		log.Printf("    (按约定数据可丢弃重建， subjects/badges 会在重启后自动 seed。)")
-	}
-
 	// 6. Initialize Repositories
 	settingsRepo := repository.NewSettingsRepository(db)
 	userRepo := repository.NewUserRepository(db)
@@ -77,13 +64,14 @@ func main() {
 	readingSeriesRepo := repository.NewReadingSeriesRepository(db)
 	readingBookRepo := repository.NewReadingBookRepository(db)
 	readingArticleRepo := repository.NewReadingArticleRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
-	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService)
+	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
 	tagService := service.NewTagService(tagRepo)
 	// Probe worker must exist before import/ingest handlers so they can wire
@@ -97,10 +85,9 @@ func main() {
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, settingsRepo)
 
-	// Seed default badges and subjects (idempotent). Badges seed FIRST: its
-	// one-time rebuild (clearing legacy single-tier badges) must run before
-	// subject seeding, which auto-generates subject_count badges — otherwise
-	// the rebuild would wipe the subject badges just created.
+	// Seed default badges and subjects (idempotent). Badges seed FIRST because
+	// subject seeding auto-generates subject_count badges and the order keeps
+	// the seed logs readable.
 	if err := badgeService.SeedDefaultBadges(); err != nil {
 		log.Printf("Warning: failed to seed default badges: %v", err)
 	}
@@ -110,14 +97,6 @@ func main() {
 	if err := tagService.SeedDefaultTags(); err != nil {
 		log.Printf("Warning: failed to seed default tags: %v", err)
 	}
-
-	// Backfill is_system on pre-existing seeded rows. On instances that were
-	// seeded BEFORE the IsSystem column existed, the starter rows have
-	// is_system=false (the column's default), so the delete-protection guard
-	// wouldn't apply to them. This one-shot UPDATE marks the canonical default
-	// keys as system so old installs converge to the same protected state as
-	// fresh ones. Idempotent — running it repeatedly just re-asserts the flag.
-	markSystemDefaults(db)
 
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
@@ -201,47 +180,3 @@ func main() {
 	}
 }
 
-// hasLegacySubjectColumn reports whether the courses table still carries the
-// old `subject` text column (pre-subjects-table schema). Used only to emit a
-// migration warning at boot.
-func hasLegacySubjectColumn(db *gorm.DB) bool {
-	type columnInfo struct {
-		Name string `gorm:"column:name"`
-	}
-	var cols []columnInfo
-	// SQLite introspection: PRAGMA table_info returns one row per column.
-	db.Raw("PRAGMA table_info(courses)").Scan(&cols)
-	for _, c := range cols {
-		if c.Name == "subject" {
-			return true
-		}
-	}
-	return false
-}
-
-// markSystemDefaults flags the canonical seeded subject/tag/badge rows as
-// IsSystem=true. This is a backfill for instances seeded before the IsSystem
-// column existed: their starter rows otherwise carry is_system=false and
-// wouldn't be delete-protected. Idempotent. The key lists are owned by the
-// service package (seed_keys.go) so they can't drift from the SeedDefault*
-// inserts.
-func markSystemDefaults(db *gorm.DB) {
-	// Keys come from the service package's single source of truth (seed_keys.go)
-	// — no hand-redeclared copies, so they can't drift from the SeedDefault*
-	// lists.
-	tables := []struct {
-		table string
-		col   string // the key/code column name
-		keys  []string
-	}{
-		{"subjects", "key", service.SystemSubjectKeys},
-		{"tags", "key", service.SystemTagKeys},
-		{"badges", "code", service.SystemBadgeCodes},
-	}
-	for _, t := range tables {
-		if err := db.Table(t.table).Where(t.col+" IN ?", t.keys).
-			Update("is_system", true).Error; err != nil {
-			log.Printf("Warning: failed to mark system %s defaults: %v", t.table, err)
-		}
-	}
-}

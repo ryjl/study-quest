@@ -52,10 +52,11 @@ class ApiService {
     return false;
   }
 
-  // 3. Fetch courses authorized for this student
-  static Future<List<Course>> fetchCourses(int activeUserId) async {
+  // 3. Fetch courses authorized for this student. Pass contentType to filter
+  // by learning (default) or entertainment.
+  static Future<List<Course>> fetchCourses(int activeUserId, {String contentType = 'learning'}) async {
     final response = await http.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/courses'),
+      Uri.parse('${AppConfig.baseUrl}/api/v1/courses?content_type=$contentType'),
       headers: _headers(activeUserId),
     );
     if (response.statusCode == 200) {

@@ -11,7 +11,6 @@ type FileInfo struct {
 	Size     int64     `json:"size"`
 	IsDir    bool      `json:"is_dir"`
 	Modified time.Time `json:"modified"`
-	Hash     string    `json:"hash,omitempty"` // populated with SHA1/MD5 if supported (e.g., AList)
 }
 
 // DownloadLink represents the result containing a download URL and additional headers required for retrieval.
@@ -30,9 +29,6 @@ type StorageProvider interface {
 
 	// GetDownloadURL generates the link (possibly with headers) for streaming.
 	GetDownloadURL(path string, userAgent string) (*DownloadLink, error)
-
-	// SupportsHash returns true if file hashes (e.g. SHA1) are natively supported and returned.
-	SupportsHash() bool
 
 	// Type returns the name of this provider (e.g. "alist", "webdav").
 	Type() string

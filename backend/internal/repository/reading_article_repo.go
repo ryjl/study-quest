@@ -19,6 +19,7 @@ type ReadingArticleRepository interface {
 	Update(article *model.ReadingArticle) error
 	Delete(id uint) error
 	SetTags(articleID uint, tagIDs []uint) error
+	SetGrades(articleID uint, grades []model.Grade) error
 
 	// Access control
 	HasAccess(userID, articleID uint) (bool, error)
@@ -58,25 +59,28 @@ func (r *readingArticleRepo) List(grade string, subjectID uint, allowedIDs []uin
 		query = query.Where("series_id = 0")
 	}
 	if grade != "" {
-		query = query.Where("grade LIKE ? OR grade = 'universal' OR grade = 'all'", "%"+grade+"%")
+		query = query.Where(
+			"id IN (SELECT article_id FROM reading_article_grades WHERE grade = ? OR grade = ?)",
+			grade, string(model.GradeUniversal),
+		)
 	}
 	if subjectID != 0 {
 		query = query.Where("subject_id = ?", subjectID)
 	}
 
-	err := query.Preload("Tags").Order("sort_order asc, id asc").Find(&articles).Error
+	err := query.Preload("Tags").Preload("Grades").Order("sort_order asc, id asc").Find(&articles).Error
 	return articles, err
 }
 
 func (r *readingArticleRepo) ListBySeries(seriesID uint) ([]model.ReadingArticle, error) {
 	var articles []model.ReadingArticle
-	err := r.db.Where("series_id = ?", seriesID).Preload("Tags").Order("sort_order asc, id asc").Find(&articles).Error
+	err := r.db.Where("series_id = ?", seriesID).Preload("Tags").Preload("Grades").Order("sort_order asc, id asc").Find(&articles).Error
 	return articles, err
 }
 
 func (r *readingArticleRepo) FindByID(id uint) (*model.ReadingArticle, error) {
 	var article model.ReadingArticle
-	if err := r.db.Preload("Tags").First(&article, id).Error; err != nil {
+	if err := r.db.Preload("Tags").Preload("Grades").First(&article, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -96,6 +100,7 @@ func (r *readingArticleRepo) Update(article *model.ReadingArticle) error {
 func (r *readingArticleRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		tx.Delete(&model.UserReadingArticleAccess{}, "article_id = ?", id)
+		tx.Delete(&model.ReadingArticleGrade{}, "article_id = ?", id)
 		return tx.Delete(&model.ReadingArticle{}, id).Error
 	})
 }
@@ -113,6 +118,26 @@ func (r *readingArticleRepo) SetTags(articleID uint, tagIDs []uint) error {
 		}
 	}
 	return r.db.Model(&article).Association("Tags").Replace(&tags)
+}
+
+// SetGrades replaces the article's applicable-grade set.
+func (r *readingArticleRepo) SetGrades(articleID uint, grades []model.Grade) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("article_id = ?", articleID).Delete(&model.ReadingArticleGrade{}).Error; err != nil {
+			return err
+		}
+		seen := make(map[model.Grade]bool, len(grades))
+		for _, g := range grades {
+			if seen[g] || !g.Valid() {
+				continue
+			}
+			seen[g] = true
+			if err := tx.Create(&model.ReadingArticleGrade{ArticleID: articleID, Grade: g}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *readingArticleRepo) HasAccess(userID, articleID uint) (bool, error) {

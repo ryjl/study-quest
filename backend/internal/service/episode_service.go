@@ -21,12 +21,12 @@ import (
 type EpisodeService interface {
 	GetEpisodesByCourse(courseID uint) ([]model.Episode, error)
 	GetEpisodeByID(id uint) (*model.Episode, error)
-	CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error)
-	UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error)
+	CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error)
+	UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error)
 	// UpdateEpisodeAdmin performs a PATCH-style update of the admin-editable
 	// fields only (title, path, chapter, sort). Media metadata fields
-	// (file_hash, file_size, duration_seconds, media_meta_json) are preserved
-	// so editing a title from the admin UI never clobbers ffprobe results.
+	// (file_size, duration_seconds, media_meta_json) are preserved so editing a
+	// title from the admin UI never clobbers ffprobe results.
 	UpdateEpisodeAdmin(id, chapterID uint, title, videoPath string, sortOrder int) (*model.Episode, error)
 	DeleteEpisode(id uint) error
 	ReorderEpisodes(episodeIDs []uint) error
@@ -93,7 +93,7 @@ func (s *episodeService) GetEpisodeByID(id uint) (*model.Episode, error) {
 	return s.episodeRepo.FindByID(id)
 }
 
-func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error) {
+func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error) {
 	ep := &model.Episode{
 		CourseID:             courseID,
 		ChapterID:            chapterID,
@@ -101,7 +101,6 @@ func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPat
 		Title:                title,
 		VideoRelativePath:    videoPath,
 		AttachmentJSON:       attachments,
-		FileHash:             fileHash,
 		OriginalRelativePath: origPath,
 		FileSize:             size,
 		DurationSeconds:      dur,
@@ -112,7 +111,7 @@ func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPat
 	return ep, nil
 }
 
-func (s *episodeService) UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, fileHash string, origPath string, size *int64, dur *int) (*model.Episode, error) {
+func (s *episodeService) UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error) {
 	ep, err := s.episodeRepo.FindByID(id)
 	if err != nil {
 		return nil, err
@@ -126,7 +125,6 @@ func (s *episodeService) UpdateEpisode(id uint, chapterID uint, title, videoPath
 	ep.VideoRelativePath = videoPath
 	ep.AttachmentJSON = attachments
 	ep.SortOrder = sortOrder
-	ep.FileHash = fileHash
 	ep.OriginalRelativePath = origPath
 	ep.FileSize = size
 	ep.DurationSeconds = dur
@@ -242,22 +240,18 @@ func (s *episodeService) GetStreamURL(episodeID uint, userAgent string) (*storag
 		return link, nil
 	}
 
-	// Dynamic disaster recovery: Path changed, check by file size or hash
-	// If provider supports hash, check hash
-	if provider.SupportsHash() && ep.FileHash != "" {
-		resolved, err := s.episodeRepo.FindByHash(ep.FileHash)
-		if err == nil && resolved != nil && resolved.VideoRelativePath != ep.VideoRelativePath {
-			// Update locally cached path for next requests
+	// Disaster recovery: the primary path 404'd on the storage backend (file
+	// moved/renamed, or the storage backend changed). Try to re-resolve by
+	// matching the stored filename basename + file_size against another episode
+	// row that has a different (presumably still-valid) path. This replaces the
+	// old hash-based recovery (hash is now removed) and fixes the broken
+	// FindByPathAndSize which queried the same failing path.
+	if ep.FileSize != nil && ep.OriginalRelativePath != "" {
+		basename := filepath.Base(ep.OriginalRelativePath)
+		if resolved, rErr := s.episodeRepo.FindByBasenameAndSize(basename, *ep.FileSize); rErr == nil && resolved != nil && resolved.VideoRelativePath != ep.VideoRelativePath {
+			// Found another row with the same file at a different path — borrow it.
 			ep.VideoRelativePath = resolved.VideoRelativePath
 			_ = s.episodeRepo.Update(ep)
-			return provider.GetDownloadURL(resolved.VideoRelativePath, userAgent)
-		}
-	}
-
-	// Check by size + original path fallback
-	if ep.FileSize != nil {
-		resolved, err := s.episodeRepo.FindByPathAndSize(ep.VideoRelativePath, *ep.FileSize)
-		if err == nil && resolved != nil {
 			return provider.GetDownloadURL(resolved.VideoRelativePath, userAgent)
 		}
 	}

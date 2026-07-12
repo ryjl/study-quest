@@ -91,7 +91,7 @@ func (h *adminHandler) CreateReadingSeries(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	series, err := h.readingSeriesService.CreateSeries(req.Title, req.Description, req.Grade, subjectID, req.CoverURL, req.SortOrder, req.TagIDs)
+	series, err := h.readingSeriesService.CreateSeries(req.Title, req.Description, parseGrades(req.Grade), subjectID, req.CoverURL, req.SortOrder, req.TagIDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -123,7 +123,7 @@ func (h *adminHandler) UpdateReadingSeries(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	series, err := h.readingSeriesService.UpdateSeries(id, req.Title, req.Description, req.Grade, subjectID, req.CoverURL, req.SortOrder, req.TagIDs)
+	series, err := h.readingSeriesService.UpdateSeries(id, req.Title, req.Description, parseGrades(req.Grade), subjectID, req.CoverURL, req.SortOrder, req.TagIDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -169,7 +169,6 @@ func (h *adminHandler) CreateReadingBook(c *gin.Context) {
 		SortOrder        int    `json:"sort_order"`
 		Title            string `json:"title" binding:"required"`
 		FileRelativePath string `json:"file_relative_path" binding:"required"`
-		FileHash         string `json:"file_hash"`
 		CoverURL         string `json:"cover_url"`
 		Grade            string `json:"grade" binding:"required"`
 		Subject          string `json:"subject" binding:"required"`
@@ -184,7 +183,7 @@ func (h *adminHandler) CreateReadingBook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	book, err := h.readingBookService.CreateBook(req.SeriesID, req.SortOrder, req.Title, req.FileRelativePath, req.FileHash, req.CoverURL, req.Grade, subjectID, req.TagIDs)
+	book, err := h.readingBookService.CreateBook(req.SeriesID, req.SortOrder, req.Title, req.FileRelativePath, req.CoverURL, parseGrades(req.Grade), subjectID, req.TagIDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -203,7 +202,6 @@ func (h *adminHandler) UpdateReadingBook(c *gin.Context) {
 		SortOrder        int    `json:"sort_order"`
 		Title            string `json:"title" binding:"required"`
 		FileRelativePath string `json:"file_relative_path" binding:"required"`
-		FileHash         string `json:"file_hash"`
 		CoverURL         string `json:"cover_url"`
 		Grade            string `json:"grade" binding:"required"`
 		Subject          string `json:"subject" binding:"required"`
@@ -218,7 +216,7 @@ func (h *adminHandler) UpdateReadingBook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	book, err := h.readingBookService.UpdateBook(id, req.SeriesID, req.SortOrder, req.Title, req.FileRelativePath, req.FileHash, req.CoverURL, req.Grade, subjectID, req.TagIDs)
+	book, err := h.readingBookService.UpdateBook(id, req.SeriesID, req.SortOrder, req.Title, req.FileRelativePath, req.CoverURL, parseGrades(req.Grade), subjectID, req.TagIDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -279,7 +277,7 @@ func (h *adminHandler) CreateReadingArticle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	article, err := h.readingArticleService.CreateArticle(req.SeriesID, req.SortOrder, req.Title, req.SourceURL, normalizeWhitelistJSON(req.WhitelistDomains), req.CoverURL, req.Grade, subjectID, req.TagIDs)
+	article, err := h.readingArticleService.CreateArticle(req.SeriesID, req.SortOrder, req.Title, req.SourceURL, normalizeWhitelistJSON(req.WhitelistDomains), req.CoverURL, parseGrades(req.Grade), subjectID, req.TagIDs)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -313,7 +311,7 @@ func (h *adminHandler) UpdateReadingArticle(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	article, err := h.readingArticleService.UpdateArticle(id, req.SeriesID, req.SortOrder, req.Title, req.SourceURL, normalizeWhitelistJSON(req.WhitelistDomains), req.CoverURL, req.Grade, subjectID, req.TagIDs)
+	article, err := h.readingArticleService.UpdateArticle(id, req.SeriesID, req.SortOrder, req.Title, req.SourceURL, normalizeWhitelistJSON(req.WhitelistDomains), req.CoverURL, parseGrades(req.Grade), subjectID, req.TagIDs)
 	if err != nil {
 		respondError(c, err)
 		return

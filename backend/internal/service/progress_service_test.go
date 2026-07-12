@@ -21,7 +21,8 @@ func TestProgressServiceLastWatched(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
-	svc := NewProgressService(db, progressRepo, episodeRepo, nil)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
+	svc := NewProgressService(db, progressRepo, episodeRepo, nil, courseRepo, entertainmentRepo)
 
 	t.Run("GetLastWatchedEpisode", func(t *testing.T) {
 		// Create User
@@ -30,8 +31,9 @@ func TestProgressServiceLastWatched(t *testing.T) {
 		_ = userRepo.Create(user)
 
 		// Create Course
-		course := &model.Course{Title: "Resume Course", Grade: "3", SubjectID: subjects["math"].ID}
+		course := &model.Course{Title: "Resume Course", SubjectID: subjects["math"].ID}
 		_ = courseRepo.Create(course)
+		db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 
 		// Create Episodes
 		ep1 := &model.Episode{CourseID: course.ID, Title: "Ep 1", VideoRelativePath: "/path1.mp4", SortOrder: 1}
@@ -110,17 +112,19 @@ func TestProgressCompletionAtomicity(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
-	svc := NewProgressService(db, progressRepo, episodeRepo, nil)
+	svc := NewProgressService(db, progressRepo, episodeRepo, nil, courseRepo, entertainmentRepo)
 
 	user := &model.User{Nickname: "Completer", PinHash: "x", Role: "student"}
 	if err := userRepo.Create(user); err != nil {
 		t.Fatalf("create user: %v", err)
 	}
-	course := &model.Course{Title: "C", Grade: "1", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "C", SubjectID: subjects["math"].ID}
 	if err := courseRepo.Create(course); err != nil {
 		t.Fatalf("create course: %v", err)
 	}
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("1")})
 	// 100-second episode → 90% threshold = 90s.
 	dur := 100
 	ep := &model.Episode{CourseID: course.ID, Title: "E1", VideoRelativePath: "/p.mp4", SortOrder: 1, DurationSeconds: &dur}

@@ -31,8 +31,7 @@ func NewWebDAVProvider(baseURL, username, password string) *WebDAVProvider {
 	}
 }
 
-func (w *WebDAVProvider) SupportsHash() bool { return false }
-func (w *WebDAVProvider) Type() string       { return "webdav" }
+func (w *WebDAVProvider) Type() string { return "webdav" }
 
 func (w *WebDAVProvider) ListDir(path string) ([]FileInfo, error) {
 	// Normalize path for gowebdav
@@ -58,7 +57,6 @@ func (w *WebDAVProvider) ListDir(path string) ([]FileInfo, error) {
 			Size:     info.Size(),
 			IsDir:    info.IsDir(),
 			Modified: info.ModTime(),
-			Hash:     "", // WebDAV doesn't support file hash natively
 		})
 	}
 	return files, nil
@@ -87,7 +85,6 @@ func (w *WebDAVProvider) GetFileInfo(path string) (*FileInfo, error) {
 		Size:     info.Size(),
 		IsDir:    info.IsDir(),
 		Modified: info.ModTime(),
-		Hash:     "",
 	}, nil
 }
 

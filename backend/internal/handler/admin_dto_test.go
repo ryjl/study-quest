@@ -24,7 +24,6 @@ func TestToEpisodeDTO(t *testing.T) {
 		VideoRelativePath: "/x/y.mp4",
 		CoverURL:          "/uploads/c.jpg",
 		AttachmentJSON:    `[]`,
-		FileHash:          "deadbeef",
 		OriginalRelativePath: "/x/orig/y.mp4",
 		FileSize:          &size,
 		DurationSeconds:   &dur,
@@ -48,7 +47,7 @@ func TestToEpisodeDTO(t *testing.T) {
 	requiredKeys := []string{
 		"id", "course_id", "chapter_id", "sort_order", "title",
 		"video_relative_path", "cover_url", "attachment_json",
-		"file_hash", "original_relative_path", "file_size",
+		"original_relative_path", "file_size",
 		"duration_seconds", "media_meta_json", "created_at", "updated_at",
 	}
 	for _, k := range requiredKeys {

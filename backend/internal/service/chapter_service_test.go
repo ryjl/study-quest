@@ -24,8 +24,9 @@ func TestChapterService(t *testing.T) {
 	chapterSvc := NewChapterService(chapterRepo)
 	episodeSvc := NewEpisodeService(episodeRepo, repository.NewSettingsRepository(db))
 
-	course := &model.Course{Title: "Test Course", Grade: "3", SubjectID: subjects["chinese"].ID}
+	course := &model.Course{Title: "Test Course", SubjectID: subjects["chinese"].ID}
 	_ = courseRepo.Create(course)
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 
 	var ch1 *model.Chapter
 
@@ -64,7 +65,7 @@ func TestChapterService(t *testing.T) {
 
 	t.Run("DeleteChapterDissociatesEpisodes", func(t *testing.T) {
 		// Create episode belonging to this chapter
-		ep, err := episodeSvc.CreateEpisode(course.ID, ch1.ID, "Lesson 1", "/path/1.mp4", "[]", 1, "", "/path/1.mp4", nil, nil)
+		ep, err := episodeSvc.CreateEpisode(course.ID, ch1.ID, "Lesson 1", "/path/1.mp4", "[]", 1, "/path/1.mp4", nil, nil)
 		if err != nil {
 			t.Fatalf("CreateEpisode failed: %v", err)
 		}

@@ -51,12 +51,22 @@ func (h *readingHandler) subjectKeyOf(subjectID uint) string {
 	return ""
 }
 
+// joinGrades joins a grade-key slice into a comma-separated string for the
+// client DTO Grade field.
+func joinGrades(gs []model.Grade) string {
+	parts := make([]string, 0, len(gs))
+	for _, g := range gs {
+		parts = append(parts, string(g))
+	}
+	return strings.Join(parts, ",")
+}
+
 func (h *readingHandler) toClientSeriesDTO(s service.ReadingSeriesCard) clientReadingSeriesDTO {
 	return clientReadingSeriesDTO{
 		ID:           s.ID,
 		Title:        s.Title,
 		Description:  s.Description,
-		Grade:        string(s.Grade),
+		Grade:        joinGrades(readingSeriesGradeKeys(s.Grades)),
 		Subject:      h.subjectKeyOf(s.SubjectID),
 		CoverURL:     s.CoverURL,
 		Tags:         s.TagsJoined(),
@@ -69,16 +79,27 @@ func (h *readingHandler) toClientSeriesDTO(s service.ReadingSeriesCard) clientRe
 	}
 }
 
+func readingSeriesGradeKeys(gs []model.ReadingSeriesGrade) []model.Grade {
+	out := make([]model.Grade, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, g.Grade)
+	}
+	return out
+}
+
 func (h *readingHandler) toClientBookDTO(b model.ReadingBook) clientReadingBookDTO {
+	parts := make([]model.Grade, 0, len(b.Grades))
+	for _, g := range b.Grades {
+		parts = append(parts, g.Grade)
+	}
 	return clientReadingBookDTO{
 		ID:        b.ID,
 		SeriesID:  b.SeriesID,
 		SortOrder: b.SortOrder,
 		Title:     b.Title,
-		FileHash:  b.FileHash,
 		PageCount: b.PageCount,
 		CoverURL:  b.CoverURL,
-		Grade:     string(b.Grade),
+		Grade:     joinGrades(parts),
 		Subject:   h.subjectKeyOf(b.SubjectID),
 	}
 }
@@ -91,6 +112,10 @@ func (h *readingHandler) toClientArticleDTO(a model.ReadingArticle) clientReadin
 	if domains == nil {
 		domains = []string{}
 	}
+	parts := make([]model.Grade, 0, len(a.Grades))
+	for _, g := range a.Grades {
+		parts = append(parts, g.Grade)
+	}
 	return clientReadingArticleDTO{
 		ID:               a.ID,
 		SeriesID:         a.SeriesID,
@@ -99,7 +124,7 @@ func (h *readingHandler) toClientArticleDTO(a model.ReadingArticle) clientReadin
 		SourceURL:        h.articleService.EffectiveURL(&a),
 		WhitelistDomains: domains,
 		CoverURL:         a.CoverURL,
-		Grade:            string(a.Grade),
+		Grade:            joinGrades(parts),
 		Subject:          h.subjectKeyOf(a.SubjectID),
 	}
 }
@@ -110,7 +135,7 @@ func (h *readingHandler) toClientArticleDTO(a model.ReadingArticle) clientReadin
 func requireStudentIdentity(c *gin.Context) (uint, string, bool) {
 	roleVal, hasRole := c.Get("userRole")
 	role, _ := roleVal.(string)
-	if role == "admin" || role == "parent" {
+	if model.IsStaffRole(role) {
 		return 0, role, true
 	}
 	uidVal, hasUID := c.Get("userID")

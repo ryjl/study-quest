@@ -12,10 +12,12 @@ package service
 
 // SystemSubjectKeys are the keys of the seeded-default subjects. These rows
 // carry IsSystem=true and are delete-protected (see ErrSystemProtected).
+// "entertainment" is the implicit subject for entertainment courses (which
+// carry no learning stats); it does NOT get an auto-generated badge.
 var SystemSubjectKeys = []string{
 	"chinese", "math", "english", "physics",
 	"chemistry", "biology", "history", "geography", "politics",
-	"extra",
+	"extra", "entertainment",
 }
 
 // SystemTagKeys are the keys of the seeded-default tags.

@@ -10,8 +10,8 @@ import (
 
 // ReadingBookRepository handles SQL operations for ReadingBook (PDF) entities,
 // their access table, and per-user page progress. Mirrors EpisodeRepository for
-// the disaster-recovery methods (FindByHash / FindByPathAndSize) and
-// progress_repo for the atomic upsert.
+// the basename-based disaster-recovery method and progress_repo for the atomic
+// upsert.
 type ReadingBookRepository interface {
 	WithTx(tx *gorm.DB) ReadingBookRepository
 	// List filters by access (nil = all, empty = none) and optionally by grade
@@ -20,12 +20,12 @@ type ReadingBookRepository interface {
 	List(grade string, subjectID uint, allowedIDs []uint, standaloneOnly bool) ([]model.ReadingBook, error)
 	ListBySeries(seriesID uint) ([]model.ReadingBook, error)
 	FindByID(id uint) (*model.ReadingBook, error)
-	FindByHash(hash string) (*model.ReadingBook, error)
-	FindByPathAndSize(path string, size int64) (*model.ReadingBook, error)
+	FindByBasenameAndSize(basename string, size int64) (*model.ReadingBook, error)
 	Create(book *model.ReadingBook) error
 	Update(book *model.ReadingBook) error
 	Delete(id uint) error
 	SetTags(bookID uint, tagIDs []uint) error
+	SetGrades(bookID uint, grades []model.Grade) error
 
 	// Access control
 	HasAccess(userID, bookID uint) (bool, error)
@@ -69,25 +69,28 @@ func (r *readingBookRepo) List(grade string, subjectID uint, allowedIDs []uint, 
 		query = query.Where("series_id = 0")
 	}
 	if grade != "" {
-		query = query.Where("grade LIKE ? OR grade = 'universal' OR grade = 'all'", "%"+grade+"%")
+		query = query.Where(
+			"id IN (SELECT book_id FROM reading_book_grades WHERE grade = ? OR grade = ?)",
+			grade, string(model.GradeUniversal),
+		)
 	}
 	if subjectID != 0 {
 		query = query.Where("subject_id = ?", subjectID)
 	}
 
-	err := query.Preload("Tags").Order("sort_order asc, id asc").Find(&books).Error
+	err := query.Preload("Tags").Preload("Grades").Order("sort_order asc, id asc").Find(&books).Error
 	return books, err
 }
 
 func (r *readingBookRepo) ListBySeries(seriesID uint) ([]model.ReadingBook, error) {
 	var books []model.ReadingBook
-	err := r.db.Where("series_id = ?", seriesID).Preload("Tags").Order("sort_order asc, id asc").Find(&books).Error
+	err := r.db.Where("series_id = ?", seriesID).Preload("Tags").Preload("Grades").Order("sort_order asc, id asc").Find(&books).Error
 	return books, err
 }
 
 func (r *readingBookRepo) FindByID(id uint) (*model.ReadingBook, error) {
 	var book model.ReadingBook
-	if err := r.db.Preload("Tags").First(&book, id).Error; err != nil {
+	if err := r.db.Preload("Tags").Preload("Grades").First(&book, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -96,20 +99,13 @@ func (r *readingBookRepo) FindByID(id uint) (*model.ReadingBook, error) {
 	return &book, nil
 }
 
-func (r *readingBookRepo) FindByHash(hash string) (*model.ReadingBook, error) {
+// FindByBasenameAndSize finds a book whose stored path ends with the given
+// basename and whose file_size matches. Used for disaster recovery when the
+// primary path 404s on the storage backend.
+func (r *readingBookRepo) FindByBasenameAndSize(basename string, size int64) (*model.ReadingBook, error) {
 	var book model.ReadingBook
-	if err := r.db.Where("file_hash = ?", hash).First(&book).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &book, nil
-}
-
-func (r *readingBookRepo) FindByPathAndSize(path string, size int64) (*model.ReadingBook, error) {
-	var book model.ReadingBook
-	if err := r.db.Where("file_relative_path = ? AND file_size = ?", path, size).First(&book).Error; err != nil {
+	basenameLike := "%/" + basename
+	if err := r.db.Where("file_relative_path LIKE ? AND file_size = ?", basenameLike, size).First(&book).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -130,6 +126,7 @@ func (r *readingBookRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		tx.Delete(&model.ReadingBookProgress{}, "book_id = ?", id)
 		tx.Delete(&model.UserReadingBookAccess{}, "book_id = ?", id)
+		tx.Delete(&model.ReadingBookGrade{}, "book_id = ?", id)
 		return tx.Delete(&model.ReadingBook{}, id).Error
 	})
 }
@@ -147,6 +144,26 @@ func (r *readingBookRepo) SetTags(bookID uint, tagIDs []uint) error {
 		}
 	}
 	return r.db.Model(&book).Association("Tags").Replace(&tags)
+}
+
+// SetGrades replaces the book's applicable-grade set.
+func (r *readingBookRepo) SetGrades(bookID uint, grades []model.Grade) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("book_id = ?", bookID).Delete(&model.ReadingBookGrade{}).Error; err != nil {
+			return err
+		}
+		seen := make(map[model.Grade]bool, len(grades))
+		for _, g := range grades {
+			if seen[g] || !g.Valid() {
+				continue
+			}
+			seen[g] = true
+			if err := tx.Create(&model.ReadingBookGrade{BookID: bookID, Grade: g}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (r *readingBookRepo) HasAccess(userID, bookID uint) (bool, error) {

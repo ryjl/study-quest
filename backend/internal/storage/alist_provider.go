@@ -40,8 +40,7 @@ func NewAListProvider(baseURL, username, password, token string) *AListProvider 
 	return p
 }
 
-func (a *AListProvider) SupportsHash() bool { return true }
-func (a *AListProvider) Type() string       { return "alist" }
+func (a *AListProvider) Type() string { return "alist" }
 
 // Response structures for AList API
 type alistResponse struct {
@@ -55,9 +54,6 @@ type alistFileInfo struct {
 	Size     int64     `json:"size"`
 	IsDir    bool      `json:"is_dir"`
 	Modified time.Time `json:"modified"`
-	HashInfo *struct {
-		SHA1 string `json:"sha1"`
-	} `json:"hash_info"`
 }
 
 type alistListResult struct {
@@ -265,10 +261,6 @@ func (a *AListProvider) ListDir(path string) ([]FileInfo, error) {
 
 	files := make([]FileInfo, 0, len(result.Content))
 	for _, f := range result.Content {
-		hash := ""
-		if f.HashInfo != nil {
-			hash = f.HashInfo.SHA1
-		}
 		// Construct path for items
 		itemPath := strings.TrimSuffix(path, "/") + "/" + f.Name
 		if path == "/" {
@@ -281,7 +273,6 @@ func (a *AListProvider) ListDir(path string) ([]FileInfo, error) {
 			Size:     f.Size,
 			IsDir:    f.IsDir,
 			Modified: f.Modified,
-			Hash:     hash,
 		})
 	}
 	return files, nil
@@ -299,18 +290,12 @@ func (a *AListProvider) GetFileInfo(path string) (*FileInfo, error) {
 		return nil, err
 	}
 
-	hash := ""
-	if f.HashInfo != nil {
-		hash = f.HashInfo.SHA1
-	}
-
 	return &FileInfo{
 		Name:     f.Name,
 		Path:     path,
 		Size:     f.Size,
 		IsDir:    f.IsDir,
 		Modified: f.Modified,
-		Hash:     hash,
 	}, nil
 }
 

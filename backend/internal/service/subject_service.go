@@ -64,7 +64,7 @@ func (s *subjectService) Create(key, label, emoji, color string, sortOrder int) 
 	}
 	// Auto-generate the subject's multi-tier subject_count badge.
 	if s.badgeService != nil {
-		if err := s.badgeService.SeedSubjectBadge(subj.Key, subj.Label); err != nil {
+		if err := s.badgeService.SeedSubjectBadge(subj.ID, subj.Key, subj.Label); err != nil {
 			log.Printf("Warning: failed to auto-generate badge for subject %s: %v", subj.Key, err)
 		}
 	}
@@ -176,6 +176,10 @@ func (s *subjectService) SeedDefaultSubjects() error {
 		{Key: "geography", Label: "地理", Emoji: "🗺️", Color: "#0ea5e9", SortOrder: 8, IsSystem: true},
 		{Key: "politics", Label: "道德与法治", Emoji: "⚖️", Color: "#ef4444", SortOrder: 9, IsSystem: true},
 		{Key: "extra", Label: "课外百科", Emoji: "🌎", Color: "#f43f5e", SortOrder: 10, IsSystem: true},
+		// Entertainment: the implicit subject for fun videos (no learning stats,
+		// no badge). Entertainment courses point SubjectID here to satisfy the
+		// NOT NULL constraint. SortOrder 99 keeps it at the end of any list.
+		{Key: "entertainment", Label: "娱乐", Emoji: "🎬", Color: "#8b5cf6", SortOrder: 99, IsSystem: true},
 	}
 
 	for i := range defaults {
@@ -190,11 +194,11 @@ func (s *subjectService) SeedDefaultSubjects() error {
 				continue
 			}
 		}
-		// Ensure each default subject has its auto-generated badge (idempotent).
-		// Run for both newly-created and already-present subjects so an old
-		// install (subjects seeded before badges auto-generated) converges.
-		if s.badgeService != nil {
-			if err := s.badgeService.SeedSubjectBadge(defaults[i].Key, defaults[i].Label); err != nil {
+		// Ensure each default subject has its auto-generated badge (idempotent),
+		// EXCEPT entertainment (fun videos carry no badge). Run for both
+		// newly-created and already-present subjects so an old install converges.
+		if defaults[i].Key != "entertainment" && s.badgeService != nil {
+			if err := s.badgeService.SeedSubjectBadge(defaults[i].ID, defaults[i].Key, defaults[i].Label); err != nil {
 				log.Printf("Warning: failed to seed badge for subject %s: %v", defaults[i].Key, err)
 			}
 		}

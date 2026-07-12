@@ -17,7 +17,6 @@ type ImportPreviewNode struct {
 	Path     string               `json:"path"`
 	IsDir    bool                 `json:"is_dir"`
 	Size     int64                `json:"size"`
-	Hash     string               `json:"hash"`
 	Type     string               `json:"type"` // "course", "chapter", "episode", "pass-through", "exclude"
 	Children []*ImportPreviewNode `json:"children"`
 }
@@ -180,7 +179,6 @@ func (s *importService) scanRecursive(provider storage.StorageProvider, path str
 					Path:  f.Path,
 					IsDir: false,
 					Size:  f.Size,
-					Hash:  f.Hash,
 					Type:  "episode",
 				}
 				node.Children = append(node.Children, childNode)
@@ -264,12 +262,16 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 				return errors.New("no subject available; create a subject first")
 			}
 			c := &model.Course{
-				Title:     req.NewCourse.Title,
-				Grade:     g,
-				SubjectID: subjectID,
-				CoverURL:  req.NewCourse.CoverURL,
+				Title:       req.NewCourse.Title,
+				SubjectID:   subjectID,
+				ContentType: model.ContentLearning,
+				CoverURL:    req.NewCourse.CoverURL,
 			}
 			if err := courseRepo.Create(c); err != nil {
+				return err
+			}
+			// Set the grade set (course_grades join table).
+			if err := courseRepo.SetGrades(c.ID, []model.Grade{g}); err != nil {
 				return err
 			}
 			// Attach any requested tags via the many2many association.
@@ -340,7 +342,7 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 				var existing *model.Episode
 				for i := range currentEpisodes {
 					curr := &currentEpisodes[i]
-					if curr.Title == node.Name || filepath.Base(curr.VideoRelativePath) == filepath.Base(node.Path) || (node.Hash != "" && curr.FileHash == node.Hash) {
+					if curr.Title == node.Name || filepath.Base(curr.VideoRelativePath) == filepath.Base(node.Path) {
 						existing = curr
 						break
 					}
@@ -350,7 +352,6 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 					existing.ChapterID = currentChapterID
 					existing.VideoRelativePath = node.Path
 					existing.OriginalRelativePath = node.Path
-					existing.FileHash = node.Hash
 					existing.FileSize = &node.Size
 					if err := episodeRepo.Update(existing); err == nil {
 						s.autoMapSubtitleTx(episodeRepo, existing)
@@ -366,7 +367,6 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 					Title:                node.Name,
 					VideoRelativePath:    node.Path,
 					AttachmentJSON:       "[]",
-					FileHash:             node.Hash,
 					OriginalRelativePath: node.Path,
 					FileSize:             &node.Size,
 				}
@@ -413,13 +413,23 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 // autoMapSubtitleTx is the transaction-aware variant of autoMapSubtitle: it
 // saves the matched subtitle through the tx-bound episode repo so the subtitle
 // write participates in the import transaction (rolls back with it on failure).
+//
+// Subtitle file matching is by video basename (e.g. "lesson01.mp4" →
+// "lesson01.srt"). This replaces the old hash-based matching (the hash column
+// has been removed). The subtitles directory holds <basename>.srt files pushed
+// by the desktop transcription pipeline (ADR-008).
 func (s *importService) autoMapSubtitleTx(episodeRepo repository.EpisodeRepository, ep *model.Episode) {
 	subtitlesDir := "./data/subtitles"
 	_ = os.MkdirAll(subtitlesDir, 0755)
 
 	var srtPath string
-	if ep.FileHash != "" {
-		srtPath = filepath.Join(subtitlesDir, ep.FileHash+".srt")
+	path := ep.OriginalRelativePath
+	if path == "" {
+		path = ep.VideoRelativePath
+	}
+	if path != "" {
+		basename := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		srtPath = filepath.Join(subtitlesDir, basename+".srt")
 	}
 
 	if srtPath != "" {
@@ -467,8 +477,13 @@ func (s *importService) autoMapSubtitle(ep *model.Episode) {
 	_ = os.MkdirAll(subtitlesDir, 0755)
 
 	var srtPath string
-	if ep.FileHash != "" {
-		srtPath = filepath.Join(subtitlesDir, ep.FileHash+".srt")
+	path := ep.OriginalRelativePath
+	if path == "" {
+		path = ep.VideoRelativePath
+	}
+	if path != "" {
+		basename := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		srtPath = filepath.Join(subtitlesDir, basename+".srt")
 	}
 
 	if srtPath != "" {

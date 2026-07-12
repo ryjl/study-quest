@@ -23,9 +23,10 @@ func TestBadgeAndProgressIntegration(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 
 	badgeSvc := NewBadgeService(db, badgeRepo, progressRepo)
-	progressSvc := NewProgressService(db, progressRepo, episodeRepo, badgeSvc)
+	progressSvc := NewProgressService(db, progressRepo, episodeRepo, badgeSvc, courseRepo, entertainmentRepo)
 
 	// 1. Seed the multi-tier default badges. episode_master (tier 0 threshold=3)
 	// is the multi-tier episode-count badge we'll exercise here.
@@ -44,10 +45,11 @@ func TestBadgeAndProgressIntegration(t *testing.T) {
 		t.Fatalf("Failed to create user: %v", err)
 	}
 
-	course := &model.Course{Title: "快乐数学", Grade: "3", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "快乐数学", SubjectID: subjects["math"].ID}
 	if err := courseRepo.Create(course); err != nil {
 		t.Fatalf("Failed to create course: %v", err)
 	}
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 
 	// Create 5 episodes, with duration 100 seconds
 	dur := 100

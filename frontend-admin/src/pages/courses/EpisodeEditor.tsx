@@ -111,7 +111,6 @@ export function EpisodeEditor({
             <div className="grid grid-cols-2 gap-1 font-mono">
               <span>时长：{episode?.duration_seconds ? `${episode.duration_seconds}s` : '未探测'}</span>
               <span>大小：{episode?.file_size ? `${(episode.file_size / 1024 / 1024).toFixed(1)} MB` : '-'}</span>
-              <span>Hash：{episode?.file_hash ? episode.file_hash.slice(0, 8) : '无'}</span>
               <span>创建：{episode?.created_at?.slice(0, 10) ?? '-'}</span>
             </div>
           </div>

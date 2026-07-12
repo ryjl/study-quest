@@ -31,7 +31,7 @@ type BadgeService interface {
 	SeedDefaultBadges() error
 	// SeedSubjectBadge creates the auto-generated multi-tier subject_count
 	// badge for a subject (idempotent). Called when a subject is created.
-	SeedSubjectBadge(key, label string) error
+	SeedSubjectBadge(subjectID uint, key, label string) error
 	// RemoveDeprecatedDefaults is retained for interface compat; the multi-tier
 	// rebuild handles cleanup now.
 	RemoveDeprecatedDefaults() error
@@ -405,10 +405,8 @@ func (s *badgeService) evalNode(userID uint, node model.CompositeRule) bool {
 }
 
 // SeedDefaultBadges populates a curated multi-tier default badge set on first
-// run, and migrates an old single-tier install to the new multi-tier scheme
-// (clearing the old badges + user_badges and re-seeding). Subject badges are
-// NOT seeded here — they're generated dynamically by SubjectService when a
-// subject is created/seeded (see SeedSubjectBadge).
+// run. Subject badges are NOT seeded here — they're generated dynamically by
+// SubjectService when a subject is created/seeded (see SeedSubjectBadge).
 //
 // Multi-tier badges (Tiers JSON) let a user progress through several tiers on
 // ONE badge, each with its own threshold and reward points. The curve is tuned
@@ -418,18 +416,6 @@ func (s *badgeService) evalNode(userID uint, node model.CompositeRule) bool {
 //
 // Defaults are marked IsSystem so they survive deletion but stay editable.
 func (s *badgeService) SeedDefaultBadges() error {
-	// One-time migration: if the DB still has the OLD single-tier-per-threshold
-	// badges (pre-multi-tier schema), drop all badges + user_badges and re-seed
-	// the new set. Detected by the presence of any retired code.
-	if needsRebuild, err := s.detectLegacyBadges(); err != nil {
-		return err
-	} else if needsRebuild {
-		log.Printf("BadgeService: detected legacy single-tier badges — rebuilding badge set")
-		if err := s.rebuildBadgeTables(); err != nil {
-			return err
-		}
-	}
-
 	// Idempotent + incremental: each default is inserted by code; a code that
 	// already exists (unique index collision) is skipped.
 	defaults := defaultBadges()
@@ -442,45 +428,6 @@ func (s *badgeService) SeedDefaultBadges() error {
 		}
 	}
 	return nil
-}
-
-// detectLegacyBadges returns true if the DB contains any retired single-tier
-// badge codes from the pre-multi-tier scheme (triggering a rebuild).
-func (s *badgeService) detectLegacyBadges() (bool, error) {
-	for _, code := range legacyBadgeCodes {
-		b, err := s.badgeRepo.FindByCode(code)
-		if err != nil {
-			return false, err
-		}
-		if b != nil {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-// rebuildBadgeTables wipes the badges + user_badges tables so the new
-// multi-tier seed can run clean. It also removes the old badge_unlocked ledger
-// entries — under the legacy single-tier scheme those carried ChangeAmount=0
-// (no points), so removing them doesn't affect user balances; it just keeps
-// the ledger from accumulating orphan "unlocked a badge that no longer exists"
-// rows. Points earned from video watches (system_watch) are untouched.
-func (s *badgeService) rebuildBadgeTables() error {
-	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("1=1").Delete(&model.UserBadge{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("1=1").Delete(&model.Badge{}).Error; err != nil {
-			return err
-		}
-		// Remove orphan badge_unlocked ledger rows from the OLD single-tier
-		// scheme — those always carried ChangeAmount=0, so removing them can't
-		// affect balances. We scope to change_amount=0 so a re-triggered
-		// rebuild on a DB that already has new-scheme (non-zero) reward rows
-		// leaves those intact.
-		return tx.Where("reason_type = ? AND change_amount = 0", "badge_unlocked").
-			Delete(&model.PointsLedger{}).Error
-	})
 }
 
 // defaultBadges returns the curated multi-tier default badge set. Kept as a
@@ -570,16 +517,6 @@ func tiers(vals ...int) string {
 	return string(b)
 }
 
-// legacyBadgeCodes are retired single-tier codes whose presence triggers a
-// one-time rebuild to the multi-tier scheme.
-var legacyBadgeCodes = []string{
-	"seven_days_pioneer", "math_expert", "english_star", "hard_worker",
-	"three_day_streak", "fourteen_day_streak", "twentyone_day_streak",
-	"ten_episodes", "thirty_episodes", "fifty_episodes", "hundred_episodes",
-	"chinese_lover", "science_explorer", "points_100", "points_500", "points_1000",
-	"night_owl",
-}
-
 // SubjectBadgeCode returns the badge code used for a subject's auto-generated
 // subject_count badge. Shared by SubjectService (create/delete/rename) and
 // SeedSubjectBadge so they agree on the convention.
@@ -589,8 +526,9 @@ func SubjectBadgeCode(subjectKey string) string {
 
 // SeedSubjectBadge creates (idempotently) the auto-generated multi-tier
 // subject_count badge for one subject. Called by SubjectService on subject
-// create and by SeedDefaultSubjects for each default subject.
-func (s *badgeService) SeedSubjectBadge(key, label string) error {
+// create and by SeedDefaultSubjects for each default subject. The subjectID
+// links the badge to its subject via FK (replacing the old string-only coupling).
+func (s *badgeService) SeedSubjectBadge(subjectID uint, key, label string) error {
 	code := SubjectBadgeCode(key)
 	if existing, _ := s.badgeRepo.FindByCode(code); existing != nil {
 		return nil // already exists
@@ -598,7 +536,8 @@ func (s *badgeService) SeedSubjectBadge(key, label string) error {
 	return s.badgeRepo.Create(&model.Badge{
 		Code: code, Title: label + "达人", IconName: "badge_english",
 		Description: "完成的 " + label + " 视频课时数",
-		RuleType: "subject_count", RuleTarget: key,
+		RuleType: model.RuleSubjectCount, RuleTarget: key,
+		SubjectID: &subjectID,
 		Tiers: tiers(
 			1, 5, 5, 15, 20, 30, 50, 60, 150, 120,
 		),

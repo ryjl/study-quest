@@ -8,10 +8,10 @@ import (
 
 // CourseService handles Course business operations.
 type CourseService interface {
-	GetCourses(userID uint, userRole string, grade string, subjectID uint) ([]model.Course, error)
+	GetCourses(userID uint, userRole string, grade string, subjectID uint, contentType model.ContentType) ([]model.Course, error)
 	GetCourseByID(id uint) (*model.Course, error)
-	CreateCourse(title, grade string, subjectID uint, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error)
-	UpdateCourse(id uint, title, grade string, subjectID uint, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error)
+	CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error)
+	UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error)
 	DeleteCourse(id uint) error
 }
 
@@ -28,10 +28,10 @@ func NewCourseService(cr repository.CourseRepository, ur repository.UserReposito
 	}
 }
 
-func (s *courseService) GetCourses(userID uint, userRole string, grade string, subjectID uint) ([]model.Course, error) {
+func (s *courseService) GetCourses(userID uint, userRole string, grade string, subjectID uint, contentType model.ContentType) ([]model.Course, error) {
 	// Admin or Parent can view all courses
-	if userRole == "admin" || userRole == "parent" {
-		return s.courseRepo.List(grade, subjectID, nil)
+	if userRole == model.RoleAdmin || userRole == model.RoleParent {
+		return s.courseRepo.List(grade, subjectID, contentType, nil)
 	}
 
 	// Students/Teens are restricted to granted courses only
@@ -40,17 +40,21 @@ func (s *courseService) GetCourses(userID uint, userRole string, grade string, s
 		return nil, err
 	}
 
-	return s.courseRepo.List(grade, subjectID, allowedIDs)
+	return s.courseRepo.List(grade, subjectID, contentType, allowedIDs)
 }
 
 func (s *courseService) GetCourseByID(id uint) (*model.Course, error) {
 	return s.courseRepo.FindByID(id)
 }
 
-func (s *courseService) CreateCourse(title, grade string, subjectID uint, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error) {
-	g := model.Grade(grade)
-	if !g.Valid() {
-		return nil, errors.New("invalid course grade value: " + grade)
+func (s *courseService) CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error) {
+	for _, g := range grades {
+		if !g.Valid() {
+			return nil, errors.New("invalid course grade value: " + string(g))
+		}
+	}
+	if !contentType.Valid() {
+		contentType = model.ContentLearning
 	}
 
 	if attachmentJSON == "" {
@@ -59,8 +63,8 @@ func (s *courseService) CreateCourse(title, grade string, subjectID uint, coverU
 
 	c := &model.Course{
 		Title:          title,
-		Grade:          g,
 		SubjectID:      subjectID,
+		ContentType:    contentType,
 		CoverURL:       coverURL,
 		AttachmentJSON: attachmentJSON,
 	}
@@ -73,7 +77,11 @@ func (s *courseService) CreateCourse(title, grade string, subjectID uint, coverU
 			return nil, err
 		}
 	}
-	// Reload so the returned object carries Tags for DTO projection.
+	// Sync the grade set (course_grades join table).
+	if err := s.courseRepo.SetGrades(c.ID, grades); err != nil {
+		return nil, err
+	}
+	// Reload so the returned object carries Tags + Grades for DTO projection.
 	reloaded, err := s.courseRepo.FindByID(c.ID)
 	if err != nil {
 		return nil, err
@@ -84,10 +92,14 @@ func (s *courseService) CreateCourse(title, grade string, subjectID uint, coverU
 	return c, nil
 }
 
-func (s *courseService) UpdateCourse(id uint, title, grade string, subjectID uint, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error) {
-	g := model.Grade(grade)
-	if !g.Valid() {
-		return nil, errors.New("invalid course grade value: " + grade)
+func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error) {
+	for _, g := range grades {
+		if !g.Valid() {
+			return nil, errors.New("invalid course grade value: " + string(g))
+		}
+	}
+	if !contentType.Valid() {
+		contentType = model.ContentLearning
 	}
 
 	c, err := s.courseRepo.FindByID(id)
@@ -103,8 +115,8 @@ func (s *courseService) UpdateCourse(id uint, title, grade string, subjectID uin
 	}
 
 	c.Title = title
-	c.Grade = g
 	c.SubjectID = subjectID
+	c.ContentType = contentType
 	c.CoverURL = coverURL
 	c.AttachmentJSON = attachmentJSON
 
@@ -115,7 +127,11 @@ func (s *courseService) UpdateCourse(id uint, title, grade string, subjectID uin
 	if err := s.courseRepo.SetTags(c.ID, tagIDs); err != nil {
 		return nil, err
 	}
-	// Reload to reflect the new Tags association in the returned object.
+	// Replace the grade set.
+	if err := s.courseRepo.SetGrades(c.ID, grades); err != nil {
+		return nil, err
+	}
+	// Reload to reflect the new Tags + Grades associations in the returned object.
 	reloaded, err := s.courseRepo.FindByID(c.ID)
 	if err != nil {
 		return nil, err

@@ -27,7 +27,7 @@ func TestCourseUpdate(t *testing.T) {
 	tag2 := env.findTagID(t, "thinking")
 	resp := env.do(t, http.MethodPut, "/admin/api/courses/"+itoa(cid), map[string]any{
 		"title":   "新标题",
-		"grade":   "3",
+		"grades":  "3",
 		"subject": "english",
 		"tag_ids": []uint{tag2},
 	})
@@ -36,7 +36,7 @@ func TestCourseUpdate(t *testing.T) {
 	}
 	var updated struct {
 		Title   string `json:"title"`
-		Grade   string `json:"grade"`
+		Grades  string `json:"grades"`
 		Subject string `json:"subject"`
 		TagIDs  []uint `json:"tag_ids"`
 	}
@@ -49,8 +49,8 @@ func TestCourseUpdate(t *testing.T) {
 	if updated.Subject != "english" {
 		t.Errorf("subject: got %q, want %q", updated.Subject, "english")
 	}
-	if updated.Grade != "3" {
-		t.Errorf("grade: got %q, want %q", updated.Grade, "3")
+	if updated.Grades != "3" {
+		t.Errorf("grades: got %q, want %q", updated.Grades, "3")
 	}
 	if len(updated.TagIDs) != 1 || updated.TagIDs[0] != tag2 {
 		t.Errorf("tag_ids: got %v, want [%d]", updated.TagIDs, tag2)
@@ -59,7 +59,7 @@ func TestCourseUpdate(t *testing.T) {
 	// Unknown subject key must be rejected, not silently coerced.
 	resp = env.do(t, http.MethodPut, "/admin/api/courses/"+itoa(cid), map[string]any{
 		"title":   "x",
-		"grade":   "3",
+		"grades":  "3",
 		"subject": "nonexistent_subject",
 	})
 	if resp.Code != http.StatusBadRequest {
@@ -73,7 +73,7 @@ func TestCourseUpdateNotFound(t *testing.T) {
 	env := newTestEnv(t)
 	resp := env.do(t, http.MethodPut, "/admin/api/courses/99999", map[string]any{
 		"title":   "x",
-		"grade":   "3",
+		"grades":  "3",
 		"subject": "math",
 	})
 	if resp.Code != http.StatusNotFound {
