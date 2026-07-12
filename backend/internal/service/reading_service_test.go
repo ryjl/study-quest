@@ -34,10 +34,12 @@ func TestReadingBookCanAccessSeriesInheritance(t *testing.T) {
 	settingsRepo := repository.NewSettingsRepository(db)
 	bookSvc := NewReadingBookService(bookRepo, settingsRepo, seriesRepo)
 
-	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID, Grade: "universal"}
+	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID}
 	db.Create(&series)
-	book := model.ReadingBook{SeriesID: series.ID, Title: "B", FileRelativePath: "/x.pdf", SubjectID: subj.ID, Grade: "universal"}
+	db.Create(&model.ReadingSeriesGrade{SeriesID: series.ID, Grade: model.GradeUniversal})
+	book := model.ReadingBook{SeriesID: series.ID, Title: "B", FileRelativePath: "/x.pdf", SubjectID: subj.ID}
 	db.Create(&book)
+	db.Create(&model.ReadingBookGrade{BookID: book.ID, Grade: model.GradeUniversal})
 
 	const uid uint = 1
 
@@ -77,8 +79,9 @@ func TestReadingBookCanAccessStandaloneNoInheritance(t *testing.T) {
 	settingsRepo := repository.NewSettingsRepository(db)
 	bookSvc := NewReadingBookService(bookRepo, settingsRepo, seriesRepo)
 
-	book := model.ReadingBook{SeriesID: 0, Title: "Standalone", FileRelativePath: "/s.pdf", SubjectID: subj.ID, Grade: "universal"}
+	book := model.ReadingBook{SeriesID: 0, Title: "Standalone", FileRelativePath: "/s.pdf", SubjectID: subj.ID}
 	db.Create(&book)
+	db.Create(&model.ReadingBookGrade{BookID: book.ID, Grade: model.GradeUniversal})
 
 	// No access → denied.
 	ok, _ := bookSvc.CanAccess(1, "student", book.ID)
@@ -103,10 +106,12 @@ func TestReadingArticleCanAccessSeriesInheritance(t *testing.T) {
 	articleRepo := repository.NewReadingArticleRepository(db)
 	articleSvc := NewReadingArticleService(articleRepo, seriesRepo)
 
-	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID, Grade: "universal"}
+	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID}
 	db.Create(&series)
-	article := model.ReadingArticle{SeriesID: series.ID, Title: "A", SourceURL: "https://example.com", SubjectID: subj.ID, Grade: "universal"}
+	db.Create(&model.ReadingSeriesGrade{SeriesID: series.ID, Grade: model.GradeUniversal})
+	article := model.ReadingArticle{SeriesID: series.ID, Title: "A", SourceURL: "https://example.com", SubjectID: subj.ID}
 	db.Create(&article)
+	db.Create(&model.ReadingArticleGrade{ArticleID: article.ID, Grade: model.GradeUniversal})
 
 	const uid uint = 1
 
@@ -142,18 +147,23 @@ func TestGetReadingRoomDedup(t *testing.T) {
 	seriesSvc := NewReadingSeriesService(seriesRepo, bookRepo, articleRepo)
 
 	// Two series.
-	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID, Grade: "universal", SortOrder: 1}
-	s2 := model.ReadingSeries{Title: "S2", SubjectID: subj.ID, Grade: "universal", SortOrder: 2}
+	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID, SortOrder: 1}
+	s2 := model.ReadingSeries{Title: "S2", SubjectID: subj.ID, SortOrder: 2}
 	db.Create(&s1)
 	db.Create(&s2)
+	db.Create(&model.ReadingSeriesGrade{SeriesID: s1.ID, Grade: model.GradeUniversal})
+	db.Create(&model.ReadingSeriesGrade{SeriesID: s2.ID, Grade: model.GradeUniversal})
 
 	// B1 inside S1, B2 inside S2, B3 standalone.
-	b1 := model.ReadingBook{SeriesID: s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID, Grade: "universal"}
-	b2 := model.ReadingBook{SeriesID: s2.ID, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID, Grade: "universal"}
-	b3 := model.ReadingBook{SeriesID: 0, Title: "B3", FileRelativePath: "/3.pdf", SubjectID: subj.ID, Grade: "universal"}
+	b1 := model.ReadingBook{SeriesID: s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
+	b2 := model.ReadingBook{SeriesID: s2.ID, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
+	b3 := model.ReadingBook{SeriesID: 0, Title: "B3", FileRelativePath: "/3.pdf", SubjectID: subj.ID}
 	db.Create(&b1)
 	db.Create(&b2)
 	db.Create(&b3)
+	db.Create(&model.ReadingBookGrade{BookID: b1.ID, Grade: model.GradeUniversal})
+	db.Create(&model.ReadingBookGrade{BookID: b2.ID, Grade: model.GradeUniversal})
+	db.Create(&model.ReadingBookGrade{BookID: b3.ID, Grade: model.GradeUniversal})
 
 	const uid uint = 1
 	// Grant: series 1 access (covers B1 via inheritance), direct B2 + B3 access.
@@ -201,12 +211,15 @@ func TestGetReadingRoomAdmin(t *testing.T) {
 	articleRepo := repository.NewReadingArticleRepository(db)
 	seriesSvc := NewReadingSeriesService(seriesRepo, bookRepo, articleRepo)
 
-	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID, Grade: "universal"}
+	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID}
 	db.Create(&s1)
-	b1 := model.ReadingBook{SeriesID: s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID, Grade: "universal"}
-	b2 := model.ReadingBook{SeriesID: 0, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID, Grade: "universal"}
+	db.Create(&model.ReadingSeriesGrade{SeriesID: s1.ID, Grade: model.GradeUniversal})
+	b1 := model.ReadingBook{SeriesID: s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
+	b2 := model.ReadingBook{SeriesID: 0, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
 	db.Create(&b1)
 	db.Create(&b2)
+	db.Create(&model.ReadingBookGrade{BookID: b1.ID, Grade: model.GradeUniversal})
+	db.Create(&model.ReadingBookGrade{BookID: b2.ID, Grade: model.GradeUniversal})
 
 	view, err := seriesSvc.GetReadingRoom(1, "admin", "", 0)
 	if err != nil {
@@ -232,19 +245,19 @@ func TestReadingSeriesCRUD(t *testing.T) {
 	svc := NewReadingSeriesService(seriesRepo, bookRepo, articleRepo)
 
 	// Create.
-	created, err := svc.CreateSeries("Test Series", "desc", "3", subj.ID, "/cover.png", 0, nil)
+	created, err := svc.CreateSeries("Test Series", "desc", []model.Grade{model.Grade("3")}, subj.ID, "/cover.png", 0, nil)
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
 	if created.Title != "Test Series" {
 		t.Fatalf("Title: got %q", created.Title)
 	}
-	if created.Grade != "3" {
-		t.Fatalf("Grade: got %q", created.Grade)
+	if created.GradeDisplay() != "3年级" {
+		t.Fatalf("Grade: got %q", created.GradeDisplay())
 	}
 
 	// Update.
-	updated, err := svc.UpdateSeries(created.ID, "Updated", "new desc", "universal", subj.ID, "/cover2.png", 5, nil)
+	updated, err := svc.UpdateSeries(created.ID, "Updated", "new desc", []model.Grade{model.GradeUniversal}, subj.ID, "/cover2.png", 5, nil)
 	if err != nil {
 		t.Fatalf("UpdateSeries: %v", err)
 	}
@@ -253,7 +266,7 @@ func TestReadingSeriesCRUD(t *testing.T) {
 	}
 
 	// Invalid grade.
-	_, err = svc.CreateSeries("Bad", "", "99", subj.ID, "", 0, nil)
+	_, err = svc.CreateSeries("Bad", "", []model.Grade{model.Grade("99")}, subj.ID, "", 0, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid grade")
 	}

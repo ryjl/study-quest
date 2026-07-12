@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
@@ -15,8 +16,8 @@ type ReadingBookService interface {
 	GetBooks(userID uint, userRole string, grade string, subjectID uint, standaloneOnly bool) ([]model.ReadingBook, error)
 	GetBooksBySeries(seriesID uint) ([]model.ReadingBook, error)
 	GetBookByID(id uint) (*model.ReadingBook, error)
-	CreateBook(seriesID uint, sortOrder int, title, fileRelativePath, fileHash, coverURL, grade string, subjectID uint, tagIDs []uint) (*model.ReadingBook, error)
-	UpdateBook(id uint, seriesID uint, sortOrder int, title, fileRelativePath, fileHash, coverURL, grade string, subjectID uint, tagIDs []uint) (*model.ReadingBook, error)
+	CreateBook(seriesID uint, sortOrder int, title, fileRelativePath, coverURL string, grades []model.Grade, subjectID uint, tagIDs []uint) (*model.ReadingBook, error)
+	UpdateBook(id uint, seriesID uint, sortOrder int, title, fileRelativePath, coverURL string, grades []model.Grade, subjectID uint, tagIDs []uint) (*model.ReadingBook, error)
 	DeleteBook(id uint) error
 
 	// GetStreamURL resolves the Alist/WebDAV direct download link for the PDF,
@@ -66,7 +67,7 @@ func (s *readingBookService) getActiveProvider() (storage.StorageProvider, error
 }
 
 func (s *readingBookService) GetBooks(userID uint, userRole string, grade string, subjectID uint, standaloneOnly bool) ([]model.ReadingBook, error) {
-	if userRole == "admin" || userRole == "parent" {
+	if model.IsStaffRole(userRole) {
 		return s.bookRepo.List(grade, subjectID, nil, standaloneOnly)
 	}
 	allowedIDs, err := s.bookRepo.GetAccessList(userID)
@@ -84,22 +85,24 @@ func (s *readingBookService) GetBookByID(id uint) (*model.ReadingBook, error) {
 	return s.bookRepo.FindByID(id)
 }
 
-func (s *readingBookService) CreateBook(seriesID uint, sortOrder int, title, fileRelativePath, fileHash, coverURL, grade string, subjectID uint, tagIDs []uint) (*model.ReadingBook, error) {
-	g := model.Grade(grade)
-	if !g.Valid() {
-		return nil, errors.New("invalid reading book grade value: " + grade)
+func (s *readingBookService) CreateBook(seriesID uint, sortOrder int, title, fileRelativePath, coverURL string, grades []model.Grade, subjectID uint, tagIDs []uint) (*model.ReadingBook, error) {
+	for _, g := range grades {
+		if !g.Valid() {
+			return nil, errors.New("invalid reading book grade value: " + string(g))
+		}
 	}
 	book := &model.ReadingBook{
 		SeriesID:         seriesID,
 		SortOrder:        sortOrder,
 		Title:            title,
 		FileRelativePath: fileRelativePath,
-		FileHash:         fileHash,
 		CoverURL:         coverURL,
-		Grade:            g,
 		SubjectID:        subjectID,
 	}
 	if err := s.bookRepo.Create(book); err != nil {
+		return nil, err
+	}
+	if err := s.bookRepo.SetGrades(book.ID, grades); err != nil {
 		return nil, err
 	}
 	if len(tagIDs) > 0 {
@@ -117,10 +120,11 @@ func (s *readingBookService) CreateBook(seriesID uint, sortOrder int, title, fil
 	return book, nil
 }
 
-func (s *readingBookService) UpdateBook(id uint, seriesID uint, sortOrder int, title, fileRelativePath, fileHash, coverURL, grade string, subjectID uint, tagIDs []uint) (*model.ReadingBook, error) {
-	g := model.Grade(grade)
-	if !g.Valid() {
-		return nil, errors.New("invalid reading book grade value: " + grade)
+func (s *readingBookService) UpdateBook(id uint, seriesID uint, sortOrder int, title, fileRelativePath, coverURL string, grades []model.Grade, subjectID uint, tagIDs []uint) (*model.ReadingBook, error) {
+	for _, g := range grades {
+		if !g.Valid() {
+			return nil, errors.New("invalid reading book grade value: " + string(g))
+		}
 	}
 	book, err := s.bookRepo.FindByID(id)
 	if err != nil {
@@ -133,11 +137,12 @@ func (s *readingBookService) UpdateBook(id uint, seriesID uint, sortOrder int, t
 	book.SortOrder = sortOrder
 	book.Title = title
 	book.FileRelativePath = fileRelativePath
-	book.FileHash = fileHash
 	book.CoverURL = coverURL
-	book.Grade = g
 	book.SubjectID = subjectID
 	if err := s.bookRepo.Update(book); err != nil {
+		return nil, err
+	}
+	if err := s.bookRepo.SetGrades(book.ID, grades); err != nil {
 		return nil, err
 	}
 	if err := s.bookRepo.SetTags(book.ID, tagIDs); err != nil {
@@ -158,8 +163,8 @@ func (s *readingBookService) DeleteBook(id uint) error {
 }
 
 // GetStreamURL resolves the PDF download link with disaster recovery, mirroring
-// EpisodeService.GetStreamURL exactly: provider lookup → hash fallback (with
-// self-healing cached path write-back) → size+path fallback.
+// EpisodeService.GetStreamURL: provider lookup → basename+size fallback (with
+// self-healing cached path write-back).
 func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*storage.DownloadLink, error) {
 	book, err := s.bookRepo.FindByID(bookID)
 	if err != nil {
@@ -180,20 +185,12 @@ func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*stora
 		return link, nil
 	}
 
-	// Hash fallback + self-heal
-	if provider.SupportsHash() && book.FileHash != "" {
-		resolved, rErr := s.bookRepo.FindByHash(book.FileHash)
-		if rErr == nil && resolved != nil && resolved.FileRelativePath != book.FileRelativePath {
+	// Disaster recovery: basename + size fallback (mirrors episode service).
+	if book.FileSize != nil && book.FileRelativePath != "" {
+		basename := filepath.Base(book.FileRelativePath)
+		if resolved, rErr := s.bookRepo.FindByBasenameAndSize(basename, *book.FileSize); rErr == nil && resolved != nil && resolved.FileRelativePath != book.FileRelativePath {
 			book.FileRelativePath = resolved.FileRelativePath
 			_ = s.bookRepo.Update(book)
-			return provider.GetDownloadURL(resolved.FileRelativePath, userAgent)
-		}
-	}
-
-	// Size + path fallback
-	if book.FileSize != nil {
-		resolved, rErr := s.bookRepo.FindByPathAndSize(book.FileRelativePath, *book.FileSize)
-		if rErr == nil && resolved != nil {
 			return provider.GetDownloadURL(resolved.FileRelativePath, userAgent)
 		}
 	}
@@ -206,7 +203,7 @@ func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*stora
 // UserReadingBookAccess row. This matches the Course→Episode semantics where
 // course access grants all episodes. Admin/parent bypass entirely.
 func (s *readingBookService) CanAccess(userID uint, userRole string, bookID uint) (bool, error) {
-	if userRole == "admin" || userRole == "parent" {
+	if model.IsStaffRole(userRole) {
 		return true, nil
 	}
 	// Direct book access.

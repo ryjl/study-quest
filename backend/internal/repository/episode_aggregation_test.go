@@ -17,12 +17,18 @@ func TestEpisodeAggregations(t *testing.T) {
 	chapterRepo := NewChapterRepository(db)
 
 	// Two courses across two subjects.
-	c1 := &model.Course{Title: "数学课", Grade: "3", SubjectID: subjects["math"].ID}
-	c2 := &model.Course{Title: "语文课", Grade: "3", SubjectID: subjects["chinese"].ID}
+	c1 := &model.Course{Title: "数学课", SubjectID: subjects["math"].ID}
+	c2 := &model.Course{Title: "语文课", SubjectID: subjects["chinese"].ID}
 	if err := courseRepo.Create(c1); err != nil {
 		t.Fatal(err)
 	}
 	if err := courseRepo.Create(c2); err != nil {
+		t.Fatal(err)
+	}
+	if err := courseRepo.SetGrades(c1.ID, []model.Grade{model.Grade("3")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := courseRepo.SetGrades(c2.ID, []model.Grade{model.Grade("3")}); err != nil {
 		t.Fatal(err)
 	}
 	ch1 := &model.Chapter{CourseID: c1.ID, Title: "第一章", SortOrder: 1}
@@ -131,8 +137,11 @@ func TestChapterCountByCourse(t *testing.T) {
 	courseRepo := NewCourseRepository(db)
 	chapterRepo := NewChapterRepository(db)
 
-	c := &model.Course{Title: "课", Grade: "1", SubjectID: subjects["math"].ID}
+	c := &model.Course{Title: "课", SubjectID: subjects["math"].ID}
 	if err := courseRepo.Create(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := courseRepo.SetGrades(c.ID, []model.Grade{model.Grade("1")}); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {

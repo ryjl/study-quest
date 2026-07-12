@@ -18,7 +18,7 @@ func (h *adminHandler) DashboardStats(c *gin.Context) {
 	if err != nil {
 		log.Printf("DashboardStats: userRepo.List failed: %v", err)
 	}
-	courses, err := h.courseRepo.List("", 0, nil)
+	courses, err := h.courseRepo.List("", 0, "", nil)
 	if err != nil {
 		log.Printf("DashboardStats: courseRepo.List failed: %v", err)
 	}

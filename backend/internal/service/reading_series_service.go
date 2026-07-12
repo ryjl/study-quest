@@ -15,8 +15,8 @@ type ReadingSeriesService interface {
 	// HasSeriesAccess checks direct series access for a student. Admin/parent
 	// always pass. Used by GetSeries to gate the detail endpoint.
 	HasSeriesAccess(userID, seriesID uint) (bool, error)
-	CreateSeries(title, description, grade string, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error)
-	UpdateSeries(id uint, title, description, grade string, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error)
+	CreateSeries(title, description string, grades []model.Grade, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error)
+	UpdateSeries(id uint, title, description string, grades []model.Grade, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error)
 	DeleteSeries(id uint) error
 
 	// GetReadingRoom returns the aggregated shelf view in one call: the series
@@ -59,7 +59,7 @@ func NewReadingSeriesService(sr repository.ReadingSeriesRepository, br repositor
 }
 
 func (s *readingSeriesService) GetSeries(userID uint, userRole string, grade string, subjectID uint) ([]model.ReadingSeries, error) {
-	if userRole == "admin" || userRole == "parent" {
+	if model.IsStaffRole(userRole) {
 		return s.seriesRepo.List(grade, subjectID, nil)
 	}
 	allowedIDs, err := s.seriesRepo.GetAccessList(userID)
@@ -78,20 +78,23 @@ func (s *readingSeriesService) HasSeriesAccess(userID, seriesID uint) (bool, err
 	return s.seriesRepo.HasAccess(userID, seriesID)
 }
 
-func (s *readingSeriesService) CreateSeries(title, description, grade string, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error) {
-	g := model.Grade(grade)
-	if !g.Valid() {
-		return nil, errors.New("invalid reading series grade value: " + grade)
+func (s *readingSeriesService) CreateSeries(title, description string, grades []model.Grade, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error) {
+	for _, g := range grades {
+		if !g.Valid() {
+			return nil, errors.New("invalid reading series grade value: " + string(g))
+		}
 	}
 	series := &model.ReadingSeries{
 		Title:       title,
 		Description: description,
-		Grade:       g,
 		SubjectID:   subjectID,
 		CoverURL:    coverURL,
 		SortOrder:   sortOrder,
 	}
 	if err := s.seriesRepo.Create(series); err != nil {
+		return nil, err
+	}
+	if err := s.seriesRepo.SetGrades(series.ID, grades); err != nil {
 		return nil, err
 	}
 	if len(tagIDs) > 0 {
@@ -109,10 +112,11 @@ func (s *readingSeriesService) CreateSeries(title, description, grade string, su
 	return series, nil
 }
 
-func (s *readingSeriesService) UpdateSeries(id uint, title, description, grade string, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error) {
-	g := model.Grade(grade)
-	if !g.Valid() {
-		return nil, errors.New("invalid reading series grade value: " + grade)
+func (s *readingSeriesService) UpdateSeries(id uint, title, description string, grades []model.Grade, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error) {
+	for _, g := range grades {
+		if !g.Valid() {
+			return nil, errors.New("invalid reading series grade value: " + string(g))
+		}
 	}
 	series, err := s.seriesRepo.FindByID(id)
 	if err != nil {
@@ -123,11 +127,13 @@ func (s *readingSeriesService) UpdateSeries(id uint, title, description, grade s
 	}
 	series.Title = title
 	series.Description = description
-	series.Grade = g
 	series.SubjectID = subjectID
 	series.CoverURL = coverURL
 	series.SortOrder = sortOrder
 	if err := s.seriesRepo.Update(series); err != nil {
+		return nil, err
+	}
+	if err := s.seriesRepo.SetGrades(series.ID, grades); err != nil {
 		return nil, err
 	}
 	if err := s.seriesRepo.SetTags(series.ID, tagIDs); err != nil {
@@ -153,7 +159,7 @@ func (s *readingSeriesService) DeleteSeries(id uint) error {
 // the user's visible-series set (those are reachable inside the series detail,
 // so they shouldn't be duplicated on the standalone shelf).
 func (s *readingSeriesService) GetReadingRoom(userID uint, userRole string, grade string, subjectID uint) (*ReadingRoomView, error) {
-	isAdmin := userRole == "admin" || userRole == "parent"
+	isAdmin := model.IsStaffRole(userRole)
 
 	// --- Series ---
 	var seriesAllowedIDs []uint

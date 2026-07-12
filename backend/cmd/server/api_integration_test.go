@@ -437,8 +437,17 @@ func TestImportEmptyGradeFallsBackToUniversal(t *testing.T) {
 	if err := env.db.Where("title = ?", "导入测试课").First(&course).Error; err != nil {
 		t.Fatalf("query imported course: %v", err)
 	}
-	if course.Grade != model.GradeUniversal {
-		t.Errorf("imported course grade: got %q, want %q", course.Grade, model.GradeUniversal)
+	// Grades now live in the course_grades join table (one row per grade).
+	var grades []model.CourseGrade
+	env.db.Where("course_id = ?", course.ID).Find(&grades)
+	found := false
+	for _, g := range grades {
+		if g.Grade == model.GradeUniversal {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("imported course grades: expected 'universal' in %+v, not found", grades)
 	}
 }
 

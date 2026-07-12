@@ -74,13 +74,14 @@ func newTestEnv(t *testing.T) *testEnv {
 	readingSeriesRepo := repository.NewReadingSeriesRepository(db)
 	readingBookRepo := repository.NewReadingBookRepository(db)
 	readingArticleRepo := repository.NewReadingArticleRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
-	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService)
+	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
 	tagService := service.NewTagService(tagRepo)
 	// Constructed but never Started: Enqueue is a pure in-memory op (pushes
@@ -267,7 +268,7 @@ func (e *testEnv) createCourse(t *testing.T, title, subjectKey string, tagIDs []
 	t.Helper()
 	body := map[string]any{
 		"title":   title,
-		"grade":   "universal",
+		"grades":  "universal",
 		"subject": subjectKey,
 	}
 	if tagIDs != nil {

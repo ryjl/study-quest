@@ -118,7 +118,7 @@ class Episode {
     required this.videoRelativePath,
     this.coverUrl = '',
     required this.attachmentJson,
-    required this.fileHash,
+    this.fileHash = '',
     required this.fileSize,
     required this.durationSeconds,
     this.locked = false,

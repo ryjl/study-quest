@@ -103,7 +103,6 @@ export interface Episode {
   video_relative_path: string;
   cover_url: string;
   attachment_json: string;
-  file_hash: string;
   original_relative_path: string;
   file_size: number | null;
   duration_seconds: number | null;
@@ -129,9 +128,11 @@ export interface Chapter {
 export interface Course {
   id: number;
   title: string;
-  grade: string;
+  grade: string; // comma-joined grade keys, e.g. "3,4,5" (alias for grades)
+  grades?: string; // comma-joined grade keys (new field; backend sends this)
   subject: string;
   subject_id?: number;
+  content_type?: string; // "learning" | "entertainment"
   cover_url: string;
   cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
   tags: string;
@@ -376,7 +377,6 @@ export interface ReadingBook {
   sort_order: number;
   title: string;
   file_relative_path: string;
-  file_hash: string;
   file_size: number | null;
   page_count: number | null;
   cover_url: string;

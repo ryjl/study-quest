@@ -11,7 +11,7 @@ import (
 type CourseRepository interface {
 	// WithTx returns a copy bound to an in-progress transaction.
 	WithTx(tx *gorm.DB) CourseRepository
-	List(grade string, subjectID uint, allowedIDs []uint) ([]model.Course, error)
+	List(grade string, subjectID uint, contentType model.ContentType, allowedIDs []uint) ([]model.Course, error)
 	FindByID(id uint) (*model.Course, error)
 	Create(course *model.Course) error
 	Update(course *model.Course) error
@@ -19,6 +19,9 @@ type CourseRepository interface {
 	// SetTags replaces a course's tags with the given tag IDs (syncs the
 	// course_tags join table). Pass nil/empty to clear all tags.
 	SetTags(courseID uint, tagIDs []uint) error
+	// SetGrades replaces a course's applicable-grade set (syncs the
+	// course_grades join table). Pass nil/empty to clear all grades.
+	SetGrades(courseID uint, grades []model.Grade) error
 }
 
 type courseRepo struct {
@@ -34,7 +37,7 @@ func (r *courseRepo) WithTx(tx *gorm.DB) CourseRepository {
 	return &courseRepo{db: tx}
 }
 
-func (r *courseRepo) List(grade string, subjectID uint, allowedIDs []uint) ([]model.Course, error) {
+func (r *courseRepo) List(grade string, subjectID uint, contentType model.ContentType, allowedIDs []uint) ([]model.Course, error) {
 	var courses []model.Course
 	query := r.db.Model(&model.Course{})
 
@@ -46,21 +49,33 @@ func (r *courseRepo) List(grade string, subjectID uint, allowedIDs []uint) ([]mo
 		query = query.Where("id IN ?", allowedIDs)
 	}
 
-	// Double-dimension filters
+	// Grade filter via the course_grades join table (exact match, plus
+	// universal courses match any grade). Replaces the old LIKE-based query
+	// that suffered from substring false-positives (e.g. grade "1" matching "10").
 	if grade != "" {
-		query = query.Where("grade LIKE ? OR grade = 'universal' OR grade = 'all'", "%"+grade+"%")
+		query = query.Where(
+			"id IN (SELECT course_id FROM course_grades WHERE grade = ? OR grade = ?)",
+			grade, string(model.GradeUniversal),
+		)
 	}
 	if subjectID != 0 {
 		query = query.Where("subject_id = ?", subjectID)
 	}
+	// Content type filter: default to learning so entertainment courses don't
+	// leak into the Study Hall listing. Entertainment tab explicitly passes
+	// ContentEntertainment.
+	if contentType == "" {
+		contentType = model.ContentLearning
+	}
+	query = query.Where("content_type = ?", contentType)
 
-	err := query.Preload("Tags").Find(&courses).Error
+	err := query.Preload("Tags").Preload("Grades").Find(&courses).Error
 	return courses, err
 }
 
 func (r *courseRepo) FindByID(id uint) (*model.Course, error) {
 	var course model.Course
-	if err := r.db.Preload("Tags").First(&course, id).Error; err != nil {
+	if err := r.db.Preload("Tags").Preload("Grades").First(&course, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
@@ -86,9 +101,11 @@ func (r *courseRepo) Delete(id uint) error {
 			tx.Delete(&model.Subtitle{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.AILessonContent{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.UserProgress{}, "episode_id = ?", ep.ID)
+			tx.Delete(&model.EntertainmentProgress{}, "episode_id = ?", ep.ID)
 		}
 		tx.Delete(&model.Episode{}, "course_id = ?", id)
 		tx.Delete(&model.UserCourseAccess{}, "course_id = ?", id)
+		tx.Delete(&model.CourseGrade{}, "course_id = ?", id)
 		return tx.Delete(&model.Course{}, id).Error
 	})
 }
@@ -109,6 +126,27 @@ func (r *courseRepo) SetTags(courseID uint, tagIDs []uint) error {
 		}
 	}
 	return r.db.Model(&course).Association("Tags").Replace(&tags)
+}
+
+// SetGrades replaces the course's applicable-grade set. It clears the
+// course_grades join table for this course and inserts one row per grade.
+func (r *courseRepo) SetGrades(courseID uint, grades []model.Grade) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("course_id = ?", courseID).Delete(&model.CourseGrade{}).Error; err != nil {
+			return err
+		}
+		seen := make(map[model.Grade]bool, len(grades))
+		for _, g := range grades {
+			if seen[g] || !g.Valid() {
+				continue
+			}
+			seen[g] = true
+			if err := tx.Create(&model.CourseGrade{CourseID: courseID, Grade: g}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // dedupUint returns ids with duplicates removed, preserving order.

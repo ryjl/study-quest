@@ -492,7 +492,6 @@ function BookModal({ book, series, onClose }: { book: ReadingBook | null; series
   const [grade, setGrade] = useState('universal');
   const [subject, setSubject] = useState('');
   const [fileRelativePath, setFileRelativePath] = useState('');
-  const [fileHash, setFileHash] = useState('');
   const [coverUrl, setCoverUrl] = useState('');
   const [sortOrder, setSortOrder] = useState(0);
   const [tagIds, setTagIds] = useState<number[]>([]);
@@ -505,13 +504,12 @@ function BookModal({ book, series, onClose }: { book: ReadingBook | null; series
       setGrade(book.grade || 'universal');
       setSubject(book.subject);
       setFileRelativePath(book.file_relative_path);
-      setFileHash(book.file_hash);
       setCoverUrl(book.cover_url);
       setSortOrder(book.sort_order);
       setTagIds(book.tag_ids ?? []);
     } else {
       setTitle(''); setSeriesId(0); setGrade('universal'); setSubject('');
-      setFileRelativePath(''); setFileHash(''); setCoverUrl(''); setSortOrder(0); setTagIds([]);
+      setFileRelativePath(''); setCoverUrl(''); setSortOrder(0); setTagIds([]);
     }
   }, [book]);
 
@@ -519,7 +517,7 @@ function BookModal({ book, series, onClose }: { book: ReadingBook | null; series
     mutationFn: async () => {
       const body = {
         series_id: seriesId, sort_order: sortOrder, title: title.trim(),
-        file_relative_path: fileRelativePath, file_hash: fileHash, cover_url: coverUrl,
+        file_relative_path: fileRelativePath, cover_url: coverUrl,
         grade, subject, tag_ids: tagIds,
       };
       if (!body.title) throw new Error('请填写标题');
@@ -550,10 +548,6 @@ function BookModal({ book, series, onClose }: { book: ReadingBook | null; series
             <button type="button" className="btn-secondary whitespace-nowrap" onClick={() => setBrowsing(true)}>浏览...</button>
           </div>
           <p className="mt-1 text-xs text-muted">首次打开时客户端会下载缓存，之后翻页走本地。</p>
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-muted">文件 Hash（可选，用于缓存失效与灾难恢复）</label>
-          <input className="input" placeholder="SHA1" value={fileHash} onChange={(e) => setFileHash(e.target.value)} spellCheck={false} />
         </div>
         <SubjectSelect value={subject} onChange={setSubject} />
         <GradeField value={grade} onChange={setGrade} />

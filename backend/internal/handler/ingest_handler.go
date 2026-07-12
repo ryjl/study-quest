@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"path/filepath"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
@@ -36,7 +37,6 @@ type episodeIngestRequest struct {
 	CourseID             uint   `json:"course_id" binding:"required"`
 	Title                string `json:"title" binding:"required"`
 	VideoRelativePath    string `json:"video_relative_path" binding:"required"`
-	FileHash             string `json:"file_hash"`
 	OriginalRelativePath string `json:"original_relative_path"`
 	FileSize             *int64 `json:"file_size"`
 	DurationSeconds      *int   `json:"duration_seconds"`
@@ -55,16 +55,12 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 	updatedCount := 0
 
 	for _, reqEp := range req {
-		// Look up existing episode using double protection index (hash first, then path+size)
+		// Look up existing episode by basename + size (the disaster-recovery
+		// index, now that hash has been removed).
 		var existing *model.Episode
-		var err error
-
-		if reqEp.FileHash != "" {
-			existing, err = h.episodeRepo.FindByHash(reqEp.FileHash)
-		}
-
-		if (err != nil || existing == nil) && reqEp.VideoRelativePath != "" && reqEp.FileSize != nil {
-			existing, err = h.episodeRepo.FindByPathAndSize(reqEp.VideoRelativePath, *reqEp.FileSize)
+		if reqEp.VideoRelativePath != "" && reqEp.FileSize != nil {
+			basename := filepath.Base(reqEp.VideoRelativePath)
+			existing, _ = h.episodeRepo.FindByBasenameAndSize(basename, *reqEp.FileSize)
 		}
 
 		if existing != nil {
@@ -108,7 +104,6 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 				reqEp.VideoRelativePath,
 				attachments,
 				reqEp.SortOrder,
-				reqEp.FileHash,
 				origPath,
 				reqEp.FileSize,
 				reqEp.DurationSeconds,

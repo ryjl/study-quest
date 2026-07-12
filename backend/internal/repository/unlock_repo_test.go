@@ -16,9 +16,12 @@ func seedCourseForUnlock(t *testing.T, db *gorm.DB) (courseID, userID uint) {
 	if err := db.Create(&subj).Error; err != nil {
 		t.Fatalf("seed subject: %v", err)
 	}
-	c := model.Course{Title: "C", Grade: "3", SubjectID: subj.ID}
+	c := model.Course{Title: "C", SubjectID: subj.ID}
 	if err := db.Create(&c).Error; err != nil {
 		t.Fatalf("seed course: %v", err)
+	}
+	if err := db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("3")}).Error; err != nil {
+		t.Fatalf("seed course grade: %v", err)
 	}
 	u := model.User{Nickname: "u", PinHash: "x"}
 	if err := db.Create(&u).Error; err != nil {

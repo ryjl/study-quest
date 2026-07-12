@@ -28,10 +28,11 @@ func seedCourseWithEpisodes(t *testing.T, db *gorm.DB, n int, grantedAt time.Tim
 	if err := db.Create(&subj).Error; err != nil {
 		t.Fatalf("seed subject: %v", err)
 	}
-	c := model.Course{Title: "C", Grade: "3", SubjectID: subj.ID}
+	c := model.Course{Title: "C", SubjectID: subj.ID}
 	if err := db.Create(&c).Error; err != nil {
 		t.Fatalf("seed course: %v", err)
 	}
+	db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("3")})
 	for i := 1; i <= n; i++ {
 		ep := model.Episode{
 			CourseID: c.ID, SortOrder: i, Title: "ep" + itoa(i),

@@ -30,9 +30,12 @@ func TestGetDistinctSubjectCompletedCount(t *testing.T) {
 
 	// A course per subject, each with an episode.
 	mkCourseEpisode := func(subjectID uint) (courseID, episodeID uint) {
-		c := &model.Course{Title: "c", SubjectID: subjectID, Grade: "g1"}
+		c := &model.Course{Title: "c", SubjectID: subjectID}
 		if err := db.Create(c).Error; err != nil {
 			t.Fatalf("create course: %v", err)
+		}
+		if err := db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("g1")}).Error; err != nil {
+			t.Fatalf("create course grade: %v", err)
 		}
 		ep := &model.Episode{Title: "e", CourseID: c.ID, VideoRelativePath: "x.mp4"}
 		if err := db.Create(ep).Error; err != nil {

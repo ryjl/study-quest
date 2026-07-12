@@ -84,42 +84,6 @@ func TestSeedDefaultBadgesSeedsMultiTier(t *testing.T) {
 	}
 }
 
-// TestSeedDefaultBadgesRebuildsLegacyInstall verifies the one-time rebuild:
-// an install that still has legacy single-tier badges gets its badge table
-// wiped and re-seeded with the multi-tier scheme.
-func TestSeedDefaultBadgesRebuildsLegacyInstall(t *testing.T) {
-	db := setupIntegrationDB(t)
-	repo := repository.NewBadgeRepository(db)
-	progressRepo := repository.NewProgressRepository(db)
-	svc := NewBadgeService(db, repo, progressRepo)
-
-	// Simulate a LEGACY install: has retired single-tier codes.
-	legacy := []model.Badge{
-		{Code: "seven_days_pioneer", Title: "七日先锋", IconName: "x", RuleType: "consecutive_days", Threshold: 7, IsSystem: true},
-		{Code: "three_day_streak", Title: "三日", IconName: "x", RuleType: "consecutive_days", Threshold: 3, IsSystem: true},
-	}
-	for i := range legacy {
-		if err := repo.Create(&legacy[i]); err != nil {
-			t.Fatalf("seed legacy badge %s: %v", legacy[i].Code, err)
-		}
-	}
-
-	// "Reboot" — the seeder detects the legacy codes and rebuilds.
-	if err := svc.SeedDefaultBadges(); err != nil {
-		t.Fatalf("rebuild seed: %v", err)
-	}
-
-	// Legacy codes must be gone (table was wiped).
-	for _, code := range []string{"seven_days_pioneer", "three_day_streak"} {
-		if b, _ := repo.FindByCode(code); b != nil {
-			t.Errorf("legacy badge %q must be removed by rebuild", code)
-		}
-	}
-	// New multi-tier defaults must now exist.
-	if b, _ := repo.FindByCode("streak"); b == nil {
-		t.Error("rebuild should have seeded 'streak'")
-	}
-	if b, _ := repo.FindByCode("first_blood"); b == nil {
-		t.Error("rebuild should have seeded 'first_blood'")
-	}
-}
+// TestSeedDefaultBadgesRebuildsLegacyInstall was removed: the legacy
+// single-tier → multi-tier rebuild (detectLegacyBadges / rebuildBadgeTables)
+// was deleted in the v1 schema cleanup. A fresh v1 DB has no legacy badges.

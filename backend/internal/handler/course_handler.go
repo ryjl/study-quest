@@ -45,6 +45,12 @@ func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs s
 func (h *courseHandler) GetCourses(c *gin.Context) {
 	grade := c.Query("grade")
 	subjectKey := strings.TrimSpace(c.Query("subject"))
+	// content_type defaults to "learning" so the Study Hall only shows learning
+	// courses. The entertainment tab passes "entertainment".
+	contentType := model.ContentLearning
+	if ct := c.Query("content_type"); ct == string(model.ContentEntertainment) {
+		contentType = model.ContentEntertainment
+	}
 
 	// Read user credentials set by UserAuthMiddleware
 	userIDVal, existsUserID := c.Get("userID")
@@ -70,7 +76,7 @@ func (h *courseHandler) GetCourses(c *gin.Context) {
 		}
 	}
 
-	courses, err := h.courseService.GetCourses(userID, userRole, grade, subjectID)
+	courses, err := h.courseService.GetCourses(userID, userRole, grade, subjectID, contentType)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list courses: " + err.Error()})
 		return
@@ -130,8 +136,9 @@ func (h *courseHandler) toClientDTO(c model.Course) clientCourseDTO {
 	return clientCourseDTO{
 		ID:             c.ID,
 		Title:          c.Title,
-		Grade:          string(c.Grade),
+		Grade:          strings.Join(c.GradeKeys(), ","),
 		Subject:        subjectKey,
+		ContentType:    string(c.ContentType),
 		CoverURL:       c.CoverURL,
 		Tags:           c.TagsJoined(),  // comma-joined labels (legacy Flutter contract)
 		TagsList:       c.TagsList(),    // []string labels

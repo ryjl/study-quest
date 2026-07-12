@@ -9,6 +9,10 @@ import (
 	"gorm.io/gorm"
 )
 
+// allowedEpisodeRepo helpers operate on the user_unlock_allowed_episodes join
+// table, which replaced the old AllowedEpisodeIDsJSON blob on UserUnlockOverride.
+// FK CASCADE on all three axes (user, course, episode) ensures no stale ids.
+
 // EffectiveUnlock is the resolved unlock configuration for a (user, course):
 // the strategy that actually applies (override wins over template, falling
 // back to AllOpen), its parameters, the admin-curated allowlist, the manual
@@ -47,9 +51,12 @@ type UnlockRepository interface {
 	// concurrent decrements can't push the count below zero.
 	DecrementManualUnlock(userID, courseID uint) error
 
-	// SetAllowedEpisodes replaces the allowlist JSON on the override row,
-	// creating it (inheriting AllOpen) if missing.
+	// SetAllowedEpisodes replaces the allowlist on the override row (stored in
+	// the user_unlock_allowed_episodes join table), creating the override
+	// (inheriting AllOpen) if missing.
 	SetAllowedEpisodes(userID, courseID uint, ids []uint) error
+	// GetAllowedEpisodes returns the (user, course) allowlist from the join table.
+	GetAllowedEpisodes(userID, courseID uint) ([]uint, error)
 
 	// ResolveEffective returns the effective unlock config for a (user,
 	// course): override wins over template, defaulting to AllOpen when
@@ -140,8 +147,8 @@ func (r *unlockRepo) IncrementManualUnlock(userID, courseID uint) error {
 		}
 	}
 	return r.db.Exec(`
-		INSERT INTO user_unlock_overrides (user_id, course_id, strategy, interval_seconds, weekly_times_json, manual_unlock_count, allowed_episode_ids_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 1, '', ?, ?)
+		INSERT INTO user_unlock_overrides (user_id, course_id, strategy, interval_seconds, weekly_times_json, manual_unlock_count, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 		ON CONFLICT(user_id, course_id) DO UPDATE SET
 			manual_unlock_count = user_unlock_overrides.manual_unlock_count + 1,
 			updated_at = excluded.updated_at
@@ -162,15 +169,10 @@ func (r *unlockRepo) DecrementManualUnlock(userID, courseID uint) error {
 }
 
 func (r *unlockRepo) SetAllowedEpisodes(userID, courseID uint, ids []uint) error {
-	buf, err := json.Marshal(ids)
-	if err != nil {
-		return err
-	}
-	jsonStr := string(buf)
-	// Same inheritance rationale as IncrementManualUnlock: a freshly created
-	// override row inherits the effective strategy so setting an allowlist
-	// (an additive source) doesn't silently switch a manual/weekly course to
-	// all_open.
+	// Ensure the override row exists (inheriting the effective strategy so
+	// setting an allowlist doesn't silently switch a manual/weekly course to
+	// all_open). Idempotent via the same inheritance mechanism as
+	// IncrementManualUnlock.
 	eff, _ := r.ResolveEffective(userID, courseID)
 	seedStrategy := eff.Strategy
 	if seedStrategy == "" {
@@ -183,13 +185,48 @@ func (r *unlockRepo) SetAllowedEpisodes(userID, courseID uint, ids []uint) error
 			seedWeekly = string(wb)
 		}
 	}
-	return r.db.Exec(`
-		INSERT INTO user_unlock_overrides (user_id, course_id, strategy, interval_seconds, weekly_times_json, manual_unlock_count, allowed_episode_ids_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)
-		ON CONFLICT(user_id, course_id) DO UPDATE SET
-			allowed_episode_ids_json = excluded.allowed_episode_ids_json,
-			updated_at = excluded.updated_at
-	`, userID, courseID, seedStrategy, seedInterval, seedWeekly, jsonStr, time.Now(), time.Now()).Error
+	// Create the override row if missing (ON CONFLICT keeps existing values).
+	if err := r.db.Exec(`
+		INSERT INTO user_unlock_overrides (user_id, course_id, strategy, interval_seconds, weekly_times_json, manual_unlock_count, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+		ON CONFLICT(user_id, course_id) DO NOTHING
+	`, userID, courseID, seedStrategy, seedInterval, seedWeekly, time.Now(), time.Now()).Error; err != nil {
+		return err
+	}
+	// Replace the allowlist in the join table atomically.
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ? AND course_id = ?", userID, courseID).
+			Delete(&model.UserUnlockAllowedEpisode{}).Error; err != nil {
+			return err
+		}
+		seen := make(map[uint]bool, len(ids))
+		for _, eid := range ids {
+			if seen[eid] {
+				continue
+			}
+			seen[eid] = true
+			if err := tx.Create(&model.UserUnlockAllowedEpisode{
+				UserID: userID, CourseID: courseID, EpisodeID: eid,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// GetAllowedEpisodes returns the (user, course) allowlist from the join table.
+func (r *unlockRepo) GetAllowedEpisodes(userID, courseID uint) ([]uint, error) {
+	var rows []model.UserUnlockAllowedEpisode
+	if err := r.db.Where("user_id = ? AND course_id = ?", userID, courseID).
+		Order("episode_id asc").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]uint, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.EpisodeID)
+	}
+	return out, nil
 }
 
 // ResolveEffective returns the effective unlock config for a (user, course):
@@ -249,11 +286,8 @@ func (r *unlockRepo) ResolveEffective(userID, courseID uint) (EffectiveUnlock, e
 				eff.WeeklyTimes = wts
 			}
 		}
-		if override.AllowedEpisodeIDsJSON != "" {
-			var ids []uint
-			if err := json.Unmarshal([]byte(override.AllowedEpisodeIDsJSON), &ids); err == nil {
-				eff.AllowedEpisodeIDs = ids
-			}
+		if allowedIDs, err := r.GetAllowedEpisodes(userID, courseID); err == nil {
+			eff.AllowedEpisodeIDs = allowedIDs
 		}
 	case template != nil:
 		// No per-user override: inherit the template wholesale.

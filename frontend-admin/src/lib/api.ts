@@ -368,13 +368,13 @@ export const api = {
   },
   async createReadingBook(body: {
     series_id: number; sort_order: number; title: string; file_relative_path: string;
-    file_hash: string; cover_url: string; grade: string; subject: string; tag_ids: number[];
+    cover_url: string; grade: string; subject: string; tag_ids: number[];
   }): Promise<ReadingBook> {
     return request('/admin/api/reading-books', { method: 'POST', body: JSON.stringify(body) });
   },
   async updateReadingBook(id: number, body: {
     series_id: number; sort_order: number; title: string; file_relative_path: string;
-    file_hash: string; cover_url: string; grade: string; subject: string; tag_ids: number[];
+    cover_url: string; grade: string; subject: string; tag_ids: number[];
   }): Promise<ReadingBook> {
     return request(`/admin/api/reading-books/${id}`, { method: 'PUT', body: JSON.stringify(body) });
   },

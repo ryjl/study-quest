@@ -98,7 +98,9 @@ func TestReadingSeriesAccessThreeStates(t *testing.T) {
 
 	// Create 3 series.
 	for i := 0; i < 3; i++ {
-		_ = db.Create(&model.ReadingSeries{Title: "S", SubjectID: subj.ID, Grade: "universal", SortOrder: i}).Error
+		s := &model.ReadingSeries{Title: "S", SubjectID: subj.ID, SortOrder: i}
+		_ = db.Create(s).Error
+		_ = db.Create(&model.ReadingSeriesGrade{SeriesID: s.ID, Grade: model.GradeUniversal}).Error
 	}
 
 	// Grant access to series 1 and 3 for user 1.
@@ -142,12 +144,18 @@ func TestReadingSeriesDeleteDetachesChildren(t *testing.T) {
 	seriesRepo := NewReadingSeriesRepository(db)
 	bookRepo := NewReadingBookRepository(db)
 
-	series := model.ReadingSeries{Title: "Series", SubjectID: subj.ID, Grade: "universal"}
+	series := model.ReadingSeries{Title: "Series", SubjectID: subj.ID}
 	if err := db.Create(&series).Error; err != nil {
 		t.Fatal(err)
 	}
-	book := model.ReadingBook{SeriesID: series.ID, Title: "Book", FileRelativePath: "/x.pdf", SubjectID: subj.ID, Grade: "universal"}
+	if err := db.Create(&model.ReadingSeriesGrade{SeriesID: series.ID, Grade: model.GradeUniversal}).Error; err != nil {
+		t.Fatal(err)
+	}
+	book := model.ReadingBook{SeriesID: series.ID, Title: "Book", FileRelativePath: "/x.pdf", SubjectID: subj.ID}
 	if err := db.Create(&book).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ReadingBookGrade{BookID: book.ID, Grade: model.GradeUniversal}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,34 +178,43 @@ func TestReadingSeriesDeleteDetachesChildren(t *testing.T) {
 	}
 }
 
-// TestReadingBookFindByHash verifies the disaster-recovery hash lookup used by
-// GetStreamURL when the primary path lookup fails.
-func TestReadingBookFindByHash(t *testing.T) {
+// TestReadingBookFindByBasenameAndSize verifies the disaster-recovery lookup
+// (basename + file size) used by GetStreamURL when the primary path lookup
+// fails. The stored path's basename plus the byte size together identify a book
+// even after a storage move renames its directory.
+func TestReadingBookFindByBasenameAndSize(t *testing.T) {
 	db := setupReadingTestDB(t)
 	subj := seedReadingSubject(t, db)
 	repo := NewReadingBookRepository(db)
 
+	size := int64(2048)
 	book := model.ReadingBook{
-		Title: "B", FileRelativePath: "/old/path.pdf", FileHash: "abc123",
-		SubjectID: subj.ID, Grade: "universal",
+		Title: "B", FileRelativePath: "/some/path/lesson01.pdf", FileSize: &size,
+		SubjectID: subj.ID,
 	}
 	if err := db.Create(&book).Error; err != nil {
 		t.Fatal(err)
 	}
 
-	// Found by hash.
-	got, err := repo.FindByHash("abc123")
+	// Found by basename + size.
+	got, err := repo.FindByBasenameAndSize("lesson01.pdf", size)
 	if err != nil || got == nil {
-		t.Fatalf("FindByHash: %v %v", got, err)
+		t.Fatalf("FindByBasenameAndSize: %v %v", got, err)
 	}
 	if got.ID != book.ID {
-		t.Fatalf("FindByHash: got ID %d, want %d", got.ID, book.ID)
+		t.Fatalf("FindByBasenameAndSize: got ID %d, want %d", got.ID, book.ID)
 	}
 
-	// Not found → (nil, nil).
-	missing, err := repo.FindByHash("nonexistent")
+	// Wrong size → (nil, nil).
+	missing, err := repo.FindByBasenameAndSize("lesson01.pdf", 9999)
 	if err != nil || missing != nil {
-		t.Fatalf("FindByHash(missing): expected (nil,nil), got (%+v, %v)", missing, err)
+		t.Fatalf("FindByBasenameAndSize(wrong size): expected (nil,nil), got (%+v, %v)", missing, err)
+	}
+
+	// Unknown basename → (nil, nil).
+	missing, err = repo.FindByBasenameAndSize("nonexistent.pdf", size)
+	if err != nil || missing != nil {
+		t.Fatalf("FindByBasenameAndSize(missing): expected (nil,nil), got (%+v, %v)", missing, err)
 	}
 }
 
@@ -210,14 +227,18 @@ func TestReadingAccessBatchLists(t *testing.T) {
 	bookRepo := NewReadingBookRepository(db)
 
 	// Create series + books.
-	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID, Grade: "universal"}
-	s2 := model.ReadingSeries{Title: "S2", SubjectID: subj.ID, Grade: "universal"}
+	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID}
+	s2 := model.ReadingSeries{Title: "S2", SubjectID: subj.ID}
 	db.Create(&s1)
 	db.Create(&s2)
-	b1 := model.ReadingBook{Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID, Grade: "universal"}
-	b2 := model.ReadingBook{Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID, Grade: "universal"}
+	db.Create(&model.ReadingSeriesGrade{SeriesID: s1.ID, Grade: model.GradeUniversal})
+	db.Create(&model.ReadingSeriesGrade{SeriesID: s2.ID, Grade: model.GradeUniversal})
+	b1 := model.ReadingBook{Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
+	b2 := model.ReadingBook{Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
 	db.Create(&b1)
 	db.Create(&b2)
+	db.Create(&model.ReadingBookGrade{BookID: b1.ID, Grade: model.GradeUniversal})
+	db.Create(&model.ReadingBookGrade{BookID: b2.ID, Grade: model.GradeUniversal})
 
 	// User 1: series 1 + book 2. User 2: series 2 only.
 	seriesRepo.GrantAccess(1, s1.ID)

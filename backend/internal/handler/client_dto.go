@@ -31,8 +31,9 @@ import (
 type clientCourseDTO struct {
 	ID             uint   `json:"ID"`
 	Title          string `json:"Title"`
-	Grade          string `json:"Grade"`
+	Grade          string `json:"Grade"`       // comma-joined grade keys (e.g. "3,4,5")
 	Subject        string `json:"Subject"` // subject key, e.g. "math"
+	ContentType    string `json:"ContentType"` // learning | entertainment
 	CoverURL       string `json:"CoverURL"`
 	Tags           string `json:"Tags"`     // comma-joined labels (legacy)
 	TagsList       []string `json:"TagsList"` // tag labels in sort order
@@ -65,7 +66,6 @@ type clientEpisodeDTO struct {
 	VideoRelativePath   string  `json:"VideoRelativePath"`
 	CoverURL            string  `json:"CoverURL"`
 	AttachmentJSON      string  `json:"AttachmentJSON"`
-	FileHash            string  `json:"FileHash"`
 	OriginalRelativePath string  `json:"OriginalRelativePath"`
 	FileSize            *int64  `json:"FileSize"`
 	DurationSeconds     *int    `json:"DurationSeconds"`
@@ -87,7 +87,6 @@ func toClientEpisodeDTO(ep model.Episode, locked bool) clientEpisodeDTO {
 		VideoRelativePath:    ep.VideoRelativePath,
 		CoverURL:             ep.CoverURL,
 		AttachmentJSON:       ep.AttachmentJSON,
-		FileHash:             ep.FileHash,
 		OriginalRelativePath: ep.OriginalRelativePath,
 		FileSize:             ep.FileSize,
 		DurationSeconds:      ep.DurationSeconds,
@@ -121,7 +120,6 @@ type clientReadingBookDTO struct {
 	SeriesID  uint   `json:"SeriesID"`
 	SortOrder int    `json:"SortOrder"`
 	Title     string `json:"Title"`
-	FileHash  string `json:"FileHash"`
 	PageCount *int   `json:"PageCount"`
 	CoverURL  string `json:"CoverURL"`
 	Grade     string `json:"Grade"`

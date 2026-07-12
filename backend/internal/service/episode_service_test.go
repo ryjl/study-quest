@@ -23,12 +23,13 @@ func TestEpisodeService(t *testing.T) {
 
 	t.Run("ReorderEpisodes", func(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
-		c := &model.Course{Title: "Sort Course", Grade: "3", SubjectID: subjects["math"].ID}
+		c := &model.Course{Title: "Sort Course", SubjectID: subjects["math"].ID}
 		_ = courseRepo.Create(c)
+		db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("3")})
 
-		ep1, _ := svc.CreateEpisode(c.ID, 0, "Episode A", "/path/a.mp4", "[]", 1, "", "", nil, nil)
-		ep2, _ := svc.CreateEpisode(c.ID, 0, "Episode B", "/path/b.mp4", "[]", 2, "", "", nil, nil)
-		ep3, _ := svc.CreateEpisode(c.ID, 0, "Episode C", "/path/c.mp4", "[]", 3, "", "", nil, nil)
+		ep1, _ := svc.CreateEpisode(c.ID, 0, "Episode A", "/path/a.mp4", "[]", 1, "", nil, nil)
+		ep2, _ := svc.CreateEpisode(c.ID, 0, "Episode B", "/path/b.mp4", "[]", 2, "", nil, nil)
+		ep3, _ := svc.CreateEpisode(c.ID, 0, "Episode C", "/path/c.mp4", "[]", 3, "", nil, nil)
 
 		// Reorder to C, A, B
 		newOrder := []uint{ep3.ID, ep1.ID, ep2.ID}
@@ -60,12 +61,13 @@ func TestEpisodeService(t *testing.T) {
 
 	t.Run("SubtitlesAndAutoMatch", func(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
-		c := &model.Course{Title: "Sub Course", Grade: "4", SubjectID: subjects["english"].ID}
+		c := &model.Course{Title: "Sub Course", SubjectID: subjects["english"].ID}
 		_ = courseRepo.Create(c)
+		db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("4")})
 
 		// Create an episode
 		size := int64(1048576)
-		ep, err := svc.CreateEpisode(c.ID, 0, "English Lesson 01", "/english/01.mp4", "[]", 1, "", "/english/lesson1/01.mp4", &size, nil)
+		ep, err := svc.CreateEpisode(c.ID, 0, "English Lesson 01", "/english/01.mp4", "[]", 1, "/english/lesson1/01.mp4", &size, nil)
 		if err != nil {
 			t.Fatalf("CreateEpisode failed: %v", err)
 		}
@@ -124,13 +126,14 @@ func TestEpisodeService(t *testing.T) {
 
 	t.Run("UpdateEpisodeAdminPreservesMedia", func(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)
-		c := &model.Course{Title: "Patch Course", Grade: "5", SubjectID: subjects["physics"].ID}
+		c := &model.Course{Title: "Patch Course", SubjectID: subjects["physics"].ID}
 		_ = courseRepo.Create(c)
+		db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("5")})
 
 		// Create an episode with full media metadata (as if ffprobe had run).
 		size := int64(2048576)
 		dur := 750
-		ep, err := svc.CreateEpisode(c.ID, 0, "原始标题", "/physics/orig.mp4", "[]", 1, "abc123hash", "/physics/orig.mp4", &size, &dur)
+		ep, err := svc.CreateEpisode(c.ID, 0, "原始标题", "/physics/orig.mp4", "[]", 1, "/physics/orig.mp4", &size, &dur)
 		if err != nil {
 			t.Fatalf("CreateEpisode failed: %v", err)
 		}
@@ -141,7 +144,7 @@ func TestEpisodeService(t *testing.T) {
 		}
 
 		// Admin edits only the title + path. The PATCH-style update must NOT
-		// touch file_hash / file_size / duration / media_meta_json.
+		// touch file_size / duration / media_meta_json.
 		updated, err := svc.UpdateEpisodeAdmin(ep.ID, 0, "新标题", "/physics/renamed.mp4", 1)
 		if err != nil {
 			t.Fatalf("UpdateEpisodeAdmin failed: %v", err)
@@ -155,9 +158,6 @@ func TestEpisodeService(t *testing.T) {
 			t.Errorf("editable fields not updated: title=%q path=%q", updated.Title, updated.VideoRelativePath)
 		}
 		// Media fields preserved.
-		if updated.FileHash != "abc123hash" {
-			t.Errorf("file_hash clobbered: got %q want %q", updated.FileHash, "abc123hash")
-		}
 		if updated.FileSize == nil || *updated.FileSize != size {
 			t.Errorf("file_size clobbered: got %v want %d", updated.FileSize, size)
 		}

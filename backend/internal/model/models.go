@@ -27,11 +27,51 @@ type User struct {
 	UpdatedAt time.Time
 }
 
-// UserCourseAccess defines which courses a user can see/access.
+// Role constants. Stored as strings on User.Role; these consts centralize the
+// values so inline string comparisons can't drift. IsStaff() identifies roles
+// that bypass student-level access gating (see all course/reading services).
+const (
+	RoleStudent = "student"
+	RoleTeen    = "teen"
+	RoleParent  = "parent"
+	RoleAdmin   = "admin"
+)
+
+func IsStaffRole(role string) bool {
+	return role == RoleAdmin || role == RoleParent
+}
+
+// PointsLedger reason-type constants. Stored as strings on
+// PointsLedger.ReasonType; these consts keep the ledger values in sync with
+// the code that writes them (previously drifted between docs and code).
+const (
+	ReasonSystemWatch   = "system_watch"    // completed a learning episode
+	ReasonBadgeUnlocked = "badge_unlocked"  // badge tier cleared
+	ReasonParentGrant   = "parent_grant"    // parent-awarded bonus (future)
+)
+
+// Badge rule-type constants. Stored as strings on Badge.RuleType.
+const (
+	RuleWatchDuration       = "watch_duration"
+	RuleConsecutiveDays     = "consecutive_days"
+	RuleSubjectCount        = "subject_count"
+	RuleEpisodeCount        = "episode_completed_count"
+	RulePointsEarned        = "points_earned"
+	RuleDistinctSubject     = "distinct_subject_count"
+	RuleCourseCompletion    = "course_completion"
+	RuleWeeklyAllPresent    = "weekly_all_present"
+	RuleComposite           = "composite"
+)
+
+// UserCourseAccess defines which courses a user can see/access. FK CASCADE on
+// both axes ensures access rows are cleaned up automatically when a user or
+// course is deleted (previously done manually in the service layer).
 type UserCourseAccess struct {
 	UserID    uint      `gorm:"primaryKey"`
 	CourseID  uint      `gorm:"primaryKey"`
 	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+	User      User      `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Course    Course    `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 }
 
 // Grade represents the grade enum.
@@ -50,22 +90,28 @@ const (
 	GradeUniversal Grade = "universal"
 )
 
-// Valid checks if the grade matches one of the enum values or is a comma-separated list of them.
+// Valid checks if the grade matches one of the enum values.
 func (g Grade) Valid() bool {
-	if g == "" {
-		return false
+	switch g {
+	case Grade1, Grade2, Grade3, Grade4, Grade5, Grade6, Grade7, Grade8, Grade9, GradeUniversal:
+		return true
 	}
-	parts := strings.Split(string(g), ",")
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		switch Grade(p) {
-		case Grade1, Grade2, Grade3, Grade4, Grade5, Grade6, Grade7, Grade8, Grade9, GradeUniversal:
-			// valid
-		default:
-			return false
-		}
-	}
-	return true
+	return false
+}
+
+// ContentType distinguishes learning content (counts towards watch time,
+// points, badges) from entertainment content (pure playback, no learning
+// stats). Stored on Course so the progress service can branch at the choke
+// point without touching the 11+ learning-stat queries.
+type ContentType string
+
+const (
+	ContentLearning      ContentType = "learning"
+	ContentEntertainment ContentType = "entertainment"
+)
+
+func (c ContentType) Valid() bool {
+	return c == ContentLearning || c == ContentEntertainment
 }
 
 // Subject represents a user-editable course subject (科目), e.g. 语文/数学/英语.
@@ -106,18 +152,28 @@ type Tag struct {
 	UpdatedAt time.Time
 }
 
-// Course represents a multi-episode course.
+// Course represents a multi-episode course. A course's applicable grades live
+// in the CourseGrade join table (one row per grade). ContentType separates
+// learning courses (stats/points/badges) from entertainment (pure playback).
 type Course struct {
 	ID             uint      `gorm:"primaryKey;autoIncrement"`
 	Title          string    `gorm:"size:255;not null"`
-	Grade          Grade     `gorm:"type:varchar(50);not null"`   // "1" to "9" or "universal" (or comma-separated)
 	SubjectID      uint      `gorm:"not null;index"`              // FK → subjects.id (ON DELETE RESTRICT)
 	Subject        Subject   `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
+	ContentType    ContentType `gorm:"size:20;not null;default:'learning'"` // learning | entertainment
 	CoverURL       string    `gorm:"size:1024"`
 	Tags           []Tag     `gorm:"many2many:course_tags;constraint:OnDelete:CASCADE"`
+	Grades         []CourseGrade `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 	AttachmentJSON string    `gorm:"type:text"`          // JSON array of attachments
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// CourseGrade is one row of a course's applicable-grade set. A course with no
+// rows matches no grade filter; GradeUniversal rows match any filter.
+type CourseGrade struct {
+	CourseID uint  `gorm:"primaryKey"`
+	Grade    Grade `gorm:"primaryKey;type:varchar(20);not null"`
 }
 
 // TagsList returns the display labels of the course's tags, in tag sort order.
@@ -137,30 +193,31 @@ func (c Course) TagsJoined() string {
 	return strings.Join(c.TagsList(), ",")
 }
 
-// Grades splits a comma-separated grade list into a slice.
-func (c Course) Grades() []string {
-	if c.Grade == "" {
-		return []string{}
+// GradeKeys returns the course's applicable grades as a string slice (loaded
+// from the CourseGrade association). Callers must have preloaded Grades.
+func (c Course) GradeKeys() []string {
+	out := make([]string, 0, len(c.Grades))
+	for _, g := range c.Grades {
+		out = append(out, string(g.Grade))
 	}
-	parts := strings.Split(string(c.Grade), ",")
-	for i, p := range parts {
-		parts[i] = strings.TrimSpace(p)
-	}
-	return parts
+	return out
 }
 
 // GradeDisplay formats the course grade for display.
 func (c Course) GradeDisplay() string {
-	if c.Grade == "universal" {
-		return "全学段通用"
-	}
-	parts := c.Grades()
-	for i, p := range parts {
-		if p == "universal" {
-			parts[i] = "通用"
-		} else {
-			parts[i] = p + "年级"
+	return courseGradeDisplay(c.Grades)
+}
+
+// courseGradeDisplay formats a grade set for the UI. Universal → "全学段通用".
+func courseGradeDisplay(gs []CourseGrade) string {
+	for _, g := range gs {
+		if g.Grade == GradeUniversal {
+			return "全学段通用"
 		}
+	}
+	parts := make([]string, 0, len(gs))
+	for _, g := range gs {
+		parts = append(parts, string(g.Grade)+"年级")
 	}
 	return strings.Join(parts, ", ")
 }
@@ -188,7 +245,6 @@ type Episode struct {
 	VideoRelativePath    string `gorm:"type:text;not null"`
 	CoverURL             string `gorm:"size:1024"`
 	AttachmentJSON       string `gorm:"type:text"` // JSON array of attachments
-	FileHash             string `gorm:"size:255;index"` // SHA1/MD5 for disaster recovery matching
 	OriginalRelativePath string `gorm:"type:text"` // Original multi-layer path to prevent name collision
 	FileSize             *int64 // Nullable file size in bytes
 	DurationSeconds      *int   // Nullable video duration in seconds
@@ -285,6 +341,10 @@ type UserProgress struct {
 //     top-level RuleType/Threshold are kept only for display/back-compat
 //     (set to "composite" when RuleJSON is populated).
 //
+// SubjectID links a subject-scoped badge (e.g. "数学达人") to its subject via
+// FK, replacing the old string-convention coupling (Code "subject_<key>"). A
+// badge with SubjectID=nil is a global badge (streak, points, etc.).
+//
 // IsSystem marks seeded defaults (protected from deletion, still editable).
 type Badge struct {
 	ID          uint      `gorm:"primaryKey;autoIncrement"`
@@ -296,6 +356,7 @@ type Badge struct {
 	RuleTarget  string    `gorm:"size:100"`         // target e.g. "math" or empty
 	Threshold   int       `gorm:"not null"`         // threshold to reach e.g. 100, 7, 5 (single-tier only)
 	RuleJSON    string    `gorm:"type:text"`        // composite rule tree (empty = single rule)
+	SubjectID   *uint     `gorm:"index"`            // FK → subjects.id (nullable; SET NULL on subject delete)
 	// Tiers holds a multi-tier progression as JSON (see TierDef). Empty =
 	// single-tier badge using Threshold. Non-empty = the badge is evaluated as
 	// a progression: the user advances through each tier as their stat crosses
@@ -305,6 +366,7 @@ type Badge struct {
 	// subject for auto-create/delete/rename-cascade.
 	Tiers    string `gorm:"type:text"`
 	IsSystem bool   `gorm:"default:false"` // true = seeded default, protected from deletion
+	Subject  *Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:SET NULL"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -394,21 +456,29 @@ type CourseUnlockTemplate struct {
 // overrides the course template. Absence means "inherit the template" (or
 // AllOpen if there's no template either).
 //
-// AllowedEpisodeIDsJSON holds the admin-curated allowlist (JSON []uint of
-// episode ids). It is the SOLE source of visibility under StrategySelected,
-// and an ADDITIVE source (unioned with the water level) under the other
-// strategies — so an admin can always hand-unlock a specific episode without
-// disturbing the drip schedule.
+// The admin-curated allowlist lives in the UserUnlockAllowedEpisode join table
+// (not a JSON blob here). It is the SOLE source of visibility under
+// StrategySelected, and an ADDITIVE source (unioned with the water level)
+// under the other strategies — so an admin can always hand-unlock a specific
+// episode without disturbing the drip schedule.
 type UserUnlockOverride struct {
-	UserID                uint      `gorm:"primaryKey"`
-	CourseID              uint      `gorm:"primaryKey"`
-	Strategy              string    `gorm:"size:20;not null;default:'all_open'"`
-	IntervalSeconds       int       `gorm:"default:0"`
-	WeeklyTimesJSON       string    `gorm:"type:text"`
-	ManualUnlockCount     int       `gorm:"default:0"` // bumps water level under manual/interval/weekly
-	AllowedEpisodeIDsJSON string    `gorm:"type:text"` // JSON []uint allowlist
-	CreatedAt             time.Time
-	UpdatedAt             time.Time
+	UserID            uint      `gorm:"primaryKey"`
+	CourseID          uint      `gorm:"primaryKey"`
+	Strategy          string    `gorm:"size:20;not null;default:'all_open'"`
+	IntervalSeconds   int       `gorm:"default:0"`
+	WeeklyTimesJSON   string    `gorm:"type:text"`
+	ManualUnlockCount int       `gorm:"default:0"` // bumps water level under manual/interval/weekly
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// UserUnlockAllowedEpisode is one row of a (user, course) override's
+// admin-curated episode allowlist. FK CASCADE on all three axes ensures no
+// stale ids survive when a user, course, or episode is deleted.
+type UserUnlockAllowedEpisode struct {
+	UserID    uint `gorm:"primaryKey"`
+	CourseID  uint `gorm:"primaryKey"`
+	EpisodeID uint `gorm:"primaryKey"`
 }
 
 // AppRelease is one Android APK build published for over-the-air distribution.
@@ -449,31 +519,55 @@ type ReadingSeries struct {
 	Description string  `gorm:"type:text"`
 	SubjectID   uint    `gorm:"not null;index"`
 	Subject     Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
-	Grade       Grade   `gorm:"type:varchar(50);not null"`
 	CoverURL    string  `gorm:"size:1024"`
 	Tags        []Tag   `gorm:"many2many:reading_series_tags;constraint:OnDelete:CASCADE"`
+	Grades      []ReadingSeriesGrade `gorm:"foreignKey:SeriesID;constraint:OnDelete:CASCADE"`
 	SortOrder   int     `gorm:"default:0;not null"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
 
-// readingGradeDisplay formats a Grade for the reading-room UI, mirroring
-// Course.GradeDisplay. Shared by all three reading models since they all carry
-// the same Grade semantics.
-func readingGradeDisplay(g Grade) string {
-	if g == "universal" {
-		return "全学段通用"
-	}
-	parts := strings.Split(string(g), ",")
-	for i, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "universal" {
-			parts[i] = "通用"
-		} else {
-			parts[i] = p + "年级"
+// ReadingSeriesGrade is one row of a reading series's applicable-grade set.
+type ReadingSeriesGrade struct {
+	SeriesID uint  `gorm:"primaryKey"`
+	Grade    Grade `gorm:"primaryKey;type:varchar(20);not null"`
+}
+
+// readingGradeDisplay formats a grade set for the reading-room UI. Shared by
+// all three reading models; each delegates its loaded grade rows here.
+func readingGradeDisplay(gs []Grade) string {
+	for _, g := range gs {
+		if g == GradeUniversal {
+			return "全学段通用"
 		}
 	}
+	parts := make([]string, 0, len(gs))
+	for _, g := range gs {
+		parts = append(parts, string(g)+"年级")
+	}
 	return strings.Join(parts, ", ")
+}
+
+func readingSeriesGrades(gs []ReadingSeriesGrade) []Grade {
+	out := make([]Grade, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, g.Grade)
+	}
+	return out
+}
+func readingBookGrades(gs []ReadingBookGrade) []Grade {
+	out := make([]Grade, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, g.Grade)
+	}
+	return out
+}
+func readingArticleGrades(gs []ReadingArticleGrade) []Grade {
+	out := make([]Grade, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, g.Grade)
+	}
+	return out
 }
 
 func (s ReadingSeries) TagsList() []string {
@@ -484,7 +578,7 @@ func (s ReadingSeries) TagsList() []string {
 	return out
 }
 func (s ReadingSeries) TagsJoined() string  { return strings.Join(s.TagsList(), ",") }
-func (s ReadingSeries) GradeDisplay() string { return readingGradeDisplay(s.Grade) }
+func (s ReadingSeries) GradeDisplay() string { return readingGradeDisplay(readingSeriesGrades(s.Grades)) }
 
 func (b ReadingBook) TagsList() []string {
 	out := make([]string, 0, len(b.Tags))
@@ -494,7 +588,7 @@ func (b ReadingBook) TagsList() []string {
 	return out
 }
 func (b ReadingBook) TagsJoined() string  { return strings.Join(b.TagsList(), ",") }
-func (b ReadingBook) GradeDisplay() string { return readingGradeDisplay(b.Grade) }
+func (b ReadingBook) GradeDisplay() string { return readingGradeDisplay(readingBookGrades(b.Grades)) }
 
 func (a ReadingArticle) TagsList() []string {
 	out := make([]string, 0, len(a.Tags))
@@ -504,7 +598,7 @@ func (a ReadingArticle) TagsList() []string {
 	return out
 }
 func (a ReadingArticle) TagsJoined() string  { return strings.Join(a.TagsList(), ",") }
-func (a ReadingArticle) GradeDisplay() string { return readingGradeDisplay(a.Grade) }
+func (a ReadingArticle) GradeDisplay() string { return readingGradeDisplay(readingArticleGrades(a.Grades)) }
 
 // ReadingBook is a PDF document in the reading room. Mirrors the Episode role:
 // FileRelativePath + FileHash + FileSize follow the exact same Alist 302-stream
@@ -517,16 +611,21 @@ type ReadingBook struct {
 	SortOrder        int     `gorm:"default:0;not null"`
 	Title            string  `gorm:"size:255;not null"`
 	FileRelativePath string  `gorm:"type:text;not null"` // Alist/WebDAV relative path
-	FileHash         string  `gorm:"size:255;index"`     // cache-invalidation + disaster-recovery key
 	FileSize         *int64                              // nullable, not yet probed
 	PageCount        *int                                // nullable, client reports on first open
 	CoverURL         string  `gorm:"size:1024"`
 	SubjectID        uint    `gorm:"not null;index"`
 	Subject          Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
-	Grade            Grade   `gorm:"type:varchar(50);not null"`
 	Tags             []Tag   `gorm:"many2many:reading_books_tags;constraint:OnDelete:CASCADE"`
+	Grades           []ReadingBookGrade `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE"`
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+}
+
+// ReadingBookGrade is one row of a reading book's applicable-grade set.
+type ReadingBookGrade struct {
+	BookID uint  `gorm:"primaryKey"`
+	Grade  Grade `gorm:"primaryKey;type:varchar(20);not null"`
 }
 
 // ReadingArticle is a web/rich-text article (e.g. a WeChat 公众号 H5) loaded
@@ -551,33 +650,44 @@ type ReadingArticle struct {
 	CoverURL   string  `gorm:"size:1024"`
 	SubjectID  uint    `gorm:"not null;index"`
 	Subject    Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
-	Grade      Grade   `gorm:"type:varchar(50);not null"`
 	Tags       []Tag   `gorm:"many2many:reading_articles_tags;constraint:OnDelete:CASCADE"`
+	Grades     []ReadingArticleGrade `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
 
+// ReadingArticleGrade is one row of a reading article's applicable-grade set.
+type ReadingArticleGrade struct {
+	ArticleID uint  `gorm:"primaryKey"`
+	Grade     Grade `gorm:"primaryKey;type:varchar(20);not null"`
+}
+
 // UserReadingSeriesAccess / UserReadingBookAccess / UserReadingArticleAccess
 // define which reading resources a user can see. Mirrors UserCourseAccess:
-// composite PK on (UserID, resourceID), no auto-increment. Three separate
-// tables (rather than one polymorphic table) keep foreign keys clean and match
-// the per-aggregate access-table convention of the video module.
+// composite PK on (UserID, resourceID), FK CASCADE on both axes. Three separate
+// tables (rather than one polymorphic table) keep foreign keys clean.
 type UserReadingSeriesAccess struct {
 	UserID    uint      `gorm:"primaryKey"`
 	SeriesID  uint      `gorm:"primaryKey"`
 	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+	User      User           `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Series    ReadingSeries  `gorm:"foreignKey:SeriesID;constraint:OnDelete:CASCADE"`
 }
 
 type UserReadingBookAccess struct {
 	UserID    uint      `gorm:"primaryKey"`
 	BookID    uint      `gorm:"primaryKey"`
 	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+	User      User         `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Book      ReadingBook  `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE"`
 }
 
 type UserReadingArticleAccess struct {
 	UserID    uint      `gorm:"primaryKey"`
 	ArticleID uint      `gorm:"primaryKey"`
 	GrantedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+	User      User            `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Article   ReadingArticle  `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE"`
 }
 
 // ReadingBookProgress remembers the last-read page of a PDF book. Mirrors the
@@ -592,6 +702,21 @@ type ReadingBookProgress struct {
 	UpdatedAt time.Time
 }
 
+// EntertainmentProgress tracks playback of entertainment videos. Physically
+// separate from UserProgress so learning-stat queries are zero-contaminated:
+// entertainment watching never lands in user_progresses, so no badge / dashboard
+// query needs an exclusion filter. WatchSeconds accumulates for the future
+// time-limit feature (daily/weekly caps). Resume position works identically to
+// UserProgress (last-writer-wins on LastPositionSeconds).
+type EntertainmentProgress struct {
+	UserID              uint `gorm:"uniqueIndex:idx_ent_user_episode;not null"`
+	EpisodeID           uint `gorm:"uniqueIndex:idx_ent_user_episode;not null"`
+	LastPositionSeconds int  `gorm:"default:0"`
+	WatchSeconds        int  `gorm:"default:0"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 // AutoMigrate runs GORM schema auto-migration for all tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
@@ -601,6 +726,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&Subject{},
 		&Tag{},
 		&Course{},
+		&CourseGrade{},
 		&Chapter{},
 		&Episode{},
 		&Subtitle{},
@@ -612,11 +738,16 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserBadge{},
 		&CourseUnlockTemplate{},
 		&UserUnlockOverride{},
+		&UserUnlockAllowedEpisode{},
 		&AppRelease{},
+		&EntertainmentProgress{},
 		// Reading Room module
 		&ReadingSeries{},
+		&ReadingSeriesGrade{},
 		&ReadingBook{},
+		&ReadingBookGrade{},
 		&ReadingArticle{},
+		&ReadingArticleGrade{},
 		&UserReadingSeriesAccess{},
 		&UserReadingBookAccess{},
 		&UserReadingArticleAccess{},

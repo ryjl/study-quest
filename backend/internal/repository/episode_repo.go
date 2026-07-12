@@ -9,15 +9,15 @@ import (
 	"gorm.io/gorm"
 )
 
-// EpisodeRepository implements core GORM functions and double-protection search.
+// EpisodeRepository implements core GORM functions and basename-based disaster
+// recovery search (file moved/renamed on the storage backend).
 type EpisodeRepository interface {
 	// WithTx returns a copy bound to an in-progress transaction.
 	WithTx(tx *gorm.DB) EpisodeRepository
 	ListByCourse(courseID uint) ([]model.Episode, error)
 	ListByNullDuration() ([]model.Episode, error)
 	FindByID(id uint) (*model.Episode, error)
-	FindByHash(hash string) (*model.Episode, error)
-	FindByPathAndSize(path string, size int64) (*model.Episode, error)
+	FindByBasenameAndSize(basename string, size int64) (*model.Episode, error)
 	Create(episode *model.Episode) error
 	Update(episode *model.Episode) error
 	Delete(id uint) error
@@ -95,20 +95,15 @@ func (r *episodeRepo) FindByID(id uint) (*model.Episode, error) {
 	return &ep, nil
 }
 
-func (r *episodeRepo) FindByHash(hash string) (*model.Episode, error) {
+// FindByBasenameAndSize finds an episode whose stored path ends with the given
+// basename and whose file_size matches. Used for disaster recovery: when the
+// primary path 404s on the storage backend (file moved/renamed), we try to
+// re-resolve by matching the filename + size across all known episode rows.
+func (r *episodeRepo) FindByBasenameAndSize(basename string, size int64) (*model.Episode, error) {
 	var ep model.Episode
-	if err := r.db.Where("file_hash = ?", hash).First(&ep).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &ep, nil
-}
-
-func (r *episodeRepo) FindByPathAndSize(path string, size int64) (*model.Episode, error) {
-	var ep model.Episode
-	if err := r.db.Where("video_relative_path = ? AND file_size = ?", path, size).First(&ep).Error; err != nil {
+	basenameLike := "%/" + basename
+	if err := r.db.Where("(original_relative_path LIKE ? OR video_relative_path LIKE ?) AND file_size = ?",
+		basenameLike, basenameLike, size).First(&ep).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

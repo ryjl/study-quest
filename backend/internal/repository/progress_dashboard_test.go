@@ -183,10 +183,12 @@ func TestTopCoursesByCompletions(t *testing.T) {
 	repo := NewProgressRepository(db)
 
 	// Two courses, each with episodes.
-	c1 := &model.Course{Title: "c1", SubjectID: 1, Grade: "g"}
-	c2 := &model.Course{Title: "c2", SubjectID: 1, Grade: "g"}
+	c1 := &model.Course{Title: "c1", SubjectID: 1}
+	c2 := &model.Course{Title: "c2", SubjectID: 1}
 	db.Create(c1)
 	db.Create(c2)
+	db.Create(&model.CourseGrade{CourseID: c1.ID, Grade: model.Grade("g")})
+	db.Create(&model.CourseGrade{CourseID: c2.ID, Grade: model.Grade("g")})
 	epC1a := &model.Episode{Title: "e", CourseID: c1.ID, VideoRelativePath: "x"}
 	epC1b := &model.Episode{Title: "e", CourseID: c1.ID, VideoRelativePath: "y"}
 	epC2 := &model.Episode{Title: "e", CourseID: c2.ID, VideoRelativePath: "z"}

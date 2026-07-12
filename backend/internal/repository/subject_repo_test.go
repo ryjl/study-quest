@@ -63,9 +63,12 @@ func TestSubjectDeleteBlockedByCourseFK(t *testing.T) {
 	subjectRepo := NewSubjectRepository(db)
 
 	// Create a course pointing at the "math" subject.
-	c := &model.Course{Title: "Math Course", Grade: "3", SubjectID: subjects["math"].ID}
+	c := &model.Course{Title: "Math Course", SubjectID: subjects["math"].ID}
 	if err := courseRepo.Create(c); err != nil {
 		t.Fatalf("create course: %v", err)
+	}
+	if err := courseRepo.SetGrades(c.ID, []model.Grade{model.Grade("3")}); err != nil {
+		t.Fatalf("set course grades: %v", err)
 	}
 
 	// Deleting the subject must fail because of the FK RESTRICT constraint.

@@ -26,7 +26,6 @@ type ReadingPreviewNode struct {
 	Path     string                 `json:"path"`
 	IsDir    bool                   `json:"is_dir"`
 	Size     int64                  `json:"size"`
-	Hash     string                 `json:"hash"`
 	Type     string                 `json:"type"`
 	Children []*ReadingPreviewNode  `json:"children"`
 }
@@ -159,7 +158,6 @@ func (s *readingImportService) scanReadingRecursive(provider storage.StorageProv
 					Path:  f.Path,
 					IsDir: false,
 					Size:  f.Size,
-					Hash:  f.Hash,
 					Type:  "book",
 				})
 			}
@@ -237,12 +235,14 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 			}
 			series := &model.ReadingSeries{
 				Title:     req.NewSeries.Title,
-				Grade:     g,
 				SubjectID: subjectID,
 				CoverURL:  req.NewSeries.CoverURL,
 				SortOrder: 0,
 			}
 			if err := seriesRepo.Create(series); err != nil {
+				return err
+			}
+			if err := seriesRepo.SetGrades(series.ID, []model.Grade{g}); err != nil {
 				return err
 			}
 			if len(req.NewSeries.TagIDs) > 0 {
@@ -273,13 +273,18 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 		// Resolve subject + grade for books: inherit from the series.
 		series, _ := seriesRepo.FindByID(seriesID)
 		var bookSubjectID uint
-		var bookGrade model.Grade = "universal"
+		var bookGrades []model.Grade
 		if series != nil {
 			bookSubjectID = series.SubjectID
-			bookGrade = series.Grade
+			for _, g := range series.Grades {
+				bookGrades = append(bookGrades, g.Grade)
+			}
+		}
+		if len(bookGrades) == 0 {
+			bookGrades = []model.Grade{model.GradeUniversal}
 		}
 
-		return s.importReadingNode(req.Tree, seriesID, bookSubjectID, bookGrade, bookRepo, existingByTitle, existingByPath, &nextSortOrder)
+		return s.importReadingNode(req.Tree, seriesID, bookSubjectID, bookGrades, bookRepo, existingByTitle, existingByPath, &nextSortOrder)
 	})
 }
 
@@ -289,7 +294,7 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 func (s *readingImportService) importReadingNode(
 	node *ReadingPreviewNode,
 	seriesID, subjectID uint,
-	grade model.Grade,
+	grades []model.Grade,
 	bookRepo repository.ReadingBookRepository,
 	existingByTitle map[string]*model.ReadingBook,
 	existingByPath map[string]*model.ReadingBook,
@@ -309,7 +314,6 @@ func (s *readingImportService) importReadingNode(
 		// Match existing by title or path basename.
 		if existing, ok := existingByTitle[node.Name]; ok {
 			existing.FileRelativePath = node.Path
-			existing.FileHash = node.Hash
 			if node.Size > 0 {
 				sz := node.Size
 				existing.FileSize = &sz
@@ -319,7 +323,6 @@ func (s *readingImportService) importReadingNode(
 		if existing, ok := existingByPath[basename]; ok {
 			existing.Title = node.Name
 			existing.FileRelativePath = node.Path
-			existing.FileHash = node.Hash
 			if node.Size > 0 {
 				sz := node.Size
 				existing.FileSize = &sz
@@ -332,8 +335,6 @@ func (s *readingImportService) importReadingNode(
 			SortOrder:        *sortOrder,
 			Title:            node.Name,
 			FileRelativePath: node.Path,
-			FileHash:         node.Hash,
-			Grade:            grade,
 			SubjectID:        subjectID,
 		}
 		if node.Size > 0 {
@@ -343,13 +344,16 @@ func (s *readingImportService) importReadingNode(
 		if err := bookRepo.Create(book); err != nil {
 			return err
 		}
+		if err := bookRepo.SetGrades(book.ID, grades); err != nil {
+			return err
+		}
 		*sortOrder++
 		return nil
 	}
 
 	// Directory — descend into children.
 	for _, child := range node.Children {
-		if err := s.importReadingNode(child, seriesID, subjectID, grade, bookRepo, existingByTitle, existingByPath, sortOrder); err != nil {
+		if err := s.importReadingNode(child, seriesID, subjectID, grades, bookRepo, existingByTitle, existingByPath, sortOrder); err != nil {
 			return err
 		}
 	}

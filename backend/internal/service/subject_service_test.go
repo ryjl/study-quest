@@ -44,8 +44,8 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		t.Fatalf("first seed: %v", err)
 	}
 	list, _ := svc.List()
-	if len(list) != 10 {
-		t.Fatalf("expected 10 default subjects, got %d", len(list))
+	if len(list) != 11 {
+		t.Fatalf("expected 11 default subjects (10 academic + entertainment), got %d", len(list))
 	}
 
 	// Idempotent: seeding again must not duplicate.
@@ -53,7 +53,7 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		t.Fatalf("second seed: %v", err)
 	}
 	list2, _ := svc.List()
-	if len(list2) != 10 {
+	if len(list2) != 11 {
 		t.Fatalf("seed not idempotent: got %d after second seed", len(list2))
 	}
 
@@ -104,9 +104,9 @@ func TestSeedDefaultSubjectsBackfillsExistingInstall(t *testing.T) {
 	}
 
 	list, _ := svc.List()
-	// 5 old + 5 new defaults + 1 user = 11.
-	if len(list) != 11 {
-		t.Fatalf("after backfill: expected 11 subjects, got %d", len(list))
+	// 5 old + 6 new defaults (5 academic + entertainment) + 1 user = 12.
+	if len(list) != 12 {
+		t.Fatalf("after backfill: expected 12 subjects, got %d", len(list))
 	}
 
 	// The newly-added defaults must now exist.
@@ -127,10 +127,11 @@ func TestSubjectServiceDeleteInUse(t *testing.T) {
 	courseRepo := repository.NewCourseRepository(db)
 
 	// A course referencing the subject should block deletion.
-	course := &model.Course{Title: "Math", Grade: "3", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "Math", SubjectID: subjects["math"].ID}
 	if err := courseRepo.Create(course); err != nil {
 		t.Fatalf("create course: %v", err)
 	}
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 
 	err := svc.Delete(subjects["math"].ID)
 	if !errors.Is(err, ErrSubjectInUse) {

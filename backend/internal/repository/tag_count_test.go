@@ -26,8 +26,12 @@ func TestCountCoursesByTag(t *testing.T) {
 
 	// Create 3 courses using tagA (via the many2many join), 0 using tagB.
 	for i := 0; i < 3; i++ {
-		if err := db.Create(&model.Course{Title: "c", SubjectID: 1, Grade: "g1", Tags: []model.Tag{*tagA}}).Error; err != nil {
+		c := &model.Course{Title: "c", SubjectID: 1, Tags: []model.Tag{*tagA}}
+		if err := db.Create(c).Error; err != nil {
 			t.Fatalf("create course %d: %v", i, err)
+		}
+		if err := db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("g1")}).Error; err != nil {
+			t.Fatalf("create course grade %d: %v", i, err)
 		}
 	}
 
@@ -56,11 +60,19 @@ func TestBatchCourseCountsByTag(t *testing.T) {
 
 	// 2 courses with A, 1 with B, none with C.
 	for i := 0; i < 2; i++ {
-		if err := db.Create(&model.Course{Title: "c", SubjectID: 1, Grade: "g1", Tags: []model.Tag{*tagA}}).Error; err != nil {
+		c := &model.Course{Title: "c", SubjectID: 1, Tags: []model.Tag{*tagA}}
+		if err := db.Create(c).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("g1")}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := db.Create(&model.Course{Title: "c", SubjectID: 1, Grade: "g1", Tags: []model.Tag{*tagB}}).Error; err != nil {
+	c3 := &model.Course{Title: "c", SubjectID: 1, Tags: []model.Tag{*tagB}}
+	if err := db.Create(c3).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.CourseGrade{CourseID: c3.ID, Grade: model.Grade("g1")}).Error; err != nil {
 		t.Fatal(err)
 	}
 

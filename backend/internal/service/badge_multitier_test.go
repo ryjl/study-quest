@@ -21,9 +21,10 @@ func TestMultiTierSkipUp(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 
@@ -39,8 +40,9 @@ func TestMultiTierSkipUp(t *testing.T) {
 	}
 
 	dur := 100
-	course := &model.Course{Title: "C", Grade: "3", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "C", SubjectID: subjects["math"].ID}
 	courseRepo.Create(course)
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 	var eps []*model.Episode
 	for i := 1; i <= 15; i++ {
 		ep := &model.Episode{CourseID: course.ID, SortOrder: i, DurationSeconds: &dur}
@@ -126,16 +128,18 @@ func TestEvaluateRulesConcurrentIdempotent(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 	bs.SeedDefaultBadges()
 
 	dur := 100
-	course := &model.Course{Title: "C", Grade: "3", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "C", SubjectID: subjects["math"].ID}
 	courseRepo.Create(course)
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 	ep := &model.Episode{CourseID: course.ID, SortOrder: 1, DurationSeconds: &dur}
 	episodeRepo.Create(ep)
 
@@ -245,9 +249,10 @@ func TestUserBadgeStatusesFields(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 
@@ -260,8 +265,9 @@ func TestUserBadgeStatusesFields(t *testing.T) {
 	badgeRepo.Create(badge)
 
 	dur := 100
-	course := &model.Course{Title: "C", Grade: "3", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "C", SubjectID: subjects["math"].ID}
 	courseRepo.Create(course)
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 	var eps []*model.Episode
 	for i := 1; i <= 5; i++ {
 		ep := &model.Episode{CourseID: course.ID, SortOrder: i, DurationSeconds: &dur}
@@ -324,9 +330,10 @@ func TestEvalMultiTierSortsUnsorted(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
+	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 
@@ -340,8 +347,9 @@ func TestEvalMultiTierSortsUnsorted(t *testing.T) {
 	badgeRepo.Create(badge)
 
 	dur := 100
-	course := &model.Course{Title: "C", Grade: "3", SubjectID: subjects["math"].ID}
+	course := &model.Course{Title: "C", SubjectID: subjects["math"].ID}
 	courseRepo.Create(course)
+	db.Create(&model.CourseGrade{CourseID: course.ID, Grade: model.Grade("3")})
 	var eps []*model.Episode
 	for i := 1; i <= 5; i++ {
 		ep := &model.Episode{CourseID: course.ID, SortOrder: i, DurationSeconds: &dur}

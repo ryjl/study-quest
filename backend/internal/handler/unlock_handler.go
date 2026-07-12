@@ -157,7 +157,8 @@ func (h *unlockHandler) ListUserOverrides(c *gin.Context) {
 	}
 	out := make([]gin.H, 0, len(list))
 	for _, o := range list {
-		out = append(out, unlockOverrideDTO(&o))
+		allowed, _ := h.svc.GetAllowedEpisodes(o.UserID, o.CourseID)
+		out = append(out, unlockOverrideDTO(&o, allowed))
 	}
 	c.JSON(http.StatusOK, out)
 }
@@ -176,7 +177,8 @@ func (h *unlockHandler) GetOverride(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"user_id": uid, "course_id": cid, "exists": false})
 		return
 	}
-	c.JSON(http.StatusOK, unlockOverrideDTO(o))
+	allowed, _ := h.svc.GetAllowedEpisodes(uid, cid)
+	c.JSON(http.StatusOK, unlockOverrideDTO(o, allowed))
 }
 
 func (h *unlockHandler) SaveOverride(c *gin.Context) {
@@ -203,7 +205,7 @@ func (h *unlockHandler) SaveOverride(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, unlockOverrideDTO(o))
+	c.JSON(http.StatusOK, unlockOverrideDTO(o, allowed))
 }
 
 func (h *unlockHandler) DeleteOverride(c *gin.Context) {
@@ -310,10 +312,9 @@ func unlockTemplateDTO(t *model.CourseUnlockTemplate, exists bool) gin.H {
 	}
 }
 
-func unlockOverrideDTO(o *model.UserUnlockOverride) gin.H {
-	allowed := []uint{}
-	if o.AllowedEpisodeIDsJSON != "" {
-		_ = json.Unmarshal([]byte(o.AllowedEpisodeIDsJSON), &allowed)
+func unlockOverrideDTO(o *model.UserUnlockOverride, allowedIDs []uint) gin.H {
+	if allowedIDs == nil {
+		allowedIDs = []uint{}
 	}
 	wt := []weeklyTimeDTO{}
 	if o.WeeklyTimesJSON != "" {
@@ -326,7 +327,7 @@ func unlockOverrideDTO(o *model.UserUnlockOverride) gin.H {
 		"interval_seconds":   o.IntervalSeconds,
 		"weekly_times":       wt,
 		"manual_unlock_count": o.ManualUnlockCount,
-		"allowed_episode_ids": allowed,
+		"allowed_episode_ids": allowedIDs,
 		"exists":             true,
 	}
 }
