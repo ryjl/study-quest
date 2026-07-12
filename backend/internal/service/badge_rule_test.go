@@ -15,10 +15,9 @@ import (
 //
 // They deliberately use only DETERMINISTIC rule types — watch_duration and
 // points_earned — whose underlying stats read from user_progresses /
-// user_points, which we can seed freely. consecutive_days and night_owl_count
-// compare against time.Now() / wall-clock hours and are therefore not
-// unit-testable without a clock seam, so they're exercised only via the
-// integration suite.
+// user_points, which we can seed freely. consecutive_days compares against
+// time.Now() and is therefore not unit-testable without a clock seam, so it's
+// exercised only via the integration suite.
 
 // setupRuleTestDB builds a fresh in-memory DB plus a student user.
 func setupRuleTestDB(t *testing.T) (*gorm.DB, *model.User) {

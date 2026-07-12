@@ -13,7 +13,6 @@ const ICONS = [
   { key: 'badge_streak_7', emoji: '🔥', label: '七日先锋' },
   { key: 'badge_math', emoji: '🧮', label: '数学达人' },
   { key: 'badge_english', emoji: '🗣️', label: '英语之星' },
-  { key: 'badge_night_owl', emoji: '🦉', label: '夜猫学者' },
   { key: 'badge_gold', emoji: '🏆', label: '黄金大满贯' },
 ];
 
@@ -21,9 +20,11 @@ const RULE_TYPES = [
   { key: 'watch_duration', label: '累计学习时长（分钟）' },
   { key: 'consecutive_days', label: '连续活跃天数（天）' },
   { key: 'subject_count', label: '特定科目完课数（课时）' },
+  { key: 'episode_completed_count', label: '累计完成课时数（课时）' },
   { key: 'distinct_subject_count', label: '完成不同科目数（个）' },
+  { key: 'course_completion', label: '完整通关课程数（门）' },
+  { key: 'weekly_all_present', label: '近7天活跃天数（天）' },
   { key: 'points_earned', label: '累计获得星币' },
-  { key: 'night_owl_count', label: '深夜听课次数（自定义，请谨慎使用）' },
 ];
 
 // Rule types that need a subject target (the rule_target field).
@@ -165,9 +166,11 @@ export function Badges() {
             <li><strong className="text-primary">累计学习时长</strong> watch_duration（分钟）</li>
             <li><strong className="text-good">连续活跃天数</strong> consecutive_days（天）</li>
             <li><strong className="text-primary">特定科目完课数</strong> subject_count（需选科目）</li>
+            <li><strong className="text-primary">累计完成课时数</strong> episode_completed_count（课时）</li>
             <li><strong className="text-primary">完成不同科目数</strong> distinct_subject_count（个）</li>
+            <li><strong className="text-good">完整通关课程数</strong> course_completion（学完所有视频算1门）</li>
+            <li><strong className="text-good">近7天活跃天数</strong> weekly_all_present（天，0-7）</li>
             <li><strong className="text-bad">累计星币</strong> points_earned</li>
-            <li><strong className="text-muted">深夜听课次数</strong> night_owl_count（自定义，慎用）</li>
             <li className="pt-2 text-primary">组合规则：可把多个条件用「全部满足(且)/任一满足(或)」组合，如「连续7天且累计60分钟」。</li>
           </ul>
         </div>
@@ -204,6 +207,13 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
   const [ruleType, setRuleType] = useState('watch_duration');
   const [ruleTarget, setRuleTarget] = useState('');
   const [threshold, setThreshold] = useState(1);
+  // Multi-tier: when on, the badge stores a Tiers JSON array instead of a
+  // single Threshold. Each tier = {threshold, reward}. Users add/remove rows.
+  const [multiTier, setMultiTier] = useState(false);
+  const [tierRows, setTierRows] = useState<{ t: number; r: number }[]>([
+    { t: 3, r: 10 },
+    { t: 7, r: 20 },
+  ]);
   // 'single' | 'composite' — toggles which editor renders. A composite badge
   // serializes to rule_json + rule_type='composite'; single uses the legacy
   // rule_type/target/threshold fields.
@@ -230,6 +240,25 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
         setRuleType(badge.RuleType || 'watch_duration');
         setRuleTarget(badge.RuleTarget);
         setThreshold(badge.Threshold || 1);
+        // Load multi-tier Tiers if present.
+        if (badge.Tiers) {
+          try {
+            const parsed = JSON.parse(badge.Tiers) as { t: number; r: number }[];
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setMultiTier(true);
+              setTierRows(parsed);
+            } else {
+              setMultiTier(false);
+              setTierRows([{ t: 3, r: 10 }, { t: 7, r: 20 }]);
+            }
+          } catch {
+            setMultiTier(false);
+            setTierRows([{ t: 3, r: 10 }, { t: 7, r: 20 }]);
+          }
+        } else {
+          setMultiTier(false);
+          setTierRows([{ t: 3, r: 10 }, { t: 7, r: 20 }]);
+        }
       }
     }
   }, [badge]);
@@ -253,7 +282,19 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
         if (isEdit && badge) return api.updateBadge(badge.ID, body);
         return api.createBadge(body);
       }
-      const body = { code, title, description, icon_name: iconName, rule_type: ruleType, rule_target: ruleTarget, threshold };
+      if (multiTier) {
+        const valid = tierRows.filter((r) => r.t > 0);
+        if (valid.length === 0) throw new Error('多层级至少需要一行有效阈值（>0）');
+        const body = {
+          code, title, description, icon_name: iconName,
+          rule_type: ruleType, rule_target: ruleTarget,
+          threshold: 0,
+          tiers: JSON.stringify(valid),
+        };
+        if (isEdit && badge) return api.updateBadge(badge.ID, body);
+        return api.createBadge(body);
+      }
+      const body = { code, title, description, icon_name: iconName, rule_type: ruleType, rule_target: ruleTarget, threshold, tiers: '' };
       if (isEdit && badge) return api.updateBadge(badge.ID, body);
       return api.createBadge(body);
     },
@@ -336,8 +377,33 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
                 </div>
               )}
               <div>
-                <label className="mb-1 block text-xs text-muted">达标阈值</label>
-                <input type="number" className="input" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} required min={1} />
+                <div className="mb-1 flex items-center justify-between">
+                  <label className="block text-xs text-muted">达标阈值</label>
+                  <label className="flex cursor-pointer items-center gap-1 text-xs text-muted">
+                    <input type="checkbox" checked={multiTier} onChange={(e) => setMultiTier(e.target.checked)} className="accent-primary" />
+                    多层级（递进解锁）
+                  </label>
+                </div>
+                {!multiTier ? (
+                  <input type="number" className="input" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} required min={1} />
+                ) : (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-xs text-muted">
+                      <span>阈值</span>
+                      <span>奖励积分</span>
+                      <span></span>
+                    </div>
+                    {tierRows.map((row, idx) => (
+                      <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+                        <input type="number" className="input" value={row.t} onChange={(e) => setTierRows(tierRows.map((r, i) => i === idx ? { ...r, t: Number(e.target.value) } : r))} min={1} />
+                        <input type="number" className="input" value={row.r} onChange={(e) => setTierRows(tierRows.map((r, i) => i === idx ? { ...r, r: Number(e.target.value) } : r))} min={0} />
+                        <button type="button" className="btn-ghost px-2" onClick={() => setTierRows(tierRows.filter((_, i) => i !== idx))} disabled={tierRows.length <= 1}>✕</button>
+                      </div>
+                    ))}
+                    <button type="button" className="btn-ghost w-full text-xs" onClick={() => setTierRows([...tierRows, { t: 0, r: 0 }])}>+ 添加层级</button>
+                    <p className="text-xs text-muted">阈值需递增；每层解锁时发放对应奖励积分。层级可随时追加（已有进度不受影响）。</p>
+                  </div>
+                )}
               </div>
             </div>
           ) : (

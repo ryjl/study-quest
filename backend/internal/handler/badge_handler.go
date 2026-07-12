@@ -37,39 +37,15 @@ func (h *badgeHandler) GetUserBadges(c *gin.Context) {
 		return
 	}
 
-	// Fetch all defined badges
-	allBadges, err := h.badgeService.List()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list badges: " + err.Error()})
-		return
-	}
-
-	// Fetch unlocked badges
-	unlockedBadges, err := h.badgeService.ListUserBadges(uint(userID))
+	statuses, err := h.badgeService.UserBadgeStatuses(uint(userID))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query user badges: " + err.Error()})
 		return
 	}
-
-	unlockedMap := make(map[uint]bool)
-	for _, ub := range unlockedBadges {
-		unlockedMap[ub.ID] = true
+	if statuses == nil {
+		statuses = []service.BadgeStatus{}
 	}
-
-	type badgeStatusResponse struct {
-		model.Badge
-		Unlocked bool `json:"unlocked"`
-	}
-
-	var response []badgeStatusResponse
-	for _, b := range allBadges {
-		response = append(response, badgeStatusResponse{
-			Badge:    b,
-			Unlocked: unlockedMap[b.ID],
-		})
-	}
-
-	c.JSON(http.StatusOK, response)
+	c.JSON(http.StatusOK, statuses)
 }
 
 func (h *badgeHandler) AdminListBadges(c *gin.Context) {
@@ -90,6 +66,7 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		RuleType    string `json:"rule_type" binding:"required"`
 		RuleTarget  string `json:"rule_target"`
 		Threshold   int    `json:"threshold"`
+		Tiers       string `json:"tiers"`     // multi-tier JSON; when set, takes precedence over Threshold
 		RuleJSON    string `json:"rule_json"` // composite rule tree; when set, RuleType="composite"
 	}
 
@@ -105,8 +82,8 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 	if req.RuleJSON != "" {
 		ruleType = "composite"
 	}
-	if req.Threshold == 0 && ruleType != "composite" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold is required for single-rule badges"})
+	if req.Threshold == 0 && ruleType != "composite" && req.Tiers == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold or tiers is required for non-composite badges"})
 		return
 	}
 
@@ -118,6 +95,7 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		RuleType:    ruleType,
 		RuleTarget:  req.RuleTarget,
 		Threshold:   req.Threshold,
+		Tiers:       req.Tiers,
 		RuleJSON:    req.RuleJSON,
 	}
 
@@ -145,6 +123,7 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 		RuleType    string `json:"rule_type" binding:"required"`
 		RuleTarget  string `json:"rule_target"`
 		Threshold   int    `json:"threshold"`
+		Tiers       string `json:"tiers"`
 		RuleJSON    string `json:"rule_json"`
 	}
 
@@ -157,8 +136,8 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 	if req.RuleJSON != "" {
 		ruleType = "composite"
 	}
-	if req.Threshold == 0 && ruleType != "composite" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold is required for single-rule badges"})
+	if req.Threshold == 0 && ruleType != "composite" && req.Tiers == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold or tiers is required for non-composite badges"})
 		return
 	}
 
@@ -179,6 +158,7 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 	badge.RuleType = ruleType
 	badge.RuleTarget = req.RuleTarget
 	badge.Threshold = req.Threshold
+	badge.Tiers = req.Tiers
 	badge.RuleJSON = req.RuleJSON
 	// IsSystem is preserved from the loaded row — admins can't flip it via the
 	// update endpoint, only the seeder marks defaults.

@@ -46,6 +46,10 @@ type ProgressRepository interface {
 	// single-column UPDATE touches only is_completed, so watch_seconds is never
 	// regressed by the completion path.
 	MarkCompleted(userID, episodeID uint) error
+	// HasCompletedToday returns true if the user already has at least one
+	// is_completed=1 row whose updated_at falls on today's business-calendar
+	// day. Used for the daily-first-completion bonus.
+	HasCompletedToday(userID uint) (bool, error)
 	GetPoints(userID uint) (*model.UserPoint, error)
 	AddPoints(ledger *model.PointsLedger) error
 	GetUserProgressOverview(userID uint) ([]model.UserProgress, error)
@@ -198,6 +202,23 @@ func (r *progressRepo) MarkCompleted(userID, episodeID uint) error {
 	return r.db.Model(&model.UserProgress{}).
 		Where("user_id = ? AND episode_id = ?", userID, episodeID).
 		Update("is_completed", 1).Error
+}
+
+// HasCompletedToday checks whether the user has any is_completed=1 row whose
+// updated_at is on today's business-calendar day. The check runs BEFORE
+// MarkCompleted in the same request, so on the FIRST completion of the day it
+// returns false (→ daily-first bonus applies); on subsequent completions it
+// returns true (→ no bonus).
+func (r *progressRepo) HasCompletedToday(userID uint) (bool, error) {
+	offsetMin := businessZoneOffsetMinutes()
+	mod := sqliteOffsetModifier(offsetMin)
+	todayStr := appclock.Now().Format("2006-01-02")
+	var count int64
+	err := r.db.Model(&model.UserProgress{}).
+		Where("user_id = ? AND is_completed = 1 AND strftime('%Y-%m-%d', datetime(updated_at, ?)) = ?",
+			userID, mod, todayStr).
+		Count(&count).Error
+	return count > 0, err
 }
 
 func (r *progressRepo) GetPoints(userID uint) (*model.UserPoint, error) {

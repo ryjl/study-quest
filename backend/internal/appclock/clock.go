@@ -1,5 +1,5 @@
 // Package appclock provides a single, explicit business timezone for all
-// "human date" semantics in the app (今天 / 昨天 / 夜猫子几点 / 连续学习几天).
+// "human date" semantics in the app (今天 / 昨天 / 连续学习几天).
 //
 // Why this exists:
 //
@@ -13,7 +13,7 @@
 //                                   in containers, host zone elsewhere)
 //   - SQLite: STRFTIME(...,'localtime') → the database process's local zone
 // When those two disagreed (very common in Docker), consecutive-day streaks
-// silently computed to 0 and "夜猫子" fired at the wrong hours.
+// silently computed to 0 and fired at the wrong days.
 //
 // The fix: pick ONE business timezone (Asia/Shanghai — the user base is
 // Chinese students), make it explicit and injectable, and have every layer use
@@ -31,7 +31,7 @@ import (
 )
 
 // defaultZone is the business timezone. Asia/Shanghai because the product
-// targets Chinese students; "今天/昨天/几点算深夜" all follow the Beijing
+// targets Chinese students; "今天/昨天" all follow the Beijing
 // calendar. Override via SetZone (mainly for tests).
 var (
 	mu      sync.RWMutex

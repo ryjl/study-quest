@@ -202,6 +202,7 @@ export interface AdminBadge {
   RuleType: string;
   RuleTarget: string;
   Threshold: number;
+  Tiers?: string; // multi-tier JSON '[{"t":3,"r":10}]'; empty = single-tier
   RuleJSON?: string; // composite rule tree; present when RuleType === 'composite'
   IsSystem?: boolean; // true = seeded default, protected from deletion
 }

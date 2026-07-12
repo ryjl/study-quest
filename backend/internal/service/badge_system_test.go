@@ -42,54 +42,10 @@ func TestBadgeDeleteRefusesSystem(t *testing.T) {
 	}
 }
 
-// TestRemoveDeprecatedDefaultsNightOwl verifies that the retired "夜猫学者"
-// (night_owl) default badge is removed on startup, BUT only when it is still a
-// pristine system default. If an admin has taken ownership (IsSystem=false),
-// it is left alone.
-func TestRemoveDeprecatedDefaultsNightOwl(t *testing.T) {
-	t.Run("removes_pristine_system_default", func(t *testing.T) {
-		db := setupIntegrationDB(t)
-		repo := repository.NewBadgeRepository(db)
-		progressRepo := repository.NewProgressRepository(db)
-		svc := NewBadgeService(db, repo, progressRepo)
-
-		// Seed a pristine system night_owl (as an old install would have it).
-		if err := repo.Create(&model.Badge{Code: "night_owl", Title: "夜猫学者", IconName: "x", RuleType: "night_owl_count", Threshold: 3, IsSystem: true}); err != nil {
-			t.Fatalf("seed night_owl: %v", err)
-		}
-
-		if err := svc.RemoveDeprecatedDefaults(); err != nil {
-			t.Fatalf("RemoveDeprecatedDefaults: %v", err)
-		}
-		if got, _ := repo.FindByCode("night_owl"); got != nil {
-			t.Fatal("pristine night_owl system default should have been removed")
-		}
-	})
-
-	t.Run("keeps_admin_owned_copy", func(t *testing.T) {
-		db := setupIntegrationDB(t)
-		repo := repository.NewBadgeRepository(db)
-		progressRepo := repository.NewProgressRepository(db)
-		svc := NewBadgeService(db, repo, progressRepo)
-
-		// Same code, but an admin flipped IsSystem off (took ownership). Must
-		// survive the cleanup.
-		if err := repo.Create(&model.Badge{Code: "night_owl", Title: "我的夜猫", IconName: "x", RuleType: "night_owl_count", Threshold: 3, IsSystem: false}); err != nil {
-			t.Fatalf("seed night_owl: %v", err)
-		}
-
-		if err := svc.RemoveDeprecatedDefaults(); err != nil {
-			t.Fatalf("RemoveDeprecatedDefaults: %v", err)
-		}
-		if got, _ := repo.FindByCode("night_owl"); got == nil {
-			t.Fatal("admin-owned night_owl must NOT be removed by cleanup")
-		}
-	})
-}
-
-// TestSeedDefaultBadgesIncludesNewDefaults verifies the curated seed set has
-// the new badges (hard_worker, explorer) and no longer includes night_owl.
-func TestSeedDefaultBadgesIncludesNewDefaults(t *testing.T) {
+// TestSeedDefaultBadgesSeedsMultiTier verifies the curated multi-tier seed set
+// is created with the expected codes, each multi-tier badge has a non-empty
+// Tiers JSON, and legacy single-tier codes are gone.
+func TestSeedDefaultBadgesSeedsMultiTier(t *testing.T) {
 	db := setupIntegrationDB(t)
 	repo := repository.NewBadgeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
@@ -99,21 +55,71 @@ func TestSeedDefaultBadgesIncludesNewDefaults(t *testing.T) {
 		t.Fatalf("SeedDefaultBadges: %v", err)
 	}
 
-	wantCodes := []string{"first_blood", "seven_days_pioneer", "math_expert", "english_star", "hard_worker", "explorer"}
-	for _, code := range wantCodes {
+	// Multi-tier defaults must exist, be IsSystem, and carry Tiers.
+	multiTier := []string{"streak", "episode_master", "time_master", "points_hero", "explorer", "course_master", "weekly_dedication"}
+	for _, code := range multiTier {
 		b, err := repo.FindByCode(code)
 		if err != nil || b == nil {
-			t.Errorf("expected seeded default badge %q, got %v %v", code, b, err)
+			t.Errorf("expected seeded badge %q, got %v %v", code, b, err)
 			continue
 		}
 		if !b.IsSystem {
-			t.Errorf("seeded badge %q must be IsSystem=true", code)
+			t.Errorf("badge %q must be IsSystem=true", code)
+		}
+		if b.Tiers == "" {
+			t.Errorf("badge %q must have non-empty Tiers", code)
+		}
+	}
+	// first_blood is single-tier (no Tiers, uses Threshold).
+	fb, _ := repo.FindByCode("first_blood")
+	if fb == nil || fb.Tiers != "" || fb.Threshold != 1 {
+		t.Errorf("first_blood should be single-tier Threshold=1, got %+v", fb)
+	}
+
+	// Legacy retired codes must NOT survive the seed.
+	for _, code := range []string{"seven_days_pioneer", "three_day_streak", "ten_episodes", "points_100", "night_owl"} {
+		if b, _ := repo.FindByCode(code); b != nil {
+			t.Errorf("legacy badge %q should not exist after seed", code)
+		}
+	}
+}
+
+// TestSeedDefaultBadgesRebuildsLegacyInstall verifies the one-time rebuild:
+// an install that still has legacy single-tier badges gets its badge table
+// wiped and re-seeded with the multi-tier scheme.
+func TestSeedDefaultBadgesRebuildsLegacyInstall(t *testing.T) {
+	db := setupIntegrationDB(t)
+	repo := repository.NewBadgeRepository(db)
+	progressRepo := repository.NewProgressRepository(db)
+	svc := NewBadgeService(db, repo, progressRepo)
+
+	// Simulate a LEGACY install: has retired single-tier codes.
+	legacy := []model.Badge{
+		{Code: "seven_days_pioneer", Title: "七日先锋", IconName: "x", RuleType: "consecutive_days", Threshold: 7, IsSystem: true},
+		{Code: "three_day_streak", Title: "三日", IconName: "x", RuleType: "consecutive_days", Threshold: 3, IsSystem: true},
+	}
+	for i := range legacy {
+		if err := repo.Create(&legacy[i]); err != nil {
+			t.Fatalf("seed legacy badge %s: %v", legacy[i].Code, err)
 		}
 	}
 
-	// night_owl must NOT be in the fresh seed (and SeedDefaultBadges runs the
-	// cleanup, so even if a row somehow existed it'd be gone).
-	if b, _ := repo.FindByCode("night_owl"); b != nil {
-		t.Error("night_owl should not be part of the default badge set")
+	// "Reboot" — the seeder detects the legacy codes and rebuilds.
+	if err := svc.SeedDefaultBadges(); err != nil {
+		t.Fatalf("rebuild seed: %v", err)
+	}
+
+	// Legacy codes must be gone (table was wiped).
+	for _, code := range []string{"seven_days_pioneer", "three_day_streak"} {
+		if b, _ := repo.FindByCode(code); b != nil {
+			t.Errorf("legacy badge %q must be removed by rebuild", code)
+		}
+	}
+	// New multi-tier defaults must now exist.
+	if b, _ := repo.FindByCode("streak"); b == nil {
+		t.Error("rebuild should have seeded 'streak'")
+	}
+	if b, _ := repo.FindByCode("first_blood"); b == nil {
+		t.Error("rebuild should have seeded 'first_blood'")
 	}
 }

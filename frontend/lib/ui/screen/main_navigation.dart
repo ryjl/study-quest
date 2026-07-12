@@ -652,8 +652,16 @@ class _MainNavigationState extends State<MainNavigation> {
 
         final userPoint = snapshot.data![0] as UserPoint;
         final progressList = snapshot.data![1] as List<UserProgress>;
-        final ledger = snapshot.data![2] as List<PointsLedger>;
+        final rawLedger = snapshot.data![2] as List<PointsLedger>;
         final badges = snapshot.data![3] as List<BadgeStatus>;
+
+        // Curate the timeline: show badge unlocks/ups FIRST (they're the
+        // highlights), then at most 2 recent video-completion rows (so the
+        // list isn't dominated by repetitive "完成视频" entries). Keep the
+        // original recency order within each group.
+        final badgeEntries = rawLedger.where((e) => e.reasonType == 'badge_unlocked').take(4).toList();
+        final watchEntries = rawLedger.where((e) => e.reasonType == 'system_watch').take(2).toList();
+        final ledger = [...badgeEntries, ...watchEntries];
 
         final completedCount = progressList.where((p) => p.isCompleted).length;
 
@@ -661,7 +669,12 @@ class _MainNavigationState extends State<MainNavigation> {
         final totalWatchSeconds =
             progressList.fold<int>(0, (sum, p) => sum + p.watchSeconds);
         final studyMinutes = (totalWatchSeconds / 60).round();
-        final unlockedBadges = badges.where((b) => b.unlocked).length;
+        // Star counting: each unlocked tier = 1 star. Multi-tier badges
+        // contribute (tier+1) stars (e.g. reached tier 2 = 3 stars); single-
+        // tier badges contribute 1. This is more granular and rewarding than
+        // "unlocked X/Y badges" — a child sees progress on every tier clear.
+        final unlockedStars = badges.fold<int>(0, (sum, b) => sum + (b.unlocked ? (b.tier + 1) : 0));
+        final totalStars = badges.fold<int>(0, (sum, b) => sum + b.tierCount);
 
         return SingleChildScrollView(
           padding: portraitAwarePadding(context),
@@ -704,7 +717,7 @@ class _MainNavigationState extends State<MainNavigation> {
               // Narrow (portrait): stacked vertically, each full width.
               Builder(builder: (context) {
                 final timeline = _buildTimelinePanel(context, ledger);
-                final badgeWall = _buildBadgeWallPanel(context, badges, unlockedBadges);
+                final badgeWall = _buildBadgeWallPanel(context, badges, unlockedStars, totalStars);
                 if (isPortrait(context)) {
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -748,7 +761,7 @@ class _MainNavigationState extends State<MainNavigation> {
       label: '累计获得积分',
       labelColor: const Color(0xFFFFEDD5),
       icon: Icons.star_rounded,
-      value: '${userPoint.currentPoints}',
+      value: '${userPoint.totalEarnedPoints}',
       compact: compact,
     );
     Widget card2 = _metricCard(
@@ -998,7 +1011,7 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   /// Right bento panel: honor wall (badge list).
-  Widget _buildBadgeWallPanel(BuildContext context, List<BadgeStatus> badges, int unlockedBadges) {
+  Widget _buildBadgeWallPanel(BuildContext context, List<BadgeStatus> badges, int unlockedStars, int totalStars) {
     return GlassPanel(
       padding: EdgeInsets.all(isPortrait(context) ? 20 : 32),
       child: Column(
@@ -1035,14 +1048,7 @@ class _MainNavigationState extends State<MainNavigation> {
             Column(
               children: [
                 for (int i = 0; i < badges.length; i++) ...[
-                  _buildBadgeItem(
-                    title: badges[i].badge.title,
-                    desc: badges[i].badge.description,
-                    icon: _badgeIcon(badges[i].badge.iconName, badges[i].badge.ruleType),
-                    color: _badgeColor(badges[i].badge.ruleType),
-                    bgColor: _badgeBgColor(badges[i].badge.ruleType),
-                    unlocked: badges[i].unlocked,
-                  ),
+                  _buildBadgeItem(badges[i]),
                   if (i < badges.length - 1) const SizedBox(height: 16),
                 ],
               ],
@@ -1053,8 +1059,8 @@ class _MainNavigationState extends State<MainNavigation> {
             onPressed: () {},
             padding: const EdgeInsets.symmetric(vertical: 14),
             child: Center(
-              child: Text('已解锁 $unlockedBadges / ${badges.length} 个成就',
-                  style: const TextStyle(fontWeight: FontWeight.w900)),
+              child: Text('⭐ $unlockedStars / $totalStars',
+                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
             ),
           ),
         ],
@@ -1062,22 +1068,26 @@ class _MainNavigationState extends State<MainNavigation> {
     );
   }
 
-  Widget _buildBadgeItem({
-    required String title,
-    required String desc,
-    required IconData icon,
-    required Color color,
-    required Color bgColor,
-    required bool unlocked,
-  }) {
+  /// One badge row in the honor wall. Multi-tier badges show tier dots + a
+  /// progress bar toward the next tier; single-tier badges show lock/unlock.
+  Widget _buildBadgeItem(BadgeStatus st) {
+    final unlocked = st.unlocked;
+    final icon = _badgeIcon(st.badge.iconName, st.badge.ruleType);
+    final color = _badgeColor(st.badge.ruleType);
+    final bgColor = _badgeBgColor(st.badge.ruleType);
+    final multiTier = st.badge.isMultiTier;
+
     return Opacity(
-      opacity: unlocked ? 1.0 : 0.5,
+      opacity: unlocked ? 1.0 : 0.55,
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFE2E8F0), width: 2),
+          border: Border.all(
+            color: unlocked ? const Color(0xFFE2E8F0) : const Color(0xFFF1F5F9),
+            width: 2,
+          ),
         ),
         child: Row(
           children: [
@@ -1095,23 +1105,110 @@ class _MainNavigationState extends State<MainNavigation> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    title,
-                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: AppTheme.textWhite),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          st.badge.title,
+                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: AppTheme.textWhite),
+                        ),
+                      ),
+                      if (multiTier && unlocked && st.tier >= st.tierCount - 1) ...[
+                        const SizedBox(width: 6),
+                        const Text('👑', style: TextStyle(fontSize: 14)),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    desc,
+                    st.badge.description,
                     style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
                   ),
+                  if (multiTier) ...[
+                    const SizedBox(height: 8),
+                    _buildTierProgress(st),
+                  ],
                 ],
               ),
             ),
-            if (!unlocked)
+            if (!multiTier && !unlocked)
               const Icon(Icons.lock_rounded, color: Color(0xFF94A3B8), size: 16),
           ],
         ),
       ),
+    );
+  }
+
+  /// Tier dots (●●●○○) + a progress bar showing progress → next tier.
+  Widget _buildTierProgress(BadgeStatus st) {
+    final cleared = st.tier + 1; // 0 if none cleared
+    final total = st.tierCount;
+    final maxed = st.tier >= 0 && st.tier >= total - 1;
+
+    // Dots: filled for cleared tiers, empty for remaining.
+    final dots = Row(
+      children: [
+        for (int i = 0; i < total; i++) ...[
+          if (i > 0) const SizedBox(width: 4),
+          Icon(
+            i <= st.tier ? Icons.circle : Icons.circle_outlined,
+            size: 8,
+            color: i <= st.tier ? _badgeColor(st.badge.ruleType) : const Color(0xFFCBD5E1),
+          ),
+        ],
+        const SizedBox(width: 8),
+        Text(
+          maxed ? '满级' : '$cleared/$total',
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.w900,
+            color: maxed ? const Color(0xFFF59E0B) : AppTheme.textMuted,
+          ),
+        ),
+      ],
+    );
+
+    // Progress bar: only when not maxed and there's a next tier threshold.
+    Widget? bar;
+    if (!maxed && st.nextTier > 0) {
+      final tiers = st.badge.parsedTiers;
+      // Guard against tier index out of range (e.g. admin reduced the tier
+      // count after the user already cleared a higher tier).
+      final safeTier = (st.tier >= 0 && st.tier < tiers.length) ? st.tier : -1;
+      final prevThreshold = safeTier >= 0 ? tiers[safeTier].t : 0;
+      final span = st.nextTier - prevThreshold;
+      final frac = span > 0 ? ((st.progress - prevThreshold) / span).clamp(0.0, 1.0) : 0.0;
+      bar = Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Row(
+          children: [
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: frac,
+                  minHeight: 5,
+                  backgroundColor: const Color(0xFFF1F5F9),
+                  valueColor: AlwaysStoppedAnimation<Color>(_badgeColor(st.badge.ruleType)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${st.progress}/${st.nextTier}',
+              style: const TextStyle(fontSize: 9, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        dots,
+        if (bar != null) bar,
+      ],
     );
   }
 
@@ -1125,11 +1222,14 @@ class _MainNavigationState extends State<MainNavigation> {
     }
     if (name.contains('math')) return Icons.architecture_rounded;
     if (name.contains('english')) return Icons.translate_rounded;
-    if (name.contains('night')) return Icons.nights_stay_rounded;
     if (name.contains('first') || ruleType == 'watch_duration') {
       return Icons.timer_rounded;
     }
+    if (ruleType == 'episode_completed_count') return Icons.check_circle_outline_rounded;
     if (ruleType == 'points_earned') return Icons.stars_rounded;
+    if (ruleType == 'course_completion') return Icons.emoji_events_rounded;
+    if (ruleType == 'weekly_all_present') return Icons.calendar_month_rounded;
+    if (ruleType == 'distinct_subject_count') return Icons.explore_rounded;
     return Icons.military_tech_rounded;
   }
 
@@ -1139,10 +1239,16 @@ class _MainNavigationState extends State<MainNavigation> {
         return const Color(0xFFF97316);
       case 'subject_count':
         return const Color(0xFF3B82F6);
+      case 'episode_completed_count':
+        return const Color(0xFF0EA5E9);
       case 'points_earned':
         return const Color(0xFF8B5CF6);
-      case 'night_owl_count':
-        return const Color(0xFF6D28D9);
+      case 'course_completion':
+        return const Color(0xFFEAB308);
+      case 'weekly_all_present':
+        return const Color(0xFFEC4899);
+      case 'distinct_subject_count':
+        return const Color(0xFF14B8A6);
       case 'watch_duration':
         return AppTheme.accentGreen;
       default:
@@ -1156,10 +1262,16 @@ class _MainNavigationState extends State<MainNavigation> {
         return const Color(0xFFFFEDD5);
       case 'subject_count':
         return const Color(0xFFEFF6FF);
+      case 'episode_completed_count':
+        return const Color(0xFFE0F2FE);
       case 'points_earned':
         return const Color(0xFFF5F3FF);
-      case 'night_owl_count':
-        return const Color(0xFFEDE9FE);
+      case 'course_completion':
+        return const Color(0xFFFEF9C3);
+      case 'weekly_all_present':
+        return const Color(0xFFFCE7F3);
+      case 'distinct_subject_count':
+        return const Color(0xFFCCFBF1);
       case 'watch_duration':
         return const Color(0xFFECFDF5);
       default:

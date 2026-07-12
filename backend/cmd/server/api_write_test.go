@@ -146,11 +146,11 @@ func TestSubjectCRUD(t *testing.T) {
 
 	// Create.
 	resp := env.do(t, http.MethodPost, "/admin/api/subjects", map[string]any{
-		"key":        "history",
-		"label":      "历史",
-		"emoji":      "📜",
+		"key":        "computer",
+		"label":      "计算机",
+		"emoji":      "💻",
 		"color":      "#8b5cf6",
-		"sort_order": 9,
+		"sort_order": 20,
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("create subject: expected 200, got %d (body: %s)", resp.Code, resp.Body.String())
@@ -163,17 +163,17 @@ func TestSubjectCRUD(t *testing.T) {
 	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode created subject: %v", err)
 	}
-	if created.Key != "history" || created.Label != "历史" {
+	if created.Key != "computer" || created.Label != "计算机" {
 		t.Fatalf("created subject: %+v", created)
 	}
 
 	// Update label only (key unchanged → no badge cascade).
 	resp = env.do(t, http.MethodPut, "/admin/api/subjects/"+itoa(created.ID), map[string]any{
-		"key":        "history",
-		"label":      "历史学",
-		"emoji":      "📜",
+		"key":        "computer",
+		"label":      "计算机科学",
+		"emoji":      "💻",
 		"color":      "#8b5cf6",
-		"sort_order": 9,
+		"sort_order": 20,
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("update subject: expected 200, got %d (body: %s)", resp.Code, resp.Body.String())

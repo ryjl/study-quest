@@ -292,13 +292,30 @@ type Badge struct {
 	Title       string    `gorm:"size:255;not null"`
 	Description string    `gorm:"type:text"`
 	IconName    string    `gorm:"size:255;not null"`
-	RuleType    string    `gorm:"size:50;not null"` // watch_duration, consecutive_days, subject_count, night_owl_count, points_earned, distinct_subject_count, composite
+	RuleType    string    `gorm:"size:50;not null"` // watch_duration, consecutive_days, subject_count, episode_completed_count, points_earned, distinct_subject_count, course_completion, weekly_all_present, composite
 	RuleTarget  string    `gorm:"size:100"`         // target e.g. "math" or empty
-	Threshold   int       `gorm:"not null"`         // threshold to reach e.g. 100, 7, 5
+	Threshold   int       `gorm:"not null"`         // threshold to reach e.g. 100, 7, 5 (single-tier only)
 	RuleJSON    string    `gorm:"type:text"`        // composite rule tree (empty = single rule)
-	IsSystem    bool      `gorm:"default:false"`    // true = seeded default, protected from deletion
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Tiers holds a multi-tier progression as JSON (see TierDef). Empty =
+	// single-tier badge using Threshold. Non-empty = the badge is evaluated as
+	// a progression: the user advances through each tier as their stat crosses
+	// each tier's threshold, earning that tier's reward points. Adding a new
+	// tier later is just appending to this array — no migration needed.
+	// Subject badges use Code "subject_<key>" so they can be paired with a
+	// subject for auto-create/delete/rename-cascade.
+	Tiers    string `gorm:"type:text"`
+	IsSystem bool   `gorm:"default:false"` // true = seeded default, protected from deletion
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TierDef is one tier of a multi-tier badge. Serialized in Badge.Tiers as
+// [{"t":3,"r":10},{"t":7,"r":20},...] — short keys keep the column compact.
+// T = the threshold the user's stat must reach to clear this tier;
+// R = reward points awarded the first time this tier is cleared.
+type TierDef struct {
+	T int `json:"t"`
+	R int `json:"r"`
 }
 
 // CompositeRule is the parsed shape of Badge.RuleJSON. Logic joins sub-rules
@@ -312,11 +329,18 @@ type CompositeRule struct {
 	Threshold int           `json:"threshold,omitempty"` // leaf: threshold
 }
 
-// UserBadge stores which badges have been unlocked by which users.
+// UserBadge stores which badges have been unlocked by which users. A row's
+// existence means "unlocked"; for multi-tier badges Tier records the highest
+// tier (0-based) cleared so far. For single-tier badges Tier is 0.
+//
+// NOTE: no gorm default tag on Tier — GORM applies `default` to zero values,
+// which would clobber tier 0 (the first tier) with the default. 0 is a valid
+// tier, so we let it be stored as-is.
 type UserBadge struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement"`
 	UserID     uint      `gorm:"uniqueIndex:idx_user_badge;not null"`
 	BadgeID    uint      `gorm:"uniqueIndex:idx_user_badge;not null"`
+	Tier       int       // 0-based highest cleared tier (0 for single-tier badges)
 	UnlockedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
 
