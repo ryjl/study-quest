@@ -44,20 +44,39 @@ type BadgeRepository interface {
 	Create(badge *model.Badge) error
 	Update(badge *model.Badge) error
 	Delete(id uint) error
+	// DeleteByCode removes a badge (and its user_badges) by Code — used to
+	// clean up subject badges when a subject is deleted. No-op if not found.
+	DeleteByCode(code string) error
 
 	ListUserBadges(userID uint) ([]model.Badge, error)
 	HasUnlocked(userID, badgeID uint) (bool, error)
 	UnlockBadge(userID, badgeID uint) error
+	// FindUserBadge returns the user's UserBadge row for a badge, or nil if
+	// they haven't unlocked it. Used to read the current Tier for multi-tier
+	// progression.
+	FindUserBadge(userID, badgeID uint) (*model.UserBadge, error)
+	// UnlockBadgeTier either creates a new UserBadge at the given tier or bumps
+	// an existing one's tier up to newTier (only if newTier > current). Returns
+	// whether a change was made. Used for multi-tier progression.
+	UnlockBadgeTier(userID, badgeID uint, newTier int) (changed bool, err error)
 
 	// Rule verification helper aggregates
 	GetTotalWatchDurationMinutes(userID uint) (int, error)
 	GetCompletedEpisodesCountBySubject(userID uint, subject string) (int, error)
-	GetNightOwlCompletedCount(userID uint) (int, error)
+	GetCompletedEpisodesCount(userID uint) (int, error)
 	GetConsecutiveActiveDays(userID uint) (int, error)
 	// GetDistinctSubjectCompletedCount returns how many DISTINCT subjects the
 	// user has at least one completed episode in. Powers the
 	// distinct_subject_count rule type (e.g. "博学多闻" badge).
 	GetDistinctSubjectCompletedCount(userID uint) (int, error)
+	// GetCompletedCoursesCount returns how many courses the user has fully
+	// completed (every episode in the course is_completed=1). Powers the
+	// course_completion rule type (e.g. "课程通关" badge).
+	GetCompletedCoursesCount(userID uint) (int, error)
+	// GetActiveDaysInLastWeek returns how many distinct calendar days (in the
+	// business timezone) the user had ANY ledger activity in the last 7 days
+	// (today + previous 6). Powers the weekly_all_present rule type.
+	GetActiveDaysInLastWeek(userID uint) (int, error)
 
 	// Batch aggregates for the admin user list.
 	// BatchUnlockedBadgeCounts returns user_id → unlocked badge count in one
@@ -147,9 +166,62 @@ func (r *badgeRepo) UnlockBadge(userID, badgeID uint) error {
 	ub := model.UserBadge{
 		UserID:     userID,
 		BadgeID:    badgeID,
+		Tier:       0, // single-tier badge: its one and only tier is 0
 		UnlockedAt: time.Now(),
 	}
 	return r.db.Create(&ub).Error
+}
+
+// FindUserBadge returns the user's UserBadge row for a badge, or nil.
+func (r *badgeRepo) FindUserBadge(userID, badgeID uint) (*model.UserBadge, error) {
+	var ub model.UserBadge
+	err := r.db.Where("user_id = ? AND badge_id = ?", userID, badgeID).First(&ub).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &ub, nil
+}
+
+// UnlockBadgeTier advances a user to newTier on a badge, creating the row if
+// it doesn't exist. Only progresses forward (newTier must exceed the current
+// tier); returns changed=false if the user is already at or past newTier.
+//
+// Atomic: a single INSERT ... ON CONFLICT statement handles both first-unlock
+// and tier-upgrade in one shot. The conflict clause's WHERE guard
+// (`tier < excluded.tier`) makes the UPDATE a no-op when the stored tier is
+// already >= newTier, so two concurrent writers can't both report changed=true
+// — the database's own conflict resolution is the single source of truth, not
+// a read-then-write in Go.
+func (r *badgeRepo) UnlockBadgeTier(userID, badgeID uint, newTier int) (bool, error) {
+	now := time.Now()
+	// SQLite UPSERT. The (user_id, badge_id) unique index is the conflict
+	// target. On conflict, only bump tier if the stored value is lower.
+	res := r.db.Exec(`
+		INSERT INTO user_badges (user_id, badge_id, tier, unlocked_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_id, badge_id) DO UPDATE SET
+			tier = excluded.tier,
+			unlocked_at = excluded.unlocked_at
+		WHERE user_badges.tier < excluded.tier
+	`, userID, badgeID, newTier, now)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
+// DeleteByCode removes a badge by Code along with its user_badges rows.
+// Used to clean up a subject badge when the subject is deleted. No-op if
+// the badge doesn't exist.
+func (r *badgeRepo) DeleteByCode(code string) error {
+	b, err := r.FindByCode(code)
+	if err != nil || b == nil {
+		return err
+	}
+	return r.Delete(b.ID)
 }
 
 func (r *badgeRepo) GetTotalWatchDurationMinutes(userID uint) (int, error) {
@@ -172,27 +244,13 @@ func (r *badgeRepo) GetCompletedEpisodesCountBySubject(userID uint, subject stri
 	return int(count), err
 }
 
-func (r *badgeRepo) GetNightOwlCompletedCount(userID uint) (int, error) {
-	// "深夜" is defined in the BUSINESS timezone (Asia/Shanghai), not UTC: for
-	// a Chinese student, 22:00 Beijing is 14:00 UTC, so we must shift stored
-	// UTC timestamps into the business zone before asking "what hour is this?".
-	// SQLite's 'localtime' modifier used the DB process zone, which diverged
-	// from Go's time.Now() in containers and fired at the wrong hours; instead
-	// we apply the business-zone offset explicitly via a Go-computed modifier.
-	offsetMin := businessZoneOffsetMinutes()
-	return r.countNightOwl(userID, offsetMin)
-}
-
-// countNightOwl is the offset-parameterized core, separated so tests can pass
-// a fixed offset (via the appclock injection) and get deterministic results
-// regardless of where the test runs.
-func (r *badgeRepo) countNightOwl(userID uint, offsetMin int) (int, error) {
+// GetCompletedEpisodesCount returns the total number of completed episodes
+// for a user (any subject). Powers the episode_completed_count rule type
+// (e.g. habit milestones like "完成10节课").
+func (r *badgeRepo) GetCompletedEpisodesCount(userID uint) (int, error) {
 	var count int64
-	// Shift the stored UTC instant by the business offset, then take the hour.
-	// '22:00–04:59' business-time → night-owl window.
-	mod := sqliteOffsetModifier(offsetMin)
 	err := r.db.Model(&model.UserProgress{}).
-		Where("user_id = ? AND is_completed = 1 AND (CAST(strftime('%H', datetime(updated_at, ?)) AS INTEGER) >= 22 OR CAST(strftime('%H', datetime(updated_at, ?)) AS INTEGER) < 5)", userID, mod, mod).
+		Where("user_id = ? AND is_completed = 1", userID).
 		Count(&count).Error
 	return int(count), err
 }
@@ -272,6 +330,49 @@ func (r *badgeRepo) GetDistinctSubjectCompletedCount(userID uint) (int, error) {
 		Count(&count).Error
 	return int(count), err
 }
+
+// GetCompletedCoursesCount counts courses where the user has completed EVERY
+// episode. Groups completed episodes by course_id and keeps only groups whose
+// completed count equals the course's total episode count (so a course with 0
+// episodes never counts, and a partially-watched course is excluded).
+func (r *badgeRepo) GetCompletedCoursesCount(userID uint) (int, error) {
+	// Raw SQL: the HAVING clause needs a correlated subquery on episodes per
+	// course, which is awkward to express in GORM's builder.
+	var count int64
+	err := r.db.Raw(`
+		SELECT COUNT(*) FROM (
+		  SELECT e.course_id
+		  FROM user_progresses up
+		  JOIN episodes e ON e.id = up.episode_id
+		  WHERE up.user_id = ? AND up.is_completed = 1
+		  GROUP BY e.course_id
+		  HAVING COUNT(*) = (SELECT COUNT(*) FROM episodes e2 WHERE e2.course_id = e.course_id)
+		)
+	`, userID).Row().Scan(&count)
+	return int(count), err
+}
+
+// GetActiveDaysInLastWeek returns the count of distinct business-calendar days
+// in the rolling 7-day window (today + previous 6) that have at least one
+// points_ledger row. Mirrors GetConsecutiveActiveDays' timezone handling.
+func (r *badgeRepo) GetActiveDaysInLastWeek(userID uint) (int, error) {
+	offsetMin := businessZoneOffsetMinutes()
+	mod := sqliteOffsetModifier(offsetMin)
+	// 7-day window start: 6 days before today's business-zone midnight, as a
+	// UTC instant (storage is UTC). Today + 6 prior days = 7-day window.
+	zone := appclock.Zone()
+	now := appclock.Now()
+	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, zone)
+	since := startOfToday.AddDate(0, 0, -6) // today + 6 prior = 7 days
+
+	var count int64
+	err := r.db.Model(&model.PointsLedger{}).
+		Where("user_id = ? AND created_at >= ?", userID, since.UTC()).
+		Select("COUNT(DISTINCT strftime('%Y-%m-%d', datetime(created_at, ?)))", mod).
+		Row().Scan(&count)
+	return int(count), err
+}
+
 func (r *badgeRepo) BatchUnlockedBadgeCounts() (map[uint]int64, error) {
 	type row struct {
 		UserID uint

@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 
@@ -24,6 +25,10 @@ type progressService struct {
 	progressRepo repository.ProgressRepository
 	episodeRepo  repository.EpisodeRepository
 	badgeService BadgeService
+	// userLocks serializes the completion+points path per user. The player's
+	// 5s heartbeat and a quiz-triggered report can overlap; without this, the
+	// daily-first-completion bonus (HasCompletedToday) could fire twice.
+	userLocks sync.Map // map[uint]*sync.Mutex
 }
 
 // NewProgressService creates an instance of ProgressService.
@@ -34,6 +39,12 @@ func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er reposi
 		episodeRepo:  er,
 		badgeService: bs,
 	}
+}
+
+// lockUser returns (and lazily creates) the per-user mutex, then locks it.
+func (s *progressService) lockUser(userID uint) *sync.Mutex {
+	v, _ := s.userLocks.LoadOrStore(userID, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 func (s *progressService) GetProgress(userID, episodeID uint) (*model.UserProgress, error) {
@@ -89,11 +100,37 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 		duration := *ep.DurationSeconds
 		threshold := int(float64(duration) * 0.9)
 		if prog.LastPositionSeconds >= threshold {
+			// Serialize the completion path per user so two overlapping
+			// heartbeats can't both claim the daily-first bonus.
+			mu := s.lockUser(userID)
+			mu.Lock()
+			defer mu.Unlock()
+
+			// Points by duration tier: longer videos need more focus, so they
+			// award more. <10min→5, 10-25min→10, >25min→15.
+			watchPoints := 10
+			if duration < 600 {
+				watchPoints = 5
+			} else if duration > 1500 {
+				watchPoints = 15
+			}
+			// Daily first-completion bonus: the FIRST episode completed each
+			// day gets +5 extra, so even a "quiet" day (no new badge tier)
+			// still feels rewarding. Check BEFORE marking complete.
+			alreadyDoneToday, _ := s.progressRepo.HasCompletedToday(userID)
+			firstBonus := 0
+			if !alreadyDoneToday {
+				firstBonus = 5
+			}
+			desc := fmt.Sprintf("完成视频学习：%s", ep.Title)
+			if firstBonus > 0 {
+				desc += "（含每日首胜 +5）"
+			}
 			pointsLedger := &model.PointsLedger{
 				UserID:       userID,
-				ChangeAmount: 10,
+				ChangeAmount: watchPoints + firstBonus,
 				ReasonType:   "system_watch",
-				Description:  fmt.Sprintf("Completed watching episode %d: %s", ep.ID, ep.Title),
+				Description:  desc,
 			}
 			// Run the completion flag + points award atomically. On any error
 			// the whole completion is aborted (neither the flag nor points land).

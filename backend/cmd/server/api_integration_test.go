@@ -101,12 +101,13 @@ func TestSubjectRenameKeyCascadesBadge(t *testing.T) {
 		t.Fatalf("rename subject: expected 200, got %d (body: %s)", resp.Code, resp.Body.String())
 	}
 
-	// math_expert is seeded with rule_type=subject_count, rule_target=math.
-	// After the rename it must point at the new key. (model.Badge has no JSON
-	// tags, so AdminListBadges emits PascalCase field names.)
-	ruleTarget := badgeRuleTarget(t, env, "math_expert")
+	// The auto-generated subject badge is seeded as subject_math with
+	// rule_type=subject_count, rule_target=math. After the rename the badge's
+	// code AND rule_target must both point at the new key. (model.Badge has no
+	// JSON tags, so AdminListBadges emits PascalCase field names.)
+	ruleTarget := badgeRuleTarget(t, env, "subject_mathematics")
 	if ruleTarget != "mathematics" {
-		t.Fatalf("math_expert RuleTarget after rename: got %q, want %q", ruleTarget, "mathematics")
+		t.Fatalf("subject_mathematics RuleTarget after rename: got %q, want %q", ruleTarget, "mathematics")
 	}
 }
 
@@ -379,8 +380,12 @@ func TestUserListBatchAggregates(t *testing.T) {
 		if u.WatchMinutes != 2 {
 			t.Errorf("watch_minutes: got %d, want 2", u.WatchMinutes)
 		}
-		if u.UnlockedBadges != 1 {
-			t.Errorf("unlocked_badges: got %d, want 1 (first_blood)", u.UnlockedBadges)
+		if u.UnlockedBadges != 4 {
+			// 1 completed math episode (the course's only episode → full
+			// course completion) unlocks 4 badges: first_blood (single-tier),
+			// time_master (tier0=1min), subject_math (tier0=1 episode),
+			// course_master (tier0=1 course).
+			t.Errorf("unlocked_badges: got %d, want 4", u.UnlockedBadges)
 		}
 		if u.LastActiveAt == "" {
 			t.Error("last_active_at: got empty, want a timestamp")

@@ -81,7 +81,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService)
-	subjectService := service.NewSubjectService(subjectRepo, badgeRepo)
+	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
 	tagService := service.NewTagService(tagRepo)
 	// Constructed but never Started: Enqueue is a pure in-memory op (pushes
 	// onto a buffered channel + bumps stats), so it stays safe without a

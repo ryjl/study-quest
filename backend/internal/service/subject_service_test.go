@@ -25,18 +25,27 @@ func newSubjectTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-func TestSeedDefaultSubjects(t *testing.T) {
+// newSubjectSvc builds a fully wired subjectService (with badgeService) on a
+// fresh in-memory DB, so subject auto-badge generation is exercised.
+func newSubjectSvc(t *testing.T) (*gorm.DB, SubjectService) {
+	t.Helper()
 	db := newSubjectTestDB(t)
 	subjectRepo := repository.NewSubjectRepository(db)
 	badgeRepo := repository.NewBadgeRepository(db)
-	svc := NewSubjectService(subjectRepo, badgeRepo)
+	progressRepo := repository.NewProgressRepository(db)
+	bs := NewBadgeService(db, badgeRepo, progressRepo)
+	return db, NewSubjectService(db, subjectRepo, badgeRepo, bs)
+}
+
+func TestSeedDefaultSubjects(t *testing.T) {
+	_, svc := newSubjectSvc(t)
 
 	if err := svc.SeedDefaultSubjects(); err != nil {
 		t.Fatalf("first seed: %v", err)
 	}
 	list, _ := svc.List()
-	if len(list) != 5 {
-		t.Fatalf("expected 5 default subjects, got %d", len(list))
+	if len(list) != 10 {
+		t.Fatalf("expected 10 default subjects, got %d", len(list))
 	}
 
 	// Idempotent: seeding again must not duplicate.
@@ -44,7 +53,7 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		t.Fatalf("second seed: %v", err)
 	}
 	list2, _ := svc.List()
-	if len(list2) != 5 {
+	if len(list2) != 10 {
 		t.Fatalf("seed not idempotent: got %d after second seed", len(list2))
 	}
 
@@ -58,13 +67,64 @@ func TestSeedDefaultSubjects(t *testing.T) {
 	}
 }
 
-func TestSubjectServiceDeleteInUse(t *testing.T) {
-	db := newSubjectTestDB(t)
-	subjects := testutil.SeedSubjects(t, db)
+// TestSeedDefaultSubjectsBackfillsExistingInstall locks in the incremental
+// backfill: an install that already has SOME default subjects (e.g. an old
+// install from before the junior-high subjects were added) must pick up the
+// newly-added defaults on the next boot, without duplicating the ones it has
+// and without touching user-created subjects.
+func TestSeedDefaultSubjectsBackfillsExistingInstall(t *testing.T) {
+	db, svc := newSubjectSvc(t)
 	subjectRepo := repository.NewSubjectRepository(db)
-	badgeRepo := repository.NewBadgeRepository(db)
+
+	// Simulate an OLD install: it has the original 5 subjects but not the
+	// 5 junior-high subjects added later. Plus one user-created subject.
+	oldDefaults := []model.Subject{
+		{Key: "chinese", Label: "语文", SortOrder: 1, IsSystem: true},
+		{Key: "math", Label: "数学", SortOrder: 2, IsSystem: true},
+		{Key: "english", Label: "英语", SortOrder: 3, IsSystem: true},
+		{Key: "physics", Label: "物理", SortOrder: 4, IsSystem: true},
+		{Key: "extra", Label: "课外百科", SortOrder: 5, IsSystem: true},
+	}
+	for i := range oldDefaults {
+		if err := subjectRepo.Create(&oldDefaults[i]); err != nil {
+			t.Fatalf("seed old subject %s: %v", oldDefaults[i].Key, err)
+		}
+	}
+	// A user-created subject that must NOT be touched by the backfill.
+	mine := model.Subject{Key: "my_subj", Label: "我的", SortOrder: 99, IsSystem: false}
+	if err := subjectRepo.Create(&mine); err != nil {
+		t.Fatalf("seed user subject: %v", err)
+	}
+
+	// "Reboot" — run the seeder. It must ADD the 5 missing defaults (history,
+	// geography, biology, chemistry, politics) without duplicating the 5 present
+	// ones or clobbering the user subject.
+	if err := svc.SeedDefaultSubjects(); err != nil {
+		t.Fatalf("backfill seed: %v", err)
+	}
+
+	list, _ := svc.List()
+	// 5 old + 5 new defaults + 1 user = 11.
+	if len(list) != 11 {
+		t.Fatalf("after backfill: expected 11 subjects, got %d", len(list))
+	}
+
+	// The newly-added defaults must now exist.
+	have := map[string]bool{}
+	for _, s := range list {
+		have[s.Key] = true
+	}
+	for _, k := range []string{"history", "geography", "biology", "chemistry", "politics"} {
+		if !have[k] {
+			t.Errorf("backfill missing new default subject %q", k)
+		}
+	}
+}
+
+func TestSubjectServiceDeleteInUse(t *testing.T) {
+	db, svc := newSubjectSvc(t)
+	subjects := testutil.SeedSubjects(t, db)
 	courseRepo := repository.NewCourseRepository(db)
-	svc := NewSubjectService(subjectRepo, badgeRepo)
 
 	// A course referencing the subject should block deletion.
 	course := &model.Course{Title: "Math", Grade: "3", SubjectID: subjects["math"].ID}
@@ -87,11 +147,9 @@ func TestSubjectServiceDeleteInUse(t *testing.T) {
 }
 
 func TestSubjectServiceRenameKeyCascadesBadge(t *testing.T) {
-	db := newSubjectTestDB(t)
+	db, svc := newSubjectSvc(t)
 	subjects := testutil.SeedSubjects(t, db)
-	subjectRepo := repository.NewSubjectRepository(db)
 	badgeRepo := repository.NewBadgeRepository(db)
-	svc := NewSubjectService(subjectRepo, badgeRepo)
 
 	// Badge whose rule_target matches the subject's current key.
 	badge := &model.Badge{

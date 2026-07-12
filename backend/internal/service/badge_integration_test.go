@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/testutil"
@@ -26,16 +27,14 @@ func TestBadgeAndProgressIntegration(t *testing.T) {
 	badgeSvc := NewBadgeService(db, badgeRepo, progressRepo)
 	progressSvc := NewProgressService(db, progressRepo, episodeRepo, badgeSvc)
 
-	// 1. Seed badges
-	err := badgeSvc.SeedDefaultBadges()
-	if err != nil {
+	// 1. Seed the multi-tier default badges. episode_master (tier 0 threshold=3)
+	// is the multi-tier episode-count badge we'll exercise here.
+	if err := badgeSvc.SeedDefaultBadges(); err != nil {
 		t.Fatalf("Failed to seed badges: %v", err)
 	}
-
-	// Verify math_expert has been seeded
-	mathBadge, err := badgeRepo.FindByCode("math_expert")
-	if err != nil || mathBadge == nil {
-		t.Fatalf("Failed to find seeded math_expert badge: %v", err)
+	episodeBadge, err := badgeRepo.FindByCode("episode_master")
+	if err != nil || episodeBadge == nil {
+		t.Fatalf("Failed to find seeded episode_master badge: %v", err)
 	}
 
 	// 2. Setup user and courses
@@ -66,81 +65,70 @@ func TestBadgeAndProgressIntegration(t *testing.T) {
 		eps = append(eps, ep)
 	}
 
-	// Verify user points initially
-	pt, err := progressSvc.GetPoints(user.ID)
+	// episode_master multi-tier badge is initially NOT unlocked.
+	ub, err := badgeRepo.FindUserBadge(user.ID, episodeBadge.ID)
 	if err != nil {
-		t.Fatalf("GetPoints failed: %v", err)
+		t.Fatalf("FindUserBadge: %v", err)
 	}
-	if pt != nil && pt.CurrentPoints > 0 {
-		t.Errorf("Expected 0 points, got %d", pt.CurrentPoints)
-	}
-
-	// Verify math_expert is initially locked
-	unlocked, err := badgeRepo.HasUnlocked(user.ID, mathBadge.ID)
-	if err != nil || unlocked {
-		t.Errorf("Expected badge to be locked, got unlocked=%v", unlocked)
+	if ub != nil {
+		t.Errorf("episode_master should not be unlocked yet, got %+v", ub)
 	}
 
-	// 3. Simulating watch logs to complete 5 math episodes
-	// Complete Ep 1 to Ep 4 (4 episodes completed)
-	for i := 0; i < 4; i++ {
-		_, err := progressSvc.ReportProgress(user.ID, eps[i].ID, 90, 90) // 90% watched (>80%)
-		if err != nil {
+	// 3. Complete 2 episodes — below episode_master tier 0 (threshold=3).
+	for i := 0; i < 2; i++ {
+		if _, err := progressSvc.ReportProgress(user.ID, eps[i].ID, 90, 90); err != nil {
 			t.Fatalf("ReportProgress failed: %v", err)
 		}
 	}
-
-	// Points should be 4 * 10 = 40
-	pt, err = progressSvc.GetPoints(user.ID)
-	if err != nil || pt == nil || pt.CurrentPoints != 40 {
-		t.Errorf("Expected 40 points, got %v", pt)
+	ub, _ = badgeRepo.FindUserBadge(user.ID, episodeBadge.ID)
+	if ub != nil {
+		t.Errorf("episode_master tier 0 (threshold=3) should NOT unlock after 2 completions, got %+v", ub)
 	}
 
-	// math_expert badge should STILL be locked (threshold is 5)
-	unlocked, err = badgeRepo.HasUnlocked(user.ID, mathBadge.ID)
-	if err != nil || unlocked {
-		t.Errorf("Expected math badge to be locked after 4 completions, got unlocked=%v", unlocked)
+	// 4. Complete the 3rd episode — now meets episode_master tier 0 (threshold=3).
+	if _, err := progressSvc.ReportProgress(user.ID, eps[2].ID, 90, 90); err != nil {
+		t.Fatalf("ReportProgress failed for 3rd episode: %v", err)
+	}
+	ub, _ = badgeRepo.FindUserBadge(user.ID, episodeBadge.ID)
+	if ub == nil {
+		t.Fatal("episode_master should be unlocked at tier 0 after 3 completions, got nil")
+	}
+	if ub.Tier != 0 {
+		t.Errorf("episode_master tier = %d, want 0 after 3 completions", ub.Tier)
 	}
 
-	// Complete the 5th episode
-	_, err = progressSvc.ReportProgress(user.ID, eps[4].ID, 90, 90)
-	if err != nil {
+	// 5. Complete 2 more (5 total) — still tier 0 (next tier is 10). Tier must
+	// NOT advance and must NOT re-award.
+	if _, err := progressSvc.ReportProgress(user.ID, eps[3].ID, 90, 90); err != nil {
+		t.Fatalf("ReportProgress failed for 4th episode: %v", err)
+	}
+	if _, err := progressSvc.ReportProgress(user.ID, eps[4].ID, 90, 90); err != nil {
 		t.Fatalf("ReportProgress failed for 5th episode: %v", err)
 	}
-
-	// Points should be 5 * 10 = 50
-	pt, err = progressSvc.GetPoints(user.ID)
-	if err != nil || pt == nil || pt.CurrentPoints != 50 {
-		t.Errorf("Expected 50 points, got %v", pt)
+	ub, _ = badgeRepo.FindUserBadge(user.ID, episodeBadge.ID)
+	if ub == nil || ub.Tier != 0 {
+		t.Errorf("episode_master tier = %v after 5 completions, want 0 (next tier is 10)", ub)
 	}
 
-	// 4. Verify math_expert is now UNLOCKED!
-	unlocked, err = badgeRepo.HasUnlocked(user.ID, mathBadge.ID)
-	if err != nil || !unlocked {
-		t.Errorf("Expected math badge to be unlocked after 5 completions, got unlocked=%v", unlocked)
-	}
-
-	// Verify ledger contains the points logs and achievement unlock log
-	ledger, err := progressSvc.GetPointsLedger(user.ID, 10, 0)
+	// The ledger must contain a badge_unlocked entry for episode_master with
+	// the tier-0 reward (10). It was awarded exactly once (on the 3rd
+	// completion), not re-awarded on completions 4 and 5.
+	ledger, err := progressSvc.GetPointsLedger(user.ID, 50, 0)
 	if err != nil {
 		t.Fatalf("GetPointsLedger failed: %v", err)
 	}
-
-	// Should contain 5 video completions + 1 badge unlock = 6 logs
-	for i, item := range ledger {
-		t.Logf("Ledger [%d]: ReasonType=%s, ChangeAmount=%d, Description=%s, CreatedAt=%v", i, item.ReasonType, item.ChangeAmount, item.Description, item.CreatedAt)
+	var unlockCount, unlockReward int
+	for _, item := range ledger {
+		t.Logf("Ledger: ReasonType=%s, ChangeAmount=%d, Description=%s", item.ReasonType, item.ChangeAmount, item.Description)
+		if item.ReasonType == "badge_unlocked" && strings.Contains(item.Description, "课时大师") {
+			unlockCount++
+			unlockReward = item.ChangeAmount
+		}
 	}
-
-	if len(ledger) != 7 {
-		t.Errorf("Expected 7 logs in points ledger, got %d", len(ledger))
+	if unlockCount != 1 {
+		t.Errorf("episode_master unlock log count = %d, want 1 (no re-award on tier-stable completions)", unlockCount)
 	}
-
-	// The latest ledger log should be the math_expert badge unlocking log!
-	latest := ledger[0]
-	if latest.ReasonType != "badge_unlocked" {
-		t.Errorf("Expected latest ledger log to be badge_unlocked, got: %s", latest.ReasonType)
-	}
-	if latest.ChangeAmount != 0 {
-		t.Errorf("Expected badge unlocking transaction amount to be 0, got %d", latest.ChangeAmount)
+	if unlockReward != 10 {
+		t.Errorf("episode_master tier 0 reward = %d, want 10", unlockReward)
 	}
 }

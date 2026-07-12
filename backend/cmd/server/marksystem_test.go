@@ -41,7 +41,7 @@ func TestMarkSystemDefaultsBackfill(t *testing.T) {
 	legacySubjects := []model.Subject{
 		{Key: "math", Label: "数学"},       // default → should be flagged
 		{Key: "chinese", Label: "语文"},    // default → should be flagged
-		{Key: "history", Label: "历史"},    // user-created → must stay false
+		{Key: "my_subject", Label: "我的学科"},    // user-created → must stay false
 	}
 	for i := range legacySubjects {
 		if err := db.Create(&legacySubjects[i]).Error; err != nil {
@@ -61,8 +61,8 @@ func TestMarkSystemDefaultsBackfill(t *testing.T) {
 	}
 
 	legacyBadges := []model.Badge{
-		{Code: "math_expert", Title: "数学达人", IconName: "x", RuleType: "subject_count", Threshold: 5}, // default → flagged
-		{Code: "explorer", Title: "博学多闻", IconName: "x", RuleType: "distinct_subject_count", Threshold: 3}, // default → flagged
+		{Code: "streak", Title: "连续学习", IconName: "x", RuleType: "consecutive_days"}, // default → flagged
+		{Code: "explorer", Title: "博学多闻", IconName: "x", RuleType: "distinct_subject_count"}, // default → flagged
 		{Code: "my_custom_badge", Title: "自建", IconName: "x", RuleType: "watch_duration", Threshold: 1}, // user-created → untouched
 	}
 	for i := range legacyBadges {
@@ -92,12 +92,12 @@ func TestMarkSystemDefaultsBackfill(t *testing.T) {
 	for _, k := range []string{"required", "logic"} {
 		assertSystem(t, "tags", "key", k, true)
 	}
-	for _, c := range []string{"math_expert", "explorer"} {
+	for _, c := range []string{"streak", "explorer"} {
 		assertSystem(t, "badges", "code", c, true)
 	}
 
 	// User-created rows untouched (still false).
-	assertSystem(t, "subjects", "key", "history", false)
+	assertSystem(t, "subjects", "key", "my_subject", false)
 	assertSystem(t, "tags", "key", "my-tag", false)
 	assertSystem(t, "badges", "code", "my_custom_badge", false)
 }
@@ -110,20 +110,20 @@ func TestMarkSystemDefaultsIdempotent(t *testing.T) {
 
 	// One default + one custom, both legacy (is_system=false).
 	db.Create(&model.Subject{Key: "math", Label: "数学"})
-	db.Create(&model.Subject{Key: "history", Label: "历史"})
+	db.Create(&model.Subject{Key: "my_subject", Label: "我的学科"})
 
 	markSystemDefaults(db)
 	markSystemDefaults(db) // second run
 
-	var mathFlag, historyFlag bool
+	var mathFlag, mySubjectFlag bool
 	db.Table("subjects").Where("key = ?", "math").Pluck("is_system", &mathFlag)
-	db.Table("subjects").Where("key = ?", "history").Pluck("is_system", &historyFlag)
+	db.Table("subjects").Where("key = ?", "my_subject").Pluck("is_system", &mySubjectFlag)
 
 	if !mathFlag {
 		t.Error("idempotent run: math should remain is_system=true")
 	}
-	if historyFlag {
-		t.Error("idempotent run: history (user-created) must remain is_system=false")
+	if mySubjectFlag {
+		t.Error("idempotent run: my_subject (user-created) must remain is_system=false")
 	}
 }
 

@@ -84,7 +84,7 @@ func main() {
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService)
-	subjectService := service.NewSubjectService(subjectRepo, badgeRepo)
+	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
 	tagService := service.NewTagService(tagRepo)
 	// Probe worker must exist before import/ingest handlers so they can wire
 	// its Enqueue callback. Started as a goroutine below.
@@ -97,17 +97,18 @@ func main() {
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, settingsRepo)
 
-	// Seed default badges and subjects (idempotent). Subjects must seed BEFORE
-	// badges so the subject_count badge rules' rule_target keys ("math",
-	// "english") resolve against a populated subjects table.
+	// Seed default badges and subjects (idempotent). Badges seed FIRST: its
+	// one-time rebuild (clearing legacy single-tier badges) must run before
+	// subject seeding, which auto-generates subject_count badges — otherwise
+	// the rebuild would wipe the subject badges just created.
+	if err := badgeService.SeedDefaultBadges(); err != nil {
+		log.Printf("Warning: failed to seed default badges: %v", err)
+	}
 	if err := subjectService.SeedDefaultSubjects(); err != nil {
 		log.Printf("Warning: failed to seed default subjects: %v", err)
 	}
 	if err := tagService.SeedDefaultTags(); err != nil {
 		log.Printf("Warning: failed to seed default tags: %v", err)
-	}
-	if err := badgeService.SeedDefaultBadges(); err != nil {
-		log.Printf("Warning: failed to seed default badges: %v", err)
 	}
 
 	// Backfill is_system on pre-existing seeded rows. On instances that were

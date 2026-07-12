@@ -161,8 +161,11 @@ func TestProgressAtomicityThroughRouter(t *testing.T) {
 		return int(raw["current_points"].(float64))
 	}
 
-	if got := readPoints(); got != 10 {
-		t.Errorf("points after completion = %d, want 10 (atomic award)", got)
+	// Completing one math episode (the course's only episode → full course
+	// completion) awards: 10 (system_watch) + 10 (time_master tier0) + 5
+	// (subject_math tier0) + 10 (course_master tier0) + 0 (first_blood) = 35.
+	if got := readPoints(); got != 35 {
+		t.Errorf("points after completion = %d, want 35 (10 watch + 10 time + 5 subject + 10 course)", got)
 	}
 
 	// Second report at same position must NOT double-award (IsCompleted==1 skips).
@@ -171,8 +174,8 @@ func TestProgressAtomicityThroughRouter(t *testing.T) {
 		"position_seconds":    95,
 		"delta_watch_seconds": 5,
 	})
-	if got := readPoints(); got != 10 {
-		t.Errorf("points after duplicate report = %d, want 10 (no double-award)", got)
+	if got := readPoints(); got != 35 {
+		t.Errorf("points after duplicate report = %d, want 35 (no double-award)", got)
 	}
 }
 

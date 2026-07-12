@@ -9,8 +9,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// These tests lock in the business-timezone semantics for consecutive_days and
-// night_owl — the two rules that previously depended on SQLite's 'localtime'
+// These tests lock in the business-timezone semantics for consecutive_days —
+// the rule that previously depended on SQLite's 'localtime'
 // (DB process zone) disagreeing with Go's time.Now() (server zone), which
 // silently zeroed streaks in containers.
 //
@@ -172,125 +172,6 @@ func TestConsecutiveDaysNoActivity(t *testing.T) {
 	}
 }
 
-// --- night_owl_count ---
-
-// TestNightOwlCountsDeepHours seeds completed episodes at various Beijing
-// hours and asserts only the 22:00–04:59 ones count.
-func TestNightOwlCountsDeepHours(t *testing.T) {
-	restore := useFixedShanghaiClock(t, shanghaiUTC("2026-03-10 12:00:00"))
-	defer restore()
-
-	db := setupTestDB(t)
-	repo := NewBadgeRepository(db).(*badgeRepo)
-	const uid uint = 7
-
-	// Completed at: 23:00 (counts), 02:00 (counts), 10:00 (no), 18:00 (no).
-	// Each needs a DISTINCT episode_id because (user_id, episode_id) is unique.
-	type seed struct {
-		ep  uint
-		at  time.Time
-	}
-	night := []seed{
-		{1, shanghaiUTC("2026-03-05 23:00:00")},
-		{2, shanghaiUTC("2026-03-06 02:00:00")},
-	}
-	day := []seed{
-		{3, shanghaiUTC("2026-03-07 10:00:00")},
-		{4, shanghaiUTC("2026-03-08 18:00:00")},
-	}
-	for _, s := range night {
-		db.Create(&model.UserProgress{UserID: uid, EpisodeID: s.ep, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: s.at})
-	}
-	for _, s := range day {
-		db.Create(&model.UserProgress{UserID: uid, EpisodeID: s.ep, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: s.at})
-	}
-
-	got, err := repo.GetNightOwlCompletedCount(uid)
-	if err != nil {
-		t.Fatalf("GetNightOwlCompletedCount: %v", err)
-	}
-	if got != 2 {
-		t.Fatalf("night-owl count = %d, want 2 (only 23:00 and 02:00 Beijing)", got)
-	}
-}
-
-// TestNightOwlBoundaryHour checks the 22:00 boundary is inclusive (≥22 counts).
-func TestNightOwlBoundaryHour(t *testing.T) {
-	restore := useFixedShanghaiClock(t, shanghaiUTC("2026-03-10 12:00:00"))
-	defer restore()
-
-	db := setupTestDB(t)
-	repo := NewBadgeRepository(db).(*badgeRepo)
-	const uid uint = 8
-
-	// Exactly 22:00 Beijing → counts. 21:59 Beijing → does not.
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 1, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: shanghaiUTC("2026-03-05 22:00:00")})
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 2, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: shanghaiUTC("2026-03-05 21:59:00")})
-
-	got, _ := repo.GetNightOwlCompletedCount(uid)
-	if got != 1 {
-		t.Fatalf("boundary count = %d, want 1 (only 22:00, not 21:59)", got)
-	}
-}
-
-// TestNightOwlEarlyMorningBoundary checks the OTHER end of the window: 04:59
-// counts (< 5) but 05:00 does not. The window is [22:00, 05:00) in business
-// time. Previously only the 22:00 end was tested.
-func TestNightOwlEarlyMorningBoundary(t *testing.T) {
-	restore := useFixedShanghaiClock(t, shanghaiUTC("2026-03-10 12:00:00"))
-	defer restore()
-
-	db := setupTestDB(t)
-	repo := NewBadgeRepository(db).(*badgeRepo)
-	const uid uint = 9
-
-	// 04:59 Beijing → counts (hour=4 < 5). 05:00 Beijing → does not (hour=5).
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 1, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: shanghaiUTC("2026-03-05 04:59:00")})
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 2, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: shanghaiUTC("2026-03-05 05:00:00")})
-
-	got, _ := repo.GetNightOwlCompletedCount(uid)
-	if got != 1 {
-		t.Fatalf("early-morning boundary count = %d, want 1 (only 04:59, not 05:00)", got)
-	}
-}
-
-// TestNightOwlIgnoresIncomplete verifies is_completed=0 rows never count,
-// even when they fall in the late-night window.
-func TestNightOwlIgnoresIncomplete(t *testing.T) {
-	restore := useFixedShanghaiClock(t, shanghaiUTC("2026-03-10 12:00:00"))
-	defer restore()
-
-	db := setupTestDB(t)
-	repo := NewBadgeRepository(db).(*badgeRepo)
-	const uid uint = 10
-
-	// 23:00 Beijing but NOT completed → must be ignored.
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 1, IsCompleted: 0, WatchSeconds: 10, UpdatedAt: shanghaiUTC("2026-03-05 23:00:00")})
-
-	got, _ := repo.GetNightOwlCompletedCount(uid)
-	if got != 0 {
-		t.Fatalf("incomplete late-night row counted: got %d, want 0", got)
-	}
-}
-
-// TestNightOwlUserIsolation verifies the count is scoped to one user — another
-// user's late-night activity must not bleed in.
-func TestNightOwlUserIsolation(t *testing.T) {
-	restore := useFixedShanghaiClock(t, shanghaiUTC("2026-03-10 12:00:00"))
-	defer restore()
-
-	db := setupTestDB(t)
-	repo := NewBadgeRepository(db).(*badgeRepo)
-
-	// User A has a late-night completion; user B has none.
-	db.Create(&model.UserProgress{UserID: 100, EpisodeID: 1, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: shanghaiUTC("2026-03-05 23:00:00")})
-
-	got, _ := repo.GetNightOwlCompletedCount(200)
-	if got != 0 {
-		t.Fatalf("user isolation failed: user 200 got %d, want 0 (only user 100 has night activity)", got)
-	}
-}
-
 // --- consecutive_days additional edge cases ---
 
 // TestConsecutiveDaysOnlyYesterday verifies the yesterday branch: if the last
@@ -396,8 +277,7 @@ func TestSqliteOffsetModifier(t *testing.T) {
 // DST-free zones (China, and any FixedZone) but would be off by ~1h on
 // historical rows that fell in the other DST half of a DST-observing zone.
 // Since the product targets Chinese students (no DST), this is fine; the test
-// pins the behavior for the case we actually ship. See TestNegativeOffsetNightOwl
-// for the hour-extraction path, which is offset-constant regardless.
+// pins the behavior for the case we actually ship.
 func TestNegativeOffsetStreak(t *testing.T) {
 	est := time.FixedZone("EST", -5*3600)
 	restore := useFixedClock(t, est, wallToUTC(est, "2026-03-10 20:00:00"))
@@ -417,28 +297,6 @@ func TestNegativeOffsetStreak(t *testing.T) {
 	}
 	if got != 3 {
 		t.Fatalf("EST streak = %d, want 3", got)
-	}
-}
-
-// TestNegativeOffsetNightOwl verifies night-owl hour extraction under a
-// negative offset. A completion at 23:00 EST local must count (hour=23, in the
-// window >=22); one at 12:00 EST must not.
-func TestNegativeOffsetNightOwl(t *testing.T) {
-	est := time.FixedZone("EST", -5*3600)
-	restore := useFixedClock(t, est, wallToUTC(est, "2026-03-10 12:00:00"))
-	defer restore()
-
-	db := setupTestDB(t)
-	repo := NewBadgeRepository(db).(*badgeRepo)
-	const uid uint = 31
-
-	// 23:00 EST → counts. 12:00 EST → does not.
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 1, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: wallToUTC(est, "2026-03-05 23:00:00")})
-	db.Create(&model.UserProgress{UserID: uid, EpisodeID: 2, IsCompleted: 1, WatchSeconds: 10, UpdatedAt: wallToUTC(est, "2026-03-05 12:00:00")})
-
-	got, _ := repo.GetNightOwlCompletedCount(uid)
-	if got != 1 {
-		t.Fatalf("EST night-owl count = %d, want 1 (only 23:00 EST)", got)
 	}
 }
 
