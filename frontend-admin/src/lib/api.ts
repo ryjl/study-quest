@@ -19,6 +19,8 @@ import type {
   UnlockTemplate,
   User,
   UserSession,
+  WatchHistoryDay,
+  WatchEventDTO,
   AppRelease,
   ReadingSeries,
   ReadingBook,
@@ -184,6 +186,17 @@ export const api = {
   },
   async updateSessionNote(token: string, note: string): Promise<{ status: string }> {
     return request(`/admin/api/sessions/${token}/note`, { method: 'PATCH', body: JSON.stringify({ note }) });
+  },
+
+  // ---- Watch history (admin per-day timeline + heatmap) ----
+  // userWatchHistory: per-day totals over [from, to). from/to are YYYY-MM-DD.
+  // `to` is exclusive on the server side; pass the day AFTER the last wanted.
+  async userWatchHistory(userId: number, from: string, to: string): Promise<WatchHistoryDay[]> {
+    return request(`/admin/api/users/${userId}/watch-history${qs({ from, to })}`);
+  },
+  // userWatchEvents: the selected day's timeline rows (titles denormalized).
+  async userWatchEvents(userId: number, day: string): Promise<WatchEventDTO[]> {
+    return request(`/admin/api/users/${userId}/watch-events${qs({ day })}`);
   },
 
   // ---- Badges ----

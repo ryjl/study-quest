@@ -89,30 +89,37 @@ func (r *entertainmentRepo) GetLastEpisodeID(userID uint) (uint, error) {
 	return prog.EpisodeID, nil
 }
 
-// GetTodayWatchSeconds sums watch_seconds for episodes touched today (business
-// calendar day). Used by the future daily-cap time-limit feature.
+// GetTodayWatchSeconds sums entertainment watch time for the given business-
+// calendar day. Used by the future daily-cap time-limit feature.
+//
+// Sourced from watch_events (per-heartbeat deltas) filtered to entertainment,
+// NOT from entertainment_progresses.watch_seconds. The old version summed the
+// lifetime-total column of any row touched today, which over-counted whenever
+// a video was started on a previous day and resumed today (prior days'
+// seconds were re-attributed to today). The event log records each delta with
+// its own timestamp, so this is now accurate.
 func (r *entertainmentRepo) GetTodayWatchSeconds(userID uint) (int64, error) {
 	mod := sqliteOffsetModifier(businessZoneOffsetMinutes())
 	today := appclock.Now()
 	todayStr := today.Format("2006-01-02")
 	var sum int64
-	err := r.db.Model(&model.EntertainmentProgress{}).
-		Where("user_id = ? AND strftime('%Y-%m-%d', datetime(updated_at, ?)) = ?",
-			userID, mod, todayStr).
-		Select("COALESCE(SUM(watch_seconds), 0)").Scan(&sum).Error
+	err := r.db.Model(&model.WatchEvent{}).
+		Where("user_id = ? AND content_type = ? AND strftime('%Y-%m-%d', datetime(started_at, ?)) = ?",
+			userID, string(model.ContentEntertainment), mod, todayStr).
+		Select("COALESCE(SUM(duration_seconds), 0)").Scan(&sum).Error
 	return sum, err
 }
 
-// GetWeekWatchSeconds sums watch_seconds for episodes touched in the last 7
-// business calendar days. Used by the future weekly-cap time-limit feature.
+// GetWeekWatchSeconds sums entertainment watch time over the last 7 business
+// calendar days. Used by the future weekly-cap time-limit feature. Same event-
+// log fix as GetTodayWatchSeconds (see that docstring).
 func (r *entertainmentRepo) GetWeekWatchSeconds(userID uint) (int64, error) {
-	mod := sqliteOffsetModifier(businessZoneOffsetMinutes())
 	since := appclock.Now().AddDate(0, 0, -6) // last 7 days including today
 	sinceMidnight := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, since.Location())
 	var sum int64
-	err := r.db.Model(&model.EntertainmentProgress{}).
-		Where("user_id = ? AND updated_at >= ?", userID, sinceMidnight.UTC()).
-		Select("COALESCE(SUM(watch_seconds), 0)").Scan(&sum).Error
-	_ = mod
+	err := r.db.Model(&model.WatchEvent{}).
+		Where("user_id = ? AND content_type = ? AND started_at >= ?",
+			userID, string(model.ContentEntertainment), sinceMidnight.UTC()).
+		Select("COALESCE(SUM(duration_seconds), 0)").Scan(&sum).Error
 	return sum, err
 }

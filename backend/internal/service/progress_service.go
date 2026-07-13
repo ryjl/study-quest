@@ -3,7 +3,9 @@ package service
 import (
 	"errors"
 	"fmt"
+	"log"
 	"sync"
+	"time"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 
@@ -27,6 +29,10 @@ type progressService struct {
 	badgeService      BadgeService
 	courseRepo        repository.CourseRepository
 	entertainmentRepo repository.EntertainmentRepository
+	watchEventRepo    repository.WatchEventRepository
+	// mergeWindow is how long a gap between two heartbeats is still folded
+	// into the same WatchEvent row. 0 disables merging. From WATCH_MERGE_WINDOW.
+	mergeWindow time.Duration
 	// userLocks serializes the completion+points path per user. The player's
 	// 5s heartbeat and a quiz-triggered report can overlap; without this, the
 	// daily-first-completion bonus (HasCompletedToday) could fire twice.
@@ -34,7 +40,7 @@ type progressService struct {
 }
 
 // NewProgressService creates an instance of ProgressService.
-func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService, cr repository.CourseRepository, er2 repository.EntertainmentRepository) ProgressService {
+func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er repository.EpisodeRepository, bs BadgeService, cr repository.CourseRepository, er2 repository.EntertainmentRepository, wer repository.WatchEventRepository, mergeWindow time.Duration) ProgressService {
 	return &progressService{
 		db:                db,
 		progressRepo:      pr,
@@ -42,6 +48,8 @@ func NewProgressService(db *gorm.DB, pr repository.ProgressRepository, er reposi
 		badgeService:      bs,
 		courseRepo:        cr,
 		entertainmentRepo: er2,
+		watchEventRepo:    wer,
+		mergeWindow:       mergeWindow,
 	}
 }
 
@@ -118,12 +126,30 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 		return nil, errors.New("episode not found")
 	}
 
+	isEnt := s.isEntertainmentCourse(ep.CourseID)
+
+	// Append (or merge) a watch-history event for this heartbeat. Done BEFORE
+	// the entertainment/learning fork so both branches are covered by a single
+	// write. A failure here is logged but does NOT abort the report — the
+	// aggregate tables (dashboard/leaderboard depend on them) must still update.
+	// The worst case is one missing timeline row, which the "total watch time"
+	// (served from the aggregate) hides entirely.
+	if deltaWatchSec > 0 && s.watchEventRepo != nil {
+		contentType := model.ContentLearning
+		if isEnt {
+			contentType = model.ContentEntertainment
+		}
+		if _, werr := s.watchEventRepo.AppendOrMerge(userID, episodeID, ep.CourseID, string(contentType), deltaWatchSec, time.Now(), s.mergeWindow); werr != nil {
+			log.Printf("watch_event append failed (user=%d ep=%d): %v", userID, episodeID, werr)
+		}
+	}
+
 	// Entertainment branch: record resume position + accumulate watch_seconds
 	// (for the future time-limit feature) in the separate table, then return.
 	// No completion, no points, no badges — learning stats stay uncontaminated.
 	// Uses isEntertainmentCourse (not isEntertainment) to avoid re-fetching the
 	// episode we already loaded above.
-	if s.isEntertainmentCourse(ep.CourseID) {
+	if isEnt {
 		entProg, err := s.entertainmentRepo.UpsertProgress(userID, episodeID, positionSec, deltaWatchSec)
 		if err != nil {
 			return nil, err

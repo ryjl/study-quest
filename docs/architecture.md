@@ -235,6 +235,7 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 | `SESSION_TTL_HOURS` | `720`（30 天）| 用户登录会话有效期（固定，不滑动续期）。过期后客户端被踢回登录页重输 PIN |
 | `INGEST_KEY` | 空（不强制）| Python 工具链灌库端点（`/api/v1/ingest/*`）的预共享密钥。空=端点公开（仅适合内网）；公网部署**必须**设置，否则任何人可 POST 篡改片库 |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | 逗号分隔的可信代理 CIDR/主机列表，Gin 据此读 `X-Forwarded-For` 解析真实客户端 IP（用于登录限速）。反代部署时设为反代所在网段 |
+| `WATCH_MERGE_WINDOW` | `60` | 观看事件窗口合并阈值（秒）。客户端每 5~30s 发一次心跳，两次心跳间隔 ≤ 此值则合并成一行（一次"连续观看会话"）。0 = 禁用合并（每次心跳单独成行）。调大→行数少但单行跨度含更多暂停；调小→边界更准但弱网易切碎 |
 
 > **部署提醒**：上述三项在纯局域网部署下均可保持默认。一旦把后端暴露到公网（即便前面套了 caddy/nginx），**必须设置 `INGEST_KEY`**，并按你的反代位置调整 `TRUSTED_PROXIES`，否则登录限速会按反代的回环 IP 统计而失效。
 
@@ -251,6 +252,21 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 
 **为什么业务配置不走环境变量？**
 因为这些配置需要在运行时通过 Admin 面板修改（比如换一个 AList 地址、更改 Token），重启服务不可接受。存数据库 + Admin 面板是最自然的方案。
+
+### 6.4 学习时长：累计字段 + 事件表（双写）
+
+学习时长有两套互补的存储，**双写**（同一次进度上报两边都更新）：
+
+| 存储 | 形态 | 用途 | 局限 |
+|------|------|------|------|
+| `user_progresses.watch_seconds` / `entertainment_progresses.watch_seconds` | 每个 (用户, 课时) 一行的**累计总数** | dashboard 总时长、排行榜、用户列表"学习时长"列 —— 都是 O(1) 读 | 丢了时间维度：回答不了"今天/某天学了多久"、"几点学的" |
+| `watch_events`（每行 = 一次"连续观看会话"） | append-only **事件流** | Admin "观看历史"页面：月历热力图 + 按日明细 | 按天聚合需 SUM（O(n)，但家庭量级无压力） |
+
+**为什么双写而不是只存事件表？** 累计字段是"快照"，O(1) 读总数，dashboard/排行榜依赖它；事件表是"真相"，回答明细/时间维度。两者职责不同，双写成本几乎为零（多一次 insert），各自走最擅长的查询路径。
+
+**窗口合并**：客户端每 5~30s 发一次心跳，后端把连续心跳合并成一行 `watch_events`（默认 60s 阈值，`WATCH_MERGE_WINDOW` 可配）。`duration_seconds` 只累加真实 delta（暂停不算）；`started_at ~ ended_at` 是墙钟跨度（含合并进来的暂停间隙）。Admin 明细页两个都显示，让操作者判断差值。
+
+**预存 bug 修复**：此 PR 同时修掉了 `RecentDailyWatchSeconds` / `CountActiveUsersSince` / entertainment `GetTodayWatchSeconds` 的"按 updated_at 分桶累计字段"缺陷——这些查询现在改读事件表，按天/按时长聚合才正确。
 
 ---
 

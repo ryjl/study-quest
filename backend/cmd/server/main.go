@@ -76,6 +76,7 @@ func main() {
 	readingBookRepo := repository.NewReadingBookRepository(db)
 	readingArticleRepo := repository.NewReadingArticleRepository(db)
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
+	watchEventRepo := repository.NewWatchEventRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
@@ -83,7 +84,7 @@ func main() {
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
-	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo)
+	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, cfg.WatchMergeWindow)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
 	tagService := service.NewTagService(tagRepo)
 	// Probe worker must exist before import/ingest handlers so they can wire
@@ -143,6 +144,7 @@ func main() {
 		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).
 		WithSessionService(sessionService).
+		WithWatchEventRepo(watchEventRepo).
 		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)

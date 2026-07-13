@@ -24,7 +24,7 @@ func TestMultiTierSkipUp(t *testing.T) {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo, nil, 0)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 
@@ -131,7 +131,7 @@ func TestEvaluateRulesConcurrentIdempotent(t *testing.T) {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo, nil, 0)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 	bs.SeedDefaultBadges()
@@ -252,7 +252,7 @@ func TestUserBadgeStatusesFields(t *testing.T) {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo, nil, 0)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 
@@ -333,7 +333,7 @@ func TestEvalMultiTierSortsUnsorted(t *testing.T) {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	bs := NewBadgeService(db, badgeRepo, progressRepo)
-	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo)
+	ps := NewProgressService(db, progressRepo, episodeRepo, bs, courseRepo, entertainmentRepo, nil, 0)
 	user := &model.User{Nickname: "k", PinHash: "x", Role: "student"}
 	userRepo.Create(user)
 

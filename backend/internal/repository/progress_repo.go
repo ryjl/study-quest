@@ -411,20 +411,34 @@ func (r *progressRepo) CountCompletedEpisodes() (int64, error) {
 	return count, err
 }
 
-// CountActiveUsersSince returns the distinct count of users with a progress
-// row updated at/after `since`. Used for "active today" / "active this week".
+// CountActiveUsersSince returns the distinct count of users with a watch event
+// at/after `since`. Used for "active today" / "active this week".
+//
+// Sourced from watch_events (not user_progresses) so the count reflects actual
+// viewing activity on/after `since`. The old version read user_progresses and
+// would miscount: a row touched yesterday and re-touched today counts as
+// "today-active" even though today's touch might itself be a different episode
+// whose event isn't captured by the aggregate row's single updated_at.
 func (r *progressRepo) CountActiveUsersSince(since time.Time) (int64, error) {
 	var count int64
-	err := r.db.Model(&model.UserProgress{}).
-		Where("updated_at >= ?", since).
+	err := r.db.Model(&model.WatchEvent{}).
+		Where("started_at >= ?", since).
 		Distinct("user_id").
 		Count(&count).Error
 	return count, err
 }
 
-// RecentDailyWatchSeconds sums watch_seconds grouped by the day of updated_at,
-// for the last `days` days, oldest first. Powers the dashboard learning-trend
-// chart (as opposed to the existing "new episodes per day" chart).
+// RecentDailyWatchSeconds sums watch-event durations grouped by the business-
+// calendar day of the event's started_at, for the last `days` days, oldest
+// first. Powers the dashboard learning-trend chart.
+//
+// Sourced from watch_events.duration_seconds (per-heartbeat deltas) rather
+// than user_progresses.watch_seconds (a per-(user,episode) lifetime total).
+// The old version bucketed the lifetime total by the row's last-touch day,
+// which dumped a video's entire accumulated seconds into whichever day it was
+// last touched — wildly over-counting that day and under-counting the days the
+// watching actually happened. The event log records each delta with its own
+// timestamp, so day-bucketing is now correct.
 func (r *progressRepo) RecentDailyWatchSeconds(days int) ([]DailyWatch, error) {
 	type row struct {
 		Date    string
@@ -436,9 +450,9 @@ func (r *progressRepo) RecentDailyWatchSeconds(days int) ([]DailyWatch, error) {
 	since := appclock.Now().AddDate(0, 0, -days+1)
 	sinceMidnight := time.Date(since.Year(), since.Month(), since.Day(), 0, 0, 0, 0, since.Location())
 	var rows []row
-	err := r.db.Model(&model.UserProgress{}).
-		Select("strftime('%Y-%m-%d', datetime(updated_at, ?)) AS date, COALESCE(SUM(watch_seconds), 0) AS seconds", mod).
-		Where("updated_at >= ?", sinceMidnight.UTC()).
+	err := r.db.Model(&model.WatchEvent{}).
+		Select("strftime('%Y-%m-%d', datetime(started_at, ?)) AS date, COALESCE(SUM(duration_seconds), 0) AS seconds", mod).
+		Where("started_at >= ?", sinceMidnight.UTC()).
 		Group("date").
 		Order("date asc").
 		Scan(&rows).Error

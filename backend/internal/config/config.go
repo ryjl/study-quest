@@ -26,6 +26,13 @@ type Config struct {
 	// X-Forwarded-For resolution. Defaults to loopback (a local caddy/nginx).
 	// Affects rate-limiting IP isolation; use c.ClientIP(), never c.RemoteIP().
 	TrustedProxies []string
+
+	// WatchMergeWindow is how long a gap between two heartbeats is still
+	// considered "the same continuous viewing session" and merged into one
+	// WatchEvent row. Larger = fewer rows but pauses inside the window get
+	// folded into the row's wall-clock span (DurationSeconds still excludes
+	// them). 0 disables merging (every heartbeat = a new row). Default 60s.
+	WatchMergeWindow time.Duration
 }
 
 // LoadConfig reads configuration from environment variables with safe defaults.
@@ -60,11 +67,20 @@ func LoadConfig() *Config {
 		proxies = []string{"127.0.0.1", "::1"}
 	}
 
+	// Default 60s window for watch-event merging. 0 disables merging.
+	mergeWindowSec := 60
+	if v := os.Getenv("WATCH_MERGE_WINDOW"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			mergeWindowSec = n
+		}
+	}
+
 	return &Config{
-		ServerAddr:     serverAddr,
-		DBPath:         dbPath,
-		SessionTTL:     time.Duration(ttlHours) * time.Hour,
-		IngestKey:      os.Getenv("INGEST_KEY"),
-		TrustedProxies: proxies,
+		ServerAddr:      serverAddr,
+		DBPath:          dbPath,
+		SessionTTL:      time.Duration(ttlHours) * time.Hour,
+		IngestKey:       os.Getenv("INGEST_KEY"),
+		TrustedProxies:  proxies,
+		WatchMergeWindow: time.Duration(mergeWindowSec) * time.Second,
 	}
 }

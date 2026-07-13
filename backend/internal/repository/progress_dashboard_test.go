@@ -46,6 +46,23 @@ func seedProgressRow(t *testing.T, db *gorm.DB, uid, eid uint, watchSec int, com
 	}
 }
 
+// seedWatchEvent inserts a watch_events row at an explicit started_at. Used by
+// the activity/trend tests now that CountActiveUsersSince and
+// RecentDailyWatchSeconds read from watch_events (not user_progresses).
+func seedWatchEvent(t *testing.T, db *gorm.DB, uid, eid, cid uint, contentType string, durSec int, started time.Time) {
+	t.Helper()
+	ev := model.WatchEvent{
+		UserID: uid, EpisodeID: eid, CourseID: cid,
+		ContentType:     contentType,
+		StartedAt:       started,
+		EndedAt:         started.Add(time.Duration(durSec) * time.Second),
+		DurationSeconds: durSec,
+	}
+	if err := db.Create(&ev).Error; err != nil {
+		t.Fatalf("seed watch event: %v", err)
+	}
+}
+
 // TestDashboardAggregatesEmpty verifies every aggregate degrades to a safe
 // zero / empty slice on a fresh DB with no progress rows.
 func TestDashboardAggregatesEmpty(t *testing.T) {
@@ -114,20 +131,22 @@ func TestCountCompletedEpisodes(t *testing.T) {
 	}
 }
 
-// TestCountActiveUsersSince counts DISTINCT users with updated_at >= since.
-// Rows before the cutoff must not count.
+// TestCountActiveUsersSince counts DISTINCT users with a watch event at/after
+// the cutoff. Events before the cutoff must not count. Reads from watch_events
+// (the source of truth for activity), so the fixture seeds events, not
+// user_progresses rows.
 func TestCountActiveUsersSince(t *testing.T) {
 	db := setupDashboardTestDB(t)
 	repo := NewProgressRepository(db)
 
 	cutoff := at("2026-01-02 00:00:00")
-	// User 1: active after cutoff (counts). Two rows but distinct = 1 user.
-	seedProgressRow(t, db, 1, 10, 10, false, at("2026-01-03 12:00:00"))
-	seedProgressRow(t, db, 1, 11, 10, false, at("2026-01-03 13:00:00"))
+	// User 1: active after cutoff (counts). Two events but distinct = 1 user.
+	seedWatchEvent(t, db, 1, 10, 100, "learning", 10, at("2026-01-03 12:00:00"))
+	seedWatchEvent(t, db, 1, 11, 100, "learning", 10, at("2026-01-03 13:00:00"))
 	// User 2: active BEFORE cutoff (must not count).
-	seedProgressRow(t, db, 2, 10, 10, false, at("2026-01-01 00:00:00"))
+	seedWatchEvent(t, db, 2, 10, 100, "learning", 10, at("2026-01-01 00:00:00"))
 	// User 3: exactly at cutoff boundary (>= is inclusive → counts).
-	seedProgressRow(t, db, 3, 10, 10, false, cutoff)
+	seedWatchEvent(t, db, 3, 10, 100, "learning", 10, cutoff)
 
 	got, err := repo.CountActiveUsersSince(cutoff)
 	if err != nil {

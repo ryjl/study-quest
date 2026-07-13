@@ -140,6 +140,10 @@ func RegisterRoutes(
 		adm.DELETE("/api/users/:id/sessions/:token", admin.RevokeUserSession)
 		adm.PATCH("/api/sessions/:token/note", admin.UpdateSessionNote)
 
+		// Watch history — per-day heatmap + selected-day timeline
+		adm.GET("/api/users/:id/watch-history", admin.GetUserWatchHistory)
+		adm.GET("/api/users/:id/watch-events", admin.GetUserWatchEvents)
+
 		// Courses
 		adm.GET("/api/courses", admin.ListCourses)
 		adm.GET("/api/courses/:id/detail", admin.GetCourseDetail)
