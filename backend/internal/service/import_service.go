@@ -247,9 +247,20 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 			if gradeStr == "" {
 				gradeStr = "universal"
 			}
-			g := model.Grade(gradeStr)
-			if !g.Valid() {
-				return errors.New("invalid course grade value: " + req.NewCourse.Grade)
+			var grades []model.Grade
+			for _, part := range strings.Split(gradeStr, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				g := model.Grade(part)
+				if !g.Valid() {
+					return errors.New("invalid course grade value: " + part)
+				}
+				grades = append(grades, g)
+			}
+			if len(grades) == 0 {
+				grades = []model.Grade{model.GradeUniversal}
 			}
 			// Resolve the subject key to its ID. Fall back to the first subject
 			// when the key is missing/unknown so import never fails on this.
@@ -261,17 +272,21 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 			} else {
 				return errors.New("no subject available; create a subject first")
 			}
+			contentType := model.ContentLearning
+			if req.NewCourse.Subject == "entertainment" {
+				contentType = model.ContentEntertainment
+			}
 			c := &model.Course{
 				Title:       req.NewCourse.Title,
 				SubjectID:   subjectID,
-				ContentType: model.ContentLearning,
+				ContentType: contentType,
 				CoverURL:    req.NewCourse.CoverURL,
 			}
 			if err := courseRepo.Create(c); err != nil {
 				return err
 			}
 			// Set the grade set (course_grades join table).
-			if err := courseRepo.SetGrades(c.ID, []model.Grade{g}); err != nil {
+			if err := courseRepo.SetGrades(c.ID, grades); err != nil {
 				return err
 			}
 			// Attach any requested tags via the many2many association.
@@ -300,8 +315,8 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 			chapterSortOrder = existingChapters[len(existingChapters)-1].SortOrder + 1
 		}
 
-		var parseNode func(node *ImportPreviewNode, currentChapterID uint) error
-		parseNode = func(node *ImportPreviewNode, currentChapterID uint) error {
+		var parseNode func(node *ImportPreviewNode, currentChapterID *uint) error
+		parseNode = func(node *ImportPreviewNode, currentChapterID *uint) error {
 			if node.Type == "exclude" {
 				return nil
 			}
@@ -327,7 +342,7 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 						chapterSortOrder++
 						existingChapters = append(existingChapters, *chap)
 					}
-					currentChapterID = chap.ID
+					currentChapterID = &chap.ID
 				}
 
 				for _, child := range node.Children {
@@ -391,7 +406,7 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 		}
 
 		for _, child := range req.Tree.Children {
-			if err := parseNode(child, 0); err != nil {
+			if err := parseNode(child, nil); err != nil {
 				return err
 			}
 		}

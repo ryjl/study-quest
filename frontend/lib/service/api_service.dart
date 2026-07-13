@@ -24,15 +24,19 @@ class ApiService {
 
   // 1. Fetch public users list (for profile selection screen)
   static Future<List<User>> fetchUsers() async {
-    final response = await http.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/users'),
-      headers: _headers(),
-    );
-    if (response.statusCode == 200) {
-      final List<dynamic> list = jsonDecode(response.body);
-      return list.map((e) => User.fromJson(e)).toList();
+    try {
+      final response = await http.get(
+        Uri.parse('${AppConfig.baseUrl}/api/v1/users'),
+        headers: _headers(),
+      ).timeout(const Duration(seconds: 4));
+      if (response.statusCode == 200) {
+        final List<dynamic> list = jsonDecode(response.body);
+        return list.map((e) => User.fromJson(e)).toList();
+      }
+      throw Exception('获取用户列表失败: ${response.statusCode}');
+    } catch (e) {
+      throw Exception('无法连接到服务器，请检查局域网连接或配置正确的服务器 IP。');
     }
-    throw Exception('获取用户列表失败: ${response.statusCode}');
   }
 
   // 2. Perform PIN authentication

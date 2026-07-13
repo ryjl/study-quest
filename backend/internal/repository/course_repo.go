@@ -63,11 +63,13 @@ func (r *courseRepo) List(grade string, subjectID uint, contentType model.Conten
 	}
 	// Content type filter: default to learning so entertainment courses don't
 	// leak into the Study Hall listing. Entertainment tab explicitly passes
-	// ContentEntertainment.
-	if contentType == "" {
-		contentType = model.ContentLearning
+	// ContentEntertainment. "all" skips this filter to return everything (useful for admin).
+	if contentType != "all" {
+		if contentType == "" {
+			contentType = model.ContentLearning
+		}
+		query = query.Where("content_type = ?", contentType)
 	}
-	query = query.Where("content_type = ?", contentType)
 
 	err := query.Preload("Tags").Preload("Grades").Find(&courses).Error
 	return courses, err

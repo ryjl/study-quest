@@ -9,6 +9,7 @@ import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/num_pad.dart';
 import '../widget/dot_pattern_background.dart';
+import '../../config.dart';
 import 'main_navigation.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -35,6 +36,102 @@ class _LoginScreenState extends State<LoginScreen> {
       _usersFuture = ApiService.fetchUsers();
       _errorMessage = '';
     });
+  }
+
+  void _showIpConfigDialog() {
+    final controller = TextEditingController(text: AppConfig.baseUrl);
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          backgroundColor: Colors.white,
+          title: Row(
+            children: const [
+              Icon(Icons.lan_rounded, color: AppTheme.primaryColor, size: 28),
+              SizedBox(width: 12),
+              Text(
+                '配置服务器地址',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: AppTheme.textWhite),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '请输入后端 API 的局域网或外网穿透地址：',
+                style: TextStyle(fontSize: 14, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: controller,
+                autofocus: true,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
+                decoration: InputDecoration(
+                  filled: true,
+                  fillColor: const Color(0xFFF1F5F9),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(color: Color(0xFFCBD5E1), width: 1.5),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2),
+                  ),
+                  hintText: 'http://192.168.x.x:8080',
+                  hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: const [
+                  Icon(Icons.info_rounded, color: AppTheme.textMuted, size: 14),
+                  SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '例如 http://192.168.1.100:8080，请确保与后端在同一局域网',
+                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消', style: TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.primaryColor,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+              ),
+              onPressed: () async {
+                final url = controller.text.trim();
+                if (url.isNotEmpty) {
+                  await AppConfig.setBaseUrl(url);
+                  if (mounted) {
+                    Navigator.pop(dialogContext);
+                    _refreshUsers();
+                  }
+                }
+              },
+              child: const Text('保存并重试', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _onSelectUser(User user) {
@@ -77,6 +174,25 @@ class _LoginScreenState extends State<LoginScreen> {
       body: DotPatternBackground(
         child: Stack(
           children: [
+            // Top Right Settings/IP Config button
+            Positioned(
+              top: 16,
+              right: 16,
+              child: SafeArea(
+                child: FocusButton(
+                  padding: const EdgeInsets.all(12),
+                  borderRadius: 16,
+                  baseColor: Colors.white.withOpacity(0.8),
+                  borderColor: AppTheme.borderMuted,
+                  onPressed: _showIpConfigDialog,
+                  child: const Icon(
+                    Icons.settings_rounded,
+                    color: AppTheme.primaryColor,
+                    size: 28,
+                  ),
+                ),
+              ),
+            ),
             // Main View Content
           SafeArea(
             child: Center(
@@ -271,14 +387,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 baseColor: Colors.transparent,
                 borderColor: AppTheme.primaryColor,
-                onPressed: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const MainNavigation(initialTabIndex: 2), // settings tab
-                    ),
-                  ).then((_) => _refreshUsers());
-                },
+                onPressed: _showIpConfigDialog,
                 child: const Text('去配置 IP', style: TextStyle(color: AppTheme.primaryColor)),
               ),
             ],

@@ -15,10 +15,11 @@ func TestToEpisodeDTO(t *testing.T) {
 	size := int64(5242880)
 	dur := 3661
 	created := time.Date(2026, 7, 6, 12, 0, 0, 0, time.UTC)
+	chapterID := uint(2)
 	ep := model.Episode{
 		ID:                7,
 		CourseID:          3,
-		ChapterID:         2,
+		ChapterID:         &chapterID,
 		SortOrder:         4,
 		Title:             "测试课时",
 		VideoRelativePath: "/x/y.mp4",

@@ -232,11 +232,15 @@ function PreviewTree({ node, onChange, depth = 0 }: { node: ImportPreviewNode; o
         style={{ borderLeftColor: TYPE_COLORS[node.type], borderLeftWidth: 3 }}
       >
         <span>{isDir ? '📁' : '🎬'}</span>
-        <input
-          className="input !py-1 !text-sm flex-1 min-w-0"
-          value={node.name}
-          onChange={(e) => onChange({ ...node, name: e.target.value })}
-        />
+        {node.type === 'course' ? (
+          <span className="font-bold text-txt flex-1 py-1 text-sm px-2 select-none" title="课程库名称以步骤 2 中填写的为准">{node.name}</span>
+        ) : (
+          <input
+            className="input !py-1 !text-sm flex-1 min-w-0"
+            value={node.name}
+            onChange={(e) => onChange({ ...node, name: e.target.value })}
+          />
+        )}
         <select className="input !py-1 !text-xs max-w-[130px]" value={node.type} onChange={(e) => setType(e.target.value)}>
           {isDir ? (
             <>

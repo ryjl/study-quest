@@ -21,13 +21,13 @@ import (
 type EpisodeService interface {
 	GetEpisodesByCourse(courseID uint) ([]model.Episode, error)
 	GetEpisodeByID(id uint) (*model.Episode, error)
-	CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error)
-	UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error)
+	CreateEpisode(courseID uint, chapterID *uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error)
+	UpdateEpisode(id uint, chapterID *uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error)
 	// UpdateEpisodeAdmin performs a PATCH-style update of the admin-editable
 	// fields only (title, path, chapter, sort). Media metadata fields
 	// (file_size, duration_seconds, media_meta_json) are preserved so editing a
 	// title from the admin UI never clobbers ffprobe results.
-	UpdateEpisodeAdmin(id, chapterID uint, title, videoPath string, sortOrder int) (*model.Episode, error)
+	UpdateEpisodeAdmin(id uint, chapterID *uint, title, videoPath string, sortOrder int) (*model.Episode, error)
 	DeleteEpisode(id uint) error
 	ReorderEpisodes(episodeIDs []uint) error
 
@@ -93,7 +93,7 @@ func (s *episodeService) GetEpisodeByID(id uint) (*model.Episode, error) {
 	return s.episodeRepo.FindByID(id)
 }
 
-func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error) {
+func (s *episodeService) CreateEpisode(courseID uint, chapterID *uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error) {
 	ep := &model.Episode{
 		CourseID:             courseID,
 		ChapterID:            chapterID,
@@ -111,7 +111,7 @@ func (s *episodeService) CreateEpisode(courseID, chapterID uint, title, videoPat
 	return ep, nil
 }
 
-func (s *episodeService) UpdateEpisode(id uint, chapterID uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error) {
+func (s *episodeService) UpdateEpisode(id uint, chapterID *uint, title, videoPath, attachments string, sortOrder int, origPath string, size *int64, dur *int) (*model.Episode, error) {
 	ep, err := s.episodeRepo.FindByID(id)
 	if err != nil {
 		return nil, err
@@ -137,7 +137,7 @@ func (s *episodeService) UpdateEpisode(id uint, chapterID uint, title, videoPath
 
 // UpdateEpisodeAdmin patches only the admin-editable fields. Media metadata
 // (hash, size, duration, ffprobe JSON) is left untouched on disk.
-func (s *episodeService) UpdateEpisodeAdmin(id, chapterID uint, title, videoPath string, sortOrder int) (*model.Episode, error) {
+func (s *episodeService) UpdateEpisodeAdmin(id uint, chapterID *uint, title, videoPath string, sortOrder int) (*model.Episode, error) {
 	ep, err := s.episodeRepo.FindByID(id)
 	if err != nil {
 		return nil, err

@@ -97,11 +97,11 @@ func (r *readingSeriesRepo) Update(series *model.ReadingSeries) error {
 // the PDFs — mirrors the principle that content outlives its grouping.
 func (r *readingSeriesRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// Detach child books/articles → standalone (SeriesID=0), preserve them.
-		if err := tx.Model(&model.ReadingBook{}).Where("series_id = ?", id).Update("series_id", 0).Error; err != nil {
+		// Detach child books/articles → standalone (SeriesID=NULL), preserve them.
+		if err := tx.Model(&model.ReadingBook{}).Where("series_id = ?", id).Updates(map[string]interface{}{"series_id": nil}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&model.ReadingArticle{}).Where("series_id = ?", id).Update("series_id", 0).Error; err != nil {
+		if err := tx.Model(&model.ReadingArticle{}).Where("series_id = ?", id).Updates(map[string]interface{}{"series_id": nil}).Error; err != nil {
 			return err
 		}
 		tx.Delete(&model.UserReadingSeriesAccess{}, "series_id = ?", id)

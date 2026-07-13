@@ -579,8 +579,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         borderRadius: 20,
         borderColor: const Color(0xFFE2E8F0),
         onPressed: () {
-          // Open Pre-Watch Modal ("探险任务卡") before playing!
-          _showPreAdventureModal(context, ep);
+          // Only show the pre-adventure modal if there are actually tasks.
+          // Otherwise, directly play the episode.
+          final ai = _aiCache[ep.id];
+          if (ai != null && ai.preAdventureCards.isNotEmpty) {
+            _showPreAdventureModal(context, ep);
+          } else {
+            _playEpisode(ep);
+          }
         },
         child: Row(
           children: [
@@ -783,6 +789,23 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
+  void _playEpisode(Episode ep) {
+    final tasks = _aiCache[ep.id]?.preAdventureCards
+            .map((c) => c.prompt)
+            .toList() ??
+        const <String>[];
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PlayerScreen(
+          activeUserId: widget.activeUserId,
+          episode: ep,
+          preAdventureTasks: tasks,
+        ),
+      ),
+    ).then((_) => _refreshData());
+  }
+
   void _showPreAdventureModal(BuildContext context, Episode ep) {
     // Resolve the latest AI pre-adventure tasks for this episode. If the
     // background prefetch already filled the cache we use it directly;
@@ -800,21 +823,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               const [],
           onStart: () {
             Navigator.pop(dialogContext); // close dialog
-            // Play video — pass the real pre-adventure tasks along.
-            final tasks = _aiCache[ep.id]?.preAdventureCards
-                    .map((c) => c.prompt)
-                    .toList() ??
-                const <String>[];
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => PlayerScreen(
-                  activeUserId: widget.activeUserId,
-                  episode: ep,
-                  preAdventureTasks: tasks,
-                ),
-              ),
-            ).then((_) => _refreshData());
+            _playEpisode(ep);
           },
         );
       },

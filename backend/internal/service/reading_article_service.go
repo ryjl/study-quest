@@ -65,8 +65,12 @@ func (s *readingArticleService) CreateArticle(seriesID uint, sortOrder int, titl
 			return nil, errors.New("invalid reading article grade value: " + string(g))
 		}
 	}
+	var seriesIDPtr *uint
+	if seriesID > 0 {
+		seriesIDPtr = &seriesID
+	}
 	article := &model.ReadingArticle{
-		SeriesID:         seriesID,
+		SeriesID:         seriesIDPtr,
 		SortOrder:        sortOrder,
 		Title:            title,
 		SourceURL:        sourceURL,
@@ -108,7 +112,11 @@ func (s *readingArticleService) UpdateArticle(id uint, seriesID uint, sortOrder 
 	if article == nil {
 		return nil, nil
 	}
-	article.SeriesID = seriesID
+	var seriesIDPtr *uint
+	if seriesID > 0 {
+		seriesIDPtr = &seriesID
+	}
+	article.SeriesID = seriesIDPtr
 	article.SortOrder = sortOrder
 	article.Title = title
 	article.SourceURL = sourceURL
@@ -166,8 +174,8 @@ func (s *readingArticleService) CanAccess(userID uint, userRole string, articleI
 	if err != nil || article == nil {
 		return false, err
 	}
-	if article.SeriesID == 0 {
+	if article.SeriesID == nil {
 		return false, nil
 	}
-	return s.seriesRepo.HasAccess(userID, article.SeriesID)
+	return s.seriesRepo.HasAccess(userID, *article.SeriesID)
 }

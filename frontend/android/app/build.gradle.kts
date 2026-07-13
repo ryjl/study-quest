@@ -25,21 +25,6 @@ android {
         versionName = flutter.versionName
     }
 
-    // MuMu (and most x86 emulators) only run x86_64. media_kit_libs_android_video
-    // bundles arm64-v8a / armeabi-v7a / x86 / x86_64 .so inside dependency
-    // jars, which ndk.abiFilters alone does NOT prune. The packaging.jniLibs
-    // excludes below strip the unwanted ABIs at the final APK assembly step,
-    // cutting the APK from ~180MB to ~45MB and avoiding houdini translation.
-    packaging {
-        jniLibs {
-            excludes += listOf(
-                "**/lib/arm64-v8a/**",
-                "**/lib/armeabi-v7a/**",
-                "**/lib/x86/**",
-            )
-        }
-    }
-
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.

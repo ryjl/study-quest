@@ -104,10 +104,14 @@ type episodeDTO struct {
 }
 
 func toEpisodeDTO(e model.Episode) episodeDTO {
+	var chapterID uint
+	if e.ChapterID != nil {
+		chapterID = *e.ChapterID
+	}
 	return episodeDTO{
 		ID:                   e.ID,
 		CourseID:             e.CourseID,
-		ChapterID:            e.ChapterID,
+		ChapterID:            chapterID,
 		SortOrder:            e.SortOrder,
 		Title:                e.Title,
 		VideoRelativePath:    e.VideoRelativePath,
@@ -448,9 +452,13 @@ func (h *adminHandler) toReadingBookDTO(b model.ReadingBook) readingBookDTO {
 	for _, g := range b.Grades {
 		parts = append(parts, string(g.Grade))
 	}
+	var seriesID uint
+	if b.SeriesID != nil {
+		seriesID = *b.SeriesID
+	}
 	return readingBookDTO{
 		ID:               b.ID,
-		SeriesID:         b.SeriesID,
+		SeriesID:         seriesID,
 		SortOrder:        b.SortOrder,
 		Title:            b.Title,
 		FileRelativePath: b.FileRelativePath,
@@ -478,9 +486,13 @@ func (h *adminHandler) toReadingArticleDTO(a model.ReadingArticle) readingArticl
 	for _, g := range a.Grades {
 		parts = append(parts, string(g.Grade))
 	}
+	var seriesID uint
+	if a.SeriesID != nil {
+		seriesID = *a.SeriesID
+	}
 	return readingArticleDTO{
 		ID:               a.ID,
-		SeriesID:         a.SeriesID,
+		SeriesID:         seriesID,
 		SortOrder:        a.SortOrder,
 		Title:            a.Title,
 		SourceURL:        a.SourceURL,

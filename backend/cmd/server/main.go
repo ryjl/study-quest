@@ -16,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func main() {
@@ -31,7 +32,16 @@ func main() {
 	}
 
 	// 3. Connect to SQLite database
-	db, err := gorm.Open(sqlite.Open(cfg.DBPath), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(cfg.DBPath), &gorm.Config{
+		Logger: logger.New(
+			log.New(os.Stdout, "\r\n", log.LstdFlags),
+			logger.Config{
+				LogLevel:                  logger.Warn,
+				IgnoreRecordNotFoundError: true,
+			},
+		),
+		TranslateError: true,
+	})
 	if err != nil {
 		log.Fatalf("Failed to connect to SQLite database: %v", err)
 	}

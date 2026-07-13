@@ -37,7 +37,7 @@ func TestReadingBookCanAccessSeriesInheritance(t *testing.T) {
 	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID}
 	db.Create(&series)
 	db.Create(&model.ReadingSeriesGrade{SeriesID: series.ID, Grade: model.GradeUniversal})
-	book := model.ReadingBook{SeriesID: series.ID, Title: "B", FileRelativePath: "/x.pdf", SubjectID: subj.ID}
+	book := model.ReadingBook{SeriesID: &series.ID, Title: "B", FileRelativePath: "/x.pdf", SubjectID: subj.ID}
 	db.Create(&book)
 	db.Create(&model.ReadingBookGrade{BookID: book.ID, Grade: model.GradeUniversal})
 
@@ -79,7 +79,7 @@ func TestReadingBookCanAccessStandaloneNoInheritance(t *testing.T) {
 	settingsRepo := repository.NewSettingsRepository(db)
 	bookSvc := NewReadingBookService(bookRepo, settingsRepo, seriesRepo)
 
-	book := model.ReadingBook{SeriesID: 0, Title: "Standalone", FileRelativePath: "/s.pdf", SubjectID: subj.ID}
+	book := model.ReadingBook{Title: "Standalone", FileRelativePath: "/s.pdf", SubjectID: subj.ID}
 	db.Create(&book)
 	db.Create(&model.ReadingBookGrade{BookID: book.ID, Grade: model.GradeUniversal})
 
@@ -109,7 +109,7 @@ func TestReadingArticleCanAccessSeriesInheritance(t *testing.T) {
 	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID}
 	db.Create(&series)
 	db.Create(&model.ReadingSeriesGrade{SeriesID: series.ID, Grade: model.GradeUniversal})
-	article := model.ReadingArticle{SeriesID: series.ID, Title: "A", SourceURL: "https://example.com", SubjectID: subj.ID}
+	article := model.ReadingArticle{SeriesID: &series.ID, Title: "A", SourceURL: "https://example.com", SubjectID: subj.ID}
 	db.Create(&article)
 	db.Create(&model.ReadingArticleGrade{ArticleID: article.ID, Grade: model.GradeUniversal})
 
@@ -155,9 +155,9 @@ func TestGetReadingRoomDedup(t *testing.T) {
 	db.Create(&model.ReadingSeriesGrade{SeriesID: s2.ID, Grade: model.GradeUniversal})
 
 	// B1 inside S1, B2 inside S2, B3 standalone.
-	b1 := model.ReadingBook{SeriesID: s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
-	b2 := model.ReadingBook{SeriesID: s2.ID, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
-	b3 := model.ReadingBook{SeriesID: 0, Title: "B3", FileRelativePath: "/3.pdf", SubjectID: subj.ID}
+	b1 := model.ReadingBook{SeriesID: &s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
+	b2 := model.ReadingBook{SeriesID: &s2.ID, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
+	b3 := model.ReadingBook{Title: "B3", FileRelativePath: "/3.pdf", SubjectID: subj.ID}
 	db.Create(&b1)
 	db.Create(&b2)
 	db.Create(&b3)
@@ -214,8 +214,8 @@ func TestGetReadingRoomAdmin(t *testing.T) {
 	s1 := model.ReadingSeries{Title: "S1", SubjectID: subj.ID}
 	db.Create(&s1)
 	db.Create(&model.ReadingSeriesGrade{SeriesID: s1.ID, Grade: model.GradeUniversal})
-	b1 := model.ReadingBook{SeriesID: s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
-	b2 := model.ReadingBook{SeriesID: 0, Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
+	b1 := model.ReadingBook{SeriesID: &s1.ID, Title: "B1", FileRelativePath: "/1.pdf", SubjectID: subj.ID}
+	b2 := model.ReadingBook{Title: "B2", FileRelativePath: "/2.pdf", SubjectID: subj.ID}
 	db.Create(&b1)
 	db.Create(&b2)
 	db.Create(&model.ReadingBookGrade{BookID: b1.ID, Grade: model.GradeUniversal})

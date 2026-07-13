@@ -205,7 +205,7 @@ func (s *readingSeriesService) GetReadingRoom(userID uint, userRole string, grad
 	}
 	books := make([]model.ReadingBook, 0, len(allBooks))
 	for _, b := range allBooks {
-		if b.SeriesID == 0 || !seriesIDSet[b.SeriesID] {
+		if b.SeriesID == nil || !seriesIDSet[*b.SeriesID] {
 			books = append(books, b)
 		}
 	}
@@ -225,7 +225,7 @@ func (s *readingSeriesService) GetReadingRoom(userID uint, userRole string, grad
 	}
 	articles := make([]model.ReadingArticle, 0, len(allArticles))
 	for _, a := range allArticles {
-		if a.SeriesID == 0 || !seriesIDSet[a.SeriesID] {
+		if a.SeriesID == nil || !seriesIDSet[*a.SeriesID] {
 			articles = append(articles, a)
 		}
 	}

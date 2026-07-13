@@ -151,7 +151,7 @@ func TestReadingSeriesDeleteDetachesChildren(t *testing.T) {
 	if err := db.Create(&model.ReadingSeriesGrade{SeriesID: series.ID, Grade: model.GradeUniversal}).Error; err != nil {
 		t.Fatal(err)
 	}
-	book := model.ReadingBook{SeriesID: series.ID, Title: "Book", FileRelativePath: "/x.pdf", SubjectID: subj.ID}
+	book := model.ReadingBook{SeriesID: &series.ID, Title: "Book", FileRelativePath: "/x.pdf", SubjectID: subj.ID}
 	if err := db.Create(&book).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -168,13 +168,13 @@ func TestReadingSeriesDeleteDetachesChildren(t *testing.T) {
 	if got != nil {
 		t.Fatalf("series should be deleted, got %+v", got)
 	}
-	// Book survives but is now standalone (SeriesID=0).
+	// Book survives but is now standalone (SeriesID=nil).
 	reloaded, _ := bookRepo.FindByID(book.ID)
 	if reloaded == nil {
 		t.Fatal("book should survive series deletion")
 	}
-	if reloaded.SeriesID != 0 {
-		t.Fatalf("book SeriesID after series delete: got %d, want 0", reloaded.SeriesID)
+	if reloaded.SeriesID != nil {
+		t.Fatalf("book SeriesID after series delete: got %v, want nil", reloaded.SeriesID)
 	}
 }
 

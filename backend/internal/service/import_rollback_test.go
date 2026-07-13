@@ -69,3 +69,55 @@ func TestImportTreeRollbackOnMidFailure(t *testing.T) {
 		t.Errorf("episode count = %d, want 0 (ep1 should have rolled back with ep2's failure)", episodeCount)
 	}
 }
+
+func TestImportWithMultiGrades(t *testing.T) {
+	db := testutil.NewFileDB(t)
+	subjects := testutil.SeedSubjects(t, db)
+
+	episodeRepo := repository.NewEpisodeRepository(db)
+	courseRepo := repository.NewCourseRepository(db)
+	chapterRepo := repository.NewChapterRepository(db)
+	subjectRepo := repository.NewSubjectRepository(db)
+	settingsRepo := repository.NewSettingsRepository(db)
+
+	svc := NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, nil)
+
+	tree := &ImportPreviewNode{
+		Name: "Root", IsDir: true, Type: "course",
+		Children: []*ImportPreviewNode{
+			{Name: "第一章", IsDir: true, Type: "chapter", Children: []*ImportPreviewNode{
+				{Name: "第1集", Path: "/a/1.mp4", Type: "episode", Size: 100},
+			}},
+		},
+	}
+	req := &ExecuteTreeImportRequest{
+		NewCourse: &NewCourseRequest{Title: "多年级测试课", Grade: "3,4,5", Subject: subjects["math"].Key},
+		Tree:      tree,
+	}
+
+	err := svc.ExecuteTreeImport(req)
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+
+	// Verify course exists and has correct grades.
+	var course model.Course
+	if err := db.Preload("Grades").Where("title = ?", "多年级测试课").First(&course).Error; err != nil {
+		t.Fatalf("failed to query course: %v", err)
+	}
+
+	if len(course.Grades) != 3 {
+		t.Fatalf("expected 3 grades, got %d", len(course.Grades))
+	}
+
+	expectedGrades := map[model.Grade]bool{
+		"3": true,
+		"4": true,
+		"5": true,
+	}
+	for _, g := range course.Grades {
+		if !expectedGrades[g.Grade] {
+			t.Errorf("unexpected grade: %s", g.Grade)
+		}
+	}
+}

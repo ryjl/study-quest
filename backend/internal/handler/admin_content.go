@@ -32,7 +32,7 @@ func parseGrades(s string) []model.Grade {
 }
 
 func (h *adminHandler) ListCourses(c *gin.Context) {
-	courses, err := h.courseRepo.List("", 0, "", nil)
+	courses, err := h.courseRepo.List("", 0, "all", nil)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -205,9 +205,14 @@ func (h *adminHandler) CreateEpisode(c *gin.Context) {
 		req.AttachmentJSON = "[]"
 	}
 
+	var chapterIDPtr *uint
+	if req.ChapterID > 0 {
+		chapterIDPtr = &req.ChapterID
+	}
+
 	ep, err := h.episodeService.CreateEpisode(
 		courseID,
-		req.ChapterID,
+		chapterIDPtr,
 		req.Title,
 		req.VideoRelativePath,
 		req.AttachmentJSON,
@@ -241,8 +246,13 @@ func (h *adminHandler) UpdateEpisode(c *gin.Context) {
 		return
 	}
 
+	var chapterIDPtr *uint
+	if req.ChapterID > 0 {
+		chapterIDPtr = &req.ChapterID
+	}
+
 	// Use the PATCH-style admin update so media metadata is never clobbered.
-	ep, err := h.episodeService.UpdateEpisodeAdmin(id, req.ChapterID, req.Title, req.VideoRelativePath, req.SortOrder)
+	ep, err := h.episodeService.UpdateEpisodeAdmin(id, chapterIDPtr, req.Title, req.VideoRelativePath, req.SortOrder)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -326,7 +336,11 @@ func (h *adminHandler) BulkMoveEpisodes(c *gin.Context) {
 			return
 		}
 		if ep != nil {
-			ep.ChapterID = req.ChapterID
+			var chapterIDPtr *uint
+			if req.ChapterID > 0 {
+				chapterIDPtr = &req.ChapterID
+			}
+			ep.ChapterID = chapterIDPtr
 			if err := h.episodeRepo.Update(ep); err != nil {
 				respondError(c, err)
 				return

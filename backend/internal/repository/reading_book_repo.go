@@ -66,7 +66,7 @@ func (r *readingBookRepo) List(grade string, subjectID uint, allowedIDs []uint, 
 	}
 
 	if standaloneOnly {
-		query = query.Where("series_id = 0")
+		query = query.Where("series_id IS NULL")
 	}
 	if grade != "" {
 		query = query.Where(

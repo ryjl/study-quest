@@ -59,8 +59,8 @@ func (r *chapterRepo) Update(chapter *model.Chapter) error {
 
 func (r *chapterRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// Dissociate episodes from this chapter (set chapter_id to 0/default)
-		if err := tx.Model(&model.Episode{}).Where("chapter_id = ?", id).Update("chapter_id", 0).Error; err != nil {
+		// Dissociate episodes from this chapter (set chapter_id to NULL)
+		if err := tx.Model(&model.Episode{}).Where("chapter_id = ?", id).Updates(map[string]interface{}{"chapter_id": nil}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&model.Chapter{}, id).Error

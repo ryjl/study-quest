@@ -78,10 +78,14 @@ type clientEpisodeDTO struct {
 // toClientEpisodeDTO projects a model.Episode into the client shape. `locked`
 // is the caller's per-user visibility flag (from the unlock resolver).
 func toClientEpisodeDTO(ep model.Episode, locked bool) clientEpisodeDTO {
+	var chapterID uint
+	if ep.ChapterID != nil {
+		chapterID = *ep.ChapterID
+	}
 	return clientEpisodeDTO{
 		ID:                   ep.ID,
 		CourseID:             ep.CourseID,
-		ChapterID:            ep.ChapterID,
+		ChapterID:            chapterID,
 		SortOrder:            ep.SortOrder,
 		Title:                ep.Title,
 		VideoRelativePath:    ep.VideoRelativePath,

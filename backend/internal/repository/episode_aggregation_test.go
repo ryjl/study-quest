@@ -38,12 +38,12 @@ func TestEpisodeAggregations(t *testing.T) {
 
 	// 6 episodes: 4 with durations (2 math + 2 chinese), 2 without (probe pending).
 	eps := []*model.Episode{
-		{CourseID: c1.ID, ChapterID: ch1.ID, SortOrder: 1, Title: "m1", VideoRelativePath: "/m1.mp4", DurationSeconds: intp(600), FileSize: int64p(100)},
-		{CourseID: c1.ID, ChapterID: ch1.ID, SortOrder: 2, Title: "m2", VideoRelativePath: "/m2.mp4", DurationSeconds: intp(1200), FileSize: int64p(200)},
-		{CourseID: c1.ID, ChapterID: 0, SortOrder: 3, Title: "m3", VideoRelativePath: "/m3.mp4"}, // no duration
-		{CourseID: c2.ID, ChapterID: 0, SortOrder: 1, Title: "c1", VideoRelativePath: "/c1.mp4", DurationSeconds: intp(300), FileSize: int64p(50)},
-		{CourseID: c2.ID, ChapterID: 0, SortOrder: 2, Title: "c2", VideoRelativePath: "/c2.mp4", DurationSeconds: intp(900), FileSize: int64p(80)},
-		{CourseID: c2.ID, ChapterID: 0, SortOrder: 3, Title: "c3", VideoRelativePath: "/c3.mp4"}, // no duration
+		{CourseID: c1.ID, ChapterID: &ch1.ID, SortOrder: 1, Title: "m1", VideoRelativePath: "/m1.mp4", DurationSeconds: intp(600), FileSize: int64p(100)},
+		{CourseID: c1.ID, ChapterID: &ch1.ID, SortOrder: 2, Title: "m2", VideoRelativePath: "/m2.mp4", DurationSeconds: intp(1200), FileSize: int64p(200)},
+		{CourseID: c1.ID, SortOrder: 3, Title: "m3", VideoRelativePath: "/m3.mp4"}, // no duration
+		{CourseID: c2.ID, SortOrder: 1, Title: "c1", VideoRelativePath: "/c1.mp4", DurationSeconds: intp(300), FileSize: int64p(50)},
+		{CourseID: c2.ID, SortOrder: 2, Title: "c2", VideoRelativePath: "/c2.mp4", DurationSeconds: intp(900), FileSize: int64p(80)},
+		{CourseID: c2.ID, SortOrder: 3, Title: "c3", VideoRelativePath: "/c3.mp4"}, // no duration
 	}
 	for _, e := range eps {
 		if err := episodeRepo.Create(e); err != nil {

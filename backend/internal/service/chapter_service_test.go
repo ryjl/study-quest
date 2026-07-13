@@ -65,14 +65,14 @@ func TestChapterService(t *testing.T) {
 
 	t.Run("DeleteChapterDissociatesEpisodes", func(t *testing.T) {
 		// Create episode belonging to this chapter
-		ep, err := episodeSvc.CreateEpisode(course.ID, ch1.ID, "Lesson 1", "/path/1.mp4", "[]", 1, "/path/1.mp4", nil, nil)
+		ep, err := episodeSvc.CreateEpisode(course.ID, &ch1.ID, "Lesson 1", "/path/1.mp4", "[]", 1, "/path/1.mp4", nil, nil)
 		if err != nil {
 			t.Fatalf("CreateEpisode failed: %v", err)
 		}
 
 		// Verify it belongs to chapter
-		if ep.ChapterID != ch1.ID {
-			t.Fatalf("Expected episode ChapterID to be %d, got %d", ch1.ID, ep.ChapterID)
+		if ep.ChapterID == nil || *ep.ChapterID != ch1.ID {
+			t.Fatalf("Expected episode ChapterID to be %d, got %v", ch1.ID, ep.ChapterID)
 		}
 
 		// Delete Chapter
@@ -87,10 +87,10 @@ func TestChapterService(t *testing.T) {
 			t.Errorf("Expected chapter to be deleted, but still found")
 		}
 
-		// Verify episode's ChapterID is reset to 0
+		// Verify episode's ChapterID is reset to nil
 		updatedEp, _ := episodeSvc.GetEpisodeByID(ep.ID)
-		if updatedEp.ChapterID != 0 {
-			t.Errorf("Expected episode's ChapterID to be dissociated to 0, got %d", updatedEp.ChapterID)
+		if updatedEp.ChapterID != nil {
+			t.Errorf("Expected episode's ChapterID to be dissociated to nil, got %v", updatedEp.ChapterID)
 		}
 	})
 }

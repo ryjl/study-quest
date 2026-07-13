@@ -226,6 +226,7 @@ func courseGradeDisplay(gs []CourseGrade) string {
 type Chapter struct {
 	ID             uint   `gorm:"primaryKey;autoIncrement"`
 	CourseID       uint   `gorm:"index;not null"`
+	Course         Course `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 	Title          string `gorm:"size:255;not null"`
 	Description    string `gorm:"type:text"`
 	CoverURL       string `gorm:"size:1024"`
@@ -237,18 +238,20 @@ type Chapter struct {
 
 // Episode represents a specific episode in a course.
 type Episode struct {
-	ID                   uint   `gorm:"primaryKey;autoIncrement"`
-	CourseID             uint   `gorm:"index:idx_course_sort;not null"`
-	ChapterID            uint   `gorm:"index;not null;default:0"` // Belonging chapter, 0 means default/unassigned
-	SortOrder            int    `gorm:"index:idx_course_sort;not null"`
-	Title                string `gorm:"size:255;not null"`
-	VideoRelativePath    string `gorm:"type:text;not null"`
-	CoverURL             string `gorm:"size:1024"`
-	AttachmentJSON       string `gorm:"type:text"` // JSON array of attachments
-	OriginalRelativePath string `gorm:"type:text"` // Original multi-layer path to prevent name collision
-	FileSize             *int64 // Nullable file size in bytes
-	DurationSeconds      *int   // Nullable video duration in seconds
-	MediaMetaJSON        string `gorm:"type:text"` // Serialized MediaMeta from ffprobe (codecs, resolution, streams, ...)
+	ID                   uint      `gorm:"primaryKey;autoIncrement"`
+	CourseID             uint      `gorm:"index:idx_course_sort;not null"`
+	Course               Course    `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
+	ChapterID            *uint     `gorm:"index"` // NULL = unassigned to any chapter
+	Chapter              *Chapter  `gorm:"foreignKey:ChapterID;constraint:OnDelete:SET NULL"`
+	SortOrder            int       `gorm:"index:idx_course_sort;not null"`
+	Title                string    `gorm:"size:255;not null"`
+	VideoRelativePath    string    `gorm:"type:text;not null"`
+	CoverURL             string    `gorm:"size:1024"`
+	AttachmentJSON       string    `gorm:"type:text"` // JSON array of attachments
+	OriginalRelativePath string    `gorm:"type:text"` // Original multi-layer path to prevent name collision
+	FileSize             *int64    // Nullable file size in bytes
+	DurationSeconds      *int      // Nullable video duration in seconds
+	MediaMetaJSON        string    `gorm:"type:text"` // Serialized MediaMeta from ffprobe (codecs, resolution, streams, ...)
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }
@@ -284,20 +287,22 @@ type MediaStream struct {
 
 // Subtitle holds the raw SRT subtitle content.
 type Subtitle struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement"`
-	EpisodeID  uint   `gorm:"index:idx_episode_lang;not null"`
-	Language   string `gorm:"size:50;index:idx_episode_lang;not null;default:'zh-CN'"` // e.g. zh-CN, en-US, bi
-	Label      string `gorm:"size:100;not null;default:'中文'"` // User-facing label
-	SrtContent string `gorm:"type:text;not null"`
+	ID         uint    `gorm:"primaryKey;autoIncrement"`
+	EpisodeID  uint    `gorm:"index:idx_episode_lang;not null"`
+	Episode    Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
+	Language   string  `gorm:"size:50;index:idx_episode_lang;not null;default:'zh-CN'"` // e.g. zh-CN, en-US, bi
+	Label      string  `gorm:"size:100;not null;default:'中文'"` // User-facing label
+	SrtContent string  `gorm:"type:text;not null"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
 
 // AILessonContent holds AI pre-adventure and post-review questions.
 type AILessonContent struct {
-	EpisodeID         uint   `gorm:"primaryKey"`
-	PreAdventureJSON  string `gorm:"type:text"` // JSON array of 3 exploration prompts
-	PostReviewJSON     string `gorm:"type:text"` // JSON of summary + 3 multiple choice questions
+	EpisodeID         uint    `gorm:"primaryKey"`
+	Episode           Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
+	PreAdventureJSON  string  `gorm:"type:text"` // JSON array of 3 exploration prompts
+	PostReviewJSON    string  `gorm:"type:text"` // JSON of summary + 3 multiple choice questions
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -305,6 +310,7 @@ type AILessonContent struct {
 // UserPoint holds active point balance.
 type UserPoint struct {
 	UserID            uint `gorm:"primaryKey"`
+	User              User `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 	CurrentPoints     int  `gorm:"default:0"`
 	TotalEarnedPoints int  `gorm:"default:0"`
 	UpdatedAt         time.Time
@@ -314,6 +320,7 @@ type UserPoint struct {
 type PointsLedger struct {
 	ID           uint      `gorm:"primaryKey;autoIncrement"`
 	UserID       uint      `gorm:"index;not null"`
+	User         User      `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 	ChangeAmount int       `gorm:"not null"`
 	ReasonType   string    `gorm:"size:50;not null"` // see Reason* consts above (system_watch, badge_unlocked, parent_grant)
 	Description  string    `gorm:"size:1024"`
@@ -324,7 +331,9 @@ type PointsLedger struct {
 type UserProgress struct {
 	ID                  uint      `gorm:"primaryKey;autoIncrement"`
 	UserID              uint      `gorm:"uniqueIndex:idx_user_episode;not null"`
+	User                User      `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 	EpisodeID           uint      `gorm:"uniqueIndex:idx_user_episode;not null"`
+	Episode             Episode   `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
 	LastPositionSeconds int       `gorm:"default:0"`
 	WatchSeconds        int       `gorm:"default:0"` // Accumulated playback seconds
 	IsCompleted         int       `gorm:"default:0"` // 0 = false, 1 = true (when watch_seconds > 80% duration)
@@ -401,7 +410,9 @@ type CompositeRule struct {
 type UserBadge struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement"`
 	UserID     uint      `gorm:"uniqueIndex:idx_user_badge;not null"`
+	User       User      `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 	BadgeID    uint      `gorm:"uniqueIndex:idx_user_badge;not null"`
+	Badge      Badge     `gorm:"foreignKey:BadgeID;constraint:OnDelete:CASCADE"`
 	Tier       int       // 0-based highest cleared tier (0 for single-tier badges)
 	UnlockedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
@@ -445,6 +456,7 @@ type WeeklyTime struct {
 // on UserUnlockOverride, since "which exact episodes" is a per-student choice.
 type CourseUnlockTemplate struct {
 	CourseID        uint      `gorm:"primaryKey"`
+	Course          Course    `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 	Strategy        string    `gorm:"size:20;not null;default:'all_open'"`
 	IntervalSeconds int       `gorm:"default:0"` // StrategyInterval
 	WeeklyTimesJSON string    `gorm:"type:text"` // StrategyWeekly: []WeeklyTime
@@ -463,7 +475,9 @@ type CourseUnlockTemplate struct {
 // episode without disturbing the drip schedule.
 type UserUnlockOverride struct {
 	UserID            uint      `gorm:"primaryKey"`
+	User              User      `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 	CourseID          uint      `gorm:"primaryKey"`
+	Course            Course    `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 	Strategy          string    `gorm:"size:20;not null;default:'all_open'"`
 	IntervalSeconds   int       `gorm:"default:0"`
 	WeeklyTimesJSON   string    `gorm:"type:text"`
@@ -476,9 +490,12 @@ type UserUnlockOverride struct {
 // admin-curated episode allowlist. FK CASCADE on all three axes ensures no
 // stale ids survive when a user, course, or episode is deleted.
 type UserUnlockAllowedEpisode struct {
-	UserID    uint `gorm:"primaryKey"`
-	CourseID  uint `gorm:"primaryKey"`
-	EpisodeID uint `gorm:"primaryKey"`
+	UserID    uint    `gorm:"primaryKey"`
+	User      User    `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	CourseID  uint    `gorm:"primaryKey"`
+	Course    Course  `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
+	EpisodeID uint    `gorm:"primaryKey"`
+	Episode   Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
 }
 
 // AppRelease is one Android APK build published for over-the-air distribution.
@@ -511,8 +528,8 @@ type AppRelease struct {
 // ReadingSeries is the container/series for reading material — a curated
 // collection of related books and articles (e.g. "上博展厅系列"). Mirrors the
 // Course role in the video module: it carries its own cover/subject/grade/tags
-// and can be assigned to users independently. A book/article with SeriesID=0 is
-// a standalone item (散本/散文) shown outside any series.
+// and can be assigned to users independently. A book/article with SeriesID=nil
+// is a standalone item (散本/散文) shown outside any series.
 type ReadingSeries struct {
 	ID          uint    `gorm:"primaryKey;autoIncrement"`
 	Title       string  `gorm:"size:255;not null"`
@@ -606,17 +623,18 @@ func (a ReadingArticle) GradeDisplay() string { return readingGradeDisplay(readi
 // opens the PDF and reports it back — there is no backend probe worker, unlike
 // the ffprobe pipeline for episodes).
 type ReadingBook struct {
-	ID               uint    `gorm:"primaryKey;autoIncrement"`
-	SeriesID         uint    `gorm:"index;not null;default:0"` // 0 = standalone (散本)
-	SortOrder        int     `gorm:"default:0;not null"`
-	Title            string  `gorm:"size:255;not null"`
-	FileRelativePath string  `gorm:"type:text;not null"` // Alist/WebDAV relative path
-	FileSize         *int64                              // nullable, not yet probed
-	PageCount        *int                                // nullable, client reports on first open
-	CoverURL         string  `gorm:"size:1024"`
-	SubjectID        uint    `gorm:"not null;index"`
-	Subject          Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
-	Tags             []Tag   `gorm:"many2many:reading_books_tags;constraint:OnDelete:CASCADE"`
+	ID               uint           `gorm:"primaryKey;autoIncrement"`
+	SeriesID         *uint          `gorm:"index"` // NULL = standalone (散本)
+	Series           *ReadingSeries `gorm:"foreignKey:SeriesID;constraint:OnDelete:SET NULL"`
+	SortOrder        int            `gorm:"default:0;not null"`
+	Title            string         `gorm:"size:255;not null"`
+	FileRelativePath string         `gorm:"type:text;not null"` // Alist/WebDAV relative path
+	FileSize         *int64                                     // nullable, not yet probed
+	PageCount        *int                                       // nullable, client reports on first open
+	CoverURL         string         `gorm:"size:1024"`
+	SubjectID        uint           `gorm:"not null;index"`
+	Subject          Subject        `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
+	Tags             []Tag          `gorm:"many2many:reading_books_tags;constraint:OnDelete:CASCADE"`
 	Grades           []ReadingBookGrade `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE"`
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
@@ -637,20 +655,21 @@ type ReadingBookGrade struct {
 // "ready", the article reader will load the self-hosted mirror instead — the
 // reading path is transparent to the status today.
 type ReadingArticle struct {
-	ID               uint    `gorm:"primaryKey;autoIncrement"`
-	SeriesID         uint    `gorm:"index;not null;default:0"` // 0 = standalone (散文)
-	SortOrder        int     `gorm:"default:0;not null"`
-	Title            string  `gorm:"size:255;not null"`
-	SourceURL        string  `gorm:"type:text;not null"`
-	WhitelistDomains string  `gorm:"type:text"` // JSON []string; empty = use global default whitelist
+	ID               uint           `gorm:"primaryKey;autoIncrement"`
+	SeriesID         *uint          `gorm:"index"` // NULL = standalone (散文)
+	Series           *ReadingSeries `gorm:"foreignKey:SeriesID;constraint:OnDelete:SET NULL"`
+	SortOrder        int            `gorm:"default:0;not null"`
+	Title            string         `gorm:"size:255;not null"`
+	SourceURL        string         `gorm:"type:text;not null"`
+	WhitelistDomains string         `gorm:"type:text"` // JSON []string; empty = use global default whitelist
 	// —— Phase 2 offline-mirror reservation (no logic today) ——
 	MirrorStatus string `gorm:"size:20;not null;default:'none'"` // none | pending | ready | failed
 	MirroredURL  string `gorm:"type:text"`
 	// —— reservation end ——
-	CoverURL   string  `gorm:"size:1024"`
-	SubjectID  uint    `gorm:"not null;index"`
-	Subject    Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
-	Tags       []Tag   `gorm:"many2many:reading_articles_tags;constraint:OnDelete:CASCADE"`
+	CoverURL   string         `gorm:"size:1024"`
+	SubjectID  uint           `gorm:"not null;index"`
+	Subject    Subject        `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
+	Tags       []Tag          `gorm:"many2many:reading_articles_tags;constraint:OnDelete:CASCADE"`
 	Grades     []ReadingArticleGrade `gorm:"foreignKey:ArticleID;constraint:OnDelete:CASCADE"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
@@ -695,9 +714,11 @@ type UserReadingArticleAccess struct {
 // INSERT ... ON CONFLICT DO UPDATE. Unlike watch_seconds there is no concurrent
 // accumulation — last page is a simple overwrite, so the upsert does not add.
 type ReadingBookProgress struct {
-	UserID    uint   `gorm:"primaryKey"`
-	BookID    uint   `gorm:"primaryKey"`
-	LastPage  int    `gorm:"default:0;not null"`
+	UserID    uint        `gorm:"primaryKey"`
+	User      User        `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	BookID    uint        `gorm:"primaryKey"`
+	Book      ReadingBook `gorm:"foreignKey:BookID;constraint:OnDelete:CASCADE"`
+	LastPage  int         `gorm:"default:0;not null"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -709,10 +730,12 @@ type ReadingBookProgress struct {
 // time-limit feature (daily/weekly caps). Resume position works identically to
 // UserProgress (last-writer-wins on LastPositionSeconds).
 type EntertainmentProgress struct {
-	UserID              uint `gorm:"uniqueIndex:idx_ent_user_episode;not null"`
-	EpisodeID           uint `gorm:"uniqueIndex:idx_ent_user_episode;not null"`
-	LastPositionSeconds int  `gorm:"default:0"`
-	WatchSeconds        int  `gorm:"default:0"`
+	UserID              uint    `gorm:"uniqueIndex:idx_ent_user_episode;not null"`
+	User                User    `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	EpisodeID           uint    `gorm:"uniqueIndex:idx_ent_user_episode;not null"`
+	Episode             Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
+	LastPositionSeconds int     `gorm:"default:0"`
+	WatchSeconds        int     `gorm:"default:0"`
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }

@@ -91,7 +91,7 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 		eps, err := h.episodeRepo.ListByCourse(ch.CourseID)
 		if err == nil {
 			for _, ep := range eps {
-				if ep.ChapterID == ch.ID && ep.OriginalRelativePath != "" {
+				if ep.ChapterID != nil && *ep.ChapterID == ch.ID && ep.OriginalRelativePath != "" {
 					targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
 					break
 				}

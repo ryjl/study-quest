@@ -330,8 +330,12 @@ func (s *readingImportService) importReadingNode(
 			return bookRepo.Update(existing)
 		}
 
+		var seriesIDPtr *uint
+		if seriesID > 0 {
+			seriesIDPtr = &seriesID
+		}
 		book := &model.ReadingBook{
-			SeriesID:         seriesID,
+			SeriesID:         seriesIDPtr,
 			SortOrder:        *sortOrder,
 			Title:            node.Name,
 			FileRelativePath: node.Path,

@@ -99,7 +99,7 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 
 			createdEp, err := h.episodeService.CreateEpisode(
 				reqEp.CourseID,
-				0, // Default ChapterID
+				nil, // Default ChapterID
 				reqEp.Title,
 				reqEp.VideoRelativePath,
 				attachments,

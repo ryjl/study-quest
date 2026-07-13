@@ -91,8 +91,12 @@ func (s *readingBookService) CreateBook(seriesID uint, sortOrder int, title, fil
 			return nil, errors.New("invalid reading book grade value: " + string(g))
 		}
 	}
+	var seriesIDPtr *uint
+	if seriesID > 0 {
+		seriesIDPtr = &seriesID
+	}
 	book := &model.ReadingBook{
-		SeriesID:         seriesID,
+		SeriesID:         seriesIDPtr,
 		SortOrder:        sortOrder,
 		Title:            title,
 		FileRelativePath: fileRelativePath,
@@ -133,7 +137,11 @@ func (s *readingBookService) UpdateBook(id uint, seriesID uint, sortOrder int, t
 	if book == nil {
 		return nil, nil
 	}
-	book.SeriesID = seriesID
+	var seriesIDPtr *uint
+	if seriesID > 0 {
+		seriesIDPtr = &seriesID
+	}
+	book.SeriesID = seriesIDPtr
 	book.SortOrder = sortOrder
 	book.Title = title
 	book.FileRelativePath = fileRelativePath
@@ -219,10 +227,10 @@ func (s *readingBookService) CanAccess(userID uint, userRole string, bookID uint
 	if err != nil || book == nil {
 		return false, err
 	}
-	if book.SeriesID == 0 {
+	if book.SeriesID == nil {
 		return false, nil // standalone, no series to inherit from
 	}
-	return s.seriesRepo.HasAccess(userID, book.SeriesID)
+	return s.seriesRepo.HasAccess(userID, *book.SeriesID)
 }
 
 func (s *readingBookService) ReportProgress(userID, bookID uint, lastPage int) (*model.ReadingBookProgress, error) {

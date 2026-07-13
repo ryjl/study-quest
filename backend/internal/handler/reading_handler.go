@@ -92,9 +92,13 @@ func (h *readingHandler) toClientBookDTO(b model.ReadingBook) clientReadingBookD
 	for _, g := range b.Grades {
 		parts = append(parts, g.Grade)
 	}
+	var seriesID uint
+	if b.SeriesID != nil {
+		seriesID = *b.SeriesID
+	}
 	return clientReadingBookDTO{
 		ID:        b.ID,
-		SeriesID:  b.SeriesID,
+		SeriesID:  seriesID,
 		SortOrder: b.SortOrder,
 		Title:     b.Title,
 		PageCount: b.PageCount,
@@ -116,9 +120,13 @@ func (h *readingHandler) toClientArticleDTO(a model.ReadingArticle) clientReadin
 	for _, g := range a.Grades {
 		parts = append(parts, g.Grade)
 	}
+	var seriesID uint
+	if a.SeriesID != nil {
+		seriesID = *a.SeriesID
+	}
 	return clientReadingArticleDTO{
 		ID:               a.ID,
-		SeriesID:         a.SeriesID,
+		SeriesID:         seriesID,
 		SortOrder:        a.SortOrder,
 		Title:            a.Title,
 		SourceURL:        h.articleService.EffectiveURL(&a),
@@ -135,9 +143,6 @@ func (h *readingHandler) toClientArticleDTO(a model.ReadingArticle) clientReadin
 func requireStudentIdentity(c *gin.Context) (uint, string, bool) {
 	roleVal, hasRole := c.Get("userRole")
 	role, _ := roleVal.(string)
-	if model.IsStaffRole(role) {
-		return 0, role, true
-	}
 	uidVal, hasUID := c.Get("userID")
 	uid, uidOK := uidVal.(uint)
 	if !hasRole || !hasUID || !uidOK {

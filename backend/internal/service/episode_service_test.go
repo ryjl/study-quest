@@ -27,9 +27,9 @@ func TestEpisodeService(t *testing.T) {
 		_ = courseRepo.Create(c)
 		db.Create(&model.CourseGrade{CourseID: c.ID, Grade: model.Grade("3")})
 
-		ep1, _ := svc.CreateEpisode(c.ID, 0, "Episode A", "/path/a.mp4", "[]", 1, "", nil, nil)
-		ep2, _ := svc.CreateEpisode(c.ID, 0, "Episode B", "/path/b.mp4", "[]", 2, "", nil, nil)
-		ep3, _ := svc.CreateEpisode(c.ID, 0, "Episode C", "/path/c.mp4", "[]", 3, "", nil, nil)
+		ep1, _ := svc.CreateEpisode(c.ID, nil, "Episode A", "/path/a.mp4", "[]", 1, "", nil, nil)
+		ep2, _ := svc.CreateEpisode(c.ID, nil, "Episode B", "/path/b.mp4", "[]", 2, "", nil, nil)
+		ep3, _ := svc.CreateEpisode(c.ID, nil, "Episode C", "/path/c.mp4", "[]", 3, "", nil, nil)
 
 		// Reorder to C, A, B
 		newOrder := []uint{ep3.ID, ep1.ID, ep2.ID}
@@ -67,7 +67,7 @@ func TestEpisodeService(t *testing.T) {
 
 		// Create an episode
 		size := int64(1048576)
-		ep, err := svc.CreateEpisode(c.ID, 0, "English Lesson 01", "/english/01.mp4", "[]", 1, "/english/lesson1/01.mp4", &size, nil)
+		ep, err := svc.CreateEpisode(c.ID, nil, "English Lesson 01", "/english/01.mp4", "[]", 1, "/english/lesson1/01.mp4", &size, nil)
 		if err != nil {
 			t.Fatalf("CreateEpisode failed: %v", err)
 		}
@@ -133,7 +133,7 @@ func TestEpisodeService(t *testing.T) {
 		// Create an episode with full media metadata (as if ffprobe had run).
 		size := int64(2048576)
 		dur := 750
-		ep, err := svc.CreateEpisode(c.ID, 0, "原始标题", "/physics/orig.mp4", "[]", 1, "/physics/orig.mp4", &size, &dur)
+		ep, err := svc.CreateEpisode(c.ID, nil, "原始标题", "/physics/orig.mp4", "[]", 1, "/physics/orig.mp4", &size, &dur)
 		if err != nil {
 			t.Fatalf("CreateEpisode failed: %v", err)
 		}
@@ -145,7 +145,7 @@ func TestEpisodeService(t *testing.T) {
 
 		// Admin edits only the title + path. The PATCH-style update must NOT
 		// touch file_size / duration / media_meta_json.
-		updated, err := svc.UpdateEpisodeAdmin(ep.ID, 0, "新标题", "/physics/renamed.mp4", 1)
+		updated, err := svc.UpdateEpisodeAdmin(ep.ID, nil, "新标题", "/physics/renamed.mp4", 1)
 		if err != nil {
 			t.Fatalf("UpdateEpisodeAdmin failed: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestEpisodeService(t *testing.T) {
 		}
 
 		// UpdateEpisodeAdmin on a non-existent episode returns nil, nil.
-		missing, err := svc.UpdateEpisodeAdmin(99999, 0, "x", "/x.mp4", 1)
+		missing, err := svc.UpdateEpisodeAdmin(99999, nil, "x", "/x.mp4", 1)
 		if err != nil {
 			t.Errorf("expected nil error for missing episode, got %v", err)
 		}
