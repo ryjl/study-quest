@@ -140,6 +140,19 @@ func newLoginRateLimiter(window time.Duration, max int, now func() time.Time) *l
 // a brute-forcer shouldn't get to "succeed on attempt 6" because the limit
 // only counted failures. The window slides: old timestamps are pruned each call.
 //
+// Note: there is deliberately NO "reset on success" path. The limiter is a
+// pre-handler gate, so it can't observe whether the login actually succeeded,
+// and threading a post-handler hook back into the limiter isn't worth the
+// complexity for this deployment. Net behavior: 6th attempt within 15 min is
+// blocked regardless of prior successes. That's slightly stricter for
+// fat-fingering users but strictly safer against brute force.
+//
+// Slice-alias invariant: `fresh := l.hits[ip][:0]` reuses the backing array.
+// This is safe ONLY because we append each kept element before the range
+// cursor could reach a position we'd overwrite — we never append more than we
+// consume per iteration. Do NOT reorder the prune loop to also append new
+// entries here without re-validating.
+//
 // Returns (true, currentCount) when the request is allowed, (false, count)
 // when the ip has already reached max within the window.
 func (l *loginRateLimiter) allow(ip string) (bool, int) {
@@ -165,14 +178,6 @@ func (l *loginRateLimiter) allow(ip string) (bool, int) {
 	fresh = append(fresh, now)
 	l.hits[ip] = fresh
 	return true, len(fresh)
-}
-
-// reset clears an ip's history. Called when a login succeeds, so a user who
-// fat-fingers their PIN a few times then gets it right isn't penalized.
-func (l *loginRateLimiter) reset(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.hits, ip)
 }
 
 // LoginRateLimitMiddleware throttles the login endpoint per source IP. After
