@@ -176,6 +176,21 @@ export interface User {
   last_active_at?: string;
 }
 
+// A user's active login session (one per device). Returned by the admin
+// device-session endpoints. `token` is the full opaque value used to target a
+// row for revoke/note; `token_prefix` is just a short display stub.
+export interface UserSession {
+  token: string;
+  token_prefix: string;
+  user_id: number;
+  device_name: string;
+  user_agent: string;
+  note: string;
+  created_at: string;
+  last_seen_at: string;
+  expires_at: string;
+}
+
 export interface Badge {
   id: number;
   code: string;

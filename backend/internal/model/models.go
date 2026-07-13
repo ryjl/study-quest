@@ -41,6 +41,27 @@ func IsStaffRole(role string) bool {
 	return role == RoleAdmin || role == RoleParent
 }
 
+// Session represents a user's authenticated client session. One user may hold
+// many concurrent sessions (one per device). The token is an opaque 32-byte
+// hex string carried in the `Authorization: Bearer <token>` header. Sessions
+// have a fixed TTL (no sliding renewal) and can be revoked individually by the
+// admin (kick a single device) or in bulk (revoke all of a user's devices).
+//
+// DeviceName is the friendly OS-level device identifier sent by the client on
+// login (e.g. "客厅 iPad"); UserAgent is the HTTP UA kept as a fallback so an
+// older client that doesn't send DeviceName still shows something identifiable
+// in the admin device list. Note is an admin-editable freeform label.
+type Session struct {
+	Token      string    `gorm:"primaryKey;size:64"` // 32-byte hex (crypto/rand)
+	UserID     uint      `gorm:"index;not null"`
+	DeviceName string    `gorm:"size:255"`           // client-supplied OS device name (primary id)
+	UserAgent  string    `gorm:"type:text"`          // HTTP UA (fallback)
+	Note       string    `gorm:"size:255"`           // admin-set device note
+	CreatedAt  time.Time                             // first login
+	LastSeenAt time.Time                             // updated on each successful Validate
+	ExpiresAt  time.Time `gorm:"index"`              // fixed TTL, no sliding renewal
+}
+
 // PointsLedger reason-type constants. Stored as strings on
 // PointsLedger.ReasonType; these consts keep the ledger values in sync with
 // the code that writes them (previously drifted between docs and code).
@@ -775,5 +796,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&UserReadingBookAccess{},
 		&UserReadingArticleAccess{},
 		&ReadingBookProgress{},
+		// Auth module
+		&Session{},
 	)
 }

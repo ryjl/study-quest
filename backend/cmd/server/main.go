@@ -62,6 +62,7 @@ func main() {
 	// 6. Initialize Repositories
 	settingsRepo := repository.NewSettingsRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	sessionRepo := repository.NewSessionRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
@@ -78,6 +79,7 @@ func main() {
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
+	sessionService := service.NewSessionService(sessionRepo, cfg.SessionTTL)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
@@ -110,7 +112,7 @@ func main() {
 
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
-	userHandler := handler.NewUserHandler(userService)
+	userHandler := handler.NewUserHandler(userService, sessionService)
 	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
 	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
 	progressHandler := handler.NewProgressHandler(progressService)
@@ -140,6 +142,7 @@ func main() {
 		WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).
+		WithSessionService(sessionService).
 		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)
@@ -151,6 +154,20 @@ func main() {
 	// 9. Boot up Gin Server Router
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+
+	// Trust configured proxies so c.ClientIP() reads X-Forwarded-For from a
+	// local caddy/nginx instead of seeing all requests as 127.0.0.1. This keeps
+	// per-IP login rate-limiting meaningful behind a reverse proxy. On a direct
+	// LAN deployment (no proxy) ClientIP() falls back to RemoteAddr.
+	if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		log.Printf("Warning: failed to set trusted proxies: %v", err)
+	}
+
+	// Surface the ingest-key state at boot so an internet-facing operator is
+	// reminded that the ingest endpoints are currently unauthenticated.
+	if cfg.IngestKey == "" {
+		log.Println("Warning: INGEST_KEY is not set — /api/v1/ingest/* endpoints are unauthenticated. Set INGEST_KEY before exposing this server publicly.")
+	}
 
 	// Register all HTTP routes
 	router.RegisterRoutes(
@@ -170,6 +187,8 @@ func main() {
 		readingHandler,
 		userRepo,
 		settingsRepo,
+		sessionService,
+		cfg.IngestKey,
 	)
 
 	// Print startup information

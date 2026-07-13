@@ -97,6 +97,12 @@ type AdminHandler interface {
 	// Attachments + Uploads
 	ScanAttachments(c *gin.Context)
 	UploadImage(c *gin.Context)
+
+	// User sessions (admin manages which devices are logged in per user)
+	ListUserSessions(c *gin.Context)
+	RevokeUserSession(c *gin.Context)
+	RevokeAllUserSessions(c *gin.Context)
+	UpdateSessionNote(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -122,6 +128,7 @@ type adminHandler struct {
 	readingArticleService service.ReadingArticleService
 	readingImportService service.ReadingImportService
 	probeWorker         *service.ProbeWorker
+	sessionService      service.SessionService
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -155,6 +162,7 @@ type AdminHandlerDeps struct {
 	ReadingArticleService service.ReadingArticleService
 	ReadingImportService service.ReadingImportService
 	ProbeWorker          *service.ProbeWorker
+	SessionService       service.SessionService
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -185,6 +193,7 @@ func (d *AdminHandlerDeps) WithReadingBookService(s service.ReadingBookService) 
 func (d *AdminHandlerDeps) WithReadingArticleService(s service.ReadingArticleService) *AdminHandlerDeps { d.ReadingArticleService = s; return d }
 func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportService) *AdminHandlerDeps  { d.ReadingImportService = s; return d }
 func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps               { d.ProbeWorker = w; return d }
+func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHandlerDeps          { d.SessionService = s; return d }
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
@@ -211,6 +220,7 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		readingArticleService: d.ReadingArticleService,
 		readingImportService: d.ReadingImportService,
 		probeWorker:          d.ProbeWorker,
+		sessionService:       d.SessionService,
 	}
 }
 

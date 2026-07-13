@@ -1427,8 +1427,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     child: PdfViewer(
                       PdfDocumentRefUri(
                         Uri.parse(url),
+                        // Auth via the opaque session token (legacy X-User-ID
+                        // is rejected by the backend). Empty if logged out;
+                        // the request then 401s instead of using a dead identity.
                         headers: {
-                          'X-User-ID': widget.activeUserId.toString(),
+                          if (ApiService.authToken != null &&
+                              ApiService.authToken!.isNotEmpty)
+                            'Authorization':
+                                'Bearer ${ApiService.authToken}',
                         },
                       ),
                       params: PdfViewerParams(

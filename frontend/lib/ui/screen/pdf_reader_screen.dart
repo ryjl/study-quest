@@ -97,7 +97,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     try {
       final url = ApiService.bookStreamUrl(widget.book.id);
       final request = http.Request('GET', Uri.parse(url));
-      request.headers['X-User-ID'] = widget.activeUserId.toString();
+      // Auth via the opaque session token (the backend rejects the legacy
+      // X-User-ID header). If no token is set, the request will 401 and the
+      // download fails fast — preferable to silently sending a dead identity.
+      final tok = ApiService.authToken;
+      if (tok != null && tok.isNotEmpty) {
+        request.headers['Authorization'] = 'Bearer $tok';
+      }
 
       final client = http.Client();
       final response = await client.send(request);
