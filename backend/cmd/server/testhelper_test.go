@@ -28,9 +28,10 @@ import (
 // probe worker constructed-but-not-Started (no ffprobe/netdisk side effects),
 // and a pre-authenticated admin session cookie ready to use.
 type testEnv struct {
-	engine      *gin.Engine
-	db          *gorm.DB
-	adminCookie *http.Cookie
+	engine         *gin.Engine
+	db             *gorm.DB
+	adminCookie    *http.Cookie
+	sessionService service.SessionService
 }
 
 // newTestEnv builds a fresh server with seeded subjects/tags/badges + a logged-
@@ -62,6 +63,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	// repos (order matches main.go)
 	settingsRepo := repository.NewSettingsRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	sessionRepo := repository.NewSessionRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	progressRepo := repository.NewProgressRepository(db)
@@ -78,6 +80,8 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// services
 	userService := service.NewUserService(userRepo)
+	// Test sessions use a long TTL so they don't spontaneously expire mid-test.
+	sessionService := service.NewSessionService(sessionRepo, 24*time.Hour)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
@@ -112,7 +116,7 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	// handlers
 	healthH := handler.NewHealthHandler()
-	userH := handler.NewUserHandler(userService)
+	userH := handler.NewUserHandler(userService, sessionService)
 	courseH := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
 	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
 	progressH := handler.NewProgressHandler(progressService)
@@ -127,7 +131,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		WithChapterService(chapterService).WithBadgeService(badgeService).
 		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
-		WithProbeWorker(probeWorker).Build()
+		WithProbeWorker(probeWorker).WithSessionService(sessionService).Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
@@ -136,7 +140,10 @@ func newTestEnv(t *testing.T) *testEnv {
 	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo)
 
 	r := gin.New()
-	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, userRepo, settingsRepo)
+	// Ingest key is intentionally empty for the default test env — the legacy
+	// ingest endpoints stay public so existing tests don't need to pass a key.
+	// Ingest-keyed behavior has its own dedicated test.
+	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, userRepo, settingsRepo, sessionService, "")
 
 	// Pre-seed the admin password hash so login only pays for one bcrypt
 	// compare instead of the lazy-init generate+compare (~120ms → ~60ms).
@@ -148,9 +155,28 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("seed admin hash: %v", err)
 	}
 
-	env := &testEnv{engine: r, db: db}
+	env := &testEnv{engine: r, db: db, sessionService: sessionService}
 	env.adminCookie = env.loginAdmin(t)
 	return env
+}
+
+// userToken caches per-userID session tokens within a test so repeated
+// doAsUser calls reuse the same token instead of minting a new one each time
+// (each call would otherwise create a distinct session row, which is fine for
+// correctness but noisy when debugging token lifecycles).
+func (e *testEnv) userToken(t *testing.T, userID uint) string {
+	t.Helper()
+	// Mint a real opaque token via the session service directly. This still
+	// exercises the real UserAuthMiddleware (the token is validated against the
+	// session table on every request), but skips the login HTTP endpoint +
+	// rate limiter — those have their own dedicated tests, and routing every
+	// helper through HTTP login would blow the per-IP attempt budget in tests
+	// that create many users.
+	tok, err := e.sessionService.Issue(userID, "test-device", "test/ua")
+	if err != nil {
+		t.Fatalf("issue session token for user %d: %v", userID, err)
+	}
+	return tok
 }
 
 // loginAdmin posts the real /admin/api/login flow (so the auth middleware +
@@ -199,8 +225,10 @@ func (e *testEnv) do(t *testing.T, method, path string, body any) *httptest.Resp
 	return w
 }
 
-// doAsUser fires a client-authenticated request via the X-User-ID header (the
-// real UserAuthMiddleware path) — used for /api/v1/* client endpoints.
+// doAsUser fires a client-authenticated request via an opaque session token in
+// the Authorization: Bearer header (the real UserAuthMiddleware path) — used
+// for /api/v1/* client endpoints. A fresh token is minted per call through the
+// session service; the full middleware still validates it.
 func (e *testEnv) doAsUser(t *testing.T, userID uint, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var bodyReader io.Reader
@@ -215,7 +243,60 @@ func (e *testEnv) doAsUser(t *testing.T, userID uint, method, path string, body 
 	if bodyReader != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.Header.Set("X-User-ID", strconv.FormatUint(uint64(userID), 10))
+	req.Header.Set("Authorization", "Bearer "+e.userToken(t, userID))
+	w := httptest.NewRecorder()
+	e.engine.ServeHTTP(w, req)
+	return w
+}
+
+// doAsUserToken fires a request carrying a specific pre-existing token (instead
+// of minting a fresh one). Used by tests that need to assert behavior for a
+// known/revoked/expired token.
+func (e *testEnv) doAsUserToken(t *testing.T, token, method, path string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+		bodyReader = bytes.NewReader(b)
+	}
+	req := httptest.NewRequest(method, path, bodyReader)
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	e.engine.ServeHTTP(w, req)
+	return w
+}
+
+// doRaw fires an unauthenticated request with a raw (already-encoded) body
+// and no admin cookie or bearer token. Used to exercise public/login routes
+// or to assert that a protected route rejects unauthenticated traffic.
+func (e *testEnv) doRaw(t *testing.T, method, path string, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+	req := httptest.NewRequest(method, path, bodyReader)
+	if bodyReader != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	w := httptest.NewRecorder()
+	e.engine.ServeHTTP(w, req)
+	return w
+}
+
+// newRequest + serve are package-level helpers for tests that need to set
+// custom headers (e.g. X-User-ID for regression guards) before dispatching.
+func newRequest(method, path string, body io.Reader) *http.Request {
+	return httptest.NewRequest(method, path, body)
+}
+
+func serve(e *testEnv, req *http.Request) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	e.engine.ServeHTTP(w, req)
 	return w

@@ -4,10 +4,12 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
+	"time"
 	"studyquest/backend/internal/admin/spa"
 	"studyquest/backend/internal/handler"
 	"studyquest/backend/internal/middleware"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -30,6 +32,8 @@ func RegisterRoutes(
 	reading handler.ReadingHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
+	sessionService service.SessionService,
+	ingestKey string,
 ) {
 	// Enable Global recovery and logger middlewares
 	r.Use(gin.Recovery())
@@ -43,11 +47,12 @@ func RegisterRoutes(
 	{
 		v1.GET("/health", health.Check)
 		v1.GET("/users", user.GetUsers)
-		v1.GET("/users/login", user.Login) // Allow GET login list too
-		v1.POST("/users/login", user.Login)
-		
-		// VLC / external player playback streaming is public for format compatibility
-		v1.GET("/episodes/:id/stream", episode.Stream)
+		// Login is rate-limited per source IP to throttle PIN brute-forcing.
+		// Both GET (legacy) and POST share the limiter since either verifies a PIN.
+		loginLimit := middleware.LoginRateLimitMiddleware(15*time.Minute, 5)
+		v1.GET("/users/login", user.Login, loginLimit) // Allow GET login list too
+		v1.POST("/users/login", user.Login, loginLimit)
+
 		v1.GET("/subtitles/:id.vtt", episode.GetSubtitleVTT)
 
 		// APK OTA distribution — FROZEN client contract. Public (no auth) so
@@ -59,7 +64,7 @@ func RegisterRoutes(
 
 	// 2. Client restricted operations (UserAuth required)
 	v1Restricted := r.Group("/api/v1")
-	v1Restricted.Use(middleware.UserAuthMiddleware(userRepo))
+	v1Restricted.Use(middleware.UserAuthMiddleware(sessionService, userRepo))
 	{
 		v1Restricted.GET("/courses", course.GetCourses)
 		v1Restricted.GET("/courses/:id", course.GetCourseByID)
@@ -67,8 +72,13 @@ func RegisterRoutes(
 		v1Restricted.GET("/courses/:id/chapters", course.GetChaptersByCourse)
 		v1Restricted.GET("/courses/:id/unlock-status", course.GetUnlockStatus)
 		v1Restricted.GET("/courses/:id/last-watched", progress.GetLastWatched)
-		
+
 		v1Restricted.GET("/episodes/:id", episode.GetEpisodeByID)
+		// Episode media streaming. Previously public (for VLC / external
+		// players); now behind UserAuth since this deployment only uses the
+		// in-app player, which resolves the direct netdisk URL via the
+		// authenticated play-info endpoint anyway.
+		v1Restricted.GET("/episodes/:id/stream", episode.Stream)
 		v1Restricted.GET("/episodes/:id/play-info", episode.GetPlayInfo)
 		v1Restricted.GET("/episodes/:id/subtitle", episode.GetSubtitle)
 		v1Restricted.GET("/episodes/:id/ai-content", episode.GetAIContent)
@@ -91,10 +101,16 @@ func RegisterRoutes(
 		v1Restricted.GET("/readings/books/:id/progress", reading.GetBookProgress)
 		v1Restricted.POST("/readings/books/:id/progress", reading.ReportBookProgress)
 		v1Restricted.GET("/readings/articles/:id", reading.GetArticle)
+
+		// Session management — revoke the caller's own session (logout).
+		v1Restricted.POST("/users/logout", user.Logout)
 	}
 
-	// 3. Local Python Toolchain ingestion points (Public)
+	// 3. Local Python Toolchain ingestion points. Public by default (LAN-only
+	// deployments), but gated by X-Ingest-Key when INGEST_KEY is configured so
+	// the endpoint isn't a public write surface on internet-facing setups.
 	v1Ingest := r.Group("/api/v1")
+	v1Ingest.Use(middleware.IngestKeyMiddleware(ingestKey))
 	{
 		v1Ingest.POST("/ingest/episodes", ingest.IngestEpisodes)
 		v1Ingest.POST("/ingest/ai-content", ingest.IngestAIContent)
@@ -117,6 +133,12 @@ func RegisterRoutes(
 		adm.POST("/api/users/:id/access/bulk", admin.BulkAccess)
 		adm.GET("/api/users/:id/ledger", admin.UserLedger)
 		adm.GET("/api/users/:id/badges", admin.UserBadges)
+
+		// User device sessions — list / revoke per-device / revoke all / relabel
+		adm.GET("/api/users/:id/sessions", admin.ListUserSessions)
+		adm.DELETE("/api/users/:id/sessions", admin.RevokeAllUserSessions)
+		adm.DELETE("/api/users/:id/sessions/:token", admin.RevokeUserSession)
+		adm.PATCH("/api/sessions/:token/note", admin.UpdateSessionNote)
 
 		// Courses
 		adm.GET("/api/courses", admin.ListCourses)

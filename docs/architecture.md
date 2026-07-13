@@ -232,6 +232,11 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 |------|--------|------|
 | `SERVER_ADDR` | `0.0.0.0:8080` | 监听地址 |
 | `DB_PATH` | `./data/studyquest.db` | SQLite 文件路径 |
+| `SESSION_TTL_HOURS` | `720`（30 天）| 用户登录会话有效期（固定，不滑动续期）。过期后客户端被踢回登录页重输 PIN |
+| `INGEST_KEY` | 空（不强制）| Python 工具链灌库端点（`/api/v1/ingest/*`）的预共享密钥。空=端点公开（仅适合内网）；公网部署**必须**设置，否则任何人可 POST 篡改片库 |
+| `TRUSTED_PROXIES` | `127.0.0.1,::1` | 逗号分隔的可信代理 CIDR/主机列表，Gin 据此读 `X-Forwarded-For` 解析真实客户端 IP（用于登录限速）。反代部署时设为反代所在网段 |
+
+> **部署提醒**：上述三项在纯局域网部署下均可保持默认。一旦把后端暴露到公网（即便前面套了 caddy/nginx），**必须设置 `INGEST_KEY`**，并按你的反代位置调整 `TRUSTED_PROXIES`，否则登录限速会按反代的回环 IP 统计而失效。
 
 **`settings` 表**（所有业务配置，Admin 面板管理）：
 
@@ -260,19 +265,26 @@ PAD 启动 → 显示所有用户头像 → 点击选择 → 输入 4-6 位 PIN 
 ```
 
 - PIN 码使用 bcrypt 哈希存储，绝不明文
-- MVP 返回简单 session token，后续可升级为 JWT
+- 登录成功后服务端签发**不透明 session token**（32 字节随机 hex，存 `sessions` 表），客户端在 `Authorization: Bearer <token>` 中携带。token **不是**用户 ID——历史上一度把用户 ID 当 token 用，那条路径已被显式拒绝（中间件对纯数字 token 返回 401）
+- 一个用户可同时持有多条 session（一设备一条），互不影响——登录第二台不会踢第一台
+- session 固定 TTL（`SESSION_TTL_HOURS`，默认 30 天），不滑动续期；过期需重登
+- 登录端点按源 IP 限速（15 分钟内 5 次尝试后 429），防 PIN 暴力破解。限速用 `c.ClientIP()`（读 `X-Forwarded-For`，受 `TRUSTED_PROXIES` 约束），反代部署时务必正确配置可信代理
 - 用户列表接口（GET /users）为公开接口（只返回头像和昵称，不含敏感信息）
+
+**Admin 设备管理**：每个用户的活跃 session（设备）在 Admin 面板可见，可单独"踢下线"、全部下线，或为设备加备注（如"客厅 iPad"）。设备主标识是客户端登录时上报的 OS 设备名（`device_info_plus`），缺失时回退到 User-Agent。
 
 ### 7.2 Admin 面板：独立密码
 
 Admin 面板有独立的登录密码（更强，存 `settings` 表），与 PAD 用户 PIN 码完全隔离。所有存储源配置、用户管理、课程分配等操作只能通过 Admin 面板完成。
 
+> Admin 面板用独立的 `admin_session` cookie 鉴权（bcrypt 密码哈希作为 cookie 值），与 PAD 端的 Bearer token 体系完全分开。两套机制互不影响。
+
 ### 7.3 扩展路径
 
 当前框架预留了升级空间：
 - PIN → 更长密码（`role` 越高，密码要求越严格）
-- Session → JWT
-- 单因素 → 多因素（如设备绑定）
+- 设备绑定 / 多因素
+- HTTPS（由前置 caddy/nginx 终结 TLS，后端本身只跑明文 HTTP）
 
 ---
 

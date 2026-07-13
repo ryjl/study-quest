@@ -33,6 +33,10 @@ dependencies:
   # self-update check (compares installed build number vs. server's latest).
   package_info_plus: ^8.0.0
 
+  # Read the OS-level device name (e.g. "客厅 iPad", "Android TV") so the admin
+  # device-session list can show a friendly label. Sent once at login.
+  device_info_plus: ^10.1.0
+
   # Resolve app-internal directories for staging a downloaded APK update. We
   # write the APK under the documents dir, which the FileProvider maps (see
   # res/xml/file_paths.xml) so the system installer can read it via content://.

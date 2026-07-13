@@ -18,6 +18,7 @@ import type {
   UnlockPreview,
   UnlockTemplate,
   User,
+  UserSession,
   AppRelease,
   ReadingSeries,
   ReadingBook,
@@ -169,6 +170,20 @@ export const api = {
   },
   async userBadges(userId: number): Promise<Badge[]> {
     return request(`/admin/api/users/${userId}/badges`);
+  },
+
+  // ---- User device sessions (admin manages which devices are logged in) ----
+  async listUserSessions(userId: number): Promise<UserSession[]> {
+    return request(`/admin/api/users/${userId}/sessions`);
+  },
+  async revokeUserSession(userId: number, token: string): Promise<{ status: string }> {
+    return request(`/admin/api/users/${userId}/sessions/${token}`, { method: 'DELETE' });
+  },
+  async revokeAllUserSessions(userId: number): Promise<{ status: string }> {
+    return request(`/admin/api/users/${userId}/sessions`, { method: 'DELETE' });
+  },
+  async updateSessionNote(token: string, note: string): Promise<{ status: string }> {
+    return request(`/admin/api/sessions/${token}/note`, { method: 'PATCH', body: JSON.stringify({ note }) });
   },
 
   // ---- Badges ----
