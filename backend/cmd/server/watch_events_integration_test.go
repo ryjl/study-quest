@@ -104,6 +104,38 @@ func TestWatchEvent_DualWriteConsistency(t *testing.T) {
 	}
 }
 
+// TestWatchEvent_DualWriteConsistency_ClampedDelta is the regression guard for
+// the clamp-centralization fix. A client may send a huge delta (e.g. a catch-up
+// upload after reconnect: 1200s in one report). Both the aggregate and the
+// event log must record the SAME clamped value (600s), or the dual-write
+// invariant breaks. The original code clamped only inside the learning repo,
+// so the event log recorded the raw 1200 while the aggregate recorded 600.
+func TestWatchEvent_DualWriteConsistency_ClampedDelta(t *testing.T) {
+	env := newTestEnv(t)
+	uid := env.createUser(t, "补传", "student")
+	_, epID := setupLearningEpisode(t, env, uid)
+
+	// One report with a delta far above the 600s clamp.
+	reportAsUser(t, env, uid, epID, 1200, 1200)
+
+	var prog model.UserProgress
+	if err := env.db.Where("user_id = ? AND episode_id = ?", uid, epID).First(&prog).Error; err != nil {
+		t.Fatalf("read progress: %v", err)
+	}
+	if prog.WatchSeconds != 600 {
+		t.Fatalf("aggregate should clamp to 600, got %d", prog.WatchSeconds)
+	}
+	events := fetchWatchEvents(t, env, uid, todayStr())
+	if len(events) != 1 || events[0].DurationSeconds != 600 {
+		var got int
+		if len(events) == 1 {
+			got = events[0].DurationSeconds
+		}
+		t.Fatalf("event must record the clamped 600 (not the raw delta) so SUM(events)==watch_seconds; got %d events, first=%d",
+			len(events), got)
+	}
+}
+
 // TestWatchEvent_EntertainmentRecorded verifies entertainment playback writes an
 // event with content_type=entertainment.
 func TestWatchEvent_EntertainmentRecorded(t *testing.T) {

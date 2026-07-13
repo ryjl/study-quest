@@ -157,6 +157,55 @@ func TestCountActiveUsersSince(t *testing.T) {
 	}
 }
 
+// TestRecentDailyWatchSeconds_CrossDaySplit is the regression guard for the
+// over-counting bug. The OLD query read user_progresses (a per-(user,episode)
+// lifetime total) and bucketed by updated_at — so an episode watched across two
+// days dumped its ENTIRE accumulated seconds into whichever day it was last
+// touched. The fix sources from watch_events (per-heartbeat deltas with their
+// own timestamps), so each day's bar reflects only that day's watching.
+//
+// Setup: the same user+episode is watched on day 1 (60s) and day 2 (40s). The
+// correct chart shows 60 on day 1 and 40 on day 2. The old code would have shown
+// 0 on day 1 and 100 on day 2 (entire lifetime bucketed to the last-touch day).
+func TestRecentDailyWatchSeconds_CrossDaySplit(t *testing.T) {
+	// Pin the clock so "today" is day 2 (the trend query reads the last 7 days
+	// ending at appclock.Now). Both days must fall inside that window.
+	now := shanghaiUTC("2026-01-02 23:00:00")
+	restore := useFixedShanghaiClock(t, now)
+	defer restore()
+
+	db := setupDashboardTestDB(t)
+	repo := NewProgressRepository(db)
+
+	day1 := shanghaiUTC("2026-01-01 12:00:00")
+	day2 := shanghaiUTC("2026-01-02 12:00:00")
+	// Same (user, episode) touched on both days — the exact shape that broke
+	// the old query. Durations: 60s day 1, 40s day 2.
+	seedWatchEvent(t, db, 1, 10, 100, "learning", 60, day1)
+	seedWatchEvent(t, db, 1, 10, 100, "learning", 40, day2)
+
+	got, err := repo.RecentDailyWatchSeconds(7)
+	if err != nil {
+		t.Fatalf("RecentDailyWatchSeconds: %v", err)
+	}
+	byDate := make(map[string]int64, len(got))
+	for _, d := range got {
+		byDate[d.Date] += d.Seconds
+	}
+	// Business-zone day strings (Asia/Shanghai): the seed instants were built
+	// as Beijing wall-clock 12:00, so they land cleanly on those dates.
+	if byDate["2026-01-01"] != 60 {
+		t.Errorf("day 1 = %d, want 60 (only day-1 watching)", byDate["2026-01-01"])
+	}
+	if byDate["2026-01-02"] != 40 {
+		t.Errorf("day 2 = %d, want 40 (only day-2 watching)", byDate["2026-01-02"])
+	}
+	// And the old bug's signature — 100 on day 2 — must NOT appear.
+	if byDate["2026-01-02"] == 100 {
+		t.Errorf("day 2 = 100 ⇒ over-counting bug is back (lifetime total bucketed to last-touch day)")
+	}
+}
+
 // TestTopUsersByWatchSeconds orders users by total watch_seconds desc and
 // respects the limit. Ties are left to SQLite's stable-ish ordering (not
 // asserted beyond "both present").

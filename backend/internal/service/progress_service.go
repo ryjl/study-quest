@@ -128,6 +128,23 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 
 	isEnt := s.isEntertainmentCourse(ep.CourseID)
 
+	// Clamp the delta ONCE at the service layer so every downstream write
+	// (event log + learning aggregate + entertainment aggregate) sees the same
+	// value. Previously each repo clamped independently — learning capped at
+	// 600s, entertainment didn't cap at all, and the event log used the raw
+	// value — so SUM(events) could diverge from watch_seconds whenever a client
+	// sent delta > 600 (e.g. a catch-up upload after reconnect). Centralizing
+	// the clamp here makes the dual-write invariant hold for any delta.
+	if positionSec < 0 {
+		positionSec = 0
+	}
+	if deltaWatchSec < 0 {
+		deltaWatchSec = 0
+	}
+	if deltaWatchSec > 600 {
+		deltaWatchSec = 600
+	}
+
 	// Append (or merge) a watch-history event for this heartbeat. Done BEFORE
 	// the entertainment/learning fork so both branches are covered by a single
 	// write. A failure here is logged but does NOT abort the report — the
