@@ -191,6 +191,27 @@ export interface UserSession {
   expires_at: string;
 }
 
+// One cell of the month heatmap: a business-calendar day + total watch
+// duration that day (seconds).
+export interface WatchHistoryDay {
+  date: string;   // YYYY-MM-DD (business zone)
+  seconds: number;
+}
+
+// One row of the selected-day detail timeline. Returned with episode + course
+// titles denormalized for display.
+export interface WatchEventDTO {
+  id: number;
+  episode_id: number;
+  episode_title: string;
+  course_id: number;
+  course_title: string;
+  content_type: 'learning' | 'entertainment';
+  started_at: string;       // ISO timestamp
+  ended_at: string;         // ISO timestamp
+  duration_seconds: number; // real watch seconds (pauses excluded)
+}
+
 export interface Badge {
   id: number;
   code: string;

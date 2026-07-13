@@ -91,6 +91,7 @@ func (r *userRepo) Delete(id uint) error {
 		tx.Delete(&model.UserPoint{}, "user_id = ?", id)
 		tx.Delete(&model.PointsLedger{}, "user_id = ?", id)
 		tx.Delete(&model.UserCourseAccess{}, "user_id = ?", id)
+		tx.Delete(&model.WatchEvent{}, "user_id = ?", id)
 		return tx.Delete(&model.User{}, id).Error
 	})
 }

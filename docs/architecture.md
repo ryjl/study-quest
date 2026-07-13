@@ -197,20 +197,22 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 
 ## 6. 数据库设计决策
 
-### 6.1 表结构总览（10 张表）
+### 6.1 表结构总览（12 张表）
 
 | 表 | 用途 | 关键设计点 |
 |---|------|----------|
 | `settings` | KV 系统配置 | 存储源连接信息、Admin 密码等，由 Admin 面板管理 |
 | `users` | 多用户 | PIN 码 bcrypt 哈希；`role` 支持 student/teen/parent/admin |
 | `user_course_access` | 用户-课程权限 | 不同用户可访问不同课程库 |
-| `courses` | 课程总表 | `grade`(TEXT) + `subject` 二维分类 |
+| `courses` | 课程总表 | `grade`(TEXT) + `subject` 二维分类；`content_type` 区分 learning/entertainment |
 | `episodes` | 课时明细 | 双保险索引：`file_hash`(indexed) + `original_relative_path` + `file_size` |
 | `subtitles` | 字幕直存 | SRT 纯文本存 DB，零延迟分发 |
 | `ai_lesson_contents` | AI 数据 | 前置探险卡 + 后期复习测试，JSON 格式 |
 | `user_points` | 积分总账 | 当前可用 + 历史总积分 |
 | `points_ledger` | 积分流水 | 防刷分，支持审计 |
-| `user_progress` | 学习进度 | 断点续播 + 累计播放时间 + 80% 完成判定 + 解锁时间控制 |
+| `user_progress` / `entertainment_progress` | 学习/娱乐进度 | 断点续播 + 累计播放秒（aggregate，见 6.4）+ 80% 完成判定；娱乐单独成表避免污染学习统计 |
+| `sessions` | 用户登录会话 | opaque token（32 字节 hex），一设备一行，固定 TTL，可 admin 撤销（见 §7） |
+| `watch_events` | 观看事件流 | append-only，每行 = 一次"连续观看会话"（窗口合并后），回答"今天/某天学了多久、几点学"（见 §6.4） |
 
 ### 6.2 相对于白皮书 DDL 的变更
 
@@ -235,6 +237,7 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 | `SESSION_TTL_HOURS` | `720`（30 天）| 用户登录会话有效期（固定，不滑动续期）。过期后客户端被踢回登录页重输 PIN |
 | `INGEST_KEY` | 空（不强制）| Python 工具链灌库端点（`/api/v1/ingest/*`）的预共享密钥。空=端点公开（仅适合内网）；公网部署**必须**设置，否则任何人可 POST 篡改片库 |
 | `TRUSTED_PROXIES` | `127.0.0.1,::1` | 逗号分隔的可信代理 CIDR/主机列表，Gin 据此读 `X-Forwarded-For` 解析真实客户端 IP（用于登录限速）。反代部署时设为反代所在网段 |
+| `WATCH_MERGE_WINDOW` | `60` | 观看事件窗口合并阈值（秒）。客户端每 5~30s 发一次心跳，两次心跳间隔 ≤ 此值则合并成一行（一次"连续观看会话"）。0 = 禁用合并（每次心跳单独成行）。调大→行数少但单行跨度含更多暂停；调小→边界更准但弱网易切碎 |
 
 > **部署提醒**：上述三项在纯局域网部署下均可保持默认。一旦把后端暴露到公网（即便前面套了 caddy/nginx），**必须设置 `INGEST_KEY`**，并按你的反代位置调整 `TRUSTED_PROXIES`，否则登录限速会按反代的回环 IP 统计而失效。
 
@@ -251,6 +254,21 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 
 **为什么业务配置不走环境变量？**
 因为这些配置需要在运行时通过 Admin 面板修改（比如换一个 AList 地址、更改 Token），重启服务不可接受。存数据库 + Admin 面板是最自然的方案。
+
+### 6.4 学习时长：累计字段 + 事件表（双写）
+
+学习时长有两套互补的存储，**双写**（同一次进度上报两边都更新）：
+
+| 存储 | 形态 | 用途 | 局限 |
+|------|------|------|------|
+| `user_progresses.watch_seconds` / `entertainment_progresses.watch_seconds` | 每个 (用户, 课时) 一行的**累计总数** | dashboard 总时长、排行榜、用户列表"学习时长"列 —— 都是 O(1) 读 | 丢了时间维度：回答不了"今天/某天学了多久"、"几点学的" |
+| `watch_events`（每行 = 一次"连续观看会话"） | append-only **事件流** | Admin "观看历史"页面：月历热力图 + 按日明细 | 按天聚合需 SUM（O(n)，但家庭量级无压力） |
+
+**为什么双写而不是只存事件表？** 累计字段是"快照"，O(1) 读总数，dashboard/排行榜依赖它；事件表是"真相"，回答明细/时间维度。两者职责不同，双写成本几乎为零（多一次 insert），各自走最擅长的查询路径。
+
+**窗口合并**：客户端每 5~30s 发一次心跳，后端把连续心跳合并成一行 `watch_events`（默认 60s 阈值，`WATCH_MERGE_WINDOW` 可配）。`duration_seconds` 只累加真实 delta（暂停不算）；`started_at ~ ended_at` 是墙钟跨度（含合并进来的暂停间隙）。Admin 明细页两个都显示，让操作者判断差值。
+
+**预存 bug 修复**：此 PR 同时修掉了 `RecentDailyWatchSeconds` / `CountActiveUsersSince` / entertainment `GetTodayWatchSeconds` 的"按 updated_at 分桶累计字段"缺陷——这些查询现在改读事件表，按天/按时长聚合才正确。
 
 ---
 
@@ -307,6 +325,8 @@ Admin 面板作为 Go 后端的一部分，使用 `html/template` 渲染页面�
 | 功能 | 说明 |
 |------|------|
 | 用户管理 | 新建/编辑/删除用户，设置角色和 PIN 码 |
+| 用户设备管理 | 每个用户可见其活跃登录设备（OS 设备名 + admin 备注），可单独/全部下线 |
+| 观看历史 | 顶层页面，月历热力图（颜色=当日学习时长）+ 点某天看当日明细（学习/娱乐、时间段、有效时长、含暂停标注、当日合计） |
 | 课程管理 | 创建课程，设置年级 × 科目分类 |
 | 存储浏览 + 导入 | 通过 StorageProvider 浏览网盘目录，选择内容导入为课时 |
 | 用户权限分配 | 设定每个用户可访问哪些课程 |
@@ -321,12 +341,15 @@ Admin 面板作为 Go 后端的一部分，使用 `html/template` 渲染页面�
 | SQL 注入防护 | ✅ | GORM 全 ORM，零 SQL 拼接 |
 | 密钥管理 | ✅ | 存储凭据存 DB，启动仅需 DB_PATH；PIN/Admin 密码 bcrypt 哈希 |
 | 输入校验 | ✅ | 所有 ID 参数整数校验 |
-| CORS | ✅ | 严格来源限制，不使用 `*` 通配符 |
-| 错误信息 | ✅ | 用户侧返回通用错误，详细日志在服务端 |
+| 用户认证 | ✅ | opaque session token（非 user ID），固定 TTL，可撤销，多设备并发；legacy `X-User-ID`/`Bearer<userID>` 已显式拒绝（见 §7） |
+| 登录限速 | ✅ | 按 `ClientIP` 滑窗 15min/5 次 → 429；防 PIN 暴力破解。反代部署需配 `TRUSTED_PROXIES` 才能拿到真实 IP |
+| 灌库端点鉴权 | ✅ | `/api/v1/ingest/*` 可由 `INGEST_KEY` 加 `X-Ingest-Key` header 校验（空=公开，仅内网） |
+| CORS | ✅ | 严格来源限制，不使用 `*` 通配符；已移除 legacy `X-User-ID` 允许头 |
+| 错误信息 | ✅ | 用户侧返回通用错误，详细日志在服务端；登录失败统一 401（不区分"用户不存在"/"PIN 错"，避免枚举） |
 | 服务绑定 | ⚠️ | `0.0.0.0`（家用内网场景，非公网暴露） |
+| HTTPS | ⚠️ | 后端只跑明文 HTTP，TLS 由前置 caddy/nginx 终结（纯局域网可不接） |
 | 存储凭据加密 | TODO | MVP 明文存 DB，正式版需加密 |
-| Rate Limiting | TODO | Phase 2 启用 |
-| CSRF | TODO | Admin 面板 POST 请求需要 CSRF token |
+| Admin CSRF | TODO | Admin 面板 POST 走 cookie，目前靠 SameSite + 同源，未加 CSRF token |
 | mTLS 数据库 | N/A | SQLite 本地文件，无网络连接 |
 
 ---
@@ -347,3 +370,24 @@ Admin 导入 + 设置                                              Admin SPA 升
 用户 + PIN 认证                                                多源虚拟聚合
 Makefile
 ```
+
+### 10.1 下一阶段：存储源抽象 + 用户存储源白名单（branch 3，待实现）
+
+> 状态：**未实现**。本节是设计意图的真相源；一旦 branch 3 落地，须同步更新本节 + §4.5 + §6.1。
+
+**动机**：多用户场景下分离不同的用户场景（例如家长追剧与小朋友资料分离）。当前存储配置全局唯一（`settings` 表 5 个 `storage_*` 键），所有用户共用一个网盘后端。
+
+**方案 D（已选）**：把"存储源"提成一等公民，存储源跟**内容**走，而不是跟用户走。
+
+- 新表 `storage_sources`（type/url/username/password/token），admin 全局配 N 个。
+- `episodes.source_id` / `reading_books.source_id` 指向其来源；导入时选定。
+- 现有 `user_course_access` 仍控制"谁能看哪些内容"。
+- 用户存储源白名单（防呆）：`user_storage_sources`（user_id, source_id）——授权时拦截 + 访问时兜底，防止 admin 误把别的源的内容授权给受限用户。默认空 = 不限制（向后兼容）。
+- 4 处 `getActiveProvider()` 改成按 episode 反查 source 解析，不再读全局 `settings`。
+- backfill 脚本：建一个 `default` source，把现有 episode/book 的 `source_id` 回填成它（一次性脚本，不写 migrate code）。
+
+**依赖**：branch 1（session 鉴权）是前提——白名单的隔离效果依赖真鉴权（否则 `X-User-ID` 可伪造）。已满足。
+
+**详见交接文档**：`docs/handoff-storage-sources.md`（branch 3 实施时建立）。
+
+---

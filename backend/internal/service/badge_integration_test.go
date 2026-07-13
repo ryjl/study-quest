@@ -26,7 +26,7 @@ func TestBadgeAndProgressIntegration(t *testing.T) {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 
 	badgeSvc := NewBadgeService(db, badgeRepo, progressRepo)
-	progressSvc := NewProgressService(db, progressRepo, episodeRepo, badgeSvc, courseRepo, entertainmentRepo)
+	progressSvc := NewProgressService(db, progressRepo, episodeRepo, badgeSvc, courseRepo, entertainmentRepo, nil, 0)
 
 	// 1. Seed the multi-tier default badges. episode_master (tier 0 threshold=3)
 	// is the multi-tier episode-count badge we'll exercise here.

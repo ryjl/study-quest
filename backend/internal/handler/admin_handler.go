@@ -103,6 +103,10 @@ type AdminHandler interface {
 	RevokeUserSession(c *gin.Context)
 	RevokeAllUserSessions(c *gin.Context)
 	UpdateSessionNote(c *gin.Context)
+
+	// Watch history (admin per-day viewing timeline + heatmap)
+	GetUserWatchHistory(c *gin.Context)
+	GetUserWatchEvents(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -129,6 +133,7 @@ type adminHandler struct {
 	readingImportService service.ReadingImportService
 	probeWorker         *service.ProbeWorker
 	sessionService      service.SessionService
+	watchEventRepo      repository.WatchEventRepository
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -163,6 +168,7 @@ type AdminHandlerDeps struct {
 	ReadingImportService service.ReadingImportService
 	ProbeWorker          *service.ProbeWorker
 	SessionService       service.SessionService
+	WatchEventRepo       repository.WatchEventRepository
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -194,6 +200,7 @@ func (d *AdminHandlerDeps) WithReadingArticleService(s service.ReadingArticleSer
 func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportService) *AdminHandlerDeps  { d.ReadingImportService = s; return d }
 func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps               { d.ProbeWorker = w; return d }
 func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHandlerDeps          { d.SessionService = s; return d }
+func (d *AdminHandlerDeps) WithWatchEventRepo(r repository.WatchEventRepository) *AdminHandlerDeps { d.WatchEventRepo = r; return d }
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
@@ -221,6 +228,7 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		readingImportService: d.ReadingImportService,
 		probeWorker:          d.ProbeWorker,
 		sessionService:       d.SessionService,
+		watchEventRepo:       d.WatchEventRepo,
 	}
 }
 

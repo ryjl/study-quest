@@ -77,6 +77,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	readingBookRepo := repository.NewReadingBookRepository(db)
 	readingArticleRepo := repository.NewReadingArticleRepository(db)
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
+	watchEventRepo := repository.NewWatchEventRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
@@ -85,7 +86,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
-	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo)
+	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, 60*time.Second)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
 	tagService := service.NewTagService(tagRepo)
 	// Constructed but never Started: Enqueue is a pure in-memory op (pushes
@@ -131,7 +132,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		WithChapterService(chapterService).WithBadgeService(badgeService).
 		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
-		WithProbeWorker(probeWorker).WithSessionService(sessionService).Build()
+		WithProbeWorker(probeWorker).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)

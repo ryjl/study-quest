@@ -46,6 +46,23 @@ func seedProgressRow(t *testing.T, db *gorm.DB, uid, eid uint, watchSec int, com
 	}
 }
 
+// seedWatchEvent inserts a watch_events row at an explicit started_at. Used by
+// the activity/trend tests now that CountActiveUsersSince and
+// RecentDailyWatchSeconds read from watch_events (not user_progresses).
+func seedWatchEvent(t *testing.T, db *gorm.DB, uid, eid, cid uint, contentType string, durSec int, started time.Time) {
+	t.Helper()
+	ev := model.WatchEvent{
+		UserID: uid, EpisodeID: eid, CourseID: cid,
+		ContentType:     contentType,
+		StartedAt:       started,
+		EndedAt:         started.Add(time.Duration(durSec) * time.Second),
+		DurationSeconds: durSec,
+	}
+	if err := db.Create(&ev).Error; err != nil {
+		t.Fatalf("seed watch event: %v", err)
+	}
+}
+
 // TestDashboardAggregatesEmpty verifies every aggregate degrades to a safe
 // zero / empty slice on a fresh DB with no progress rows.
 func TestDashboardAggregatesEmpty(t *testing.T) {
@@ -114,20 +131,22 @@ func TestCountCompletedEpisodes(t *testing.T) {
 	}
 }
 
-// TestCountActiveUsersSince counts DISTINCT users with updated_at >= since.
-// Rows before the cutoff must not count.
+// TestCountActiveUsersSince counts DISTINCT users with a watch event at/after
+// the cutoff. Events before the cutoff must not count. Reads from watch_events
+// (the source of truth for activity), so the fixture seeds events, not
+// user_progresses rows.
 func TestCountActiveUsersSince(t *testing.T) {
 	db := setupDashboardTestDB(t)
 	repo := NewProgressRepository(db)
 
 	cutoff := at("2026-01-02 00:00:00")
-	// User 1: active after cutoff (counts). Two rows but distinct = 1 user.
-	seedProgressRow(t, db, 1, 10, 10, false, at("2026-01-03 12:00:00"))
-	seedProgressRow(t, db, 1, 11, 10, false, at("2026-01-03 13:00:00"))
+	// User 1: active after cutoff (counts). Two events but distinct = 1 user.
+	seedWatchEvent(t, db, 1, 10, 100, "learning", 10, at("2026-01-03 12:00:00"))
+	seedWatchEvent(t, db, 1, 11, 100, "learning", 10, at("2026-01-03 13:00:00"))
 	// User 2: active BEFORE cutoff (must not count).
-	seedProgressRow(t, db, 2, 10, 10, false, at("2026-01-01 00:00:00"))
+	seedWatchEvent(t, db, 2, 10, 100, "learning", 10, at("2026-01-01 00:00:00"))
 	// User 3: exactly at cutoff boundary (>= is inclusive → counts).
-	seedProgressRow(t, db, 3, 10, 10, false, cutoff)
+	seedWatchEvent(t, db, 3, 10, 100, "learning", 10, cutoff)
 
 	got, err := repo.CountActiveUsersSince(cutoff)
 	if err != nil {
@@ -135,6 +154,55 @@ func TestCountActiveUsersSince(t *testing.T) {
 	}
 	if got != 2 {
 		t.Fatalf("active users = %d, want 2 (users 1 and 3; user 2 before cutoff)", got)
+	}
+}
+
+// TestRecentDailyWatchSeconds_CrossDaySplit is the regression guard for the
+// over-counting bug. The OLD query read user_progresses (a per-(user,episode)
+// lifetime total) and bucketed by updated_at — so an episode watched across two
+// days dumped its ENTIRE accumulated seconds into whichever day it was last
+// touched. The fix sources from watch_events (per-heartbeat deltas with their
+// own timestamps), so each day's bar reflects only that day's watching.
+//
+// Setup: the same user+episode is watched on day 1 (60s) and day 2 (40s). The
+// correct chart shows 60 on day 1 and 40 on day 2. The old code would have shown
+// 0 on day 1 and 100 on day 2 (entire lifetime bucketed to the last-touch day).
+func TestRecentDailyWatchSeconds_CrossDaySplit(t *testing.T) {
+	// Pin the clock so "today" is day 2 (the trend query reads the last 7 days
+	// ending at appclock.Now). Both days must fall inside that window.
+	now := shanghaiUTC("2026-01-02 23:00:00")
+	restore := useFixedShanghaiClock(t, now)
+	defer restore()
+
+	db := setupDashboardTestDB(t)
+	repo := NewProgressRepository(db)
+
+	day1 := shanghaiUTC("2026-01-01 12:00:00")
+	day2 := shanghaiUTC("2026-01-02 12:00:00")
+	// Same (user, episode) touched on both days — the exact shape that broke
+	// the old query. Durations: 60s day 1, 40s day 2.
+	seedWatchEvent(t, db, 1, 10, 100, "learning", 60, day1)
+	seedWatchEvent(t, db, 1, 10, 100, "learning", 40, day2)
+
+	got, err := repo.RecentDailyWatchSeconds(7)
+	if err != nil {
+		t.Fatalf("RecentDailyWatchSeconds: %v", err)
+	}
+	byDate := make(map[string]int64, len(got))
+	for _, d := range got {
+		byDate[d.Date] += d.Seconds
+	}
+	// Business-zone day strings (Asia/Shanghai): the seed instants were built
+	// as Beijing wall-clock 12:00, so they land cleanly on those dates.
+	if byDate["2026-01-01"] != 60 {
+		t.Errorf("day 1 = %d, want 60 (only day-1 watching)", byDate["2026-01-01"])
+	}
+	if byDate["2026-01-02"] != 40 {
+		t.Errorf("day 2 = %d, want 40 (only day-2 watching)", byDate["2026-01-02"])
+	}
+	// And the old bug's signature — 100 on day 2 — must NOT appear.
+	if byDate["2026-01-02"] == 100 {
+		t.Errorf("day 2 = 100 ⇒ over-counting bug is back (lifetime total bucketed to last-touch day)")
 	}
 }
 

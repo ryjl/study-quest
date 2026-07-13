@@ -761,6 +761,37 @@ type EntertainmentProgress struct {
 	UpdatedAt           time.Time
 }
 
+// WatchEvent records one "continuous viewing session" for the watch-history
+// feature (admin per-day timeline + heatmap). The client sends a heartbeat
+// every ~5–30s; the backend merges consecutive heartbeats into a single row
+// when the gap is within the merge window (default 60s, see WATCH_MERGE_WINDOW).
+// So one row ≈ one uninterrupted viewing stretch.
+//
+// Both learning and entertainment playback write to this table (ContentType
+// distinguishes them), giving the admin a unified history regardless of which
+// progress-aggregate table (UserProgress vs EntertainmentProgress) holds the
+// running total.
+//
+// DurationSeconds accumulates ONLY real client-reported deltas — paused/away
+// time never adds to it (the client doesn't send a delta while paused).
+// StartedAt..EndedAt is the wall-clock span and DOES contain any pause inside
+// the merge window. The admin UI shows both so the operator can judge the
+// difference ("9–10am span but only 45min watched ⇒ 15min paused").
+//
+// CourseID/ContentType are denormalized at write time (taken from the episode)
+// so timeline queries avoid an episodes+courses join on every read.
+type WatchEvent struct {
+	ID              uint   `gorm:"primaryKey;autoIncrement"`
+	UserID          uint   `gorm:"index:idx_we_user_ep_started,priority:1;index:idx_we_user_started,priority:1"`
+	EpisodeID       uint   `gorm:"index:idx_we_user_ep_started,priority:2"`
+	CourseID        uint   `gorm:"index"`                       // denormalized from episode → course
+	ContentType     string `gorm:"size:20;index;default:'learning'"` // "learning" | "entertainment"
+	StartedAt       time.Time `gorm:"index:idx_we_user_ep_started,priority:3;index:idx_we_user_started,priority:2"`
+	EndedAt         time.Time `gorm:"index"`                      // last heartbeat merged into this row
+	DurationSeconds int    `gorm:"default:0"`                    // real watch seconds (delta sum, pauses excluded)
+	CreatedAt       time.Time
+}
+
 // AutoMigrate runs GORM schema auto-migration for all tables.
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
@@ -798,5 +829,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&ReadingBookProgress{},
 		// Auth module
 		&Session{},
+		// Watch history module (per-session viewing events; coexists with the
+		// aggregate progress tables above, written alongside them on each report).
+		&WatchEvent{},
 	)
 }

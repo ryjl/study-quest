@@ -22,7 +22,7 @@ func TestProgressServiceLastWatched(t *testing.T) {
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
-	svc := NewProgressService(db, progressRepo, episodeRepo, nil, courseRepo, entertainmentRepo)
+	svc := NewProgressService(db, progressRepo, episodeRepo, nil, courseRepo, entertainmentRepo, nil, 0)
 
 	t.Run("GetLastWatchedEpisode", func(t *testing.T) {
 		// Create User
@@ -114,7 +114,7 @@ func TestProgressCompletionAtomicity(t *testing.T) {
 	courseRepo := repository.NewCourseRepository(db)
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	userRepo := repository.NewUserRepository(db)
-	svc := NewProgressService(db, progressRepo, episodeRepo, nil, courseRepo, entertainmentRepo)
+	svc := NewProgressService(db, progressRepo, episodeRepo, nil, courseRepo, entertainmentRepo, nil, 0)
 
 	user := &model.User{Nickname: "Completer", PinHash: "x", Role: "student"}
 	if err := userRepo.Create(user); err != nil {
