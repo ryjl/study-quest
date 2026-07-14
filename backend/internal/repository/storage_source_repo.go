@@ -11,14 +11,15 @@ import (
 
 // StorageSourceRepository covers two related concerns:
 //   - CRUD for StorageSource rows (the admin-configured netdisk backends), and
-//   - the per-user storage-source whitelist (UserStorageSource), whose empty
-//     state means "no restriction" (backward compatible). See IsAllowed.
+//   - the per-user storage-source allow-list (UserStorageSource), which is
+//     default-deny: a user may access a source iff it is in their list, and an
+//     EMPTY list means the user is allowed nothing. See IsAllowed.
 //
 // The whitelist is the 防呆 layer: even if an admin accidentally grants a
-// course from source Y to a user whose whitelist is [X], the grant-time gate
+// course from source Y to a user whose list is [X], the grant-time gate
 // refuses; the access-time gate refuses again at play-info/stream. Both gates
-// go through IsAllowed so the empty=unrestricted semantics stay identical
-// across modules.
+// go through IsAllowed so the default-deny semantics stay identical across
+// modules.
 type StorageSourceRepository interface {
 	// ── StorageSource CRUD ──
 	Create(s *model.StorageSource) error
@@ -35,19 +36,19 @@ type StorageSourceRepository interface {
 	// WithTx returns a copy bound to an in-progress transaction.
 	WithTx(tx *gorm.DB) StorageSourceRepository
 
-	// ── User whitelist ──
+	// ── User allow-list ──
 	// WhitelistForUser returns the sorted source ids the user is allowed to
-	// access. An empty slice means "no restriction" (see IsAllowed).
+	// access. An empty slice means the user is allowed nothing (default-deny).
 	WhitelistForUser(userID uint) ([]uint, error)
-	// SetWhitelist replaces the user's whitelist wholesale (delete-then-insert
-	// inside one transaction). An empty sourceIDs slice clears the whitelist
-	// (restoring the unrestricted state).
+	// SetWhitelist replaces the user's allow-list wholesale (delete-then-insert
+	// inside one transaction). An empty sourceIDs slice clears the list,
+	// returning the user to default-deny (allowed nothing).
 	SetWhitelist(userID uint, sourceIDs []uint) error
-	// IsAllowed reports whether the user may access the given source. Returns
-	// true (allow) when the user's whitelist is EMPTY — this is the backward-
-	// compatibility guarantee and the must-test case. A non-empty whitelist
-	// restricts to exactly its members. A zero sourceID (caller didn't resolve
-	// one) is treated as "no source dimension on this row" → allow.
+// IsAllowed reports whether the user may access the given source. The user's
+// whitelist is an ALLOW-list: the user may access a source if and only if it
+// appears in their whitelist. An EMPTY whitelist means the user is allowed
+// NOTHING (every source is denied) — this is the default-deny posture; an
+// admin must explicitly grant at least one source before the user can stream.
 	IsAllowed(userID, sourceID uint) (bool, error)
 }
 
@@ -149,7 +150,7 @@ func (r *storageSourceRepo) SetWhitelist(userID uint, sourceIDs []uint) error {
 			return err
 		}
 		if len(unique) == 0 {
-			return nil // empty = unrestricted
+			return nil // empty list → default-deny (allowed nothing)
 		}
 		rows := make([]model.UserStorageSource, len(unique))
 		for i, id := range unique {
@@ -159,21 +160,9 @@ func (r *storageSourceRepo) SetWhitelist(userID uint, sourceIDs []uint) error {
 	})
 }
 
+// IsAllowed is a pure membership check against the user's allow-list. The list
+// is default-deny: an empty list (or a source not in it) → false.
 func (r *storageSourceRepo) IsAllowed(userID, sourceID uint) (bool, error) {
-	// No source dimension on this row (caller couldn't resolve one) → allow.
-	// This keeps legacy rows reachable via the global fallback unrestricted.
-	if sourceID == 0 {
-		return true, nil
-	}
-	var count int64
-	if err := r.db.Model(&model.UserStorageSource{}).
-		Where("user_id = ?", userID).Count(&count).Error; err != nil {
-		return false, err
-	}
-	if count == 0 {
-		// Empty whitelist = unrestricted (backward compatible).
-		return true, nil
-	}
 	var allowed int64
 	if err := r.db.Model(&model.UserStorageSource{}).
 		Where("user_id = ? AND source_id = ?", userID, sourceID).

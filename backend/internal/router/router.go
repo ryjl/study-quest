@@ -198,8 +198,6 @@ func RegisterRoutes(
 		adm.POST("/api/import/execute", admin.ExecuteImport)
 		adm.GET("/api/settings", admin.GetSettings)
 		adm.PUT("/api/settings", admin.UpdateSettings)
-		adm.GET("/api/storage/ping", admin.PingStorage)
-		adm.POST("/api/storage/ping", admin.PingStorage)
 
 		// Storage sources (multi-source CRUD + ping + user whitelist)
 		adm.GET("/api/storage-sources", admin.ListStorageSources)

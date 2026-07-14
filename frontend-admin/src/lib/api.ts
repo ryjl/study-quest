@@ -10,7 +10,6 @@ import type {
   ImportPreviewNode,
   PointsLedgerEntry,
   ProbeStats,
-  Settings,
   StorageSource,
   SubjectMeta,
   TagMeta,
@@ -269,9 +268,6 @@ export const api = {
   async executeImport(body: unknown): Promise<{ status: string }> {
     return request('/admin/api/import/execute', { method: 'POST', body: JSON.stringify(body) });
   },
-  async pingStorage(body: Partial<Settings>): Promise<{ status: string; message: string }> {
-    return request('/admin/api/storage/ping', { method: 'POST', body: JSON.stringify(body) });
-  },
 
   // ---- Storage sources (multi-source CRUD + per-source ping) ----
   async listStorageSources(): Promise<StorageSource[]> {
@@ -299,10 +295,10 @@ export const api = {
   },
 
   // ---- Settings ----
-  async getSettings(): Promise<Settings> {
+  async getSettings(): Promise<Record<string, never>> {
     return request('/admin/api/settings');
   },
-  async updateSettings(body: Partial<Settings> & { admin_password?: string }): Promise<{ status: string; message: string }> {
+  async updateSettings(body: { admin_password?: string }): Promise<{ status: string; message: string }> {
     return request('/admin/api/settings', { method: 'PUT', body: JSON.stringify(body) });
   },
 

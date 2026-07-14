@@ -18,8 +18,7 @@ func TestEpisodeService(t *testing.T) {
 	db := setupEpisodeTestDB(t)
 	subjects := testutil.SeedSubjects(t, db)
 	episodeRepo := repository.NewEpisodeRepository(db)
-	settingsRepo := repository.NewSettingsRepository(db)
-	svc := NewEpisodeService(episodeRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo))
+	svc := NewEpisodeService(episodeRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db)))
 
 	t.Run("ReorderEpisodes", func(t *testing.T) {
 		courseRepo := repository.NewCourseRepository(db)

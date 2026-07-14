@@ -302,14 +302,6 @@ export interface ImportPreviewNode {
   children?: ImportPreviewNode[];
 }
 
-export interface Settings {
-  storage_type: string;
-  storage_url: string;
-  storage_username: string;
-  storage_password: string;
-  storage_token: string;
-}
-
 // StorageSource is one netdisk backend (alist or webdav). Admin configures N;
 // content points at one via source_id. Mirrors the Go StorageSource model.
 // Field names are snake_case to match the backend JSON tags.

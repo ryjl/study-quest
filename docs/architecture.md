@@ -149,14 +149,11 @@ AList/OpenList 已经做了云存储抽象。115 的 SHA1、天翼云的直链�
 
 ### 4.5 多源扩展策略
 
-**MVP 阶段**：单源，`settings` 表存当前激活的存储源配置（类型 + 连接参数），Admin 面板二选一。
-
 **多源（已实现，见 §10.1）**：
-- `storage_sources` 表：每行一个存储源（id, type, name, url, username, password, token, is_default）。Admin 全局配 N 个。
-- `episodes.source_id` / `reading_books.source_id`（nullable）指向其来源；导入时选定。
-- `StorageProviderResolver` 按 `source_id` 解析出 `StorageProvider`（进程内缓存）；`source_id` 为 NULL 时回退到全局 `settings` 兼容期，两者都无则报错。
-- 用户存储源白名单 `user_storage_sources`（防呆）：授权时拦截 + 访问时兜底，防止 admin 误把受限源的内容授权给受限用户。空集合 = 不限制（向后兼容）。
-- backfill 脚本 `cmd/backfill_sources`：建一个 `default` source（从旧 `settings` 读）并把 NULL `source_id` 回填（一次性，不写 migrate code）。
+- `storage_sources` 表：每行一个存储源（id, type, name, url, username, password, token, is_default）。Admin 全局配 N 个。这是存储连接配置的唯一来源（旧的全局 `storage_*` settings 键已删除）。
+- `episodes.source_id` / `reading_books.source_id` 指向其来源；导入时选定。NULL = 该内容未绑定源、无法播放（不再有全局回退）。
+- `StorageProviderResolver` 按 `source_id` 解析出 `StorageProvider`（进程内缓存）；`source_id` 为 NULL 直接报错。
+- 用户存储源白名单 `user_storage_sources`（防呆，**默认全拒**）：授权时拦截 + 访问时兜底，防止 admin 误把受限源的内容授权给受限用户。**空集合 = 一个都不允许**（admin 必须显式勾选至少一个源，用户才能播放任何内容）；staff（admin/parent）bypass。
 
 **未来扩展**（仍未实现）：
 - 虚拟聚合层：跨源浏览和检索（多 source 拼成一棵树）。
@@ -247,16 +244,13 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 
 > **部署提醒**：上述三项在纯局域网部署下均可保持默认。一旦把后端暴露到公网（即便前面套了 caddy/nginx），**必须设置 `INGEST_KEY`**，并按你的反代位置调整 `TRUSTED_PROXIES`，否则登录限速会按反代的回环 IP 统计而失效。
 
-**`settings` 表**（所有业务配置，Admin 面板管理）：
+**`settings` 表**（业务配置，Admin 面板管理）：
 
 | Key | 说明 |
 |-----|------|
-| `storage_type` | `"alist"` 或 `"webdav"` |
-| `storage_url` | AList 地址 或 WebDAV 端点 URL |
-| `storage_username` | 用户名 |
-| `storage_password` | 密码 |
-| `storage_token` | AList Token（可选） |
 | `admin_password_hash` | Admin 面板密码（bcrypt） |
+
+> 存储连接配置已迁到 `storage_sources` 表（多源，见 §4.5），不再存 `settings`。
 
 **为什么业务配置不走环境变量？**
 因为这些配置需要在运行时通过 Admin 面板修改（比如换一个 AList 地址、更改 Token），重启服务不可接受。存数据库 + Admin 面板是最自然的方案。
@@ -385,20 +379,19 @@ Makefile
 
 **方案 D（已落地）**：把"存储源"提成一等公民，存储源跟**内容**走，而不是跟用户走。
 
-- 新表 `storage_sources`（type/url/username/password/token/is_default），admin 全局配 N 个；`user_storage_sources` 是用户白名单。
-- `episodes.source_id` / `reading_books.source_id` 指向其来源；导入时选定（NULL = 走全局 `settings` 兼容回退）。
+- 新表 `storage_sources`（type/url/username/password/token/is_default），admin 全局配 N 个；`user_storage_sources` 是用户白名单。存储连接配置的唯一来源（全局 `storage_*` settings 键已删除）。
+- `episodes.source_id` / `reading_books.source_id` 指向其来源；导入时选定。NULL = 未绑定源、无法播放。
 - 现有 `user_course_access` / `user_reading_*_access` 仍控制"谁能看哪些内容"。
-- 用户存储源白名单（防呆）：授权时拦截（GrantAccess / readingGrant）+ 访问时兜底（GetPlayInfo / StreamBook），防止 admin 误把别的源的内容授权给受限用户。默认空 = 不限制（向后兼容）；staff（admin/parent）bypass；reading 文章无存储维度不拦。
-- `StorageProviderResolver` 统一构造 provider（替换 4 处 `getActiveProvider()` 的 copy-paste），按 `source_id` 解析；NULL 回退全局 `settings`；凭据改了走 `Invalidate` 失效缓存。
-- 灾难恢复（basename+size 兜底）按 `source_id` 限定作用域（`FindByBasenameAndSizeScoped`），避免 A 源自愈成 B 源路径；NULL `source_id` 退化为全局（兼容旧数据）。
-- backfill 脚本 `cmd/backfill_sources`：建一个 `default` source（从旧 `settings` 读）并把 NULL `source_id` 回填（一次性，带 `-dry-run`，不写 migrate code）。
-- Admin SPA：Settings 页"存储源管理"区块（多 source CRUD + 测连接，旧全局配置降级为兼容回退）；用户详情抽屉"允许的存储源"多选；Import 页存储源选择器。
+- 用户存储源白名单（防呆，**默认全拒**）：授权时拦截（GrantAccess / readingGrant / grant_all）+ 访问时兜底（Stream / StreamAttachment / GetPlayInfo / StreamBook 共用 `checkEpisodeSourceAccess`），防止 admin 误把别的源的内容授权给受限用户。**空集合 = 一个都不允许**（admin 必须显式勾选）；staff（admin/parent）bypass；nil SourceID 拒绝；reading 文章无存储维度不拦。
+- `StorageProviderResolver` 统一构造 provider（替换 4 处 `getActiveProvider()` 的 copy-paste），按 `source_id` 解析（进程内缓存）；nil `source_id` 直接报错（无全局回退）；凭据改了走 `Invalidate` 失效缓存。
+- 灾难恢复（basename+size 兜底）按 `source_id` 限定作用域（`FindByBasenameAndSizeScoped`），避免 A 源自愈成 B 源路径。
+- Admin SPA：Settings 页"存储源管理"区块（多 source CRUD + 测连接）；用户详情抽屉"允许的存储源"多选；Import 页存储源选择器。
 
 **依赖**：branch 1（session 鉴权）是前提——白名单的隔离效果依赖真鉴权（否则 `X-User-ID` 可伪造）。已满足。
 
-**测试**：repo 单元测试覆盖 CRUD + 白名单空/非空语义（空=不限制是向后兼容核心断言）；cmd/server 集成测试覆盖多源隔离、授权拦截、访问兜底、staff bypass、白名单经 user DTO 往返。
+**测试**：repo 单元测试覆盖 CRUD + 白名单默认全拒语义；cmd/server 集成测试覆盖多源隔离、授权拦截、访问兜底（含 Stream/StreamAttachment）、staff bypass、白名单经 user DTO 往返。
 
-**仍不在范围**：存储凭据加密（独立 PR）、虚拟聚合（多 source 拼树）、删除全局 `storage_*` settings（留兼容期）。
+**仍不在范围**：存储凭据加密（独立 PR）、虚拟聚合（多 source 拼树）。
 
 **详见**：`docs/handoff-storage-sources.md`（branch 3 交接文档，含决策记录）。
 

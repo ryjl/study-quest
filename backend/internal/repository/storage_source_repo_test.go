@@ -85,20 +85,20 @@ func TestStorageSourceCRUD(t *testing.T) {
 	}
 }
 
-// TestStorageWhitelistEmptyMeansUnrestricted is THE backward-compatibility
-// assertion: a user with no whitelist rows is allowed every source. This is
-// the must-test case called out in the handoff.
-func TestStorageWhitelistEmptyMeansUnrestricted(t *testing.T) {
+// TestStorageWhitelistEmptyDeniesAll is THE default-deny assertion: a user
+// with no allow-list rows is allowed NOTHING. This replaced the old empty=
+// unrestricted behavior once the global-settings fallback was removed.
+func TestStorageWhitelistEmptyDeniesAll(t *testing.T) {
 	env := newStorageRepoTestDB(t)
 	repo := env.repo
 	repo.Create(&model.StorageSource{Name: "s1", Type: "alist", URL: "u1"})
 
 	allowed, err := repo.IsAllowed(42, 1)
 	if err != nil {
-		t.Fatalf("IsAllowed empty: %v", err)
+		t.Fatalf("IsAllowed empty list: %v", err)
 	}
-	if !allowed {
-		t.Fatal("empty whitelist must allow (empty=unrestricted invariant)")
+	if allowed {
+		t.Fatal("empty allow-list must DENY (default-deny invariant)")
 	}
 }
 
@@ -140,27 +140,27 @@ func TestStorageWhitelistSetReplacesWholesale(t *testing.T) {
 	if len(wl) != 1 || wl[0] != 2 {
 		t.Fatalf("after replace [2]: got %v", wl)
 	}
-	// Empty array clears the whitelist → unrestricted again.
+	// Empty array clears the list → default-deny (denies everything).
 	repo.SetWhitelist(9, []uint{})
 	wl, _ = repo.WhitelistForUser(9)
 	if len(wl) != 0 {
 		t.Fatalf("after clear: got %v", wl)
 	}
-	if ok, _ := repo.IsAllowed(9, 1); !ok {
-		t.Error("cleared whitelist should be unrestricted again")
+	if ok, _ := repo.IsAllowed(9, 1); ok {
+		t.Error("cleared list should deny all (default-deny)")
 	}
 }
 
-// TestStorageWhitelistZeroSourceIDAllowed: IsAllowed with sourceID=0 (caller
-// couldn't resolve a source for a legacy row) must allow — keeps legacy NULL-
-// source content reachable.
-func TestStorageWhitelistZeroSourceIDAllowed(t *testing.T) {
+// TestStorageWhitelistZeroSourceIDDenied: IsAllowed with sourceID=0 is just a
+// membership miss (0 is never in any list) → denied. There is no longer a
+// special "legacy NULL-source" allow path.
+func TestStorageWhitelistZeroSourceIDDenied(t *testing.T) {
 	env := newStorageRepoTestDB(t)
 	repo := env.repo
 	repo.Create(&model.StorageSource{Name: "s", Type: "alist", URL: "u"})
-	repo.SetWhitelist(5, []uint{1}) // restrictive whitelist
-	if ok, _ := repo.IsAllowed(5, 0); !ok {
-		t.Error("sourceID=0 must always allow (legacy NULL-source content)")
+	repo.SetWhitelist(5, []uint{1})
+	if ok, _ := repo.IsAllowed(5, 0); ok {
+		t.Error("sourceID=0 must be denied (not a member of any list)")
 	}
 }
 

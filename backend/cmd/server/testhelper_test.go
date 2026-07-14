@@ -32,6 +32,11 @@ type testEnv struct {
 	db             *gorm.DB
 	adminCookie    *http.Cookie
 	sessionService service.SessionService
+	// defaultSourceID is the id of a storage source seeded in newTestEnv so the
+	// "happy path" tests (unlock, reading-room, ...) work under default-deny:
+	// createEpisode stamps episodes with it and createUser adds non-staff users
+	// to its allow-list. Storage-specific tests override these per-case.
+	defaultSourceID uint
 }
 
 // newTestEnv builds a fresh server with seeded subjects/tags/badges + a logged-
@@ -85,7 +90,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	// Test sessions use a long TTL so they don't spontaneously expire mid-test.
 	sessionService := service.NewSessionService(sessionRepo, 24*time.Hour)
 	courseService := service.NewCourseService(courseRepo, userRepo)
-	storageResolver := service.NewStorageProviderResolver(storageSourceRepo, settingsRepo)
+	storageResolver := service.NewStorageProviderResolver(storageSourceRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, storageResolver)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, 60*time.Second)
@@ -161,6 +166,16 @@ func newTestEnv(t *testing.T) *testEnv {
 
 	env := &testEnv{engine: r, db: db, sessionService: sessionService}
 	env.adminCookie = env.loginAdmin(t)
+
+	// Seed a default storage source so default-deny doesn't break every happy-
+	// path test. createEpisode stamps episodes with env.defaultSourceID and
+	// createUser adds non-staff users to its allow-list. Storage-specific tests
+	// create their own sources and override the whitelist as needed.
+	src := model.StorageSource{Name: "test-default", Type: "alist", URL: "http://test:5244", IsDefault: true}
+	if err := db.Create(&src).Error; err != nil {
+		t.Fatalf("seed default storage source: %v", err)
+	}
+	env.defaultSourceID = src.ID
 	return env
 }
 
@@ -389,6 +404,15 @@ func (e *testEnv) createUser(t *testing.T, nickname, role string) uint {
 	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode created user: %v (body: %s)", err, resp.Body.String())
 	}
+	// Default-deny: a freshly-created non-staff user would be allowed nothing.
+	// Add them to the default source's allow-list so happy-path tests work
+	// without each having to set a whitelist. Storage-specific tests override.
+	if !model.IsStaffRole(role) && e.defaultSourceID != 0 {
+		ssRepo := repository.NewStorageSourceRepository(e.db)
+		if err := ssRepo.SetWhitelist(created.ID, []uint{e.defaultSourceID}); err != nil {
+			t.Fatalf("seed user whitelist: %v", err)
+		}
+	}
 	return created.ID
 }
 
@@ -421,6 +445,15 @@ func (e *testEnv) createEpisode(t *testing.T, courseID uint, title string) uint 
 	}
 	if err := json.Unmarshal(resp.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode created episode: %v (body: %s)", err, resp.Body.String())
+	}
+	// Stamp the seeded default source so the episode is streamable under the
+	// default-deny storage gate. Storage-specific tests override via
+	// setEpisodeSource.
+	if e.defaultSourceID != 0 {
+		if err := e.db.Model(&model.Episode{}).Where("id = ?", created.ID).
+			Update("source_id", e.defaultSourceID).Error; err != nil {
+			t.Fatalf("seed episode source: %v", err)
+		}
 	}
 	return created.ID
 }

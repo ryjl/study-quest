@@ -286,21 +286,32 @@ func (h *readingHandler) StreamBook(c *gin.Context) {
 		return
 	}
 
-	// Storage-source whitelist gate (访问兜底), mirroring GetPlayInfo. Staff
+	// Storage-source allow-list gate (访问兜底), mirroring GetPlayInfo. Staff
 	// roles bypass (CanAccess already returned true for them above, but we
-	// re-check role here to skip the source lookup entirely). Empty whitelist
-	// = no-op.
+	// re-check role here to skip the source lookup entirely). Default-deny: an
+	// empty allow-list allows nothing; a book with no SourceID is also denied.
 	if h.storageSourceRepo != nil && !model.IsStaffRole(role) {
-		if book, berr := h.bookService.GetBookByID(uint(id)); berr == nil && book != nil && book.SourceID != nil {
-			srcAllowed, serr := h.storageSourceRepo.IsAllowed(uid, *book.SourceID)
-			if serr != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage access"})
-				return
-			}
-			if !srcAllowed {
-				c.JSON(http.StatusForbidden, gin.H{"error": "该用户不被允许访问此存储源"})
-				return
-			}
+		book, berr := h.bookService.GetBookByID(uint(id))
+		if berr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load book"})
+			return
+		}
+		if book == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "book not found"})
+			return
+		}
+		if book.SourceID == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "该书未绑定存储源"})
+			return
+		}
+		srcAllowed, serr := h.storageSourceRepo.IsAllowed(uid, *book.SourceID)
+		if serr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage access"})
+			return
+		}
+		if !srcAllowed {
+			c.JSON(http.StatusForbidden, gin.H{"error": "该用户不被允许访问此存储源"})
+			return
 		}
 	}
 

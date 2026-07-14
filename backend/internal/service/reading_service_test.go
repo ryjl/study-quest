@@ -31,8 +31,7 @@ func TestReadingBookCanAccessSeriesInheritance(t *testing.T) {
 	subj := seedReadingFixtures(t, db)
 	seriesRepo := repository.NewReadingSeriesRepository(db)
 	bookRepo := repository.NewReadingBookRepository(db)
-	settingsRepo := repository.NewSettingsRepository(db)
-	bookSvc := NewReadingBookService(bookRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo), seriesRepo)
+	bookSvc := NewReadingBookService(bookRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db)), seriesRepo)
 
 	series := model.ReadingSeries{Title: "S", SubjectID: subj.ID}
 	db.Create(&series)
@@ -76,8 +75,7 @@ func TestReadingBookCanAccessStandaloneNoInheritance(t *testing.T) {
 	subj := seedReadingFixtures(t, db)
 	seriesRepo := repository.NewReadingSeriesRepository(db)
 	bookRepo := repository.NewReadingBookRepository(db)
-	settingsRepo := repository.NewSettingsRepository(db)
-	bookSvc := NewReadingBookService(bookRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo), seriesRepo)
+	bookSvc := NewReadingBookService(bookRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db)), seriesRepo)
 
 	book := model.ReadingBook{Title: "Standalone", FileRelativePath: "/s.pdf", SubjectID: subj.ID}
 	db.Create(&book)

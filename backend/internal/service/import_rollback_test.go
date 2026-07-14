@@ -24,8 +24,7 @@ func TestImportTreeRollbackOnMidFailure(t *testing.T) {
 	courseRepo := repository.NewCourseRepository(db)
 	chapterRepo := repository.NewChapterRepository(db)
 	subjectRepo := repository.NewSubjectRepository(db)
-	settingsRepo := repository.NewSettingsRepository(db)
-	resolver := NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo)
+	resolver := NewStorageProviderResolver(repository.NewStorageSourceRepository(db))
 
 	svc := NewImportService(db, episodeRepo, courseRepo, resolver, chapterRepo, subjectRepo, nil).
 		(*importService)
@@ -79,8 +78,7 @@ func TestImportWithMultiGrades(t *testing.T) {
 	courseRepo := repository.NewCourseRepository(db)
 	chapterRepo := repository.NewChapterRepository(db)
 	subjectRepo := repository.NewSubjectRepository(db)
-	settingsRepo := repository.NewSettingsRepository(db)
-	resolver := NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo)
+	resolver := NewStorageProviderResolver(repository.NewStorageSourceRepository(db))
 
 	svc := NewImportService(db, episodeRepo, courseRepo, resolver, chapterRepo, subjectRepo, nil)
 

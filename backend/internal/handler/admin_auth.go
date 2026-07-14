@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
-	"studyquest/backend/internal/storage"
 )
 
 
@@ -77,35 +76,19 @@ func (h *adminHandler) Me(c *gin.Context) {
 // A failure in any one stat degrades to a zero value rather than 500-ing the
 // whole dashboard, but each error is logged so silent breakage is visible.
 func (h *adminHandler) GetSettings(c *gin.Context) {
-	all, err := h.settingsRepo.GetAll()
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	get := func(k string) string {
-		if v, ok := all[k]; ok {
-			return v
-		}
-		return ""
-	}
+	// Storage connection config moved to storage_sources (multi-source). The
+	// only thing surfaced here is whether an admin password is set, so the SPA
+	// can show a hint.
+	hash, _ := h.settingsRepo.Get("admin_password_hash")
 	c.JSON(http.StatusOK, gin.H{
-		"storage_type":     get("storage_type"),
-		"storage_url":      get("storage_url"),
-		"storage_username": get("storage_username"),
-		"storage_password": get("storage_password"),
-		"storage_token":    get("storage_token"),
+		"has_admin_password": hash != "",
 	})
 }
 
 // UserLedger returns a paginated slice of a user's point transactions.
 func (h *adminHandler) UpdateSettings(c *gin.Context) {
 	var req struct {
-		StorageType     string `json:"storage_type"`
-		StorageURL      string `json:"storage_url"`
-		StorageUsername string `json:"storage_username"`
-		StoragePassword string `json:"storage_password"`
-		StorageToken    string `json:"storage_token"`
-		AdminPassword   string `json:"admin_password"`
+		AdminPassword string `json:"admin_password"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -113,19 +96,6 @@ func (h *adminHandler) UpdateSettings(c *gin.Context) {
 		return
 	}
 
-	_ = h.settingsRepo.Set("storage_type", req.StorageType, "Storage provider type (alist/webdav)")
-	_ = h.settingsRepo.Set("storage_url", req.StorageURL, "AList/WebDAV service base endpoint URL")
-	_ = h.settingsRepo.Set("storage_username", req.StorageUsername, "Basic authentication username")
-	_ = h.settingsRepo.Set("storage_password", req.StoragePassword, "Basic authentication password")
-	_ = h.settingsRepo.Set("storage_token", req.StorageToken, "AList API Authorization Token")
-	// Drop the cached legacy-settings provider so the next Resolve(nil) rebuilds
-	// from the new values instead of serving a stale one. (The resolver has a
-	// drift check that would self-heal on the next read, but that check is racy
-	// with these 5 independent Set calls — explicit invalidation closes the
-	// torn-read window.)
-	if h.storageResolver != nil {
-		h.storageResolver.InvalidateSettings()
-	}
 	if req.AdminPassword != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.AdminPassword), bcrypt.DefaultCost)
 		if err != nil {
@@ -136,44 +106,4 @@ func (h *adminHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Settings updated successfully"})
-}
-
-func (h *adminHandler) PingStorage(c *gin.Context) {
-	// Support testing unsaved settings directly from the form
-	var req struct {
-		StorageType     string `json:"storage_type"`
-		StorageURL      string `json:"storage_url"`
-		StorageUsername string `json:"storage_username"`
-		StoragePassword string `json:"storage_password"`
-		StorageToken    string `json:"storage_token"`
-	}
-
-	// Try to bind JSON body. If it binds successfully and has a URL, we test it on the fly
-	if c.Request.Method == "POST" {
-		if err := c.ShouldBindJSON(&req); err == nil && req.StorageURL != "" {
-			var provider storage.StorageProvider
-			if req.StorageType == "alist" {
-				provider = storage.NewAListProvider(req.StorageURL, req.StorageUsername, req.StoragePassword, req.StorageToken)
-			} else if req.StorageType == "webdav" {
-				provider = storage.NewWebDAVProvider(req.StorageURL, req.StorageUsername, req.StoragePassword)
-			}
-
-			if provider != nil {
-				if err := provider.Ping(); err != nil {
-					c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "status": "failed"})
-					return
-				}
-				c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Successfully connected to storage source (测试通过)"})
-				return
-			}
-		}
-	}
-
-	// Default fallback to saved settings (nil → global settings fallback).
-	if err := h.importService.PingStorage(nil); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "status": "failed"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Successfully connected to storage source"})
 }

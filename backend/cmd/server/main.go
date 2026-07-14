@@ -86,7 +86,7 @@ func main() {
 	// The storage resolver centralizes provider construction (replaces the 4
 	// per-service getActiveProvider copies). nil SourceID → global settings
 	// fallback (legacy); non-nil → that source's configured backend.
-	storageResolver := service.NewStorageProviderResolver(storageSourceRepo, settingsRepo)
+	storageResolver := service.NewStorageProviderResolver(storageSourceRepo)
 	episodeService := service.NewEpisodeService(episodeRepo, storageResolver)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, cfg.WatchMergeWindow)

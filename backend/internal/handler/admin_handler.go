@@ -86,7 +86,6 @@ type AdminHandler interface {
 	ExecuteImport(c *gin.Context)
 	GetSettings(c *gin.Context)
 	UpdateSettings(c *gin.Context)
-	PingStorage(c *gin.Context)
 
 	// Subtitles
 	ListSubtitles(c *gin.Context)

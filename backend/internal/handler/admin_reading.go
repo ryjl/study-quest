@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"golang.org/x/net/html"
 
+	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/service"
 )
 
@@ -398,82 +399,76 @@ func (h *adminHandler) BulkReadingAccess(c *gin.Context) {
 			return
 		}
 		// Series + books DO have a storage dimension (series access implies
-		// child-book access via StreamBook's CanAccess inheritance). When the
-		// user has a non-empty whitelist we grant per-item, skipping any series
-		// or book whose source isn't allowed — otherwise a series grant would
-		// smuggle through access to a restricted book. Empty whitelist = the
-		// fast bulk GrantAll path (unrestricted).
+		// child-book access via StreamBook's CanAccess inheritance). The allow-
+		// list is default-deny: a user with an EMPTY list is allowed nothing,
+		// so grant_all refuses with a hint. With a non-empty list we grant per
+		// item, skipping any series/book whose source isn't allowed.
 		if h.storageSourceRepo != nil {
 			wl, werr := h.storageSourceRepo.WhitelistForUser(id)
 			if werr != nil {
-				// Fail-closed: can't enforce the gate without the whitelist.
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read storage whitelist"})
 				return
 			}
-			if len(wl) > 0 {
-				// Load every book ONCE (instead of ListBySeries per series) and
-				// group source ids by series in memory — the per-series loop
-				// below then consults this map instead of issuing N queries.
-				allBooks, berr := h.readingBookRepo.List("", 0, nil, false)
-				if berr != nil {
-					respondError(c, berr)
-					return
-				}
-				seriesSources := make(map[uint][]uint)
-				for _, b := range allBooks {
-					if b.SeriesID != nil && b.SourceID != nil {
-						seriesSources[*b.SeriesID] = append(seriesSources[*b.SeriesID], *b.SourceID)
-					}
-				}
-				seriesGranted, seriesSkipped := 0, 0
-				allSeries, serr := h.readingSeriesRepo.List("", 0, nil)
-				if serr != nil {
-					respondError(c, serr)
-					return
-				}
-				for _, s := range allSeries {
-					// A series grant implies access to ALL its books (via
-					// StreamBook's CanAccess series inheritance), so the series
-					// is allowed only if EVERY one of its books' sources is in
-					// the whitelist. checkStorageWhitelist handles that (it
-					// rejects if any needed source is missing).
-					if werr := checkStorageWhitelist(h.storageSourceRepo, id, seriesSources[s.ID]); werr != nil {
-						seriesSkipped++
-						continue
-					}
-					if err := h.readingSeriesRepo.GrantAccess(id, s.ID); err != nil {
-						respondError(c, err)
-						return
-					}
-					seriesGranted++
-				}
-				// Grant each standalone book (and the allowed-source books of
-				// a skipped series) individually. Books whose series was just
-				// granted are re-granted harmlessly (idempotent upsert).
-				booksGranted, booksSkipped := 0, 0
-				for _, b := range allBooks {
-					var ids []uint
-					if b.SourceID != nil {
-						ids = []uint{*b.SourceID}
-					}
-					if werr := checkStorageWhitelist(h.storageSourceRepo, id, ids); werr != nil {
-						booksSkipped++
-						continue
-					}
-					if err := h.readingBookRepo.GrantAccess(id, b.ID); err != nil {
-						respondError(c, err)
-						return
-					}
-					booksGranted++
-				}
-				c.JSON(http.StatusOK, gin.H{
-					"status":  "success",
-					"message": fmt.Sprintf("已授权 %d 套/%d 本，跳过 %d 套/%d 本（存储源白名单）", seriesGranted, booksGranted, seriesSkipped, booksSkipped),
-				})
+			if len(wl) == 0 {
+				c.JSON(http.StatusForbidden, gin.H{"error": "该用户未被允许任何存储源，请先在用户详情里勾选至少一个存储源"})
 				return
 			}
+			// Load every book ONCE and group source ids by series in memory.
+			allBooks, berr := h.readingBookRepo.List("", 0, nil, false)
+			if berr != nil {
+				respondError(c, berr)
+				return
+			}
+			seriesSources := make(map[uint][]uint)
+			for _, b := range allBooks {
+				if b.SeriesID != nil && b.SourceID != nil {
+					seriesSources[*b.SeriesID] = append(seriesSources[*b.SeriesID], *b.SourceID)
+				}
+			}
+			seriesGranted, seriesSkipped := 0, 0
+			allSeries, serr := h.readingSeriesRepo.List("", 0, nil)
+			if serr != nil {
+				respondError(c, serr)
+				return
+			}
+			for _, s := range allSeries {
+				// A series grant implies access to ALL its books (via
+				// StreamBook's CanAccess series inheritance), so the series is
+				// allowed only if EVERY one of its books' sources is in the
+				// allow-list.
+				if werr := checkStorageWhitelist(h.storageSourceRepo, id, seriesSources[s.ID]); werr != nil {
+					seriesSkipped++
+					continue
+				}
+				if err := h.readingSeriesRepo.GrantAccess(id, s.ID); err != nil {
+					respondError(c, err)
+					return
+				}
+				seriesGranted++
+			}
+			booksGranted, booksSkipped := 0, 0
+			for _, b := range allBooks {
+				var ids []uint
+				if b.SourceID != nil {
+					ids = []uint{*b.SourceID}
+				}
+				if werr := checkStorageWhitelist(h.storageSourceRepo, id, ids); werr != nil {
+					booksSkipped++
+					continue
+				}
+				if err := h.readingBookRepo.GrantAccess(id, b.ID); err != nil {
+					respondError(c, err)
+					return
+				}
+				booksGranted++
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "success",
+				"message": fmt.Sprintf("已授权 %d 套/%d 本，跳过 %d 套/%d 本（存储源白名单）", seriesGranted, booksGranted, seriesSkipped, booksSkipped),
+			})
+			return
 		}
-		// No whitelist (or feature unwired) → unrestricted bulk grant.
+		// Feature unwired (nil repo) → unrestricted bulk grant.
 		if err := h.readingSeriesRepo.GrantAll(id); err != nil {
 			respondError(c, err)
 			return
@@ -541,14 +536,17 @@ func (h *adminHandler) readingSourceIDsForGrant(targetType string, targetID uint
 }
 
 func (h *adminHandler) readingGrant(userID uint, targetType string, targetID uint) error {
-	// Storage-source whitelist gate (防呆), mirroring the course grant gate.
+	// Storage-source whitelist gate (防呆). Staff roles bypass — they manage
+	// content, not consume under the gate.
 	if h.storageSourceRepo != nil {
-		sourceIDs, serr := h.readingSourceIDsForGrant(targetType, targetID)
-		if serr != nil {
-			return serr
-		}
-		if werr := checkStorageWhitelist(h.storageSourceRepo, userID, sourceIDs); werr != nil {
-			return werr
+		if u, uerr := h.userRepo.FindByID(userID); uerr == nil && u != nil && !model.IsStaffRole(u.Role) {
+			sourceIDs, serr := h.readingSourceIDsForGrant(targetType, targetID)
+			if serr != nil {
+				return serr
+			}
+			if werr := checkStorageWhitelist(h.storageSourceRepo, userID, sourceIDs); werr != nil {
+				return werr
+			}
 		}
 	}
 	switch targetType {

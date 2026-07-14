@@ -55,37 +55,47 @@ func (e *testEnv) setStorageWhitelist(t *testing.T, userID uint, sourceIDs []uin
 // not 404).
 func TestStorageSourceCRUDEndpoint(t *testing.T) {
 	env := newTestEnv(t)
-
-	a := env.createStorageSource(t, "家长盘", "alist", "http://a", true)
+	// newTestEnv seeds a "test-default" source; this test creates two more and
+	// checks the CRUD lifecycle on them, tolerating the seeded row in listings.
+	a := env.createStorageSource(t, "家长盘", "alist", "http://a", false)
 	b := env.createStorageSource(t, "小朋友盘", "webdav", "http://b", false)
 
-	// List returns both, default first.
+	// List returns all (seeded default + a + b); default (seeded) is first.
 	resp := env.do(t, http.MethodGet, "/admin/api/storage-sources", nil)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("list: %d", resp.Code)
 	}
 	var list []map[string]any
 	json.Unmarshal(resp.Body.Bytes(), &list)
-	if len(list) != 2 {
+	if len(list) < 2 {
 		t.Fatalf("list len: got %d", len(list))
 	}
-	if list[0]["id"].(float64) != float64(a) {
-		t.Errorf("default source should be listed first, got id=%v", list[0]["id"])
+	// The default-flagged row (the seeded test-default) must be first.
+	if !list[0]["is_default"].(bool) {
+		t.Errorf("default source should be listed first, got id=%v is_default=%v", list[0]["id"], list[0]["is_default"])
 	}
 
-	// Promote B to default → A loses the flag (server enforces uniqueness).
-	resp = env.do(t, http.MethodPut, "/admin/api/storage-sources/"+itoa(b), map[string]any{
-		"name": "小朋友盘", "type": "webdav", "url": "http://b", "is_default": true,
+	// Promote A to default → the seeded default loses its flag (uniqueness).
+	resp = env.do(t, http.MethodPut, "/admin/api/storage-sources/"+itoa(a), map[string]any{
+		"name": "家长盘", "type": "alist", "url": "http://a", "is_default": true,
 	})
 	if resp.Code != http.StatusOK {
-		t.Fatalf("update B: %d (body: %s)", resp.Code, resp.Body.String())
+		t.Fatalf("update A: %d (body: %s)", resp.Code, resp.Body.String())
 	}
 	resp = env.do(t, http.MethodGet, "/admin/api/storage-sources", nil)
 	json.Unmarshal(resp.Body.Bytes(), &list)
+	// Exactly one default now (A), and it's listed first.
+	defaults := 0
 	for _, s := range list {
-		if s["id"].(float64) == float64(a) && s["is_default"].(bool) {
-			t.Error("A should have lost default after B promoted")
+		if s["is_default"].(bool) {
+			defaults++
+			if s["id"].(float64) != float64(a) {
+				t.Errorf("expected A to be the sole default, got id=%v", s["id"])
+			}
 		}
+	}
+	if defaults != 1 {
+		t.Errorf("expected exactly 1 default after promoting A, got %d", defaults)
 	}
 
 	// Ping hits a non-existent backend → 500 (not 404; the route resolved).
@@ -94,33 +104,33 @@ func TestStorageSourceCRUDEndpoint(t *testing.T) {
 		t.Errorf("ping: expected 200 or 500, got %d", resp.Code)
 	}
 
-	// Delete B.
+	// Delete B → list drops by one (B gone; seeded default + A remain).
 	resp = env.do(t, http.MethodDelete, "/admin/api/storage-sources/"+itoa(b), nil)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("delete B: %d", resp.Code)
 	}
 	resp = env.do(t, http.MethodGet, "/admin/api/storage-sources", nil)
 	json.Unmarshal(resp.Body.Bytes(), &list)
-	if len(list) != 1 {
+	if len(list) != 2 {
 		t.Fatalf("after delete, list len: got %d", len(list))
 	}
 }
 
-// TestStorageWhitelistEmptyMeansUnrestrictedPlayInfo is THE backward-compat
-// assertion at the HTTP layer: a user with an empty whitelist can reach an
-// episode's play-info (NOT 403 from the source gate), even when the episode
-// has a SourceID set. This is the must-test case from the handoff.
-func TestStorageWhitelistEmptyMeansUnrestrictedPlayInfo(t *testing.T) {
+// TestStorageWhitelistEmptyDeniesPlayInfo is THE default-deny assertion at the
+// HTTP layer: a user with an empty allow-list (the default) is denied play-info
+// (403) for any episode that has a SourceID, because the allow-list allows
+// nothing. This replaced the old empty=unrestricted behavior once the global
+// fallback was removed.
+func TestStorageWhitelistEmptyDeniesPlayInfo(t *testing.T) {
 	env := newTestEnv(t)
 	courseID, userID, epIDs := seedCourseEpisodes(t, env, 1)
 
 	srcA := env.createStorageSource(t, "A", "alist", "http://a", true)
 	env.setEpisodeSource(t, epIDs[0], srcA)
-	// No whitelist set → unrestricted. play-info must NOT 403 on the source
-	// gate (it may 500 if the storage backend is unreachable, but never 403).
+	// No whitelist set (default-deny). play-info must 403 on the source gate.
 	resp := env.doAsUser(t, userID, http.MethodGet, "/api/v1/episodes/"+itoa(epIDs[0])+"/play-info", nil)
-	if resp.Code == http.StatusForbidden {
-		t.Errorf("empty whitelist: play-info 403'd but should be unrestricted (got %d)", resp.Code)
+	if resp.Code != http.StatusForbidden {
+		t.Errorf("empty allow-list: play-info expected 403 (default-deny), got %d", resp.Code)
 	}
 	_ = courseID
 }
@@ -270,12 +280,7 @@ func TestStorageStreamAttachmentGateDeniesWrongSource(t *testing.T) {
 
 	srcB := env.createStorageSource(t, "B", "webdav", "http://b", false)
 	env.setEpisodeSource(t, epIDs[0], srcB)
-	// Whitelist excludes B → the attachment stream must be refused.
-	env.setStorageWhitelist(t, userID, []uint{})
-
-	// An empty-but-present whitelist means "no restriction", so to make this
-	// restrictive we instead whitelist a different source that the episode is
-	// NOT on. Create source A and whitelist only it.
+	// Whitelist a DIFFERENT source (A) so the episode's source (B) is excluded.
 	srcA := env.createStorageSource(t, "A", "alist", "http://a", true)
 	env.setStorageWhitelist(t, userID, []uint{srcA})
 

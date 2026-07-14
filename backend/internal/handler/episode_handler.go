@@ -95,18 +95,17 @@ func srtToVtt(srt string) string {
 	return vtt
 }
 
-// checkEpisodeSourceAccess is the storage-source whitelist gate shared by all
-// episode media endpoints (Stream, StreamAttachment, GetPlayInfo). It enforces
-// the 防呆 rule: a non-staff user with a non-empty whitelist may only reach an
-// episode whose SourceID is in their whitelist. Returns true to proceed; on a
-// denial it writes the response (401/403/500) and returns false so the caller
-// can `return` immediately.
+// checkEpisodeSourceAccess is the storage-source allow-list gate shared by all
+// episode media endpoints (Stream, StreamAttachment, GetPlayInfo). A non-staff
+// user may reach an episode only if its SourceID is in the user's allow-list
+// (default-deny: an empty list allows nothing). Returns true to proceed; on a
+// denial it writes the response (401/403/404/500) and returns false so the
+// caller can `return` immediately.
 //
 // Fail-closed: a non-staff request with no trustworthy userID is rejected
-// (401) rather than falling through to hand out a stream URL. Staff roles
-// (admin/parent) bypass entirely. A nil storageSourceRepo (feature unwired) or
-// an episode with no SourceID (legacy row on the global fallback) short-
-// circuits to allow. Empty whitelist = unrestricted (backward compatible).
+// (401). Staff roles (admin/parent) bypass entirely. A nil storageSourceRepo
+// (feature not wired) short-circuits to allow. An episode with no SourceID is
+// denied (it can't stream without a bound source).
 func (h *episodeHandler) checkEpisodeSourceAccess(c *gin.Context, episodeID uint) bool {
 	if h.storageSourceRepo == nil {
 		return true
@@ -131,8 +130,15 @@ func (h *episodeHandler) checkEpisodeSourceAccess(c *gin.Context, episodeID uint
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load episode"})
 		return false
 	}
-	if ep == nil || ep.SourceID == nil {
-		return true // no source dimension → unrestricted (legacy fallback)
+	if ep == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "episode not found"})
+		return false
+	}
+	if ep.SourceID == nil {
+		// No source bound (admin-created but never imported, or stale data).
+		// With the global fallback removed this episode can't stream, so deny.
+		c.JSON(http.StatusForbidden, gin.H{"error": "该课时未绑定存储源"})
+		return false
 	}
 	allowed, aerr := h.storageSourceRepo.IsAllowed(uid, *ep.SourceID)
 	if aerr != nil {

@@ -18,10 +18,9 @@ type Setting struct {
 
 // StorageSource is one netdisk backend configuration (alist or webdav). The
 // admin configures N of these globally. Content (episode/book) points at one
-// via SourceID; users never hold storage credentials directly. This replaces
-// the single global storage_* settings keys for the multi-source era — those
-// keys remain as a fallback for legacy rows whose SourceID is still NULL
-// (see StorageProviderResolver).
+// via SourceID; users never hold storage credentials directly. This is the
+// sole source of storage connection config (the old global storage_* settings
+// keys were removed once every deployment migrated).
 //
 // At most one row should have IsDefault=true; it is the selection used when an
 // import does not specify a source and no other default is implied. The
@@ -303,10 +302,9 @@ type Episode struct {
 	SortOrder            int       `gorm:"index:idx_course_sort;not null"`
 	Title                string    `gorm:"size:255;not null"`
 	VideoRelativePath    string    `gorm:"type:text;not null"`
-	// SourceID points at the StorageSource this episode was imported from. NULL
-	// = legacy data predating multi-source (resolved via the global storage_*
-	// settings fallback); see StorageProviderResolver. Backfilled by the
-	// one-shot backfill_sources tool on non-rebuild deployments.
+	// SourceID points at the StorageSource this episode was imported from.
+	// Should always be set post-import; NULL means the episode can't stream
+	// (no source bound). See StorageProviderResolver.
 	SourceID             *uint     `gorm:"index"`
 	CoverURL             string    `gorm:"size:1024"`
 	AttachmentJSON       string    `gorm:"type:text"` // JSON array of attachments
@@ -693,9 +691,9 @@ type ReadingBook struct {
 	FileRelativePath string         `gorm:"type:text;not null"` // Alist/WebDAV relative path
 	FileSize         *int64                                     // nullable, not yet probed
 	PageCount        *int                                       // nullable, client reports on first open
-	// SourceID points at the StorageSource this book was imported from. NULL =
-	// legacy data (resolved via the global storage_* settings fallback); see
-	// StorageProviderResolver. Mirror of Episode.SourceID.
+	// SourceID points at the StorageSource this book was imported from. Should
+	// always be set post-import; NULL means the book can't stream (no source
+	// bound). See StorageProviderResolver. Mirror of Episode.SourceID.
 	SourceID         *uint         `gorm:"index"`
 	CoverURL         string         `gorm:"size:1024"`
 	SubjectID        uint           `gorm:"not null;index"`

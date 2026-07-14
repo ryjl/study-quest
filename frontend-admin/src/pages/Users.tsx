@@ -713,16 +713,16 @@ function StorageWhitelistSection({ userId, current }: { userId: number; current:
         </h3>
         {selected.size > 0 && (
           <button className="btn-danger btn-sm" onClick={() => mut.mutate([])} disabled={mut.isPending}>
-            清空（不限制）
+            清空（全拒）
           </button>
         )}
       </div>
       <p className="mb-2 text-xs text-muted">
-        防呆：勾选后该用户只能访问这些源的内容（即使被授权了别的源的课程）。空 = 不限制。
+        防呆：勾选后该用户只能访问这些源的内容。<strong>空 = 一个都不允许</strong>（必须勾选至少一个源，用户才能播放任何内容）。
       </p>
       {sources.length === 0 ? (
         <p className="rounded-lg border border-border bg-card-2 px-3 py-2 text-xs text-muted">
-          尚未配置存储源（在「系统设置」新增）。未配置时不限制。
+          尚未配置存储源（在「系统设置」新增）。
         </p>
       ) : (
         <div className="max-h-48 space-y-1 overflow-auto">
