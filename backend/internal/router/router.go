@@ -201,6 +201,15 @@ func RegisterRoutes(
 		adm.GET("/api/storage/ping", admin.PingStorage)
 		adm.POST("/api/storage/ping", admin.PingStorage)
 
+		// Storage sources (multi-source CRUD + ping + user whitelist)
+		adm.GET("/api/storage-sources", admin.ListStorageSources)
+		adm.POST("/api/storage-sources", admin.CreateStorageSource)
+		adm.PUT("/api/storage-sources/:id", admin.UpdateStorageSource)
+		adm.DELETE("/api/storage-sources/:id", admin.DeleteStorageSource)
+		adm.POST("/api/storage-sources/:id/ping", admin.PingStorageSource)
+		adm.GET("/api/users/:id/storage-whitelist", admin.GetStorageWhitelist)
+		adm.PUT("/api/users/:id/storage-whitelist", admin.SetStorageWhitelist)
+
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)
 		adm.POST("/api/probe/scan-missing", admin.ScanMissingDurations)

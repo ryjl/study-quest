@@ -21,6 +21,11 @@ type ReadingBookRepository interface {
 	ListBySeries(seriesID uint) ([]model.ReadingBook, error)
 	FindByID(id uint) (*model.ReadingBook, error)
 	FindByBasenameAndSize(basename string, size int64) (*model.ReadingBook, error)
+	// FindByBasenameAndSizeScoped is the multi-source-aware disaster-recovery
+	// lookup. A nil sourceID applies NO source filter (identical to the legacy
+	// unscoped lookup); a non-nil sourceID restricts to rows in that source so
+	// a file in source A never self-heals onto source B's path.
+	FindByBasenameAndSizeScoped(basename string, size int64, sourceID *uint) (*model.ReadingBook, error)
 	Create(book *model.ReadingBook) error
 	Update(book *model.ReadingBook) error
 	Delete(id uint) error
@@ -106,6 +111,25 @@ func (r *readingBookRepo) FindByBasenameAndSize(basename string, size int64) (*m
 	var book model.ReadingBook
 	basenameLike := "%/" + basename
 	if err := r.db.Where("file_relative_path LIKE ? AND file_size = ?", basenameLike, size).First(&book).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &book, nil
+}
+
+// FindByBasenameAndSizeScoped adds a source_id filter on top of
+// FindByBasenameAndSize. A nil sourceID applies NO source filter (identical to
+// the legacy unscoped lookup).
+func (r *readingBookRepo) FindByBasenameAndSizeScoped(basename string, size int64, sourceID *uint) (*model.ReadingBook, error) {
+	if sourceID == nil {
+		return r.FindByBasenameAndSize(basename, size)
+	}
+	var book model.ReadingBook
+	basenameLike := "%/" + basename
+	if err := r.db.Where("file_relative_path LIKE ? AND file_size = ? AND source_id = ?",
+		basenameLike, size, *sourceID).First(&book).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

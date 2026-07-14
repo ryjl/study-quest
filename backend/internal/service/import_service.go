@@ -25,6 +25,9 @@ type ExecuteTreeImportRequest struct {
 	TargetCourseID uint               `json:"target_course_id"`
 	NewCourse      *NewCourseRequest  `json:"new_course"`
 	Tree           *ImportPreviewNode `json:"tree"`
+	// SourceID stamps every imported episode with its storage source. Nil =
+	// legacy (resolved via the global settings fallback at play time).
+	SourceID *uint `json:"source_id"`
 }
 
 type NewCourseRequest struct {
@@ -36,19 +39,21 @@ type NewCourseRequest struct {
 }
 
 // ImportService coordinates scanning AList/WebDAV and registering episodes.
+// Scan/preview/ping methods take a sourceID to select which storage source to
+// operate on; a nil sourceID selects the global settings fallback (legacy).
 type ImportService interface {
-	ScanPath(path string) ([]storage.FileInfo, error)
-	PreviewDeepScan(path string) (*ImportPreviewNode, error)
+	ScanPath(path string, sourceID *uint) ([]storage.FileInfo, error)
+	PreviewDeepScan(path string, sourceID *uint) (*ImportPreviewNode, error)
 	ExecuteTreeImport(req *ExecuteTreeImportRequest) error
-	ScanDirectoryAttachments(path string) ([]storage.FileInfo, error)
-	PingStorage() error
+	ScanDirectoryAttachments(path string, sourceID *uint) ([]storage.FileInfo, error)
+	PingStorage(sourceID *uint) error
 }
 
 type importService struct {
 	db           *gorm.DB
 	episodeRepo  repository.EpisodeRepository
 	courseRepo   repository.CourseRepository
-	settingsRepo repository.SettingsRepository
+	resolver     *StorageProviderResolver
 	chapterRepo  repository.ChapterRepository
 	subjectRepo  repository.SubjectRepository
 	enqueueProbe func(uint) // optional: backfill media metadata after import
@@ -69,12 +74,13 @@ func (s *importService) SetTestFailHook(failOnEpisodeNth int) {
 
 // NewImportService creates an instance of ImportService. enqueueProbe is an
 // optional callback (pass nil to skip) invoked after each episode is created
-// or updated, so a background worker can ffprobe its media metadata.
+// or updated, so a background worker can ffprobe its media metadata. The
+// resolver replaces the old settingsRepo-backed getActiveProvider.
 func NewImportService(
 	db *gorm.DB,
 	er repository.EpisodeRepository,
 	cr repository.CourseRepository,
-	sr repository.SettingsRepository,
+	resolver *StorageProviderResolver,
 	ch repository.ChapterRepository,
 	subj repository.SubjectRepository,
 	enqueueProbe func(uint),
@@ -83,38 +89,23 @@ func NewImportService(
 		db:           db,
 		episodeRepo:  er,
 		courseRepo:   cr,
-		settingsRepo: sr,
+		resolver:     resolver,
 		chapterRepo:  ch,
 		subjectRepo:  subj,
 		enqueueProbe: enqueueProbe,
 	}
 }
 
-func (s *importService) getActiveProvider() (storage.StorageProvider, error) {
-	sType := s.settingsRepo.GetWithDefault("storage_type", "alist")
-	sURL := s.settingsRepo.GetWithDefault("storage_url", "http://localhost:5244")
-	sUser, _ := s.settingsRepo.Get("storage_username")
-	sPass, _ := s.settingsRepo.Get("storage_password")
-	sToken, _ := s.settingsRepo.Get("storage_token")
-
-	if sType == "alist" {
-		return storage.NewAListProvider(sURL, sUser, sPass, sToken), nil
-	} else if sType == "webdav" {
-		return storage.NewWebDAVProvider(sURL, sUser, sPass), nil
-	}
-	return nil, errors.New("unsupported storage_type configured: " + sType)
-}
-
-func (s *importService) ScanPath(path string) ([]storage.FileInfo, error) {
-	provider, err := s.getActiveProvider()
+func (s *importService) ScanPath(path string, sourceID *uint) ([]storage.FileInfo, error) {
+	provider, err := s.resolver.Resolve(sourceID)
 	if err != nil {
 		return nil, err
 	}
 	return provider.ListDir(path)
 }
 
-func (s *importService) PreviewDeepScan(path string) (*ImportPreviewNode, error) {
-	provider, err := s.getActiveProvider()
+func (s *importService) PreviewDeepScan(path string, sourceID *uint) (*ImportPreviewNode, error) {
+	provider, err := s.resolver.Resolve(sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -384,6 +375,7 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 					AttachmentJSON:       "[]",
 					OriginalRelativePath: node.Path,
 					FileSize:             &node.Size,
+					SourceID:             req.SourceID,
 				}
 				// Test-only forced failure: simulates a DB error on the Nth
 				// episode create, so the import transaction's rollback path can
@@ -515,16 +507,16 @@ func (s *importService) autoMapSubtitle(ep *model.Episode) {
 	}
 }
 
-func (s *importService) PingStorage() error {
-	provider, err := s.getActiveProvider()
+func (s *importService) PingStorage(sourceID *uint) error {
+	provider, err := s.resolver.Resolve(sourceID)
 	if err != nil {
 		return err
 	}
 	return provider.Ping()
 }
 
-func (s *importService) ScanDirectoryAttachments(path string) ([]storage.FileInfo, error) {
-	provider, err := s.getActiveProvider()
+func (s *importService) ScanDirectoryAttachments(path string, sourceID *uint) ([]storage.FileInfo, error) {
+	provider, err := s.resolver.Resolve(sourceID)
 	if err != nil {
 		return nil, err
 	}

@@ -107,6 +107,15 @@ type AdminHandler interface {
 	// Watch history (admin per-day viewing timeline + heatmap)
 	GetUserWatchHistory(c *gin.Context)
 	GetUserWatchEvents(c *gin.Context)
+
+	// Storage sources (multi-source CRUD + per-source ping + user whitelist)
+	ListStorageSources(c *gin.Context)
+	CreateStorageSource(c *gin.Context)
+	UpdateStorageSource(c *gin.Context)
+	DeleteStorageSource(c *gin.Context)
+	PingStorageSource(c *gin.Context)
+	GetStorageWhitelist(c *gin.Context)
+	SetStorageWhitelist(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -134,6 +143,8 @@ type adminHandler struct {
 	probeWorker         *service.ProbeWorker
 	sessionService      service.SessionService
 	watchEventRepo      repository.WatchEventRepository
+	storageSourceRepo   repository.StorageSourceRepository
+	storageResolver     *service.StorageProviderResolver
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -169,6 +180,8 @@ type AdminHandlerDeps struct {
 	ProbeWorker          *service.ProbeWorker
 	SessionService       service.SessionService
 	WatchEventRepo       repository.WatchEventRepository
+	StorageSourceRepo    repository.StorageSourceRepository
+	StorageResolver      *service.StorageProviderResolver
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -201,6 +214,8 @@ func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportServi
 func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps               { d.ProbeWorker = w; return d }
 func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHandlerDeps          { d.SessionService = s; return d }
 func (d *AdminHandlerDeps) WithWatchEventRepo(r repository.WatchEventRepository) *AdminHandlerDeps { d.WatchEventRepo = r; return d }
+func (d *AdminHandlerDeps) WithStorageSources(r repository.StorageSourceRepository) *AdminHandlerDeps { d.StorageSourceRepo = r; return d }
+func (d *AdminHandlerDeps) WithStorageResolver(r *service.StorageProviderResolver) *AdminHandlerDeps { d.StorageResolver = r; return d }
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
@@ -229,6 +244,8 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		probeWorker:          d.ProbeWorker,
 		sessionService:       d.SessionService,
 		watchEventRepo:       d.WatchEventRepo,
+		storageSourceRepo:    d.StorageSourceRepo,
+		storageResolver:      d.StorageResolver,
 	}
 }
 

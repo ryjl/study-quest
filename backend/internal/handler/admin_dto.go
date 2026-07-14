@@ -165,6 +165,10 @@ type userDTO struct {
 	ReadingSeriesAccess  []uint `json:"reading_series_access"`
 	ReadingBookAccess    []uint `json:"reading_book_access"`
 	ReadingArticleAccess []uint `json:"reading_article_access"`
+	// StorageSourceAccess is the user's storage-source whitelist (防呆). Empty
+	// = unrestricted. Populated lazily by toUserDTO only when storageSourceRepo
+	// is wired (nil repo → empty, meaning "feature not configured").
+	StorageSourceAccess  []uint `json:"storage_source_access"`
 	// Learning stats (populated from batch aggregates in ListUsers so the
 	// user list avoids N+1). All default to 0 when the user has no data.
 	CompletedEpisodes   int    `json:"completed_episodes"`   // 完成课时数
@@ -219,6 +223,18 @@ func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
 	if prog.LastActiveAt != nil {
 		lastActive = formatTime(*prog.LastActiveAt)
 	}
+	// Storage whitelist — only populated when the feature is wired (single
+	// repo lookup; acceptable for the user-detail drawer). Stays empty when the
+	// repo is nil (feature not configured).
+	var srcAcc []uint
+	if h.storageSourceRepo != nil {
+		if wl, werr := h.storageSourceRepo.WhitelistForUser(u.ID); werr == nil {
+			srcAcc = wl
+		}
+	}
+	if srcAcc == nil {
+		srcAcc = []uint{}
+	}
 	return userDTO{
 		ID:                   u.ID,
 		Nickname:             u.Nickname,
@@ -230,6 +246,7 @@ func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
 		ReadingSeriesAccess:  seriesAcc,
 		ReadingBookAccess:    bookAcc,
 		ReadingArticleAccess: articleAcc,
+		StorageSourceAccess:  srcAcc,
 		CompletedEpisodes:  int(prog.CompletedEpisodes),
 		AccessibleEpisodes: int(b.accessible[u.ID]),
 		WatchSeconds:       prog.TotalWatchSeconds,

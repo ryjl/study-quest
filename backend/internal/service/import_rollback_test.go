@@ -25,8 +25,9 @@ func TestImportTreeRollbackOnMidFailure(t *testing.T) {
 	chapterRepo := repository.NewChapterRepository(db)
 	subjectRepo := repository.NewSubjectRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
+	resolver := NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo)
 
-	svc := NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, nil).
+	svc := NewImportService(db, episodeRepo, courseRepo, resolver, chapterRepo, subjectRepo, nil).
 		(*importService)
 
 	// Force the 2ND episode create to fail. The tree below has 2 episodes under
@@ -79,8 +80,9 @@ func TestImportWithMultiGrades(t *testing.T) {
 	chapterRepo := repository.NewChapterRepository(db)
 	subjectRepo := repository.NewSubjectRepository(db)
 	settingsRepo := repository.NewSettingsRepository(db)
+	resolver := NewStorageProviderResolver(repository.NewStorageSourceRepository(db), settingsRepo)
 
-	svc := NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, nil)
+	svc := NewImportService(db, episodeRepo, courseRepo, resolver, chapterRepo, subjectRepo, nil)
 
 	tree := &ImportPreviewNode{
 		Name: "Root", IsDir: true, Type: "course",

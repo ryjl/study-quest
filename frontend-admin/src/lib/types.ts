@@ -166,6 +166,8 @@ export interface User {
   reading_series_access?: number[];
   reading_book_access?: number[];
   reading_article_access?: number[];
+  // Storage-source whitelist (防呆). Empty/undefined = unrestricted.
+  storage_source_access?: number[];
   // Per-user learning stats (populated by the batch-aggregated ListUsers).
   completed_episodes?: number;
   accessible_episodes?: number;
@@ -306,6 +308,20 @@ export interface Settings {
   storage_username: string;
   storage_password: string;
   storage_token: string;
+}
+
+// StorageSource is one netdisk backend (alist or webdav). Admin configures N;
+// content points at one via source_id. Mirrors the Go StorageSource model.
+// Field names are snake_case to match the backend JSON tags.
+export interface StorageSource {
+  id?: number;
+  name: string;
+  type: string; // "alist" | "webdav"
+  url: string;
+  username: string;
+  password: string;
+  token: string; // alist only
+  is_default?: boolean;
 }
 
 // AppRelease is one published APK build. (version_code, abi) is the identity —

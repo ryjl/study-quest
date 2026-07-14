@@ -78,13 +78,15 @@ func newTestEnv(t *testing.T) *testEnv {
 	readingArticleRepo := repository.NewReadingArticleRepository(db)
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	watchEventRepo := repository.NewWatchEventRepository(db)
+	storageSourceRepo := repository.NewStorageSourceRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
 	// Test sessions use a long TTL so they don't spontaneously expire mid-test.
 	sessionService := service.NewSessionService(sessionRepo, 24*time.Hour)
 	courseService := service.NewCourseService(courseRepo, userRepo)
-	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
+	storageResolver := service.NewStorageProviderResolver(storageSourceRepo, settingsRepo)
+	episodeService := service.NewEpisodeService(episodeRepo, storageResolver)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, 60*time.Second)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
@@ -94,13 +96,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	// consumer. Only Start() → probeOne → episodeService.Probe would spawn
 	// ffprobe / hit the netdisk, which we don't want in tests.
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
-	importService := service.NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
+	importService := service.NewImportService(db, episodeRepo, courseRepo, storageResolver, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 	readingSeriesService := service.NewReadingSeriesService(readingSeriesRepo, readingBookRepo, readingArticleRepo)
-	readingBookService := service.NewReadingBookService(readingBookRepo, settingsRepo, readingSeriesRepo)
+	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
-	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, settingsRepo)
+	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
 
 	// seed (subjects → tags → badges, same order as main.go; subjects must
 	// come first so the subject_count badge rules resolve against a populated
@@ -119,7 +121,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	healthH := handler.NewHealthHandler()
 	userH := handler.NewUserHandler(userService, sessionService)
 	courseH := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
-	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
+	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService, storageSourceRepo)
 	progressH := handler.NewProgressHandler(progressService)
 	ingestH := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
 	adminH := handler.NewAdminHandlerDeps().
@@ -132,13 +134,14 @@ func newTestEnv(t *testing.T) *testEnv {
 		WithChapterService(chapterService).WithBadgeService(badgeService).
 		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
-		WithProbeWorker(probeWorker).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).Build()
+		WithProbeWorker(probeWorker).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).
+		WithStorageSources(storageSourceRepo).WithStorageResolver(storageResolver).Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
 	unlockH := handler.NewUnlockHandler(unlockService)
 	releaseH := handler.NewReleaseHandler(releaseRepo)
-	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo)
+	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
 
 	r := gin.New()
 	// Ingest key is intentionally empty for the default test env — the legacy

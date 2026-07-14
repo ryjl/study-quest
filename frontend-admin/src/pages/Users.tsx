@@ -27,6 +27,7 @@ function formatWatchTime(seconds?: number, minutes?: number): string {
   return rem === 0 ? `${h} 时` : `${h} 时 ${rem} 分`;
 }
 import { useToast, useConfirm } from '../lib/toast';
+import { useStorageSources } from '../lib/useStorageSources';
 
 const ROLES = [
   { key: 'student', label: '学生', color: '#60a5fa' },
@@ -442,6 +443,10 @@ function UserDetailDrawer({
         )}
       </section>
 
+      {/* Storage-source whitelist (防呆). Empty = unrestricted. Whole-list
+          replace on every toggle via setStorageWhitelist. */}
+      <StorageWhitelistSection userId={user.id} current={user.storage_source_access ?? []} />
+
       {/* Per-course unlock controls — only for granted courses. Lets the admin
           manually bump the water level, cherry-pick episodes (selected mode),
           or override the strategy for this specific student. */}
@@ -657,5 +662,87 @@ function SessionRow({
         </button>
       </div>
     </div>
+  );
+}
+
+// StorageWhitelistSection renders the user's storage-source whitelist (防呆) as
+// a checkbox list. Empty selection = unrestricted (backward compatible). The
+// whole list is replaced on every toggle via setStorageWhitelist (PUT). The
+// catalog comes from useStorageSources (warmed at the app root).
+function StorageWhitelistSection({ userId, current }: { userId: number; current: number[] }) {
+  const sourcesQ = useStorageSources();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const selected = new Set(current);
+  const sources = sourcesQ.data ?? [];
+
+  // Optimistic update: patch the cached ['users'] entry's storage_source_access
+  // BEFORE the PUT resolves, so a rapid second toggle reads the just-clicked
+  // baseline instead of the stale server snapshot (which would otherwise lose
+  // the first toggle to last-write-wins). onMutate returns the previous cache
+  // so onError can roll back.
+  const mut = useMutation({
+    mutationFn: (ids: number[]) => api.setStorageWhitelist(userId, ids),
+    onMutate: async (nextIds: number[]) => {
+      await qc.cancelQueries({ queryKey: ['users'] });
+      const prev = qc.getQueryData<User[]>(['users']);
+      qc.setQueryData<User[]>(['users'], (old) =>
+        (old ?? []).map((u) => (u.id === userId ? { ...u, storage_source_access: nextIds } : u)),
+      );
+      return { prev };
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['users'] });
+    },
+    onError: (e, _ids, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['users'], ctx.prev);
+      toast.error((e as Error).message);
+    },
+  });
+
+  const toggle = (id: number, on: boolean) => {
+    const next = on ? [...selected, id] : [...selected].filter((x) => x !== id);
+    mut.mutate(next);
+  };
+
+  return (
+    <section className="mb-6">
+      <div className="mb-2 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-txt">
+          💾 允许的存储源 ({selected.size}/{sources.length})
+        </h3>
+        {selected.size > 0 && (
+          <button className="btn-danger btn-sm" onClick={() => mut.mutate([])} disabled={mut.isPending}>
+            清空（不限制）
+          </button>
+        )}
+      </div>
+      <p className="mb-2 text-xs text-muted">
+        防呆：勾选后该用户只能访问这些源的内容（即使被授权了别的源的课程）。空 = 不限制。
+      </p>
+      {sources.length === 0 ? (
+        <p className="rounded-lg border border-border bg-card-2 px-3 py-2 text-xs text-muted">
+          尚未配置存储源（在「系统设置」新增）。未配置时不限制。
+        </p>
+      ) : (
+        <div className="max-h-48 space-y-1 overflow-auto">
+          {sources.map((s) => (
+            <label key={s.id} className="flex items-center gap-2 rounded-lg border border-border bg-card-2 px-3 py-1.5 text-sm">
+              <input
+                type="checkbox"
+                checked={selected.has(s.id!)}
+                onChange={(e) => toggle(s.id!, e.target.checked)}
+                className="h-4 w-4 accent-primary"
+              />
+              <span className="flex-1 text-txt">
+                {s.name}
+                {s.is_default && <span className="ml-1 text-[10px] text-primary">默认</span>}
+              </span>
+              <span className="text-[10px] uppercase text-muted">{s.type}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }

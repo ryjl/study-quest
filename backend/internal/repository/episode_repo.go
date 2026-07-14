@@ -18,6 +18,11 @@ type EpisodeRepository interface {
 	ListByNullDuration() ([]model.Episode, error)
 	FindByID(id uint) (*model.Episode, error)
 	FindByBasenameAndSize(basename string, size int64) (*model.Episode, error)
+	// FindByBasenameAndSizeScoped is the multi-source-aware disaster-recovery
+	// lookup. When sourceID is non-nil the match is restricted to rows sharing
+	// that source (a file in source A must not self-heal onto source B's path);
+	// when nil it behaves identically to FindByBasenameAndSize (legacy rows).
+	FindByBasenameAndSizeScoped(basename string, size int64, sourceID *uint) (*model.Episode, error)
 	Create(episode *model.Episode) error
 	Update(episode *model.Episode) error
 	Delete(id uint) error
@@ -104,6 +109,26 @@ func (r *episodeRepo) FindByBasenameAndSize(basename string, size int64) (*model
 	basenameLike := "%/" + basename
 	if err := r.db.Where("(original_relative_path LIKE ? OR video_relative_path LIKE ?) AND file_size = ?",
 		basenameLike, basenameLike, size).First(&ep).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &ep, nil
+}
+
+// FindByBasenameAndSizeScoped adds a source_id filter on top of
+// FindByBasenameAndSize so disaster recovery never crosses storage sources.
+// A nil sourceID applies NO source filter (identical to the legacy unscoped
+// lookup), preserving back-compat for rows still on the global fallback.
+func (r *episodeRepo) FindByBasenameAndSizeScoped(basename string, size int64, sourceID *uint) (*model.Episode, error) {
+	if sourceID == nil {
+		return r.FindByBasenameAndSize(basename, size)
+	}
+	var ep model.Episode
+	basenameLike := "%/" + basename
+	if err := r.db.Where("(original_relative_path LIKE ? OR video_relative_path LIKE ?) AND file_size = ? AND source_id = ?",
+		basenameLike, basenameLike, size, *sourceID).First(&ep).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

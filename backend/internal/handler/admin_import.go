@@ -12,6 +12,21 @@ import (
 	"studyquest/backend/internal/service"
 )
 
+// parseSourceIDQuery reads an optional ?source_id= query param. Returns nil
+// when absent or "0" (→ use the global settings fallback); callers pass the
+// nil straight to the resolver/import service which treat it as "legacy".
+func parseSourceIDQuery(c *gin.Context) *uint {
+	raw := c.Query("source_id")
+	if raw == "" {
+		return nil
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 {
+		return nil
+	}
+	u := uint(id)
+	return &u
+}
 
 func (h *adminHandler) Scan(c *gin.Context) {
 	path := c.Query("path")
@@ -19,7 +34,7 @@ func (h *adminHandler) Scan(c *gin.Context) {
 		path = "/"
 	}
 
-	files, err := h.importService.ScanPath(path)
+	files, err := h.importService.ScanPath(path, parseSourceIDQuery(c))
 	if err != nil {
 		respondError(c, err)
 		return
@@ -34,7 +49,7 @@ func (h *adminHandler) PreviewTree(c *gin.Context) {
 		path = "/"
 	}
 
-	tree, err := h.importService.PreviewDeepScan(path)
+	tree, err := h.importService.PreviewDeepScan(path, parseSourceIDQuery(c))
 	if err != nil {
 		respondError(c, err)
 		return
@@ -72,6 +87,7 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 	}
 
 	var targetPath string
+	var sourceID *uint // resolved from the episode whose attachments we scan
 	switch entityType {
 	case "episode":
 		ep, err := h.episodeRepo.FindByID(uint(id))
@@ -79,6 +95,7 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Episode not found"})
 			return
 		}
+		sourceID = ep.SourceID
 		if ep.OriginalRelativePath != "" {
 			targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
 		}
@@ -93,6 +110,9 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 			for _, ep := range eps {
 				if ep.ChapterID != nil && *ep.ChapterID == ch.ID && ep.OriginalRelativePath != "" {
 					targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
+					if ep.SourceID != nil {
+						sourceID = ep.SourceID
+					}
 					break
 				}
 			}
@@ -108,6 +128,9 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 			for _, ep := range eps {
 				if ep.OriginalRelativePath != "" {
 					targetPath = filepath.ToSlash(filepath.Dir(ep.OriginalRelativePath))
+					if ep.SourceID != nil {
+						sourceID = ep.SourceID
+					}
 					break
 				}
 			}
@@ -118,7 +141,7 @@ func (h *adminHandler) ScanAttachments(c *gin.Context) {
 		targetPath = "/"
 	}
 
-	files, err := h.importService.ScanDirectoryAttachments(targetPath)
+	files, err := h.importService.ScanDirectoryAttachments(targetPath, sourceID)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -179,10 +202,10 @@ func (h *adminHandler) ScanMissingDurations(c *gin.Context) {
 	}
 	enqueued := h.probeWorker.EnqueueBatch(ids)
 	c.JSON(http.StatusOK, gin.H{
-		"status":   "success",
-		"queued":   enqueued,
-		"total":    len(ids),
-		"message":  fmt.Sprintf("已排队 %d 集等待探测时长（串行限速，约每集 4 秒）", enqueued),
+		"status":  "success",
+		"queued":  enqueued,
+		"total":   len(ids),
+		"message": fmt.Sprintf("已排队 %d 集等待探测时长（串行限速，约每集 4 秒）", enqueued),
 	})
 }
 

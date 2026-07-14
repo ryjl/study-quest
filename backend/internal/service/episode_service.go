@@ -58,31 +58,18 @@ type EpisodeService interface {
 }
 
 type episodeService struct {
-	episodeRepo  repository.EpisodeRepository
-	settingsRepo repository.SettingsRepository
+	episodeRepo repository.EpisodeRepository
+	resolver    *StorageProviderResolver
 }
 
-// NewEpisodeService creates an instance of EpisodeService.
-func NewEpisodeService(er repository.EpisodeRepository, sr repository.SettingsRepository) EpisodeService {
+// NewEpisodeService creates an instance of EpisodeService. The resolver
+// replaces the old settingsRepo-backed getActiveProvider: episodes resolve
+// their provider via ep.SourceID (nil → global settings fallback).
+func NewEpisodeService(er repository.EpisodeRepository, resolver *StorageProviderResolver) EpisodeService {
 	return &episodeService{
-		episodeRepo:  er,
-		settingsRepo: sr,
+		episodeRepo: er,
+		resolver:    resolver,
 	}
-}
-
-func (s *episodeService) getActiveProvider() (storage.StorageProvider, error) {
-	sType := s.settingsRepo.GetWithDefault("storage_type", "alist")
-	sURL := s.settingsRepo.GetWithDefault("storage_url", "http://localhost:5244")
-	sUser, _ := s.settingsRepo.Get("storage_username")
-	sPass, _ := s.settingsRepo.Get("storage_password")
-	sToken, _ := s.settingsRepo.Get("storage_token")
-
-	if sType == "alist" {
-		return storage.NewAListProvider(sURL, sUser, sPass, sToken), nil
-	} else if sType == "webdav" {
-		return storage.NewWebDAVProvider(sURL, sUser, sPass), nil
-	}
-	return nil, errors.New("unsupported storage_type configured: " + sType)
 }
 
 func (s *episodeService) GetEpisodesByCourse(courseID uint) ([]model.Episode, error) {
@@ -229,7 +216,7 @@ func (s *episodeService) GetStreamURL(episodeID uint, userAgent string) (*storag
 		return nil, errors.New("episode not found")
 	}
 
-	provider, err := s.getActiveProvider()
+	provider, err := s.resolver.Resolve(ep.SourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +235,9 @@ func (s *episodeService) GetStreamURL(episodeID uint, userAgent string) (*storag
 	// FindByPathAndSize which queried the same failing path.
 	if ep.FileSize != nil && ep.OriginalRelativePath != "" {
 		basename := filepath.Base(ep.OriginalRelativePath)
-		if resolved, rErr := s.episodeRepo.FindByBasenameAndSize(basename, *ep.FileSize); rErr == nil && resolved != nil && resolved.VideoRelativePath != ep.VideoRelativePath {
+		// Scope the lookup to ep's own source so a file in source A never
+		// self-heals onto source B's path. nil SourceID → legacy unscoped.
+		if resolved, rErr := s.episodeRepo.FindByBasenameAndSizeScoped(basename, *ep.FileSize, ep.SourceID); rErr == nil && resolved != nil && resolved.VideoRelativePath != ep.VideoRelativePath {
 			// Found another row with the same file at a different path — borrow it.
 			ep.VideoRelativePath = resolved.VideoRelativePath
 			_ = s.episodeRepo.Update(ep)
@@ -282,7 +271,7 @@ func (s *episodeService) GetAttachmentStreamURL(episodeID uint, index int, userA
 		return nil, "", errors.New("attachment index out of range")
 	}
 
-	provider, err := s.getActiveProvider()
+	provider, err := s.resolver.Resolve(ep.SourceID)
 	if err != nil {
 		return nil, "", err
 	}

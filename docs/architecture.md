@@ -151,12 +151,15 @@ AList/OpenList 已经做了云存储抽象。115 的 SHA1、天翼云的直链�
 
 **MVP 阶段**：单源，`settings` 表存当前激活的存储源配置（类型 + 连接参数），Admin 面板二选一。
 
-**未来扩展**（预留但不实现）：
-- 新增 `storage_sources` 表：每行一个存储源（id, type, name, config_json）
-- `episodes` 表新增 `source_id` 外键：标记每个课时属于哪个存储源
-- 聚合层：跨源浏览和检索
+**多源（已实现，见 §10.1）**：
+- `storage_sources` 表：每行一个存储源（id, type, name, url, username, password, token, is_default）。Admin 全局配 N 个。
+- `episodes.source_id` / `reading_books.source_id`（nullable）指向其来源；导入时选定。
+- `StorageProviderResolver` 按 `source_id` 解析出 `StorageProvider`（进程内缓存）；`source_id` 为 NULL 时回退到全局 `settings` 兼容期，两者都无则报错。
+- 用户存储源白名单 `user_storage_sources`（防呆）：授权时拦截 + 访问时兜底，防止 admin 误把受限源的内容授权给受限用户。空集合 = 不限制（向后兼容）。
+- backfill 脚本 `cmd/backfill_sources`：建一个 `default` source（从旧 `settings` 读）并把 NULL `source_id` 回填（一次性，不写 migrate code）。
 
-当前 `episodes` 表不加 `source_id` 字段。未来需要时一条 `ALTER TABLE ADD COLUMN` 即可，不影响已有数据和代码。
+**未来扩展**（仍未实现）：
+- 虚拟聚合层：跨源浏览和检索（多 source 拼成一棵树）。
 
 ---
 
@@ -197,7 +200,7 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 
 ## 6. 数据库设计决策
 
-### 6.1 表结构总览（12 张表）
+### 6.1 表结构总览（14 张表）
 
 | 表 | 用途 | 关键设计点 |
 |---|------|----------|
@@ -205,7 +208,7 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 | `users` | 多用户 | PIN 码 bcrypt 哈希；`role` 支持 student/teen/parent/admin |
 | `user_course_access` | 用户-课程权限 | 不同用户可访问不同课程库 |
 | `courses` | 课程总表 | `grade`(TEXT) + `subject` 二维分类；`content_type` 区分 learning/entertainment |
-| `episodes` | 课时明细 | 双保险索引：`file_hash`(indexed) + `original_relative_path` + `file_size` |
+| `episodes` | 课时明细 | 双保险索引：`file_hash`(indexed) + `original_relative_path` + `file_size`；`source_id` 指向其存储源（NULL = 走全局 settings 兼容回退，见 §4.5） |
 | `subtitles` | 字幕直存 | SRT 纯文本存 DB，零延迟分发 |
 | `ai_lesson_contents` | AI 数据 | 前置探险卡 + 后期复习测试，JSON 格式 |
 | `user_points` | 积分总账 | 当前可用 + 历史总积分 |
@@ -213,6 +216,8 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 | `user_progress` / `entertainment_progress` | 学习/娱乐进度 | 断点续播 + 累计播放秒（aggregate，见 6.4）+ 80% 完成判定；娱乐单独成表避免污染学习统计 |
 | `sessions` | 用户登录会话 | opaque token（32 字节 hex），一设备一行，固定 TTL，可 admin 撤销（见 §7） |
 | `watch_events` | 观看事件流 | append-only，每行 = 一次"连续观看会话"（窗口合并后），回答"今天/某天学了多久、几点学"（见 §6.4） |
+| `storage_sources` | 存储源配置 | 多源：admin 全局配 N 个网盘后端（alist/webdav），内容通过 source_id 指向其一（见 §4.5） |
+| `user_storage_sources` | 用户存储源白名单 | 防呆：空集合 = 不限制（向后兼容）；非空时授权 + 访问两道拦截 |
 
 ### 6.2 相对于白皮书 DDL 的变更
 
@@ -225,6 +230,7 @@ Go 后端只做一件事：查库拿到 `video_relative_path` → 问 StoragePro
 | `pdf_relative_path` → `attachment_json` | JSON 数组，支持多类型附件（PDF、练习册、音频等），不限于 PDF |
 | `file_size` / `duration_seconds` 改为可空 | Python 流水线分阶段填充，初次导入可能只有路径 |
 | `user_progress` 增加 `watch_seconds` | 记录累计播放秒数，配合服务端 80% 完成校验 |
+| 新增 `storage_sources` / `user_storage_sources` 表 + `episodes`/`reading_books` 加 `source_id` | 多源：admin 全局配 N 个网盘后端，内容跟源走；用户白名单防呆。NULL `source_id` 回退到全局 `settings` 兼容期（见 §4.5） |
 
 ### 6.3 配置管理策略
 
@@ -371,23 +377,29 @@ Admin 导入 + 设置                                              Admin SPA 升
 Makefile
 ```
 
-### 10.1 下一阶段：存储源抽象 + 用户存储源白名单（branch 3，待实现）
+### 10.1 已落地：存储源抽象 + 用户存储源白名单（branch 3）
 
-> 状态：**未实现**。本节是设计意图的真相源；一旦 branch 3 落地，须同步更新本节 + §4.5 + §6.1。
+> 状态：**已实现**。设计意图的真相源现在收敛到 §4.5 + §6.1；本节保留为落地摘要。
 
-**动机**：多用户场景下分离不同的用户场景（例如家长追剧与小朋友资料分离）。当前存储配置全局唯一（`settings` 表 5 个 `storage_*` 键），所有用户共用一个网盘后端。
+**动机**：多用户场景下分离不同的用户场景（例如家长追剧与小朋友资料分离）。此前存储配置全局唯一（`settings` 表 5 个 `storage_*` 键），所有用户共用一个网盘后端。
 
-**方案 D（已选）**：把"存储源"提成一等公民，存储源跟**内容**走，而不是跟用户走。
+**方案 D（已落地）**：把"存储源"提成一等公民，存储源跟**内容**走，而不是跟用户走。
 
-- 新表 `storage_sources`（type/url/username/password/token），admin 全局配 N 个。
-- `episodes.source_id` / `reading_books.source_id` 指向其来源；导入时选定。
-- 现有 `user_course_access` 仍控制"谁能看哪些内容"。
-- 用户存储源白名单（防呆）：`user_storage_sources`（user_id, source_id）——授权时拦截 + 访问时兜底，防止 admin 误把别的源的内容授权给受限用户。默认空 = 不限制（向后兼容）。
-- 4 处 `getActiveProvider()` 改成按 episode 反查 source 解析，不再读全局 `settings`。
-- backfill 脚本：建一个 `default` source，把现有 episode/book 的 `source_id` 回填成它（一次性脚本，不写 migrate code）。
+- 新表 `storage_sources`（type/url/username/password/token/is_default），admin 全局配 N 个；`user_storage_sources` 是用户白名单。
+- `episodes.source_id` / `reading_books.source_id` 指向其来源；导入时选定（NULL = 走全局 `settings` 兼容回退）。
+- 现有 `user_course_access` / `user_reading_*_access` 仍控制"谁能看哪些内容"。
+- 用户存储源白名单（防呆）：授权时拦截（GrantAccess / readingGrant）+ 访问时兜底（GetPlayInfo / StreamBook），防止 admin 误把别的源的内容授权给受限用户。默认空 = 不限制（向后兼容）；staff（admin/parent）bypass；reading 文章无存储维度不拦。
+- `StorageProviderResolver` 统一构造 provider（替换 4 处 `getActiveProvider()` 的 copy-paste），按 `source_id` 解析；NULL 回退全局 `settings`；凭据改了走 `Invalidate` 失效缓存。
+- 灾难恢复（basename+size 兜底）按 `source_id` 限定作用域（`FindByBasenameAndSizeScoped`），避免 A 源自愈成 B 源路径；NULL `source_id` 退化为全局（兼容旧数据）。
+- backfill 脚本 `cmd/backfill_sources`：建一个 `default` source（从旧 `settings` 读）并把 NULL `source_id` 回填（一次性，带 `-dry-run`，不写 migrate code）。
+- Admin SPA：Settings 页"存储源管理"区块（多 source CRUD + 测连接，旧全局配置降级为兼容回退）；用户详情抽屉"允许的存储源"多选；Import 页存储源选择器。
 
 **依赖**：branch 1（session 鉴权）是前提——白名单的隔离效果依赖真鉴权（否则 `X-User-ID` 可伪造）。已满足。
 
-**详见交接文档**：`docs/handoff-storage-sources.md`（branch 3 实施时建立）。
+**测试**：repo 单元测试覆盖 CRUD + 白名单空/非空语义（空=不限制是向后兼容核心断言）；cmd/server 集成测试覆盖多源隔离、授权拦截、访问兜底、staff bypass、白名单经 user DTO 往返。
+
+**仍不在范围**：存储凭据加密（独立 PR）、虚拟聚合（多 source 拼树）、删除全局 `storage_*` settings（留兼容期）。
+
+**详见**：`docs/handoff-storage-sources.md`（branch 3 交接文档，含决策记录）。
 
 ---

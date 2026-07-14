@@ -16,6 +16,7 @@ export function PathBrowser({
   selectMode = 'dir',
   acceptExt,
   title,
+  sourceId,
   onClose,
   onPick,
 }: {
@@ -26,6 +27,10 @@ export function PathBrowser({
   // are dimmed and not selectable. Omit to allow any file.
   acceptExt?: string[];
   title?: string;
+  // sourceId selects which storage backend to browse. Omit (or undefined) to
+  // use the global storage_* settings fallback — the legacy behavior used by
+  // callers that don't operate in multi-source mode (episode/book editors).
+  sourceId?: number;
   onClose: () => void;
   onPick: (path: string) => void;
 }) {
@@ -39,9 +44,12 @@ export function PathBrowser({
     }
   }, [open, initialPath]);
 
+  // Include sourceId in the query key so switching source (or opening the
+  // browser for a different source) refetches instead of showing a stale
+  // listing cached for another backend.
   const listQ = useQuery({
-    queryKey: ['browse', cwd],
-    queryFn: () => api.scanPath(cwd || '/'),
+    queryKey: ['browse', cwd, sourceId],
+    queryFn: () => api.scanPath(cwd || '/', sourceId),
     enabled: open,
     staleTime: 5_000,
   });

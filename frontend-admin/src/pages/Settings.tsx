@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { LoadingState } from '../components/ui';
 import { useToast } from '../lib/toast';
+import { StorageSourcesSection } from './StorageSourcesSection';
 
 export function Settings() {
   const qc = useQueryClient();
@@ -64,9 +65,14 @@ export function Settings() {
     <div>
       <h1 className="mb-6 border-b border-border pb-4 text-2xl font-bold text-txt">系统设置</h1>
 
+      <div className="mb-5">
+        <StorageSourcesSection />
+      </div>
+
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
         <div className="card">
-          <h2 className="mb-4 text-base font-bold text-txt">存储源配置</h2>
+          <h2 className="mb-1 text-base font-bold text-txt">全局存储配置（兼容回退）</h2>
+          <p className="mb-3 text-xs text-muted">未指定存储源的内容走此配置。迁移到多源后可忽略；删除前请确认所有内容已绑定存储源。</p>
           <div className="space-y-4">
             <div>
               <label className="mb-1 block text-xs text-muted">存储类型</label>

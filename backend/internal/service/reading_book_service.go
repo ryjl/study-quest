@@ -37,33 +37,20 @@ type ReadingBookService interface {
 }
 
 type readingBookService struct {
-	bookRepo     repository.ReadingBookRepository
-	seriesRepo   repository.ReadingSeriesRepository
-	settingsRepo repository.SettingsRepository
+	bookRepo   repository.ReadingBookRepository
+	seriesRepo repository.ReadingSeriesRepository
+	resolver   *StorageProviderResolver
 }
 
-// NewReadingBookService creates an instance of ReadingBookService.
-func NewReadingBookService(br repository.ReadingBookRepository, sr repository.SettingsRepository, ssr repository.ReadingSeriesRepository) ReadingBookService {
+// NewReadingBookService creates an instance of ReadingBookService. The resolver
+// replaces the old settingsRepo-backed getActiveProvider: books resolve their
+// provider via book.SourceID (nil → global settings fallback).
+func NewReadingBookService(br repository.ReadingBookRepository, resolver *StorageProviderResolver, ssr repository.ReadingSeriesRepository) ReadingBookService {
 	return &readingBookService{
-		bookRepo:     br,
-		seriesRepo:   ssr,
-		settingsRepo: sr,
+		bookRepo:   br,
+		seriesRepo: ssr,
+		resolver:   resolver,
 	}
-}
-
-func (s *readingBookService) getActiveProvider() (storage.StorageProvider, error) {
-	sType := s.settingsRepo.GetWithDefault("storage_type", "alist")
-	sURL := s.settingsRepo.GetWithDefault("storage_url", "http://localhost:5244")
-	sUser, _ := s.settingsRepo.Get("storage_username")
-	sPass, _ := s.settingsRepo.Get("storage_password")
-	sToken, _ := s.settingsRepo.Get("storage_token")
-
-	if sType == "alist" {
-		return storage.NewAListProvider(sURL, sUser, sPass, sToken), nil
-	} else if sType == "webdav" {
-		return storage.NewWebDAVProvider(sURL, sUser, sPass), nil
-	}
-	return nil, errors.New("unsupported storage_type configured: " + sType)
 }
 
 func (s *readingBookService) GetBooks(userID uint, userRole string, grade string, subjectID uint, standaloneOnly bool) ([]model.ReadingBook, error) {
@@ -182,7 +169,7 @@ func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*stora
 		return nil, errors.New("reading book not found")
 	}
 
-	provider, err := s.getActiveProvider()
+	provider, err := s.resolver.Resolve(book.SourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -194,9 +181,11 @@ func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*stora
 	}
 
 	// Disaster recovery: basename + size fallback (mirrors episode service).
+	// Scoped to book's own source so a file in source A never self-heals onto
+	// source B's path; nil SourceID → legacy unscoped.
 	if book.FileSize != nil && book.FileRelativePath != "" {
 		basename := filepath.Base(book.FileRelativePath)
-		if resolved, rErr := s.bookRepo.FindByBasenameAndSize(basename, *book.FileSize); rErr == nil && resolved != nil && resolved.FileRelativePath != book.FileRelativePath {
+		if resolved, rErr := s.bookRepo.FindByBasenameAndSizeScoped(basename, *book.FileSize, book.SourceID); rErr == nil && resolved != nil && resolved.FileRelativePath != book.FileRelativePath {
 			book.FileRelativePath = resolved.FileRelativePath
 			_ = s.bookRepo.Update(book)
 			return provider.GetDownloadURL(resolved.FileRelativePath, userAgent)

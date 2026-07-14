@@ -22,7 +22,7 @@ func TestChapterService(t *testing.T) {
 	episodeRepo := repository.NewEpisodeRepository(db)
 
 	chapterSvc := NewChapterService(chapterRepo)
-	episodeSvc := NewEpisodeService(episodeRepo, repository.NewSettingsRepository(db))
+	episodeSvc := NewEpisodeService(episodeRepo, NewStorageProviderResolver(repository.NewStorageSourceRepository(db), repository.NewSettingsRepository(db)))
 
 	course := &model.Course{Title: "Test Course", SubjectID: subjects["chinese"].ID}
 	_ = courseRepo.Create(course)

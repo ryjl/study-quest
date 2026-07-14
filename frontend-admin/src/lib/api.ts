@@ -11,6 +11,7 @@ import type {
   PointsLedgerEntry,
   ProbeStats,
   Settings,
+  StorageSource,
   SubjectMeta,
   TagMeta,
   Subtitle,
@@ -259,17 +260,42 @@ export const api = {
   },
 
   // ---- Import / Storage ----
-  async scanPath(path: string): Promise<FileInfo[]> {
-    return request(`/admin/api/import/scan${qs({ path })}`);
+  async scanPath(path: string, sourceId?: number): Promise<FileInfo[]> {
+    return request(`/admin/api/import/scan${qs({ path, source_id: sourceId })}`);
   },
-  async previewTree(path: string): Promise<ImportPreviewNode> {
-    return request(`/admin/api/import/preview-tree${qs({ path })}`);
+  async previewTree(path: string, sourceId?: number): Promise<ImportPreviewNode> {
+    return request(`/admin/api/import/preview-tree${qs({ path, source_id: sourceId })}`);
   },
   async executeImport(body: unknown): Promise<{ status: string }> {
     return request('/admin/api/import/execute', { method: 'POST', body: JSON.stringify(body) });
   },
   async pingStorage(body: Partial<Settings>): Promise<{ status: string; message: string }> {
     return request('/admin/api/storage/ping', { method: 'POST', body: JSON.stringify(body) });
+  },
+
+  // ---- Storage sources (multi-source CRUD + per-source ping) ----
+  async listStorageSources(): Promise<StorageSource[]> {
+    return request('/admin/api/storage-sources');
+  },
+  async createStorageSource(body: StorageSource): Promise<StorageSource> {
+    return request('/admin/api/storage-sources', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateStorageSource(id: number, body: StorageSource): Promise<StorageSource> {
+    return request(`/admin/api/storage-sources/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteStorageSource(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/storage-sources/${id}`, { method: 'DELETE' });
+  },
+  async pingStorageSource(id: number): Promise<{ status: string; message: string }> {
+    return request(`/admin/api/storage-sources/${id}/ping`, { method: 'POST' });
+  },
+
+  // ---- Per-user storage-source whitelist ----
+  async getStorageWhitelist(userId: number): Promise<number[]> {
+    return request(`/admin/api/users/${userId}/storage-whitelist`);
+  },
+  async setStorageWhitelist(userId: number, sourceIds: number[]): Promise<{ status: string }> {
+    return request(`/admin/api/users/${userId}/storage-whitelist`, { method: 'PUT', body: JSON.stringify({ source_ids: sourceIds }) });
   },
 
   // ---- Settings ----

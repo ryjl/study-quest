@@ -35,6 +35,9 @@ type ExecuteReadingImportRequest struct {
 	TargetSeriesID uint                  `json:"target_series_id"`
 	NewSeries      *NewReadingSeriesReq  `json:"new_series"`
 	Tree           *ReadingPreviewNode   `json:"tree"`
+	// SourceID stamps every imported book with its storage source. Nil =
+	// legacy (resolved via the global settings fallback at stream time).
+	SourceID *uint `json:"source_id"`
 }
 
 type NewReadingSeriesReq struct {
@@ -46,7 +49,7 @@ type NewReadingSeriesReq struct {
 }
 
 type ReadingImportService interface {
-	PreviewReadingFolder(path string) (*ReadingPreviewNode, error)
+	PreviewReadingFolder(path string, sourceID *uint) (*ReadingPreviewNode, error)
 	ExecuteReadingImport(req *ExecuteReadingImportRequest) error
 }
 
@@ -55,7 +58,7 @@ type readingImportService struct {
 	seriesRepo  repository.ReadingSeriesRepository
 	bookRepo    repository.ReadingBookRepository
 	subjectRepo repository.SubjectRepository
-	settingsRepo repository.SettingsRepository
+	resolver    *StorageProviderResolver
 }
 
 func NewReadingImportService(
@@ -63,30 +66,15 @@ func NewReadingImportService(
 	sr repository.ReadingSeriesRepository,
 	br repository.ReadingBookRepository,
 	subj repository.SubjectRepository,
-	settings repository.SettingsRepository,
+	resolver *StorageProviderResolver,
 ) ReadingImportService {
 	return &readingImportService{
-		db:           db,
-		seriesRepo:   sr,
-		bookRepo:     br,
-		subjectRepo:  subj,
-		settingsRepo: settings,
+		db:          db,
+		seriesRepo:  sr,
+		bookRepo:    br,
+		subjectRepo: subj,
+		resolver:    resolver,
 	}
-}
-
-func (s *readingImportService) getActiveProvider() (storage.StorageProvider, error) {
-	sType := s.settingsRepo.GetWithDefault("storage_type", "alist")
-	sURL := s.settingsRepo.GetWithDefault("storage_url", "http://localhost:5244")
-	sUser, _ := s.settingsRepo.Get("storage_username")
-	sPass, _ := s.settingsRepo.Get("storage_password")
-	sToken, _ := s.settingsRepo.Get("storage_token")
-
-	if sType == "alist" {
-		return storage.NewAListProvider(sURL, sUser, sPass, sToken), nil
-	} else if sType == "webdav" {
-		return storage.NewWebDAVProvider(sURL, sUser, sPass), nil
-	}
-	return nil, errors.New("unsupported storage_type configured: " + sType)
 }
 
 func isPdfFile(filename string) bool {
@@ -96,8 +84,8 @@ func isPdfFile(filename string) bool {
 // PreviewReadingFolder walks the storage tree and builds a preview the admin can
 // edit before committing. The root folder name becomes the series title;
 // PDF leaves become books. Mirrors importService.PreviewDeepScan.
-func (s *readingImportService) PreviewReadingFolder(path string) (*ReadingPreviewNode, error) {
-	provider, err := s.getActiveProvider()
+func (s *readingImportService) PreviewReadingFolder(path string, sourceID *uint) (*ReadingPreviewNode, error) {
+	provider, err := s.resolver.Resolve(sourceID)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +272,7 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 			bookGrades = []model.Grade{model.GradeUniversal}
 		}
 
-		return s.importReadingNode(req.Tree, seriesID, bookSubjectID, bookGrades, bookRepo, existingByTitle, existingByPath, &nextSortOrder)
+		return s.importReadingNode(req.Tree, seriesID, bookSubjectID, bookGrades, bookRepo, existingByTitle, existingByPath, &nextSortOrder, req.SourceID)
 	})
 }
 
@@ -299,6 +287,7 @@ func (s *readingImportService) importReadingNode(
 	existingByTitle map[string]*model.ReadingBook,
 	existingByPath map[string]*model.ReadingBook,
 	sortOrder *int,
+	sourceID *uint,
 ) error {
 	if node.Type == "exclude" {
 		return nil
@@ -340,6 +329,7 @@ func (s *readingImportService) importReadingNode(
 			Title:            node.Name,
 			FileRelativePath: node.Path,
 			SubjectID:        subjectID,
+			SourceID:         sourceID,
 		}
 		if node.Size > 0 {
 			sz := node.Size
@@ -357,7 +347,7 @@ func (s *readingImportService) importReadingNode(
 
 	// Directory — descend into children.
 	for _, child := range node.Children {
-		if err := s.importReadingNode(child, seriesID, subjectID, grades, bookRepo, existingByTitle, existingByPath, sortOrder); err != nil {
+		if err := s.importReadingNode(child, seriesID, subjectID, grades, bookRepo, existingByTitle, existingByPath, sortOrder, sourceID); err != nil {
 			return err
 		}
 	}

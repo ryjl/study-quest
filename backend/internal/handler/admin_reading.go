@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -391,15 +392,93 @@ func (h *adminHandler) BulkReadingAccess(c *gin.Context) {
 	}
 	switch req.Action {
 	case "grant_all":
+		// Articles have no storage dimension (web URLs) — always grant in bulk.
+		if err := h.readingArticleRepo.GrantAll(id); err != nil {
+			respondError(c, err)
+			return
+		}
+		// Series + books DO have a storage dimension (series access implies
+		// child-book access via StreamBook's CanAccess inheritance). When the
+		// user has a non-empty whitelist we grant per-item, skipping any series
+		// or book whose source isn't allowed — otherwise a series grant would
+		// smuggle through access to a restricted book. Empty whitelist = the
+		// fast bulk GrantAll path (unrestricted).
+		if h.storageSourceRepo != nil {
+			wl, werr := h.storageSourceRepo.WhitelistForUser(id)
+			if werr != nil {
+				// Fail-closed: can't enforce the gate without the whitelist.
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read storage whitelist"})
+				return
+			}
+			if len(wl) > 0 {
+				// Load every book ONCE (instead of ListBySeries per series) and
+				// group source ids by series in memory — the per-series loop
+				// below then consults this map instead of issuing N queries.
+				allBooks, berr := h.readingBookRepo.List("", 0, nil, false)
+				if berr != nil {
+					respondError(c, berr)
+					return
+				}
+				seriesSources := make(map[uint][]uint)
+				for _, b := range allBooks {
+					if b.SeriesID != nil && b.SourceID != nil {
+						seriesSources[*b.SeriesID] = append(seriesSources[*b.SeriesID], *b.SourceID)
+					}
+				}
+				seriesGranted, seriesSkipped := 0, 0
+				allSeries, serr := h.readingSeriesRepo.List("", 0, nil)
+				if serr != nil {
+					respondError(c, serr)
+					return
+				}
+				for _, s := range allSeries {
+					// A series grant implies access to ALL its books (via
+					// StreamBook's CanAccess series inheritance), so the series
+					// is allowed only if EVERY one of its books' sources is in
+					// the whitelist. checkStorageWhitelist handles that (it
+					// rejects if any needed source is missing).
+					if werr := checkStorageWhitelist(h.storageSourceRepo, id, seriesSources[s.ID]); werr != nil {
+						seriesSkipped++
+						continue
+					}
+					if err := h.readingSeriesRepo.GrantAccess(id, s.ID); err != nil {
+						respondError(c, err)
+						return
+					}
+					seriesGranted++
+				}
+				// Grant each standalone book (and the allowed-source books of
+				// a skipped series) individually. Books whose series was just
+				// granted are re-granted harmlessly (idempotent upsert).
+				booksGranted, booksSkipped := 0, 0
+				for _, b := range allBooks {
+					var ids []uint
+					if b.SourceID != nil {
+						ids = []uint{*b.SourceID}
+					}
+					if werr := checkStorageWhitelist(h.storageSourceRepo, id, ids); werr != nil {
+						booksSkipped++
+						continue
+					}
+					if err := h.readingBookRepo.GrantAccess(id, b.ID); err != nil {
+						respondError(c, err)
+						return
+					}
+					booksGranted++
+				}
+				c.JSON(http.StatusOK, gin.H{
+					"status":  "success",
+					"message": fmt.Sprintf("已授权 %d 套/%d 本，跳过 %d 套/%d 本（存储源白名单）", seriesGranted, booksGranted, seriesSkipped, booksSkipped),
+				})
+				return
+			}
+		}
+		// No whitelist (or feature unwired) → unrestricted bulk grant.
 		if err := h.readingSeriesRepo.GrantAll(id); err != nil {
 			respondError(c, err)
 			return
 		}
 		if err := h.readingBookRepo.GrantAll(id); err != nil {
-			respondError(c, err)
-			return
-		}
-		if err := h.readingArticleRepo.GrantAll(id); err != nil {
 			respondError(c, err)
 			return
 		}
@@ -423,7 +502,55 @@ func (h *adminHandler) BulkReadingAccess(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "success"})
 }
 
+// readingSourceIDsForGrant expands a reading grant target into the set of
+// storage source ids it would expose. Articles have no source dimension (nil);
+// books contribute their own SourceID; a series contributes the union of its
+// books' source ids (series access implies child access).
+func (h *adminHandler) readingSourceIDsForGrant(targetType string, targetID uint) ([]uint, error) {
+	switch targetType {
+	case "series":
+		books, err := h.readingBookRepo.ListBySeries(targetID)
+		if err != nil {
+			return nil, err
+		}
+		ids := make([]uint, 0, len(books))
+		for _, b := range books {
+			if b.SourceID != nil {
+				ids = append(ids, *b.SourceID)
+			}
+		}
+		return ids, nil
+	case "book":
+		book, err := h.readingBookRepo.FindByID(targetID)
+		if err != nil {
+			return nil, err
+		}
+		if book == nil {
+			// A miss should NOT be treated as "allowed" — surface it so the
+			// caller refuses instead of silently granting access to nothing.
+			return nil, fmt.Errorf("reading book %d not found", targetID)
+		}
+		if book.SourceID == nil {
+			return nil, nil
+		}
+		return []uint{*book.SourceID}, nil
+	case "article":
+		return nil, nil
+	}
+	return nil, nil
+}
+
 func (h *adminHandler) readingGrant(userID uint, targetType string, targetID uint) error {
+	// Storage-source whitelist gate (防呆), mirroring the course grant gate.
+	if h.storageSourceRepo != nil {
+		sourceIDs, serr := h.readingSourceIDsForGrant(targetType, targetID)
+		if serr != nil {
+			return serr
+		}
+		if werr := checkStorageWhitelist(h.storageSourceRepo, userID, sourceIDs); werr != nil {
+			return werr
+		}
+	}
 	switch targetType {
 	case "series":
 		return h.readingSeriesRepo.GrantAccess(userID, targetID)
@@ -456,7 +583,7 @@ func (h *adminHandler) PreviewReadingImport(c *gin.Context) {
 	if path == "" {
 		path = "/"
 	}
-	tree, err := h.readingImportService.PreviewReadingFolder(path)
+	tree, err := h.readingImportService.PreviewReadingFolder(path, parseSourceIDQuery(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to scan folder: " + err.Error()})
 		return

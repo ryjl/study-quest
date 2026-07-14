@@ -335,6 +335,25 @@ func (h *adminHandler) GrantAccess(c *gin.Context) {
 		return
 	}
 
+	// Storage-source whitelist gate (防呆): refuse if any episode in this course
+	// lives on a source the user's whitelist doesn't include. Empty whitelist =
+	// unrestricted, so this is a no-op until the admin curates one.
+	if h.storageSourceRepo != nil {
+		sourceIDs, gerr := courseSourceSet(h.episodeRepo, req.CourseID)
+		if gerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to inspect course sources"})
+			return
+		}
+		if werr := checkStorageWhitelist(h.storageSourceRepo, req.UserID, sourceIDs); werr != nil {
+			code := http.StatusForbidden
+			if _, denied := werr.(*errStorageWhitelistDenied); !denied {
+				code = http.StatusInternalServerError
+			}
+			c.JSON(code, gin.H{"error": werr.Error()})
+			return
+		}
+	}
+
 	if err := h.userService.GrantCourseAccess(req.UserID, req.CourseID); err != nil {
 		respondError(c, err)
 		return
@@ -408,6 +427,49 @@ func (h *adminHandler) BulkAccess(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
 		return
+	}
+
+	// For grant_all, if the user has a non-empty storage whitelist we can't
+	// blindly grant every course — some may live on a restricted source. Fall
+	// back to per-course granting, skipping (and counting) the denied ones, so
+	// grant_all never hard-fails on the whitelist but still respects it.
+	if req.Action == "grant_all" && h.storageSourceRepo != nil {
+		wl, werr := h.storageSourceRepo.WhitelistForUser(id)
+		if werr != nil {
+			// Fail-closed: a whitelist read error means we can't enforce the
+			// 防呆 gate, so refuse rather than silently grant everything.
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read storage whitelist"})
+			return
+		}
+		if len(wl) > 0 {
+			courses, cerr := h.courseRepo.List("", 0, "all", nil)
+			if cerr != nil {
+				respondError(c, cerr)
+				return
+			}
+			granted, skipped := 0, 0
+			for _, cr := range courses {
+				sourceIDs, serr := courseSourceSet(h.episodeRepo, cr.ID)
+				if serr != nil {
+					respondError(c, serr)
+					return
+				}
+				if werr := checkStorageWhitelist(h.storageSourceRepo, id, sourceIDs); werr != nil {
+					skipped++
+					continue
+				}
+				if err := h.userService.GrantCourseAccess(id, cr.ID); err != nil {
+					respondError(c, err)
+					return
+				}
+				granted++
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status":  "success",
+				"message": fmt.Sprintf("已授权 %d 门课，%d 门因存储源白名单被跳过", granted, skipped),
+			})
+			return
+		}
 	}
 
 	if err := h.userService.BulkCourseAccess(id, req.Action); err != nil {

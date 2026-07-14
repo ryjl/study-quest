@@ -27,19 +27,23 @@ type ReadingHandler interface {
 }
 
 type readingHandler struct {
-	seriesService  service.ReadingSeriesService
-	bookService    service.ReadingBookService
-	articleService service.ReadingArticleService
-	subjectRepo    repository.SubjectRepository
+	seriesService    service.ReadingSeriesService
+	bookService      service.ReadingBookService
+	articleService   service.ReadingArticleService
+	subjectRepo      repository.SubjectRepository
+	storageSourceRepo repository.StorageSourceRepository
 }
 
-// NewReadingHandler creates an instance of ReadingHandler.
-func NewReadingHandler(ss service.ReadingSeriesService, bs service.ReadingBookService, as service.ReadingArticleService, subj repository.SubjectRepository) ReadingHandler {
+// NewReadingHandler creates an instance of ReadingHandler. The storage source
+// repo backs the access-time whitelist gate in StreamBook (nil = gate
+// disabled, for setups that haven't configured sources).
+func NewReadingHandler(ss service.ReadingSeriesService, bs service.ReadingBookService, as service.ReadingArticleService, subj repository.SubjectRepository, ssr repository.StorageSourceRepository) ReadingHandler {
 	return &readingHandler{
-		seriesService:  ss,
-		bookService:    bs,
-		articleService: as,
-		subjectRepo:    subj,
+		seriesService:     ss,
+		bookService:       bs,
+		articleService:    as,
+		subjectRepo:       subj,
+		storageSourceRepo: ssr,
 	}
 }
 
@@ -280,6 +284,24 @@ func (h *readingHandler) StreamBook(c *gin.Context) {
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"error": "book is locked"})
 		return
+	}
+
+	// Storage-source whitelist gate (访问兜底), mirroring GetPlayInfo. Staff
+	// roles bypass (CanAccess already returned true for them above, but we
+	// re-check role here to skip the source lookup entirely). Empty whitelist
+	// = no-op.
+	if h.storageSourceRepo != nil && !model.IsStaffRole(role) {
+		if book, berr := h.bookService.GetBookByID(uint(id)); berr == nil && book != nil && book.SourceID != nil {
+			srcAllowed, serr := h.storageSourceRepo.IsAllowed(uid, *book.SourceID)
+			if serr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage access"})
+				return
+			}
+			if !srcAllowed {
+				c.JSON(http.StatusForbidden, gin.H{"error": "该用户不被允许访问此存储源"})
+				return
+			}
+		}
 	}
 
 	link, err := h.bookService.GetStreamURL(uint(id), c.Request.UserAgent())

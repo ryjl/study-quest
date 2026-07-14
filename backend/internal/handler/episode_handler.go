@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
 
@@ -25,15 +26,18 @@ type EpisodeHandler interface {
 }
 
 type episodeHandler struct {
-	episodeService  service.EpisodeService
-	progressService service.ProgressService
-	settingsRepo    repository.SettingsRepository
-	unlockService   service.UnlockService
+	episodeService    service.EpisodeService
+	progressService   service.ProgressService
+	settingsRepo      repository.SettingsRepository
+	unlockService     service.UnlockService
+	storageSourceRepo repository.StorageSourceRepository
 }
 
-// NewEpisodeHandler creates an instance of EpisodeHandler.
-func NewEpisodeHandler(es service.EpisodeService, ps service.ProgressService, sr repository.SettingsRepository, us service.UnlockService) EpisodeHandler {
-	return &episodeHandler{episodeService: es, progressService: ps, settingsRepo: sr, unlockService: us}
+// NewEpisodeHandler creates an instance of EpisodeHandler. The storage source
+// repo backs the access-time whitelist gate in GetPlayInfo (nil = gate
+// disabled, for setups that haven't configured sources).
+func NewEpisodeHandler(es service.EpisodeService, ps service.ProgressService, sr repository.SettingsRepository, us service.UnlockService, ssr repository.StorageSourceRepository) EpisodeHandler {
+	return &episodeHandler{episodeService: es, progressService: ps, settingsRepo: sr, unlockService: us, storageSourceRepo: ssr}
 }
 
 func (h *episodeHandler) GetEpisodeByID(c *gin.Context) {
@@ -91,11 +95,70 @@ func srtToVtt(srt string) string {
 	return vtt
 }
 
+// checkEpisodeSourceAccess is the storage-source whitelist gate shared by all
+// episode media endpoints (Stream, StreamAttachment, GetPlayInfo). It enforces
+// the 防呆 rule: a non-staff user with a non-empty whitelist may only reach an
+// episode whose SourceID is in their whitelist. Returns true to proceed; on a
+// denial it writes the response (401/403/500) and returns false so the caller
+// can `return` immediately.
+//
+// Fail-closed: a non-staff request with no trustworthy userID is rejected
+// (401) rather than falling through to hand out a stream URL. Staff roles
+// (admin/parent) bypass entirely. A nil storageSourceRepo (feature unwired) or
+// an episode with no SourceID (legacy row on the global fallback) short-
+// circuits to allow. Empty whitelist = unrestricted (backward compatible).
+func (h *episodeHandler) checkEpisodeSourceAccess(c *gin.Context, episodeID uint) bool {
+	if h.storageSourceRepo == nil {
+		return true
+	}
+	role, _ := c.Get("userRole")
+	roleStr, _ := role.(string)
+	if model.IsStaffRole(roleStr) {
+		return true
+	}
+	uidVal, ok := c.Get("userID")
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		return false
+	}
+	uid, ok := uidVal.(uint)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authentication required"})
+		return false
+	}
+	ep, err := h.episodeService.GetEpisodeByID(episodeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load episode"})
+		return false
+	}
+	if ep == nil || ep.SourceID == nil {
+		return true // no source dimension → unrestricted (legacy fallback)
+	}
+	allowed, aerr := h.storageSourceRepo.IsAllowed(uid, *ep.SourceID)
+	if aerr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check storage access"})
+		return false
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "该用户不被允许访问此存储源"})
+		return false
+	}
+	return true
+}
+
 func (h *episodeHandler) Stream(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID format"})
+		return
+	}
+
+	// Storage-source whitelist gate (访问兜底). Stream hands out the direct
+	// netdisk URL via 302, so it MUST be gated the same way as GetPlayInfo —
+	// otherwise a user can bypass the whitelist by calling /stream directly
+	// with a guessed episode id. Staff bypass; fail-closed on missing identity.
+	if !h.checkEpisodeSourceAccess(c, uint(id)) {
 		return
 	}
 
@@ -157,6 +220,14 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 				return
 			}
 		}
+	}
+
+	// Storage-source whitelist gate (访问兜底). Shared with Stream /
+	// StreamAttachment via checkEpisodeSourceAccess so every media-exfiltration
+	// endpoint enforces the same constraint. Empty whitelist = no-op; staff
+	// bypass; fail-closed on missing identity.
+	if !h.checkEpisodeSourceAccess(c, uint(id)) {
+		return
 	}
 
 	link, err := h.episodeService.GetStreamURL(uint(id), c.Request.UserAgent())
@@ -321,6 +392,12 @@ func (h *episodeHandler) StreamAttachment(c *gin.Context) {
 	index, err := strconv.Atoi(indexStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment index"})
+		return
+	}
+
+	// Storage-source whitelist gate — same rationale as Stream: attachments are
+	// gated by the episode's source, and this endpoint hands out a direct URL.
+	if !h.checkEpisodeSourceAccess(c, uint(id)) {
 		return
 	}
 

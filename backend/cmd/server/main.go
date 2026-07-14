@@ -77,12 +77,17 @@ func main() {
 	readingArticleRepo := repository.NewReadingArticleRepository(db)
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	watchEventRepo := repository.NewWatchEventRepository(db)
+	storageSourceRepo := repository.NewStorageSourceRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
 	sessionService := service.NewSessionService(sessionRepo, cfg.SessionTTL)
 	courseService := service.NewCourseService(courseRepo, userRepo)
-	episodeService := service.NewEpisodeService(episodeRepo, settingsRepo)
+	// The storage resolver centralizes provider construction (replaces the 4
+	// per-service getActiveProvider copies). nil SourceID → global settings
+	// fallback (legacy); non-nil → that source's configured backend.
+	storageResolver := service.NewStorageProviderResolver(storageSourceRepo, settingsRepo)
+	episodeService := service.NewEpisodeService(episodeRepo, storageResolver)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, cfg.WatchMergeWindow)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)
@@ -90,13 +95,13 @@ func main() {
 	// Probe worker must exist before import/ingest handlers so they can wire
 	// its Enqueue callback. Started as a goroutine below.
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
-	importService := service.NewImportService(db, episodeRepo, courseRepo, settingsRepo, chapterRepo, subjectRepo, probeWorker.Enqueue)
+	importService := service.NewImportService(db, episodeRepo, courseRepo, storageResolver, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 	readingSeriesService := service.NewReadingSeriesService(readingSeriesRepo, readingBookRepo, readingArticleRepo)
-	readingBookService := service.NewReadingBookService(readingBookRepo, settingsRepo, readingSeriesRepo)
+	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
-	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, settingsRepo)
+	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
 
 	// Seed default badges and subjects (idempotent). Badges seed FIRST because
 	// subject seeding auto-generates subject_count badges and the order keeps
@@ -115,7 +120,7 @@ func main() {
 	healthHandler := handler.NewHealthHandler()
 	userHandler := handler.NewUserHandler(userService, sessionService)
 	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
-	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService)
+	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService, storageSourceRepo)
 	progressHandler := handler.NewProgressHandler(progressService)
 	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
 	adminHandler := handler.NewAdminHandlerDeps().
@@ -145,13 +150,15 @@ func main() {
 		WithProbeWorker(probeWorker).
 		WithSessionService(sessionService).
 		WithWatchEventRepo(watchEventRepo).
+		WithStorageSources(storageSourceRepo).
+		WithStorageResolver(storageResolver).
 		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)
 	tagHandler := handler.NewTagHandler(tagService)
 	unlockHandler := handler.NewUnlockHandler(unlockService)
 	releaseHandler := handler.NewReleaseHandler(releaseRepo)
-	readingHandler := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo)
+	readingHandler := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
 
 	// 9. Boot up Gin Server Router
 	gin.SetMode(gin.ReleaseMode)

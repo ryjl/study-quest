@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useSubjects } from '../lib/useSubjects';
+import { useStorageSources } from '../lib/useStorageSources';
 import { useTags } from '../lib/useTags';
 import { useTheme } from './ThemeProvider';
 
@@ -26,6 +27,7 @@ export function Layout() {
   // across courses, dashboard, import, badges).
   useSubjects();
   useTags();
+  useStorageSources();
   const probeQ = useQuery({
     queryKey: ['probe'],
     queryFn: api.probeProgress,

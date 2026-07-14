@@ -16,6 +16,42 @@ type Setting struct {
 	UpdatedAt   time.Time
 }
 
+// StorageSource is one netdisk backend configuration (alist or webdav). The
+// admin configures N of these globally. Content (episode/book) points at one
+// via SourceID; users never hold storage credentials directly. This replaces
+// the single global storage_* settings keys for the multi-source era — those
+// keys remain as a fallback for legacy rows whose SourceID is still NULL
+// (see StorageProviderResolver).
+//
+// At most one row should have IsDefault=true; it is the selection used when an
+// import does not specify a source and no other default is implied. The
+// backfill_sources tool creates the default from the legacy settings.
+type StorageSource struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement"`
+	Name      string    `gorm:"size:100;not null"`          // display name, e.g. "家长追剧盘"
+	Type      string    `gorm:"size:20;not null"`           // "alist" | "webdav"
+	URL       string    `gorm:"size:1024;not null"`
+	Username  string    `gorm:"size:255"`
+	Password  string    `gorm:"size:255"`
+	Token     string    `gorm:"size:1024"`                  // alist only
+	IsDefault bool      `gorm:"default:false"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// UserStorageSource is one row of a user's storage-source whitelist (防呆).
+// An EMPTY set means "no restriction" (backward compatible — the user may
+// access any source their content access already permits). A non-empty set
+// restricts the user to exactly the listed sources; the grant-time and
+// access-time gates enforce this (see storage_source_repo.IsAllowed).
+type UserStorageSource struct {
+	UserID    uint      `gorm:"primaryKey"`
+	SourceID  uint      `gorm:"primaryKey"`
+	CreatedAt time.Time `gorm:"default:CURRENT_TIMESTAMP"`
+	User      User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Source    StorageSource `gorm:"foreignKey:SourceID;constraint:OnDelete:CASCADE"`
+}
+
 // User represents a user (student or parent).
 type User struct {
 	ID        uint   `gorm:"primaryKey;autoIncrement"`
@@ -267,6 +303,11 @@ type Episode struct {
 	SortOrder            int       `gorm:"index:idx_course_sort;not null"`
 	Title                string    `gorm:"size:255;not null"`
 	VideoRelativePath    string    `gorm:"type:text;not null"`
+	// SourceID points at the StorageSource this episode was imported from. NULL
+	// = legacy data predating multi-source (resolved via the global storage_*
+	// settings fallback); see StorageProviderResolver. Backfilled by the
+	// one-shot backfill_sources tool on non-rebuild deployments.
+	SourceID             *uint     `gorm:"index"`
 	CoverURL             string    `gorm:"size:1024"`
 	AttachmentJSON       string    `gorm:"type:text"` // JSON array of attachments
 	OriginalRelativePath string    `gorm:"type:text"` // Original multi-layer path to prevent name collision
@@ -652,6 +693,10 @@ type ReadingBook struct {
 	FileRelativePath string         `gorm:"type:text;not null"` // Alist/WebDAV relative path
 	FileSize         *int64                                     // nullable, not yet probed
 	PageCount        *int                                       // nullable, client reports on first open
+	// SourceID points at the StorageSource this book was imported from. NULL =
+	// legacy data (resolved via the global storage_* settings fallback); see
+	// StorageProviderResolver. Mirror of Episode.SourceID.
+	SourceID         *uint         `gorm:"index"`
 	CoverURL         string         `gorm:"size:1024"`
 	SubjectID        uint           `gorm:"not null;index"`
 	Subject          Subject        `gorm:"foreignKey:SubjectID;constraint:OnDelete:RESTRICT"`
@@ -832,5 +877,9 @@ func AutoMigrate(db *gorm.DB) error {
 		// Watch history module (per-session viewing events; coexists with the
 		// aggregate progress tables above, written alongside them on each report).
 		&WatchEvent{},
+		// Storage sources module (multi-source: admin configures N netdisk
+		// backends; content points at one; user whitelist is the 防呆 gate).
+		&StorageSource{},
+		&UserStorageSource{},
 	)
 }

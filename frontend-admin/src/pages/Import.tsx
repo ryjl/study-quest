@@ -5,6 +5,7 @@ import type { ImportPreviewNode } from '../lib/types';
 import { EmptyState, Tag } from '../components/ui';
 import { PathBrowser } from '../components/PathBrowser';
 import { useSubjects } from '../lib/useSubjects';
+import { useStorageSources } from '../lib/useStorageSources';
 import { GradePicker, ImageUpload } from '../components/inputs';
 import { TagInput } from '../components/TagInput';
 import { useToast } from '../lib/toast';
@@ -17,9 +18,12 @@ export function Import() {
   const qc = useQueryClient();
   const subjectsQ = useSubjects();
   const subjects = subjectsQ.data ?? [];
+  const sourcesQ = useStorageSources();
+  const sources = sourcesQ.data ?? [];
 
   // Step state
   const [path, setPath] = useState('/');
+  const [sourceId, setSourceId] = useState<number | undefined>(undefined);
   const [browsing, setBrowsing] = useState(false);
   const [mode, setMode] = useState<ImportMode>('new');
   const [targetCourseId, setTargetCourseId] = useState(0);
@@ -36,12 +40,33 @@ export function Import() {
     if (!newSubject && subjects.length > 0) setNewSubject(subjects[0].key);
   }, [subjects, newSubject]);
 
+  // Default sourceId to the default source (or the first one) once the catalog
+  // loads, so the very first scan picks a real source instead of the global
+  // fallback. If no sources are configured, sourceId stays undefined and the
+  // backend falls back to the global storage_* settings (legacy behavior).
+  // Also reset to undefined if the selected source is deleted mid-session, so
+  // the next effect re-picks a live one instead of scanning a dead id.
+  useEffect(() => {
+    if (sources.length === 0) {
+      if (sourceId !== undefined) setSourceId(undefined);
+      return;
+    }
+    if (sourceId !== undefined && !sources.some((s) => s.id === sourceId)) {
+      setSourceId(undefined);
+      return;
+    }
+    if (sourceId === undefined) {
+      const def = sources.find((s) => s.is_default) ?? sources[0];
+      setSourceId(def.id);
+    }
+  }, [sources, sourceId]);
+
   const [tree, setTree] = useState<ImportPreviewNode | null>(null);
 
   const coursesQ = useQuery({ queryKey: ['courses'], queryFn: api.listCourses });
 
   const previewMut = useMutation({
-    mutationFn: (scanPath: string) => api.previewTree(scanPath || path),
+    mutationFn: (scanPath: string) => api.previewTree(scanPath || path, sourceId),
     onSuccess: (t) => {
       setTree(t);
       // Auto-suggest new course title from root
@@ -53,7 +78,7 @@ export function Import() {
   const executeMut = useMutation({
     mutationFn: () => {
       if (!tree) throw new Error('请先扫描');
-      const body: Record<string, unknown> = { tree: serializeTree(tree) };
+      const body: Record<string, unknown> = { tree: serializeTree(tree), source_id: sourceId };
       if (mode === 'existing') {
         if (!targetCourseId) throw new Error('请选择目标课程');
         body.target_course_id = targetCourseId;
@@ -86,6 +111,26 @@ export function Import() {
           <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-white">1</span>
           <h2 className="font-semibold text-txt">选择扫描路径</h2>
         </div>
+        {sources.length > 0 && (
+          <div className="mb-3">
+            <label className="mb-1 block text-xs text-muted">存储源</label>
+            <select
+              className="input"
+              value={sourceId ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSourceId(v === '' ? undefined : Number(v));
+                setTree(null); // switching source invalidates the prior preview
+              }}
+            >
+              {sources.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}{s.is_default ? '（默认）' : ''} — {s.type}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex gap-2">
           <input
             className="input font-mono"
@@ -106,12 +151,14 @@ export function Import() {
         <PathBrowser
           open
           initialPath={path}
+          sourceId={sourceId}
           onClose={() => setBrowsing(false)}
           onPick={(p) => {
             setPath(p);
             setBrowsing(false);
             // Auto-scan immediately after picking a folder — the separate
             // "开始扫描" button exists only for the manual-path entry case.
+            // sourceId is captured from render scope by previewMut.mutationFn.
             previewMut.mutate(p);
           }}
         />

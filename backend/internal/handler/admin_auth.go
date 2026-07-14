@@ -118,6 +118,14 @@ func (h *adminHandler) UpdateSettings(c *gin.Context) {
 	_ = h.settingsRepo.Set("storage_username", req.StorageUsername, "Basic authentication username")
 	_ = h.settingsRepo.Set("storage_password", req.StoragePassword, "Basic authentication password")
 	_ = h.settingsRepo.Set("storage_token", req.StorageToken, "AList API Authorization Token")
+	// Drop the cached legacy-settings provider so the next Resolve(nil) rebuilds
+	// from the new values instead of serving a stale one. (The resolver has a
+	// drift check that would self-heal on the next read, but that check is racy
+	// with these 5 independent Set calls — explicit invalidation closes the
+	// torn-read window.)
+	if h.storageResolver != nil {
+		h.storageResolver.InvalidateSettings()
+	}
 	if req.AdminPassword != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.AdminPassword), bcrypt.DefaultCost)
 		if err != nil {
@@ -161,8 +169,8 @@ func (h *adminHandler) PingStorage(c *gin.Context) {
 		}
 	}
 
-	// Default fallback to saved settings
-	if err := h.importService.PingStorage(); err != nil {
+	// Default fallback to saved settings (nil → global settings fallback).
+	if err := h.importService.PingStorage(nil); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "status": "failed"})
 		return
 	}
