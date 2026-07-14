@@ -30,6 +30,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   late Future<List<Episode>> _episodesFuture;
   late Future<List<UserProgress>> _progressFuture;
   late Future<List<Chapter>> _chaptersFuture;
+  // Cached combined future — FutureBuilder must see a STABLE future reference
+  // across rebuilds, otherwise each setState (e.g. enrichment prefetch filling
+  // the AI/attachment caches) makes FutureBuilder re-subscribe, flip to
+  // ConnectionState.waiting, flash the loading spinner, then flip back. On real
+  // devices this shows as continuous flicker making the list untappable; MuMu
+  // (fast x86) hides it because the waiting→done flip lands within one frame.
+  // Built once per load in _refreshData; the FutureBuilder reads this.
+  late Future<List<dynamic>> _combinedFuture;
 
   /// Per-episode enrichment data (AI content + attachments), keyed by episode
   /// id. Fetched lazily once the episode list is available so the row badges
@@ -52,28 +60,36 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   }
 
   void _refreshData() {
-    setState(() {
-      _episodesFuture = ApiService.fetchEpisodes(widget.activeUserId, widget.course.id);
-      _progressFuture = ApiService.fetchProgressOverview(widget.activeUserId);
-      _chaptersFuture = ApiService.fetchChapters(widget.activeUserId, widget.course.id);
-    });
+    _episodesFuture = ApiService.fetchEpisodes(widget.activeUserId, widget.course.id);
+    _progressFuture = ApiService.fetchProgressOverview(widget.activeUserId);
+    _chaptersFuture = ApiService.fetchChapters(widget.activeUserId, widget.course.id);
+    // Compose the combined future ONCE here so FutureBuilder sees a stable
+    // reference across rebuilds (see _combinedFuture comment above).
+    _combinedFuture = Future.wait([_episodesFuture, _progressFuture, _chaptersFuture]);
+    setState(() {});
     // After episodes load, prefetch enrichment data in the background.
     _episodesFuture.then((eps) => _prefetchEnrichment(eps)).catchError((_) {});
   }
 
   Future<void> _prefetchEnrichment(List<Episode> episodes) async {
+    // Fetch ALL enrichment before calling setState once. The old code called
+    // setState per-episode (N rebuilds), which — combined with the unstable
+    // FutureBuilder future — caused N flashes on real devices. Batched into a
+    // single setState so the list only rebuilds once after everything lands.
+    bool changed = false;
     for (final ep in episodes) {
       try {
         final ai = await ApiService.fetchAILesson(widget.activeUserId, ep.id);
         final atts = await ApiService.fetchAttachments(widget.activeUserId, ep.id);
-        if (!mounted) return;
-        setState(() {
-          _aiCache[ep.id] = ai;
-          _attachmentCache[ep.id] = atts;
-        });
+        _aiCache[ep.id] = ai;
+        _attachmentCache[ep.id] = atts;
+        changed = true;
       } catch (_) {
         // Enrichment is best-effort; rows simply fall back to no-badge.
       }
+    }
+    if (changed && mounted) {
+      setState(() {});
     }
   }
 
@@ -88,7 +104,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       body: Container(
         color: AppTheme.backgroundColor, // slate-50 background
         child: FutureBuilder(
-          future: Future.wait([_episodesFuture, _progressFuture, _chaptersFuture]),
+          future: _combinedFuture,
           builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return loadingSpinner();
