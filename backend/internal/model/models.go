@@ -38,11 +38,12 @@ type StorageSource struct {
 	UpdatedAt time.Time
 }
 
-// UserStorageSource is one row of a user's storage-source whitelist (防呆).
-// An EMPTY set means "no restriction" (backward compatible — the user may
-// access any source their content access already permits). A non-empty set
-// restricts the user to exactly the listed sources; the grant-time and
-// access-time gates enforce this (see storage_source_repo.IsAllowed).
+// UserStorageSource is one row of a user's storage-source allow-list (防呆).
+// The list is DEFAULT-DENY: a user may access a source if and only if it
+// appears in their list. An EMPTY set means the user is allowed NOTHING (an
+// admin must explicitly grant at least one source before the user can stream).
+// The grant-time and access-time gates both enforce this via
+// storage_source_repo.IsAllowed. Staff roles (admin/parent) bypass entirely.
 type UserStorageSource struct {
 	UserID    uint      `gorm:"primaryKey"`
 	SourceID  uint      `gorm:"primaryKey"`

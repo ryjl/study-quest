@@ -117,17 +117,17 @@ func TestStorageSourceCRUDEndpoint(t *testing.T) {
 }
 
 // TestStorageWhitelistEmptyDeniesPlayInfo is THE default-deny assertion at the
-// HTTP layer: a user with an empty allow-list (the default) is denied play-info
-// (403) for any episode that has a SourceID, because the allow-list allows
-// nothing. This replaced the old empty=unrestricted behavior once the global
-// fallback was removed.
+// HTTP layer: a user with an empty allow-list is denied play-info (403) for any
+// episode that has a SourceID, because the allow-list allows nothing. The
+// explicit setStorageWhitelist([]) clears the auto-seeded [defaultSourceID] so
+// this truly exercises the empty-list path (not the wrong-source path).
 func TestStorageWhitelistEmptyDeniesPlayInfo(t *testing.T) {
 	env := newTestEnv(t)
 	courseID, userID, epIDs := seedCourseEpisodes(t, env, 1)
 
-	srcA := env.createStorageSource(t, "A", "alist", "http://a", true)
-	env.setEpisodeSource(t, epIDs[0], srcA)
-	// No whitelist set (default-deny). play-info must 403 on the source gate.
+	// Episode is on the default source (auto-stamped by createEpisode). Clear
+	// the user's allow-list so they're allowed nothing.
+	env.setStorageWhitelist(t, userID, []uint{})
 	resp := env.doAsUser(t, userID, http.MethodGet, "/api/v1/episodes/"+itoa(epIDs[0])+"/play-info", nil)
 	if resp.Code != http.StatusForbidden {
 		t.Errorf("empty allow-list: play-info expected 403 (default-deny), got %d", resp.Code)

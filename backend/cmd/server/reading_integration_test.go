@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"studyquest/backend/internal/model"
 )
 
 // Helper: create a reading series via the admin API.
@@ -51,6 +53,15 @@ func (e *testEnv) createReadingBook(t *testing.T, title, path, subjectKey string
 		ID uint `json:"id"`
 	}
 	json.Unmarshal(resp.Body.Bytes(), &b)
+	// Stamp the seeded default source so the book is streamable under the
+	// default-deny storage gate (mirrors createEpisode). Storage-specific tests
+	// override via direct DB writes.
+	if e.defaultSourceID != 0 {
+		if err := e.db.Model(&model.ReadingBook{}).Where("id = ?", b.ID).
+			Update("source_id", e.defaultSourceID).Error; err != nil {
+			t.Fatalf("seed reading book source: %v", err)
+		}
+	}
 	return b.ID
 }
 

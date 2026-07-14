@@ -228,10 +228,10 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 		}
 	}
 
-	// Storage-source whitelist gate (访问兜底). Shared with Stream /
+	// Storage-source allow-list gate (访问兜底). Shared with Stream /
 	// StreamAttachment via checkEpisodeSourceAccess so every media-exfiltration
-	// endpoint enforces the same constraint. Empty whitelist = no-op; staff
-	// bypass; fail-closed on missing identity.
+	// endpoint enforces the same constraint. Default-deny: an empty allow-list
+	// denies everything; staff bypass; fail-closed on missing identity.
 	if !h.checkEpisodeSourceAccess(c, uint(id)) {
 		return
 	}
