@@ -137,10 +137,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                 // Header Area
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
+                // Header Area
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isNarrow = constraints.maxWidth < 600;
+                    final headerContent = Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: const [
                         Text(
@@ -162,47 +163,76 @@ class _CourseListScreenState extends State<CourseListScreen> {
                           ),
                         ),
                       ],
-                    ),
+                    );
 
-                    // Continue Learning Button (3D) — opens the most relevant course
-                    if (continueCourse != null)
-                      Button3D.blue(
-                        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                        onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => CourseDetailScreen(
-                                activeUserId: widget.activeUserId,
-                                course: continueCourse!,
-                              ),
-                            ),
-                          ).then((_) => _loadData());
-                        },
-                        child: Row(
-                          children: [
-                            const Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 36),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                    final continueButton = continueCourse == null
+                        ? const SizedBox.shrink()
+                        : Button3D.blue(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => CourseDetailScreen(
+                                    activeUserId: widget.activeUserId,
+                                    course: continueCourse!,
+                                  ),
+                                ),
+                              ).then((_) => _loadData());
+                            },
+                            child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Text(
-                                  '继续学习',
-                                  style: TextStyle(color: Color(0xFFDBEAFE), fontSize: 10, fontWeight: FontWeight.bold),
-                                ),
-                                Text(
-                                  continueCourse.title,
-                                  style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
+                                const Icon(Icons.play_circle_fill_rounded, color: Colors.white, size: 36),
+                                const SizedBox(width: 12),
+                                ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    maxWidth: isNarrow ? constraints.maxWidth - 100 : 160,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Text(
+                                        '继续学习',
+                                        style: TextStyle(color: Color(0xFFDBEAFE), fontSize: 10, fontWeight: FontWeight.bold),
+                                      ),
+                                      Text(
+                                        continueCourse.title,
+                                        style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w900),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
-                          ],
-                        ),
-                      ),
-                  ],
+                          );
+
+                    if (isNarrow) {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          headerContent,
+                          const SizedBox(height: 16),
+                          SizedBox(
+                            width: double.infinity,
+                            child: continueButton,
+                          ),
+                        ],
+                      );
+                    }
+
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(child: headerContent),
+                        const SizedBox(width: 16),
+                        continueButton,
+                      ],
+                    );
+                  },
                 ),
                 const SizedBox(height: 24),
 
