@@ -93,6 +93,13 @@ type AdminHandler interface {
 	DeleteSubtitle(c *gin.Context)
 	AutoMatchSubtitle(c *gin.Context)
 
+	// Subtitle generation queue
+	EnqueueSubtitleJobs(c *gin.Context)
+	ListSubtitleJobs(c *gin.Context)
+	SkipSubtitleJob(c *gin.Context)
+	RetrySubtitleJob(c *gin.Context)
+	SubtitleJobStats(c *gin.Context)
+
 	// Attachments + Uploads
 	ScanAttachments(c *gin.Context)
 	UploadImage(c *gin.Context)
@@ -140,6 +147,7 @@ type adminHandler struct {
 	readingArticleService service.ReadingArticleService
 	readingImportService service.ReadingImportService
 	probeWorker         *service.ProbeWorker
+	subtitleJobService  service.SubtitleJobService
 	sessionService      service.SessionService
 	watchEventRepo      repository.WatchEventRepository
 	storageSourceRepo   repository.StorageSourceRepository
@@ -177,6 +185,7 @@ type AdminHandlerDeps struct {
 	ReadingArticleService service.ReadingArticleService
 	ReadingImportService service.ReadingImportService
 	ProbeWorker          *service.ProbeWorker
+	SubtitleJobService   service.SubtitleJobService
 	SessionService       service.SessionService
 	WatchEventRepo       repository.WatchEventRepository
 	StorageSourceRepo    repository.StorageSourceRepository
@@ -211,6 +220,7 @@ func (d *AdminHandlerDeps) WithReadingBookService(s service.ReadingBookService) 
 func (d *AdminHandlerDeps) WithReadingArticleService(s service.ReadingArticleService) *AdminHandlerDeps { d.ReadingArticleService = s; return d }
 func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportService) *AdminHandlerDeps  { d.ReadingImportService = s; return d }
 func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps               { d.ProbeWorker = w; return d }
+func (d *AdminHandlerDeps) WithSubtitleJobService(s service.SubtitleJobService) *AdminHandlerDeps   { d.SubtitleJobService = s; return d }
 func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHandlerDeps          { d.SessionService = s; return d }
 func (d *AdminHandlerDeps) WithWatchEventRepo(r repository.WatchEventRepository) *AdminHandlerDeps { d.WatchEventRepo = r; return d }
 func (d *AdminHandlerDeps) WithStorageSources(r repository.StorageSourceRepository) *AdminHandlerDeps { d.StorageSourceRepo = r; return d }
@@ -241,6 +251,7 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		readingArticleService: d.ReadingArticleService,
 		readingImportService: d.ReadingImportService,
 		probeWorker:          d.ProbeWorker,
+		subtitleJobService:   d.SubtitleJobService,
 		sessionService:       d.SessionService,
 		watchEventRepo:       d.WatchEventRepo,
 		storageSourceRepo:    d.StorageSourceRepo,

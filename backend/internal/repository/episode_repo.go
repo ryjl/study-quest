@@ -43,6 +43,18 @@ type EpisodeRepository interface {
 	GetSubtitleByID(id uint) (*model.Subtitle, error)
 	SaveSubtitle(subtitle *model.Subtitle) error
 	DeleteSubtitle(id uint) error
+	// CountSubtitlesByEpisodes returns episode_id → subtitle count for the
+	// given ids (ids with no subtitle are absent from the map). Used to populate
+	// subtitle_count on the admin episode list without an N+1.
+	CountSubtitlesByEpisodes(episodeIDs []uint) (map[uint]int, error)
+	// HasSubtitle reports whether an episode has any subtitle row. A cheaper
+	// existence check than ListSubtitles when the caller only needs a boolean.
+	HasSubtitle(episodeID uint) (bool, error)
+
+	// FindCourseContentType joins an episode to its course and returns the
+	// course's content_type ("learning" | "entertainment"). Used by the subtitle
+	// queue gate to refuse entertainment content.
+	FindCourseContentType(episodeID uint) (string, error)
 
 	// AI Lesson Content operations
 	GetAIContent(episodeID uint) (*model.AILessonContent, error)
@@ -180,6 +192,55 @@ func (r *episodeRepo) GetSubtitleByID(id uint) (*model.Subtitle, error) {
 		return nil, err
 	}
 	return &sub, nil
+}
+
+// CountSubtitlesByEpisodes returns episode_id → subtitle count for the given
+// ids. Ids with no subtitle row are absent from the map (callers treat a
+// missing key as zero). One GROUP BY query instead of N per-episode COUNTs.
+func (r *episodeRepo) CountSubtitlesByEpisodes(episodeIDs []uint) (map[uint]int, error) {
+	out := make(map[uint]int, len(episodeIDs))
+	if len(episodeIDs) == 0 {
+		return out, nil
+	}
+	type row struct {
+		EpisodeID uint
+		Cnt       int
+	}
+	var rows []row
+	err := r.db.Model(&model.Subtitle{}).
+		Select("episode_id, count(*) as cnt").
+		Where("episode_id IN ?", episodeIDs).
+		Group("episode_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.EpisodeID] = r.Cnt
+	}
+	return out, nil
+}
+
+func (r *episodeRepo) HasSubtitle(episodeID uint) (bool, error) {
+	var cnt int64
+	err := r.db.Model(&model.Subtitle{}).Where("episode_id = ?", episodeID).Count(&cnt).Error
+	return cnt > 0, err
+}
+
+// FindCourseContentType joins episodes → courses to read the course's
+// content_type. Returns "" if the episode or its course is missing.
+func (r *episodeRepo) FindCourseContentType(episodeID uint) (string, error) {
+	var ct string
+	err := r.db.Table("episodes AS e").
+		Select("c.content_type").
+		Joins("JOIN courses c ON c.id = e.course_id").
+		Where("e.id = ?", episodeID).
+		Limit(1).
+		Scan(&ct).Error
+	if err != nil {
+		return "", err
+	}
+	return ct, nil
 }
 
 func (r *episodeRepo) SaveSubtitle(subtitle *model.Subtitle) error {

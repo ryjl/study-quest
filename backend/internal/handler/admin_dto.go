@@ -99,6 +99,7 @@ type episodeDTO struct {
 	FileSize             *int64 `json:"file_size"`
 	DurationSeconds      *int   `json:"duration_seconds"`
 	MediaMetaJSON        string `json:"media_meta_json"`
+	SubtitleCount        int    `json:"subtitle_count"`
 	CreatedAt            string `json:"created_at"`
 	UpdatedAt            string `json:"updated_at"`
 }
@@ -124,6 +125,17 @@ func toEpisodeDTO(e model.Episode) episodeDTO {
 		CreatedAt:            formatTime(e.CreatedAt),
 		UpdatedAt:            formatTime(e.UpdatedAt),
 	}
+}
+
+// withSubtitleCounts stamps the subtitle_count field on each DTO from a
+// episode_id→count map (absent key = 0). Callers fetch the map once via
+// episodeRepo.CountSubtitlesByEpisodes to avoid an N+1 across a course's
+// episodes. The map is applied in place; the slice is returned for chaining.
+func withSubtitleCounts(dtos []episodeDTO, counts map[uint]int) []episodeDTO {
+	for i := range dtos {
+		dtos[i].SubtitleCount = counts[dtos[i].ID]
+	}
+	return dtos
 }
 
 type chapterDTO struct {

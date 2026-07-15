@@ -23,6 +23,7 @@ func RegisterRoutes(
 	episode handler.EpisodeHandler,
 	progress handler.ProgressHandler,
 	ingest handler.IngestHandler,
+	subtitleJob handler.SubtitleJobHandler,
 	admin handler.AdminHandler,
 	badge handler.BadgeHandler,
 	subject handler.SubjectHandler,
@@ -114,6 +115,13 @@ func RegisterRoutes(
 	{
 		v1Ingest.POST("/ingest/episodes", ingest.IngestEpisodes)
 		v1Ingest.POST("/ingest/ai-content", ingest.IngestAIContent)
+
+		// Subtitle generation worker protocol. Shares the X-Ingest-Key gate —
+		// the whisper worker is another member of the Python toolchain.
+		v1Ingest.POST("/subtitle-jobs/claim", subtitleJob.Claim)
+		v1Ingest.POST("/subtitle-jobs/:id/complete", subtitleJob.Complete)
+		v1Ingest.POST("/subtitle-jobs/:id/heartbeat", subtitleJob.Heartbeat)
+		v1Ingest.POST("/subtitle-jobs/:id/fail", subtitleJob.Fail)
 	}
 
 	// 4. Admin auth APIs (Public — used by the SPA before session cookie exists)
@@ -218,6 +226,13 @@ func RegisterRoutes(
 		adm.POST("/api/episodes/:id/subtitles", admin.SaveSubtitle)
 		adm.DELETE("/api/subtitles/:id", admin.DeleteSubtitle)
 		adm.POST("/api/subtitles/auto-match", admin.AutoMatchSubtitle)
+
+		// Subtitle generation queue (admin opts episodes in; a worker transcribes)
+		adm.POST("/api/subtitle-jobs", admin.EnqueueSubtitleJobs)
+		adm.GET("/api/subtitle-jobs", admin.ListSubtitleJobs)
+		adm.POST("/api/subtitle-jobs/:id/skip", admin.SkipSubtitleJob)
+		adm.POST("/api/subtitle-jobs/:id/retry", admin.RetrySubtitleJob)
+		adm.GET("/api/subtitle-jobs/stats", admin.SubtitleJobStats)
 
 		// Attachments
 		adm.GET("/api/scan-attachments", admin.ScanAttachments)

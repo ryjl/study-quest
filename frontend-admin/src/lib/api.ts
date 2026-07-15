@@ -14,6 +14,9 @@ import type {
   SubjectMeta,
   TagMeta,
   Subtitle,
+  SubtitleJob,
+  SubtitleJobEnqueueResult,
+  SubtitleJobStats,
   UnlockOverride,
   UnlockPreview,
   UnlockTemplate,
@@ -313,6 +316,23 @@ export const api = {
   },
   async probeProgress(): Promise<ProbeStats> {
     return request('/admin/api/probe/progress');
+  },
+
+  // ---- Subtitle generation queue ----
+  async enqueueSubtitleJobs(episodeIds: number[], priority = 0): Promise<SubtitleJobEnqueueResult> {
+    return request('/admin/api/subtitle-jobs', { method: 'POST', body: JSON.stringify({ episode_ids: episodeIds, priority }) });
+  },
+  async listSubtitleJobs(status?: string): Promise<SubtitleJob[]> {
+    return request(`/admin/api/subtitle-jobs${qs({ status })}`);
+  },
+  async subtitleJobStats(): Promise<SubtitleJobStats> {
+    return request('/admin/api/subtitle-jobs/stats');
+  },
+  async skipSubtitleJob(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/subtitle-jobs/${id}/skip`, { method: 'POST' });
+  },
+  async retrySubtitleJob(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/subtitle-jobs/${id}/retry`, { method: 'POST' });
   },
 
   // ---- Unlock (drip schedule) ----

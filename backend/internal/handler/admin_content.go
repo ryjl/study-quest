@@ -68,6 +68,14 @@ func (h *adminHandler) GetCourseDetail(c *gin.Context) {
 	for _, e := range eps {
 		epDTOs = append(epDTOs, toEpisodeDTO(e))
 	}
+	// Stamp subtitle_count in one batch query (avoids an N+1 across episodes).
+	ids := make([]uint, 0, len(eps))
+	for _, e := range eps {
+		ids = append(ids, e.ID)
+	}
+	if counts, cerr := h.episodeRepo.CountSubtitlesByEpisodes(ids); cerr == nil {
+		withSubtitleCounts(epDTOs, counts)
+	}
 	chDTOs := make([]chapterDTO, 0, len(chs))
 	for _, ch := range chs {
 		chDTOs = append(chDTOs, toChapterDTO(ch))
@@ -492,6 +500,14 @@ func (h *adminHandler) ListEpisodesByCourse(c *gin.Context) {
 	out := make([]episodeDTO, 0, len(episodes))
 	for _, ep := range episodes {
 		out = append(out, toEpisodeDTO(ep))
+	}
+	// Stamp subtitle_count in one batch query (avoids an N+1 across episodes).
+	ids := make([]uint, 0, len(episodes))
+	for _, ep := range episodes {
+		ids = append(ids, ep.ID)
+	}
+	if counts, cerr := h.episodeRepo.CountSubtitlesByEpisodes(ids); cerr == nil {
+		withSubtitleCounts(out, counts)
 	}
 	c.JSON(http.StatusOK, out)
 }

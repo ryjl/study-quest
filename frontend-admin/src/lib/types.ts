@@ -465,3 +465,47 @@ export interface ReadingSeriesDetail {
 }
 
 export type ReadingTargetType = 'series' | 'book' | 'article';
+
+// ---- Subtitle generation queue ----
+
+export type SubtitleJobStatus = 'queued' | 'processing' | 'done' | 'failed' | 'skipped';
+
+export interface SubtitleJob {
+  id: number;
+  episode_id: number;
+  episode_title?: string;
+  course_id?: number;
+  status: SubtitleJobStatus;
+  priority: number;
+  attempt: number;
+  language: string;
+  claimed_by?: string;
+  claimed_at?: string | null;
+  completed_at?: string | null;
+  error?: string;
+  duration_seconds?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SubtitleJobStats {
+  running: boolean;
+  current_job_id?: number;
+  current_episode_id?: number;
+  current_title?: string;
+  queued: number;
+  processing: number;
+  done: number;
+  failed: number;
+  skipped: number;
+  last_finished_at?: string;
+}
+
+// Result of a batch enqueue: which episodes were added vs skipped, with a
+// per-id machine reason code for the skipped ones.
+export interface SubtitleJobEnqueueResult {
+  status: string;
+  enqueued: number[];
+  skipped: number[];
+  reasons: Record<number, string>;
+}

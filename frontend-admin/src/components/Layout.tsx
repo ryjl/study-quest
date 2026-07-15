@@ -11,6 +11,7 @@ const NAV = [
   { to: '/admin/users', label: '用户与授权', icon: '👥' },
   { to: '/admin/watch-history', label: '观看历史', icon: '📅' },
   { to: '/admin/courses', label: '课程库管理', icon: '📚' },
+  { to: '/admin/subtitle-queue', label: '字幕队列', icon: '💬' },
   { to: '/admin/reading-room', label: '阅读室', icon: '📖' },
   { to: '/admin/subjects', label: '科目管理', icon: '🏷️' },
   { to: '/admin/tags', label: '标签管理', icon: '🔖' },

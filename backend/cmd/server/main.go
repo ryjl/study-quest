@@ -6,6 +6,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
+
 	"studyquest/backend/internal/config"
 	"studyquest/backend/internal/handler"
 	"studyquest/backend/internal/model"
@@ -32,7 +35,18 @@ func main() {
 	}
 
 	// 3. Connect to SQLite database
-	db, err := gorm.Open(sqlite.Open(cfg.DBPath), &gorm.Config{
+	// busy_timeout is set in the DSN (not just a PRAGMA Exec) so every pooled
+	// connection honors it — a PRAGMA Exec only sets it on the one connection it
+	// ran on, and GORM hands writes to arbitrary pooled connections. Without it,
+	// a concurrent writer (e.g. subtitle-queue claim vs a progress report)
+	// fails with "database is locked" instead of queueing for the writer lock.
+	dsn := cfg.DBPath
+	if strings.Contains(dsn, "?") {
+		dsn += "&_busy_timeout=5000"
+	} else {
+		dsn += "?_busy_timeout=5000"
+	}
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.New(
 			log.New(os.Stdout, "\r\n", log.LstdFlags),
 			logger.Config{
@@ -46,7 +60,9 @@ func main() {
 		log.Fatalf("Failed to connect to SQLite database: %v", err)
 	}
 
-	// 4. Configure SQLite optimization params
+	// 4. Configure SQLite optimization params. busy_timeout is set in the DSN
+	// (per-connection), so here we only set the two that aren't connection-
+	// sticky the same way: WAL journal mode and FK enforcement.
 	sqlDB, err := db.DB()
 	if err == nil {
 		_, _ = sqlDB.Exec("PRAGMA journal_mode=WAL;")
@@ -78,6 +94,7 @@ func main() {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	watchEventRepo := repository.NewWatchEventRepository(db)
 	storageSourceRepo := repository.NewStorageSourceRepository(db)
+	subtitleJobRepo := repository.NewSubtitleJobRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
@@ -102,6 +119,7 @@ func main() {
 	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
+	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService)
 
 	// Seed default badges and subjects (idempotent). Badges seed FIRST because
 	// subject seeding auto-generates subject_count badges and the order keeps
@@ -123,6 +141,7 @@ func main() {
 	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService, storageSourceRepo)
 	progressHandler := handler.NewProgressHandler(progressService)
 	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
+	subtitleJobHandler := handler.NewSubtitleJobHandler(subtitleJobService)
 	adminHandler := handler.NewAdminHandlerDeps().
 		// Repos
 		WithSettings(settingsRepo).
@@ -148,6 +167,7 @@ func main() {
 		WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).
+		WithSubtitleJobService(subtitleJobService).
 		WithSessionService(sessionService).
 		WithWatchEventRepo(watchEventRepo).
 		WithStorageSources(storageSourceRepo).
@@ -187,6 +207,7 @@ func main() {
 		episodeHandler,
 		progressHandler,
 		ingestHandler,
+		subtitleJobHandler,
 		adminHandler,
 		badgeHandler,
 		subjectHandler,
@@ -212,6 +233,33 @@ func main() {
 	probeCtx, probeCancel := context.WithCancel(context.Background())
 	defer probeCancel()
 	go probeWorker.Start(probeCtx)
+
+	// Background reaper for the subtitle queue: a worker that crashed or was
+	// powered off mid-transcription leaves its job in 'processing' with a stale
+	// claimed_at. Every 5 minutes we flip jobs older than the service's stale
+	// threshold back to 'queued' so they become claimable again.
+	//
+	// This goroutine has its own context (not probeCtx) so the two background
+	// loops are independent: renaming/removing the probe worker can't
+	// accidentally take down the reaper, and vice versa.
+	reaperCtx, reaperCancel := context.WithCancel(context.Background())
+	defer reaperCancel()
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-reaperCtx.Done():
+				return
+			case <-ticker.C:
+				if n, err := subtitleJobService.ReapStale(); err != nil {
+					log.Printf("[subtitle-reaper] error: %v", err)
+				} else if n > 0 {
+					log.Printf("[subtitle-reaper] reaped %d stale job(s) back to queued", n)
+				}
+			}
+		}
+	}()
 
 	if err := r.Run(cfg.ServerAddr); err != nil {
 		log.Fatalf("Server startup failed on '%s': %v", cfg.ServerAddr, err)

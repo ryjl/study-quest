@@ -358,6 +358,56 @@ type Subtitle struct {
 	UpdatedAt  time.Time
 }
 
+// SubtitleJob is one row in the subtitle-generation queue. The admin opts
+// episodes into the queue (priority controls order); a Python whisper worker
+// on a GPU box claims the highest-priority queued job, transcribes it, and
+// posts the SRT back. The VPS only coordinates — it never runs whisper.
+//
+// The worker is a separate machine, so unlike the in-process ProbeWorker this
+// queue is DB-backed and the claim is an atomic compare-and-swap (a single
+// UPDATE ... WHERE id=(SELECT ... LIMIT 1)) so two workers can't grab the same
+// job. A processing job whose claimed_at is older than the stale timeout is
+// reaped back to queued by a background ticker (the desktop may have crashed
+// or been powered off mid-transcription).
+//
+// De-duplication is enforced in the service layer (not a DB constraint) so a
+// completed/failed history can accumulate: an episode may have many done/failed
+// rows but at most one queued/processing at a time.
+type SubtitleJob struct {
+	ID          uint       `gorm:"primaryKey;autoIncrement"`
+	EpisodeID   uint       `gorm:"index;not null"`
+	Episode     Episode    `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
+	Status      string     `gorm:"size:20;not null;default:'queued';index"` // queued|processing|done|failed|skipped
+	Priority    int        `gorm:"default:0"`                               // higher = claimed first
+	Attempt     int        `gorm:"default:0"`                               // bumped on each ClaimNext
+	ClaimedAt   *time.Time `gorm:"index"`                                   // last claim time; for stale reaping
+	ClaimedBy   string     `gorm:"size:100"`                                // worker self-id (X-Worker-ID), for observability
+	CompletedAt *time.Time
+	Error       string `gorm:"type:text"`
+	Language    string `gorm:"size:50;default:'zh-CN'"` // target subtitle language
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Subtitle job status constants. Stored as strings on SubtitleJob.Status; these
+// consts keep the state-machine values in sync with the code that transitions
+// them (see SubtitleJobService / SubtitleJobRepository).
+const (
+	SubtitleJobQueued     = "queued"     // waiting for a worker to claim
+	SubtitleJobProcessing = "processing" // claimed by a worker, not yet completed
+	SubtitleJobDone       = "done"       // SRT posted back and saved to subtitles
+	SubtitleJobFailed     = "failed"     // worker reported failure; admin decides retry/skip
+	SubtitleJobSkipped    = "skipped"    // admin gave up; terminal
+)
+
+// IsTerminalSubtitleJobStatus reports whether a status is terminal (no further
+// state transitions). Non-terminal statuses (queued, processing) are the ones
+// de-duplication cares about: an episode may have many terminal rows but at
+// most one non-terminal.
+func IsTerminalSubtitleJobStatus(status string) bool {
+	return status == SubtitleJobDone || status == SubtitleJobFailed || status == SubtitleJobSkipped
+}
+
 // AILessonContent holds AI pre-adventure and post-review questions.
 type AILessonContent struct {
 	EpisodeID         uint    `gorm:"primaryKey"`
@@ -849,6 +899,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&Chapter{},
 		&Episode{},
 		&Subtitle{},
+		&SubtitleJob{},
 		&AILessonContent{},
 		&UserPoint{},
 		&PointsLedger{},

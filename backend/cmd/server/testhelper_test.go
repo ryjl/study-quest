@@ -53,7 +53,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	// "no such table". The unique DSN keeps tests isolated from each other
 	// (a plain `file::memory:?cache=shared` would share ONE db across all
 	// tests and pollute state).
-	dbName := fmt.Sprintf("file:test_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	// _busy_timeout in the DSN (not a PRAGMA Exec) so EVERY pooled connection
+	// honors it — a PRAGMA Exec only sets it on the one connection it ran on.
+	dbName := fmt.Sprintf("file:test_%d?mode=memory&cache=shared&_busy_timeout=5000", time.Now().UnixNano())
 	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
@@ -61,6 +63,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	// FKs are OFF by default in SQLite; turn them on so the RESTRICT/CASCADE
 	// constraints exercised by the subject/tag tests actually fire.
 	db.Exec("PRAGMA foreign_keys=ON")
+	// busy_timeout so concurrent writers (e.g. the subtitle-queue claim race
+	// test) queue instead of erroring with "database is locked".
+	db.Exec("PRAGMA busy_timeout=5000")
 	if err := model.AutoMigrate(db); err != nil {
 		t.Fatalf("auto-migrate: %v", err)
 	}
@@ -84,6 +89,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	entertainmentRepo := repository.NewEntertainmentRepository(db)
 	watchEventRepo := repository.NewWatchEventRepository(db)
 	storageSourceRepo := repository.NewStorageSourceRepository(db)
+	subtitleJobRepo := repository.NewSubtitleJobRepository(db)
 
 	// services
 	userService := service.NewUserService(userRepo)
@@ -108,6 +114,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
+	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService)
 
 	// seed (subjects → tags → badges, same order as main.go; subjects must
 	// come first so the subject_count badge rules resolve against a populated
@@ -129,6 +136,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService, storageSourceRepo)
 	progressH := handler.NewProgressHandler(progressService)
 	ingestH := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
+	subtitleJobH := handler.NewSubtitleJobHandler(subtitleJobService)
 	adminH := handler.NewAdminHandlerDeps().
 		WithSettings(settingsRepo).WithUsers(userRepo).WithCourses(courseRepo).
 		WithEpisodes(episodeRepo).WithChapters(chapterRepo).WithProgress(progressRepo).
@@ -139,7 +147,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		WithChapterService(chapterService).WithBadgeService(badgeService).
 		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
-		WithProbeWorker(probeWorker).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).
+		WithProbeWorker(probeWorker).WithSubtitleJobService(subtitleJobService).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).
 		WithStorageSources(storageSourceRepo).WithStorageResolver(storageResolver).Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
@@ -152,7 +160,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	// Ingest key is intentionally empty for the default test env — the legacy
 	// ingest endpoints stay public so existing tests don't need to pass a key.
 	// Ingest-keyed behavior has its own dedicated test.
-	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, userRepo, settingsRepo, sessionService, "")
+	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, subtitleJobH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, userRepo, settingsRepo, sessionService, "")
 
 	// Pre-seed the admin password hash so login only pays for one bcrypt
 	// compare instead of the lazy-init generate+compare (~120ms → ~60ms).

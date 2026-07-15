@@ -158,6 +158,42 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
     onError: (e) => toast.error((e as Error).message),
   });
 
+  // Human-readable labels for the machine skip-reason codes the backend
+  // returns from a batch enqueue, so the toast explains *why* episodes were
+  // skipped rather than just a count.
+  const skipReasonLabel: Record<string, string> = {
+    has_subtitle: '已有字幕',
+    already_queued: '已在队列',
+    entertainment: '娱乐内容',
+    not_found: '不存在',
+  };
+  const enqueueSubtitlesMut = useMutation({
+    mutationFn: (vars: { ids: number[]; priority: number }) => api.enqueueSubtitleJobs(vars.ids, vars.priority),
+    onSuccess: (d) => {
+      const added = d.enqueued.length;
+      const skipped = d.skipped.length;
+      if (added > 0 && skipped === 0) {
+        toast.success(`已加入字幕队列：${added} 个`);
+      } else if (added > 0 && skipped > 0) {
+        // Summarize skip reasons so the operator knows why some were left out.
+        const reasonCounts: Record<string, number> = {};
+        for (const id of d.skipped) {
+          const r = skipReasonLabel[d.reasons[id]] ?? d.reasons[id] ?? '跳过';
+          reasonCounts[r] = (reasonCounts[r] ?? 0) + 1;
+        }
+        const summary = Object.entries(reasonCounts).map(([r, n]) => `${n} ${r}`).join('，');
+        toast.success(`已加入 ${added} 个；跳过 ${skipped} 个（${summary}）`);
+      } else {
+        toast.info('没有新的课时加入队列');
+      }
+      setSelected(new Set());
+      invalidateAll();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const onEnqueueSubtitles = (priority: number) => enqueueSubtitlesMut.mutate({ ids: selectedIds, priority });
+
   const moveEpisode = async (ep: Episode, dir: -1 | 1) => {
     const siblings = grouped.get(ep.chapter_id) ?? [];
     const idx = siblings.findIndex((e) => e.id === ep.id);
@@ -223,6 +259,26 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
                   {c.title}
                 </option>
               ))}
+            </select>
+            {/* Subtitle queue: opt the selected episodes into whisper transcription.
+                Priority is chosen inline (higher = the worker picks it first); the
+                default 0 is fine for most batches. */}
+            <select
+              className="input !py-1 !text-xs max-w-[160px]"
+              defaultValue=""
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v !== '') onEnqueueSubtitles(Number(v));
+                e.target.value = '';
+              }}
+              disabled={enqueueSubtitlesMut.isPending}
+              title="把选中课时加入字幕生成队列"
+            >
+              <option value="">加入字幕队列...</option>
+              <option value="0">普通优先级 (0)</option>
+              <option value="1">优先 (1)</option>
+              <option value="2">较优先 (2)</option>
+              <option value="3">最优先 (3)</option>
             </select>
             <button className="btn-danger btn-sm" onClick={onBulkDelete}>
               批量删除
