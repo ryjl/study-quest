@@ -155,12 +155,15 @@ func newTestEnv(t *testing.T) *testEnv {
 	unlockH := handler.NewUnlockHandler(unlockService)
 	releaseH := handler.NewReleaseHandler(releaseRepo)
 	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
+	// AI handler with nil service — tests don't exercise AI; the endpoints
+	// return 404/503 cleanly. Keeps the test harness AI-free.
+	aiH := handler.NewAIHandler(nil)
 
 	r := gin.New()
 	// Ingest key is intentionally empty for the default test env — the legacy
 	// ingest endpoints stay public so existing tests don't need to pass a key.
 	// Ingest-keyed behavior has its own dedicated test.
-	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, subtitleJobH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, userRepo, settingsRepo, sessionService, "")
+	router.RegisterRoutes(r, healthH, userH, courseH, episodeH, progressH, ingestH, subtitleJobH, adminH, badgeH, subjectH, tagH, unlockH, releaseH, readingH, aiH, userRepo, settingsRepo, sessionService, "")
 
 	// Pre-seed the admin password hash so login only pays for one bcrypt
 	// compare instead of the lazy-init generate+compare (~120ms → ~60ms).

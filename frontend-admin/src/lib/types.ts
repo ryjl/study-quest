@@ -141,6 +141,11 @@ export interface Course {
    * future quiz agent): terminology, accent notes, the key topic to catch.
    * Optional; empty when unset. */
   ai_hint?: string;
+  /** Course-level switches for AI post-processing of its episodes. When false,
+   * the worker skips summary / quiz generation for this course even if the AI
+   * pipeline is globally configured. Optional (absent = enabled, the default). */
+  ai_summary_enabled?: boolean;
+  ai_quiz_enabled?: boolean;
   tags_list?: string[];
   tag_ids?: number[];
   grade_display?: string;
@@ -541,4 +546,63 @@ export interface SubtitleJobEnqueueResult {
   enqueued: number[];
   skipped: number[];
   reasons: Record<number, string>;
+}
+
+// ---- AI workflow observability ----
+
+export type AiJobStatus = 'queued' | 'processing' | 'done' | 'failed' | 'skipped';
+
+// One AI job enqueued against an episode (e.g. "summarize" / "quiz"). Mirrors
+// the Go AiJob model; field names are snake_case to match backend JSON tags.
+export interface AiJob {
+  id: number;
+  job_type: string; // "summarize" | "quiz" | ...
+  episode_id: number;
+  course_id?: number;
+  status: AiJobStatus;
+  attempt: number;
+  error?: string;
+  /** Worker-reported ratio 0..1, or null when none reported. */
+  progress?: number | null;
+  created_at: string;
+  completed_at?: string | null;
+}
+
+// Aggregate counts for the jobs stats bar (returned alongside the job list).
+export interface AiJobStats {
+  queued: number;
+  processing: number;
+  done: number;
+  failed: number;
+  skipped: number;
+}
+
+// Response of GET /admin/api/ai/jobs: a job list + rolled-up status counts.
+export interface AiJobsResponse {
+  jobs: AiJob[];
+  stats: AiJobStats;
+}
+
+// Result of POST /admin/api/ai/jobs: which episode ids were enqueued vs
+// skipped, with a per-id reason map.
+export interface AiJobEnqueueResult {
+  enqueued: number[];
+  skipped: Record<number, string>;
+}
+
+// One recorded model invocation (an "agent decision trace"). A job produces
+// one or more runs; each run is a single capability call (chat / embedding /
+// rerank) with its prompt/response captured for replay.
+export interface AiRun {
+  id: number;
+  job_id: number;
+  capability: string; // "chat" | "embedding" | "rerank"
+  input_json: string; // raw JSON string of the call's structured input
+  prompt_tokens: number;
+  completion_tokens: number;
+  model_used: string;
+  response_text: string;
+  self_check_result?: string; // "" / pass / fail / machine-readable result
+  duration_ms: number;
+  created_at: string;
 }

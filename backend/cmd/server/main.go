@@ -127,6 +127,15 @@ func main() {
 	// no provider is enabled the resolver returns ErrNoProvider and AI endpoints
 	// degrade gracefully — the rest of the server is unaffected.
 	aiResolver := ai.NewProviderResolver(aiProviderRepo, cfg.AIModelsDir)
+	// AI service owns the in-process job worker (segment/summary) and the
+	// observability reads. Built unconditionally; when no provider is configured
+	// jobs are recorded but processed as "skipped: AI not configured".
+	aiContentRepo := repository.NewAIContentRepository(db)
+	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver)
+	// Connect Step 2 → Step 3: when a subtitle lands, auto-enqueue a segment job
+	// (only if the course has AI enabled). The callback keeps the subtitle
+	// service free of any AI import — it just calls a function if set.
+	subtitleJobService.SetOnSubtitleCompleted(aiService.OnSubtitleCompleted)
 
 	// Seed default badges and subjects (idempotent). Badges seed FIRST because
 	// subject seeding auto-generates subject_count badges and the order keeps
@@ -181,11 +190,13 @@ func main() {
 		WithStorageResolver(storageResolver).
 		WithAIProviderRepo(aiProviderRepo).
 		WithAIResolver(aiResolver).
+		WithAIService(aiService).
 		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)
 	tagHandler := handler.NewTagHandler(tagService)
 	unlockHandler := handler.NewUnlockHandler(unlockService)
+	aiHandler := handler.NewAIHandler(aiService)
 	releaseHandler := handler.NewReleaseHandler(releaseRepo)
 	readingHandler := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
 
@@ -224,6 +235,7 @@ func main() {
 		unlockHandler,
 		releaseHandler,
 		readingHandler,
+		aiHandler,
 		userRepo,
 		settingsRepo,
 		sessionService,

@@ -1,0 +1,326 @@
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../lib/api';
+import type { AiJob, AiJobStatus, AiRun } from '../lib/types';
+import { Modal } from '../components/ui';
+
+// Status badge palette. Kept inline since only this page renders these badges.
+// Follows the SubtitleQueue pattern: tailwind palette swatches per status,
+// `bad` token for failures so it tracks the theme.
+const STATUS_META: Record<AiJobStatus, { label: string; cls: string }> = {
+  queued: { label: '排队中', cls: 'bg-blue-500/15 text-blue-600' },
+  processing: { label: '处理中', cls: 'bg-amber-500/15 text-amber-600' },
+  done: { label: '已完成', cls: 'bg-emerald-500/15 text-emerald-600' },
+  failed: { label: '失败', cls: 'bg-bad/15 text-bad' },
+  skipped: { label: '已跳过', cls: 'bg-gray-500/15 text-muted' },
+};
+
+const STATUS_FILTERS: (AiJobStatus | 'all')[] = ['all', 'queued', 'processing', 'done', 'failed', 'skipped'];
+
+// job_type → Chinese label. The backend job_type is a free string today; map
+// the two known ones and pass anything else through verbatim.
+const JOB_TYPE_LABEL: Record<string, string> = {
+  slice: '切片',
+  summarize: '总结',
+  quiz: '出题',
+};
+
+function jobTypeLabel(t: string): string {
+  return JOB_TYPE_LABEL[t] ?? t;
+}
+
+function fmtTime(s?: string | null): string {
+  if (!s) return '—';
+  try {
+    return new Date(s).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return s;
+  }
+}
+
+// Wall-clock duration of a finished job: completed_at - created_at, in seconds.
+// Returns '—' if either bound is missing (e.g. still processing).
+function jobDuration(j: AiJob): string {
+  if (!j.completed_at || !j.created_at) return '—';
+  const ms = new Date(j.completed_at).getTime() - new Date(j.created_at).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  if (s < 60) return `${s.toFixed(1)}s`;
+  return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+}
+
+export function AIWorkflow() {
+  const [filter, setFilter] = useState<AiJobStatus | 'all'>('all');
+
+  // Jobs + stats come back together from one endpoint. We poll only while
+  // there's queued/processing work, mirroring SubtitleQueue's pattern.
+  const jobsQ = useQuery({
+    queryKey: ['ai-jobs', null, filter],
+    queryFn: () => api.listAiJobs(undefined, filter === 'all' ? undefined : filter),
+    refetchInterval: (q) => {
+      const hasActive = q.state.data?.jobs.some((j) => j.status === 'queued' || j.status === 'processing');
+      return hasActive ? 3000 : false;
+    },
+    refetchIntervalInBackground: false,
+  });
+
+  // Recent decision-trace runs. The list endpoint serves the last N runs; we
+  // poll lightly while jobs are in flight so a fresh run appears here as soon
+  // as the agent finishes it, then stop.
+  const runsQ = useQuery({
+    queryKey: ['ai-runs', 20],
+    queryFn: () => api.listAiRuns(20),
+    refetchInterval: (q) => {
+      const hasActive = q.state.data?.some((r) => Date.now() - new Date(r.created_at).getTime() < 60_000);
+      return hasActive ? 5000 : false;
+    },
+    refetchIntervalInBackground: false,
+  });
+
+  const stats = jobsQ.data?.stats;
+  const jobs = jobsQ.data?.jobs ?? [];
+  const runs = runsQ.data ?? [];
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold">AI Workflow 观测</h1>
+        <p className="mt-1 text-sm text-muted">
+          AI 任务的执行状态与决策回放：切片 / 总结 / 出题 等任务的进度，以及每次模型调用的输入、输出与自检结果。
+        </p>
+      </div>
+
+      {/* Stats bar */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <Stat label="排队中" value={stats?.queued} tone="blue" />
+        <Stat label="处理中" value={stats?.processing} tone="amber" />
+        <Stat label="已完成" value={stats?.done} tone="emerald" />
+        <Stat label="失败" value={stats?.failed} tone="bad" />
+        <Stat label="已跳过" value={stats?.skipped} tone="muted" />
+      </div>
+
+      {/* Jobs section */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">任务队列</h2>
+          <div className="flex flex-wrap gap-1.5">
+            {STATUS_FILTERS.map((f) => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
+                  filter === f ? 'bg-primary text-white' : 'bg-card-2 text-muted hover:text-txt'
+                }`}
+              >
+                {f === 'all' ? '全部' : STATUS_META[f].label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          <table className="w-full text-sm">
+            <thead className="border-b border-border bg-card-2 text-xs text-muted">
+              <tr>
+                <th className="px-4 py-3 text-left font-medium">类型</th>
+                <th className="px-4 py-3 text-left font-medium">状态</th>
+                <th className="px-4 py-3 text-left font-medium">Episode</th>
+                <th className="px-4 py-3 text-left font-medium">进度</th>
+                <th className="px-4 py-3 text-left font-medium">耗时</th>
+                <th className="px-4 py-3 text-left font-medium">创建时间</th>
+                <th className="px-4 py-3 text-left font-medium">错误</th>
+              </tr>
+            </thead>
+            <tbody>
+              {jobs.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-muted">
+                    {jobsQ.isLoading ? '加载中…' : '暂无任务'}
+                  </td>
+                </tr>
+              )}
+              {jobs.map((j) => (
+                <JobRow key={j.id} job={j} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+        {/* Decision-trace section */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">决策痕迹（最近运行）</h2>
+            <span className="text-xs text-muted">点击展开查看输入 / 完整响应</span>
+          </div>
+          <RunList runs={runs} loading={runsQ.isLoading} />
+        </div>
+    </div>
+  );
+}
+
+function JobRow({ job }: { job: AiJob }) {
+  const meta = STATUS_META[job.status];
+  const showProgress = job.status === 'processing' && job.progress != null;
+  return (
+    <tr className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
+      <td className="px-4 py-3">
+        <span className="font-medium">{jobTypeLabel(job.job_type)}</span>
+        <span className="ml-1.5 text-[11px] text-muted">{job.job_type}</span>
+      </td>
+      <td className="px-4 py-3">
+        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
+      </td>
+      <td className="px-4 py-3">
+        <span className="text-muted">#{job.episode_id}</span>
+        {job.course_id != null && <span className="ml-1.5 text-[11px] text-muted">课程 {job.course_id}</span>}
+      </td>
+      <td className="px-4 py-3">
+        {showProgress ? (
+          <div className="flex items-center gap-2">
+            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-card-2">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.round((job.progress ?? 0) * 100)}%` }} />
+            </div>
+            <span className="text-xs text-muted">{Math.round((job.progress ?? 0) * 100)}%</span>
+          </div>
+        ) : (
+          <span className="text-muted">—</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-xs text-muted">{jobDuration(job)}</td>
+      <td className="px-4 py-3 text-xs text-muted">{fmtTime(job.created_at)}</td>
+      <td className="max-w-[280px] px-4 py-3">
+        {job.error ? <span className="line-clamp-2 text-xs text-bad" title={job.error}>{job.error}</span> : '—'}
+      </td>
+    </tr>
+  );
+}
+
+function RunList({ runs, loading }: { runs: AiRun[]; loading: boolean }) {
+  const [openId, setOpenId] = useState<number | null>(null);
+  const openRun = runs.find((r) => r.id === openId) ?? null;
+
+  if (loading) {
+    return <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">加载中…</div>;
+  }
+  if (runs.length === 0) {
+    return <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">暂无运行记录</div>;
+  }
+
+  return (
+    <>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <table className="w-full text-sm">
+          <thead className="border-b border-border bg-card-2 text-xs text-muted">
+            <tr>
+              <th className="px-4 py-3 text-left font-medium">能力</th>
+              <th className="px-4 py-3 text-left font-medium">模型</th>
+              <th className="px-4 py-3 text-left font-medium">Tokens (输入/输出)</th>
+              <th className="px-4 py-3 text-left font-medium">耗时</th>
+              <th className="px-4 py-3 text-left font-medium">自检</th>
+              <th className="px-4 py-3 text-left font-medium">时间</th>
+              <th className="px-4 py-3 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.id} className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
+                <td className="px-4 py-3">
+                  <span className="font-medium">{r.capability}</span>
+                  <span className="ml-1.5 text-[11px] text-muted">#{r.job_id}</span>
+                </td>
+                <td className="px-4 py-3 text-xs text-muted">{r.model_used || '—'}</td>
+                <td className="px-4 py-3 text-xs text-muted">
+                  {r.prompt_tokens} / {r.completion_tokens}
+                </td>
+                <td className="px-4 py-3 text-xs text-muted">{r.duration_ms}ms</td>
+                <td className="px-4 py-3">
+                  <SelfCheckBadge result={r.self_check_result} />
+                </td>
+                <td className="px-4 py-3 text-xs text-muted">{fmtTime(r.created_at)}</td>
+                <td className="px-4 py-3 text-right">
+                  <button className="btn-ghost btn-sm" onClick={() => setOpenId(r.id)}>
+                    查看回放
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <Modal open={openRun != null} onClose={() => setOpenId(null)} title={`运行回放 #${openRun?.id ?? ''}`} size="xl">
+        {openRun && <RunDetail run={openRun} />}
+      </Modal>
+    </>
+  );
+}
+
+function SelfCheckBadge({ result }: { result?: string }) {
+  if (!result) return <span className="text-muted">—</span>;
+  const r = result.toLowerCase();
+  // Treat "" / pass / ok as good; anything mentioning fail as bad; else muted.
+  const cls =
+    r === '' || r === 'pass' || r === 'ok'
+      ? 'bg-emerald-500/15 text-emerald-600'
+      : r.includes('fail')
+        ? 'bg-bad/15 text-bad'
+        : 'bg-gray-500/15 text-muted';
+  return <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>{result}</span>;
+}
+
+function RunDetail({ run }: { run: AiRun }) {
+  // Pretty-print JSON input if possible; fall back to the raw string.
+  let prettyInput = run.input_json;
+  try {
+    if (run.input_json) prettyInput = JSON.stringify(JSON.parse(run.input_json), null, 2);
+  } catch {
+    /* not JSON — keep raw */
+  }
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+        <Meta label="能力" value={run.capability} />
+        <Meta label="模型" value={run.model_used || '—'} />
+        <Meta label="Tokens" value={`${run.prompt_tokens} / ${run.completion_tokens}`} />
+        <Meta label="耗时" value={`${run.duration_ms}ms`} />
+      </div>
+
+      <div>
+        <div className="mb-1 text-xs font-medium text-muted">输入 (input_json)</div>
+        <pre className="max-h-64 overflow-auto rounded-xl border border-border bg-card-2 p-3 text-xs text-txt">{prettyInput || '(空)'}</pre>
+      </div>
+
+      <div>
+        <div className="mb-1 text-xs font-medium text-muted">响应 (response_text)</div>
+        <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-card-2 p-3 text-xs text-txt">{run.response_text || '(空)'}</pre>
+      </div>
+    </div>
+  );
+}
+
+function Meta({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card-2 p-2.5">
+      <div className="text-[11px] text-muted">{label}</div>
+      <div className="mt-0.5 truncate text-sm font-medium">{value}</div>
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value?: number; tone: 'blue' | 'amber' | 'emerald' | 'bad' | 'muted' }) {
+  const toneCls = {
+    blue: 'text-blue-600',
+    amber: 'text-amber-600',
+    emerald: 'text-emerald-600',
+    bad: 'text-bad',
+    muted: 'text-muted',
+  }[tone];
+  return (
+    <div className="rounded-xl border border-border bg-card p-3">
+      <div className="text-[11px] text-muted">{label}</div>
+      <div className={`mt-0.5 text-2xl font-bold ${toneCls}`}>{value ?? 0}</div>
+    </div>
+  );
+}

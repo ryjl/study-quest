@@ -68,6 +68,12 @@ type SubtitleJobService interface {
 	// the job isn't processing (e.g. already reaped/failed).
 	Heartbeat(jobID uint, progress *float64) error
 
+	// SetOnSubtitleCompleted registers a callback fired after a transcript is
+	// successfully saved. This is the Step 2→3 seam: main.go wires the AI
+	// service's auto-segment trigger here, keeping this service AI-agnostic.
+	// Optional; nil callback = no-op (pre-AI behavior).
+	SetOnSubtitleCompleted(fn func(episodeID uint))
+
 	Fail(jobID uint, errStr string) error
 	Skip(jobID uint) error
 	// Retry moves a failed job back to queued (attempt count is preserved so
@@ -146,6 +152,20 @@ type subtitleJobService struct {
 	courseRepo     repository.CourseRepository
 	chapterRepo    repository.ChapterRepository
 	subjectRepo    repository.SubjectRepository
+	// onSubtitleCompleted is an optional callback fired after a transcript
+	// successfully lands. It's the seam where the AI subsystem hooks in to
+	// auto-segment new subtitles — kept as a callback (not a direct AIService
+	// import) so the subtitle service stays decoupled from AI. nil = no-op
+	// (AI not wired). Set via SetOnSubtitleCompleted.
+	onSubtitleCompleted func(episodeID uint)
+}
+
+// SetOnSubtitleCompleted registers a callback invoked after a subtitle is
+// successfully saved. Used by main.go to connect AIService.OnSubtitleCompleted
+// without the subtitle service importing the AI package. Optional: if never
+// called, subtitle completion is a no-op beyond persistence (pre-AI behavior).
+func (s *subtitleJobService) SetOnSubtitleCompleted(fn func(episodeID uint)) {
+	s.onSubtitleCompleted = fn
 }
 
 // NewSubtitleJobService constructs a SubtitleJobService. episodeService backs
@@ -348,6 +368,13 @@ func (s *subtitleJobService) Complete(jobID uint, srtContent, language, label st
 		// visible; the job is done but subtitle-less — admin can re-save a
 		// subtitle manually via the existing subtitle UI.
 		return fmt.Errorf("job marked done but subtitle save failed: %w", err)
+	}
+
+	// Fire the AI hook (if wired) so new subtitles get auto-segmented. The hook
+	// is a fire-and-forget enqueue — failures here must NOT fail Complete (the
+	// subtitle itself is already safely persisted). Best-effort, logged.
+	if s.onSubtitleCompleted != nil {
+		s.onSubtitleCompleted(job.EpisodeID)
 	}
 	return nil
 }

@@ -94,6 +94,19 @@ func (r *ProviderResolver) IsReady() (chat, embed bool, err error) {
 	return chat, embed, nil
 }
 
+// ChatModelName returns the model name of the enabled chat provider (e.g.
+// "gpt-5.4-mini"), or "" if none is enabled. Used to stamp ai_runs/ai_summaries
+// with which model produced a result, for observability. Reads the DB row
+// (cheap, only called once per generation job) rather than threading the name
+// through the LLMProvider interface.
+func (r *ProviderResolver) ChatModelName() string {
+	row, err := r.enabledRow(model.AICapabilityChat)
+	if err != nil || row == nil {
+		return ""
+	}
+	return row.ModelName
+}
+
 // Invalidate drops the cached provider for one capability. Called by the admin
 // handler after a provider row is created/updated/deleted, so the next resolve
 // rebuilds from the new config.

@@ -31,6 +31,7 @@ func RegisterRoutes(
 	unlock handler.UnlockHandler,
 	release handler.ReleaseHandler,
 	reading handler.ReadingHandler,
+	ai handler.AIHandler,
 	userRepo repository.UserRepository,
 	settingsRepo repository.SettingsRepository,
 	sessionService service.SessionService,
@@ -83,6 +84,9 @@ func RegisterRoutes(
 		v1Restricted.GET("/episodes/:id/play-info", episode.GetPlayInfo)
 		v1Restricted.GET("/episodes/:id/subtitle", episode.GetSubtitle)
 		v1Restricted.GET("/episodes/:id/ai-content", episode.GetAIContent)
+		// AI module (Step 3) — client reads. 404 when AI is off / no summary yet,
+		// so the client can hide the AI card gracefully.
+		v1Restricted.GET("/episodes/:id/ai-summary", ai.GetEpisodeSummary)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
 		// Resolve the Nth attachment of an episode into a 302 download link.
 		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)
@@ -223,6 +227,12 @@ func RegisterRoutes(
 		adm.DELETE("/api/ai/providers/:id", admin.DeleteAIProvider)
 		adm.POST("/api/ai/providers/:id/test", admin.TestAIProvider)
 		adm.GET("/api/ai/status", admin.GetAIStatus)
+		// AI module — generation jobs + observability.
+		adm.POST("/api/ai/jobs", admin.EnqueueAIJobs)
+		adm.GET("/api/ai/jobs", admin.ListAIJobs)
+		adm.GET("/api/ai/jobs/:id", admin.GetAIJob)
+		adm.GET("/api/ai/runs", admin.ListAIRuns)
+		adm.GET("/api/ai/runs/:id", admin.GetAIRun)
 
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)

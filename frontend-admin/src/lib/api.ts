@@ -33,6 +33,10 @@ import type {
   ReadingTargetType,
   AiProvider,
   AiProviderTestResult,
+  AiJob,
+  AiJobsResponse,
+  AiJobEnqueueResult,
+  AiRun,
 } from './types';
 
 // Centralized API client. Same-origin cookies carry the admin session. All
@@ -514,5 +518,25 @@ export const api = {
   },
   async testAiProvider(id: number): Promise<AiProviderTestResult> {
     return request(`/admin/api/ai/providers/${id}/test`, { method: 'POST' });
+  },
+
+  // AI workflow jobs (slice/summarize/etc). The list endpoint rolls up status
+  // counts alongside the jobs, so the page gets both in one round-trip.
+  async enqueueAiJobs(jobType: string, episodeIds: number[]): Promise<AiJobEnqueueResult> {
+    return request('/admin/api/ai/jobs', { method: 'POST', body: JSON.stringify({ job_type: jobType, episode_ids: episodeIds }) });
+  },
+  async listAiJobs(jobType?: string, status?: string): Promise<AiJobsResponse> {
+    return request(`/admin/api/ai/jobs${qs({ job_type: jobType, status })}`);
+  },
+  async getAiJob(id: number): Promise<{ job: AiJob; runs: AiRun[] }> {
+    return request(`/admin/api/ai/jobs/${id}`);
+  },
+  // Decision-trace runs: the recorded model invocations an agent made. limit
+  // caps the window (the page shows the most recent N).
+  async listAiRuns(limit = 20): Promise<AiRun[]> {
+    return request(`/admin/api/ai/runs${qs({ limit })}`);
+  },
+  async getAiRun(id: number): Promise<AiRun> {
+    return request(`/admin/api/ai/runs/${id}`);
   },
 };

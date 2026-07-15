@@ -15,6 +15,7 @@ import { Releases } from './pages/Releases';
 import { ReadingRoom } from './pages/ReadingRoom';
 import { WatchHistory } from './pages/WatchHistory';
 import { SubtitleQueue } from './pages/SubtitleQueue';
+import { AIWorkflow } from './pages/AIWorkflow';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="watch-history" element={<WatchHistory />} />
         <Route path="courses" element={<Courses />} />
         <Route path="subtitle-queue" element={<SubtitleQueue />} />
+        <Route path="ai-workflow" element={<AIWorkflow />} />
         <Route path="reading-room" element={<ReadingRoom />} />
         <Route path="subjects" element={<Subjects />} />
         <Route path="tags" element={<Tags />} />

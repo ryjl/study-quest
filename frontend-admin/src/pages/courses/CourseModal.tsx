@@ -33,6 +33,8 @@ export function CreateEditCourseModal({
   const [coverUrl, setCoverUrl] = useState('');
   const [tagIDs, setTagIDs] = useState<number[]>([]);
   const [aiHint, setAiHint] = useState('');
+  const [aiSummaryEnabled, setAiSummaryEnabled] = useState(true);
+  const [aiQuizEnabled, setAiQuizEnabled] = useState(true);
 
   useEffect(() => {
     if (open) {
@@ -45,6 +47,11 @@ export function CreateEditCourseModal({
       setCoverUrl(course?.cover_url ?? '');
       setTagIDs(course?.tag_ids ?? []);
       setAiHint(course?.ai_hint ?? '');
+      // AI switches default OFF when unset — AI is an opt-in add-on layer; a
+      // course with no explicit setting behaves as plain video viewing (no AI
+      // surfaces). Matches the backend gorm:"default:false".
+      setAiSummaryEnabled(course?.ai_summary_enabled ?? false);
+      setAiQuizEnabled(course?.ai_quiz_enabled ?? false);
     }
   }, [open, course, subjects]);
 
@@ -63,6 +70,8 @@ export function CreateEditCourseModal({
         cover_url: coverUrl,
         tag_ids: tagIDs,
         ai_hint: aiHint.trim(),
+        ai_summary_enabled: aiSummaryEnabled,
+        ai_quiz_enabled: aiQuizEnabled,
       };
       if (isEdit && course) return api.updateCourse(course.id, body);
       return api.createCourse(body);
@@ -143,6 +152,28 @@ export function CreateEditCourseModal({
             onChange={(e) => setAiHint(e.target.value)}
           />
           <p className="mt-1 text-[11px] text-muted">拼入 Whisper 提示词，帮助压制学科术语错字。过长的内容会被截断。</p>
+        </div>
+
+        <div className="space-y-2 rounded-xl border border-border bg-card-2 p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border accent-primary"
+              checked={aiSummaryEnabled}
+              onChange={(e) => setAiSummaryEnabled(e.target.checked)}
+            />
+            <span>启用 AI 总结</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border accent-primary"
+              checked={aiQuizEnabled}
+              onChange={(e) => setAiQuizEnabled(e.target.checked)}
+            />
+            <span>启用 AI 出题</span>
+          </label>
+          <p className="text-[11px] text-muted">关闭后，该课程的课时将跳过对应的 AI 后处理（即使全局已配置）。</p>
         </div>
 
         <button type="submit" className="btn-primary w-full" disabled={saveMut.isPending}>

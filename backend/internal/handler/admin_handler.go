@@ -131,6 +131,12 @@ type AdminHandler interface {
 	DeleteAIProvider(c *gin.Context)
 	TestAIProvider(c *gin.Context)
 	GetAIStatus(c *gin.Context)
+	// AI module — generation jobs + observability.
+	EnqueueAIJobs(c *gin.Context)
+	ListAIJobs(c *gin.Context)
+	GetAIJob(c *gin.Context)
+	ListAIRuns(c *gin.Context)
+	GetAIRun(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -166,6 +172,7 @@ type adminHandler struct {
 	// of the panel is unaffected.
 	aiProviderRepo repository.AIProviderRepository
 	aiResolver     *ai.ProviderResolver
+	aiService      service.AIService
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -206,6 +213,7 @@ type AdminHandlerDeps struct {
 	StorageResolver      *service.StorageProviderResolver
 	AIProviderRepo       repository.AIProviderRepository
 	AIResolver           *ai.ProviderResolver
+	AIService            service.AIService
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -243,6 +251,7 @@ func (d *AdminHandlerDeps) WithStorageSources(r repository.StorageSourceReposito
 func (d *AdminHandlerDeps) WithStorageResolver(r *service.StorageProviderResolver) *AdminHandlerDeps { d.StorageResolver = r; return d }
 func (d *AdminHandlerDeps) WithAIProviderRepo(r repository.AIProviderRepository) *AdminHandlerDeps { d.AIProviderRepo = r; return d }
 func (d *AdminHandlerDeps) WithAIResolver(r *ai.ProviderResolver) *AdminHandlerDeps            { d.AIResolver = r; return d }
+func (d *AdminHandlerDeps) WithAIService(s service.AIService) *AdminHandlerDeps                 { d.AIService = s; return d }
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
@@ -276,6 +285,7 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		storageResolver:      d.StorageResolver,
 		aiProviderRepo:       d.AIProviderRepo,
 		aiResolver:           d.AIResolver,
+		aiService:            d.AIService,
 	}
 }
 
