@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../config.dart';
 import '../../model/user.dart';
 import '../../model/progress.dart';
@@ -125,14 +127,16 @@ class _MainNavigationState extends State<MainNavigation> {
       // header on top of the content. Replaces the 280px sidebar, which crowds
       // a portrait screen.
       return Scaffold(
-        body: DotPatternBackground(
-          child: Column(
-            children: [
-              if (user != null) _buildCompactHeader(user),
-              Expanded(
-                child: _buildCurrentScreen(user?.id ?? 0),
-              ),
-            ],
+        body: SafeArea(
+          child: DotPatternBackground(
+            child: Column(
+              children: [
+                if (user != null) _buildCompactHeader(user),
+                Expanded(
+                  child: _buildCurrentScreen(user?.id ?? 0),
+                ),
+              ],
+            ),
           ),
         ),
         bottomNavigationBar: _buildBottomNav(),
@@ -141,18 +145,20 @@ class _MainNavigationState extends State<MainNavigation> {
 
     // Wide (tablet landscape): full 280px sidebar + content.
     return Scaffold(
-      body: Row(
-        children: [
-          // Sidebar (w-280, bg-white, border-r)
-          _buildSidebar(user),
+      body: SafeArea(
+        child: Row(
+          children: [
+            // Sidebar (w-280, bg-white, border-r)
+            _buildSidebar(user),
 
-          // Main content with DotPatternBackground
-          Expanded(
-            child: DotPatternBackground(
-              child: _buildCurrentScreen(user?.id ?? 0),
+            // Main content with DotPatternBackground
+            Expanded(
+              child: DotPatternBackground(
+                child: _buildCurrentScreen(user?.id ?? 0),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -320,248 +326,259 @@ class _MainNavigationState extends State<MainNavigation> {
           ),
         ],
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Brand Logo
-          Padding(
-            padding: const EdgeInsets.only(top: 32, bottom: 16, left: 32, right: 32),
-            child: Row(
-              children: [
-                Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF3B82F6), Color(0xFF6366F1)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF3B82F6).withOpacity(0.3),
-                        blurRadius: 10,
-                        offset: const Offset(0, 4),
-                      )
-                    ],
-                  ),
-                  child: const Icon(
-                    Icons.rocket_launch,
-                    color: Colors.white,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                const Text(
-                  '学途奇旅',
-                  style: TextStyle(
-                    fontFamily: 'Quicksand',
-                    fontWeight: FontWeight.w900,
-                    fontSize: 20,
-                    color: AppTheme.textWhite,
-                    letterSpacing: -0.5,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Profile Container (bouncy gradient card)
-          if (user != null)
-            Container(
-              margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFFEFF6FF), Colors.white],
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                ),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: const Color(0xFFDBEAFE), width: 1.0),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Stack(
-                        clipBehavior: Clip.none,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: IntrinsicHeight(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Brand Logo
+                    Padding(
+                      padding: const EdgeInsets.only(top: 32, bottom: 16, left: 32, right: 32),
+                      child: Row(
                         children: [
                           Container(
-                            width: 64,
-                            height: 64,
-                            padding: const EdgeInsets.all(3.0),
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              gradient: LinearGradient(
-                                colors: [Color(0xFF60A5FA), Color(0xFFC084FC)],
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF3B82F6), Color(0xFF6366F1)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
                               ),
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF3B82F6).withOpacity(0.3),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                )
+                              ],
                             ),
-                            child: Container(
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: Colors.white,
-                              ),
-                              padding: const EdgeInsets.all(2.0),
-                              child: ClipOval(
-                                child: user.avatarUrl.isNotEmpty
-                                    ? Image.network(user.avatarUrl, fit: BoxFit.cover)
-                                    : const Icon(Icons.person, color: AppTheme.textMuted),
-                              ),
+                            child: const Icon(
+                              Icons.rocket_launch,
+                              color: Colors.white,
+                              size: 20,
                             ),
                           ),
-                          Positioned(
-                            bottom: -6,
-                            right: -4,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Color(0xFFFB923C), Color(0xFFFACC15)],
-                                ),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(color: Colors.white, width: 1.5),
-                              ),
-                              child: Text(
-                                'Lv.${(_userPoint?.currentPoints ?? 0) ~/ 100 + 1}',
-                                style: const TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            '学途奇旅',
+                            style: TextStyle(
+                              fontFamily: 'Quicksand',
+                              fontWeight: FontWeight.w900,
+                              fontSize: 20,
+                              color: AppTheme.textWhite,
+                              letterSpacing: -0.5,
                             ),
                           ),
                         ],
                       ),
-                      const SizedBox(width: 14),
-                      Expanded(
+                    ),
+
+                    // Profile Container (bouncy gradient card)
+                    if (user != null)
+                      Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFFEFF6FF), Colors.white],
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                          ),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: const Color(0xFFDBEAFE), width: 1.0),
+                        ),
                         child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              user.nickname,
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w900,
-                                fontSize: 18,
-                                color: AppTheme.textWhite,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 4),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFE2E8F0),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Text(
-                                user.role == 'student' ? '四年级' : '家长',
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  color: AppTheme.textMuted,
-                                  fontWeight: FontWeight.bold,
+                            Row(
+                              children: [
+                                Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    Container(
+                                      width: 64,
+                                      height: 64,
+                                      padding: const EdgeInsets.all(3.0),
+                                      decoration: const BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        gradient: LinearGradient(
+                                          colors: [Color(0xFF60A5FA), Color(0xFFC084FC)],
+                                        ),
+                                      ),
+                                      child: Container(
+                                        decoration: const BoxDecoration(
+                                          shape: BoxShape.circle,
+                                          color: Colors.white,
+                                        ),
+                                        padding: const EdgeInsets.all(2.0),
+                                        child: ClipOval(
+                                          child: user.avatarUrl.isNotEmpty
+                                              ? Image.network(user.avatarUrl, fit: BoxFit.cover)
+                                              : const Icon(Icons.person, color: AppTheme.textMuted),
+                                        ),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      bottom: -6,
+                                      right: -4,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          gradient: const LinearGradient(
+                                            colors: [Color(0xFFFB923C), Color(0xFFFACC15)],
+                                          ),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: Colors.white, width: 1.5),
+                                        ),
+                                        child: Text(
+                                          'Lv.${(_userPoint?.currentPoints ?? 0) ~/ 100 + 1}',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 9,
+                                            fontWeight: FontWeight.w900,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        user.nickname,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 18,
+                                          color: AppTheme.textWhite,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFE2E8F0),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: Text(
+                                          user.role == 'student' ? '四年级' : '家长',
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            color: AppTheme.textMuted,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            // Points Badge white card
+                            Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: const Color(0xFFE2E8F0)),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(0xFF0F172A).withOpacity(0.04),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        width: 32,
+                                        height: 32,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFFFFEDD5),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(Icons.star_rounded, color: Color(0xFFF97316), size: 18),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Text(
+                                        '我的积分',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 13,
+                                          color: AppTheme.textWhite,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Text(
+                                    '${_userPoint?.currentPoints ?? 0}',
+                                    style: const TextStyle(
+                                      color: Color(0xFFF97316),
+                                      fontWeight: FontWeight.w900,
+                                      fontSize: 18,
+                                      fontFamily: 'Quicksand',
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-                  // Points Badge white card
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF0F172A).withOpacity(0.04),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              width: 32,
-                              height: 32,
-                              decoration: const BoxDecoration(
-                                color: Color(0xFFFFEDD5),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.star_rounded, color: Color(0xFFF97316), size: 18),
-                            ),
-                            const SizedBox(width: 8),
-                            const Text(
-                              '我的积分',
+
+                    // Menu Navigation Tabs
+                    const SizedBox(height: 12),
+                    _buildNavItem(0, Icons.school_rounded, '学习大厅'),
+                    _buildNavItem(1, Icons.menu_book_rounded, '阅读室'),
+                    _buildNavItem(2, Icons.explore_rounded, '成长足迹'),
+                    _buildNavItem(3, Icons.settings_rounded, '系统设置'),
+
+                    const Spacer(),
+
+                    // Logout Button
+                    Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: FocusButton(
+                        baseColor: Colors.transparent,
+                        borderColor: Colors.transparent,
+                        onPressed: _onLogout,
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: const [
+                            Icon(Icons.logout_rounded, color: Color(0xFF94A3B8), size: 18),
+                            SizedBox(width: 8),
+                            Text(
+                              '退出当前账号',
                               style: TextStyle(
-                                fontWeight: FontWeight.w800,
-                                fontSize: 13,
-                                color: AppTheme.textWhite,
+                                color: Color(0xFF94A3B8),
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
                               ),
                             ),
                           ],
                         ),
-                        Text(
-                          '${_userPoint?.currentPoints ?? 0}',
-                          style: const TextStyle(
-                            color: Color(0xFFF97316),
-                            fontWeight: FontWeight.w900,
-                            fontSize: 18,
-                            fontFamily: 'Quicksand',
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-
-          // Menu Navigation Tabs
-          const SizedBox(height: 12),
-          _buildNavItem(0, Icons.school_rounded, '学习大厅'),
-          _buildNavItem(1, Icons.menu_book_rounded, '阅读室'),
-          _buildNavItem(2, Icons.explore_rounded, '成长足迹'),
-          _buildNavItem(3, Icons.settings_rounded, '系统设置'),
-
-          const Spacer(),
-
-          // Logout Button
-          Padding(
-            padding: const EdgeInsets.all(20.0),
-            child: FocusButton(
-              baseColor: Colors.transparent,
-              borderColor: Colors.transparent,
-              onPressed: _onLogout,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.logout_rounded, color: Color(0xFF94A3B8), size: 18),
-                  SizedBox(width: 8),
-                  Text(
-                    '退出当前账号',
-                    style: TextStyle(
-                      color: Color(0xFF94A3B8),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1394,6 +1411,84 @@ class _MainNavigationState extends State<MainNavigation> {
                         child: Text('离开局域网时，请输入内网穿透或虚拟局域网（如 ZeroTier）的 API 地址。', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
                       ),
                     ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+
+          // Local settings card
+          Container(
+            constraints: const BoxConstraints(maxWidth: 800),
+            child: GlassPanel(
+              padding: EdgeInsets.all(compact ? 20 : 32),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: const BoxDecoration(
+                          color: Color(0xFFEFF6FF),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.settings_suggest_rounded, color: Color(0xFF2563EB), size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      const Text('播放设置（本地偏好）', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppTheme.textWhite)),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  // Hardware Decoding Switch
+                  FutureBuilder<bool>(
+                    future: SharedPreferences.getInstance().then((prefs) => prefs.getBool('enable_hw_acceleration') ?? false),
+                    builder: (context, snapshot) {
+                      final isEnabled = snapshot.data ?? false;
+                      return SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('硬件加速解码 (HW Acceleration)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
+                        subtitle: const Text('开启后使用硬件加速解码，若播放异常请关闭', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                        value: isEnabled,
+                        activeColor: AppTheme.primaryColor,
+                        onChanged: (val) async {
+                          final prefs = await SharedPreferences.getInstance();
+                          await prefs.setBool('enable_hw_acceleration', val);
+                          setState(() {});
+                        },
+                      );
+                    },
+                  ),
+                  const Divider(color: Color(0xFFE2E8F0), height: 32),
+                  // Cache Cleaning
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('清理本地缓存空间', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
+                    subtitle: const Text('清理 PDF 讲义和临时缓存的媒体文件', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                    trailing: Button3D.white(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                      onPressed: () async {
+                        try {
+                          final tempDir = await getTemporaryDirectory();
+                          if (tempDir.existsSync()) {
+                            tempDir.deleteSync(recursive: true);
+                          }
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('本地缓存清理成功！')),
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('清理失败: $e')),
+                            );
+                          }
+                        }
+                      },
+                      child: const Text('立即清理', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ),
                   ),
                 ],
               ),

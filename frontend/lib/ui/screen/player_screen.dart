@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:pdfrx/pdfrx.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:screen_brightness/screen_brightness.dart';
 import '../../config.dart';
 import '../../model/course.dart';
 import '../../service/api_service.dart';
@@ -48,7 +51,7 @@ class PlayerScreen extends StatefulWidget {
 class _PlayerScreenState extends State<PlayerScreen> {
   // media_kit core
   late final Player _player;
-  late final VideoController _controller;
+  late VideoController _controller;
   bool _engineReady = false;
   String _errorMessage = '';
 
@@ -66,7 +69,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   AILessonContent? _aiContent;
   bool _loadingExtras = true;
 
-  // Subtitle selection (0 = off, otherwise 1-based into _playInfo.subtitles)
+  // Subtitle selection (0 = off, otherwise 1-based into subtitles list)
   int _selectedSubtitle = 0;
 
   // Anti-cheat progress logging
@@ -91,13 +94,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isFullscreen = false;
   bool _controlsLocked = false;
   double _rate = 1.0;
-  double? _volumeBeforeMute; // null = not muted
+  String _subtitleSizeLabel = '中';
+  double _volumeBeforeMute = 50.0;
+  String _activeMenu = '';
+  final List<String> _nativeSubtitleIds = [];
+  bool _nativeSubtitlesCaptured = false;
   // Drag-to-seek transient state. While the user is dragging the seek bar we
   // only update a local preview position (no seek); a single seek is committed
   // on change-end. Without this, dragging fires dozens of seek() calls and
   // tears the libmpv demuxer down on every frame.
   bool _isDraggingSeek = false;
   Duration _dragPosition = Duration.zero;
+
+  // Helper panel layout state
+  bool _helperPanelInitialized = false;
+  bool _showHelperPanel = false;
+
+  // Gestures Overlay indicators
+  bool _showVolumeIndicator = false;
+  double _volumeIndicatorVal = 0.0;
+  bool _showBrightnessIndicator = false;
+  double _brightnessIndicatorVal = 0.0;
+  bool _showFastForwardIndicator = false;
+  String _fastForwardText = '';
+  Timer? _indicatorTimer;
 
   @override
   void initState() {
@@ -121,18 +141,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         bufferSize: 64 * 1024 * 1024,
       ),
     );
-    // Hardware acceleration OFF by default.
-    //
-    // media_kit's HW decoder delegates to MediaCodec/OMX. On emulators (MuMu is
-    // x86 pretending to be ARM) the emulated OMX.qcom.* decoders are unstable:
-    // we observed the whole Flutter engine freezing mid-playback with repeated
-    // `PlayerBase::stop()` and no further render ticks. Software decoding is
-    // slower but reliable across devices; revisit for real ARM hardware if a
-    // high-bitrate file actually stutters.
-    _controller = VideoController(_player,
-        configuration: const VideoControllerConfiguration(
-          enableHardwareAcceleration: false,
-        ));
 
     _initializeVideo();
     _loadExtras();
@@ -184,7 +192,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // ---------------------------------------------------------------------------
 
   Future<void> _initializeVideo() async {
+    _nativeSubtitleIds.clear();
+    _nativeSubtitlesCaptured = false;
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final enableHw = prefs.getBool('enable_hw_acceleration') ?? false;
+      _controller = VideoController(_player,
+          configuration: VideoControllerConfiguration(
+            enableHardwareAcceleration: enableHw,
+          ));
+
       final playInfo = await ApiService.fetchPlayInfo(
           widget.activeUserId, widget.episode.id);
       _playInfo = playInfo;
@@ -232,6 +249,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
       } else {
         _player.open(media);
       }
+
+      _player.stream.tracks.listen((tracks) {
+        if (mounted) {
+          if (!_nativeSubtitlesCaptured && tracks.subtitle.isNotEmpty) {
+            _nativeSubtitleIds.clear();
+            for (var t in tracks.subtitle) {
+              if (t.id != 'no' && t.id != 'auto') {
+                _nativeSubtitleIds.add(t.id);
+              }
+            }
+            if (_player.state.duration > Duration.zero) {
+              _nativeSubtitlesCaptured = true;
+            }
+          }
+          final options = _getSubtitleOptions();
+          if (_selectedSubtitle == 0) {
+            _autoSelectDefaultSubtitle(options);
+          }
+        }
+      });
 
       if (mounted) {
         setState(() => _engineReady = true);
@@ -420,22 +457,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Subtitle selection
-  // ---------------------------------------------------------------------------
 
-  Future<void> _selectSubtitle(int slot) async {
-    // slot 0 => off; slot n => _playInfo.subtitles[n-1]
-    setState(() => _selectedSubtitle = slot);
-    final subs = _playInfo?.subtitles ?? const [];
-    if (slot == 0) {
-      await _player.setSubtitleTrack(SubtitleTrack.no());
-    } else if (slot - 1 < subs.length) {
-      final sub = subs[slot - 1];
-      final url = ApiService.absoluteUrl(sub.url);
-      await _player.setSubtitleTrack(SubtitleTrack.uri(url, title: sub.label));
-    }
-  }
 
   // ---------------------------------------------------------------------------
   // Controls auto-hide
@@ -445,7 +467,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _hideTimer?.cancel();
     _hideTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && _player.state.playing && !_showQuizBlocker) {
-        setState(() => _controlsVisible = false);
+        setState(() {
+          _controlsVisible = false;
+          _activeMenu = '';
+        });
       }
     });
   }
@@ -461,23 +486,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _setVolume(double v) {
     _player.setVolume(v.clamp(0.0, 100.0));
-    setState(() {
-      // Unmute if a real volume is chosen while muted.
-      _volumeBeforeMute = null;
-    });
     _scheduleAutoHide();
   }
 
-  void _toggleMute() {
-    if (_volumeBeforeMute == null) {
-      setState(() => _volumeBeforeMute = _player.state.volume);
-      _player.setVolume(0);
-    } else {
-      _player.setVolume(_volumeBeforeMute!);
-      setState(() => _volumeBeforeMute = null);
-    }
-    _scheduleAutoHide();
-  }
+
 
   void _setRate(double r) {
     _player.setRate(r);
@@ -537,6 +549,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return _buildErrorScreen();
     }
 
+    if (!_helperPanelInitialized) {
+      _showHelperPanel = MediaQuery.of(context).size.width >= 900;
+      _isFullscreen = !_showHelperPanel;
+      _helperPanelInitialized = true;
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Shortcuts(
@@ -552,17 +570,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
           onKeyEvent: _onRemoteKey,
           child: Stack(
             children: [
-              // 70/30 split: video (left) + helper panel (right).
-              // In fullscreen the helper panel is collapsed so the video
-              // fills the whole screen.
               Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    flex: _isFullscreen ? 1 : 7,
                     child: _buildVideoArea(),
                   ),
-                  if (!_isFullscreen) _buildHelperPanel(),
+                  if (!_isFullscreen && _showHelperPanel)
+                    SizedBox(
+                      width: MediaQuery.of(context).size.width >= 900 ? 360 : 300,
+                      child: _buildHelperPanel(),
+                    ),
                 ],
               ),
 
@@ -661,6 +679,78 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Video area (left 70%)
   // ---------------------------------------------------------------------------
 
+  // Gesture Helper states
+  double _dragVolumeStart = 0.0;
+  double _dragBrightnessStart = 0.5;
+  double _dragStartOffset = 0.0;
+  double _rateBeforeLongPress = 1.0;
+
+  Future<void> _setBrightness(double val) async {
+    try {
+      await ScreenBrightness().setScreenBrightness(val.clamp(0.0, 1.0));
+    } catch (_) {}
+  }
+  Future<double> _getBrightness() async {
+    try {
+      return await ScreenBrightness().current;
+    } catch (_) {
+      return 0.5;
+    }
+  }
+
+  void _showVolumeOverlay(double val) {
+    _indicatorTimer?.cancel();
+    setState(() {
+      _showVolumeIndicator = true;
+      _volumeIndicatorVal = val;
+      _showBrightnessIndicator = false;
+      _showFastForwardIndicator = false;
+    });
+    _indicatorTimer = Timer(const Duration(milliseconds: 1000), () {
+      if (mounted) setState(() => _showVolumeIndicator = false);
+    });
+  }
+
+  void _showBrightnessOverlay(double val) {
+    _indicatorTimer?.cancel();
+    setState(() {
+      _showBrightnessIndicator = true;
+      _brightnessIndicatorVal = val;
+      _showVolumeIndicator = false;
+      _showFastForwardIndicator = false;
+    });
+    _indicatorTimer = Timer(const Duration(milliseconds: 1000), () {
+      if (mounted) setState(() => _showBrightnessIndicator = false);
+    });
+  }
+
+  void _showFFRewindIndicator(String text) {
+    _indicatorTimer?.cancel();
+    setState(() {
+      _showFastForwardIndicator = true;
+      _fastForwardText = text;
+      _showVolumeIndicator = false;
+      _showBrightnessIndicator = false;
+    });
+    _indicatorTimer = Timer(const Duration(milliseconds: 1000), () {
+      if (mounted) setState(() => _showFastForwardIndicator = false);
+    });
+  }
+
+  void _showFastForwardOverlay(String text) {
+    _indicatorTimer?.cancel();
+    setState(() {
+      _showFastForwardIndicator = true;
+      _fastForwardText = text;
+      _showVolumeIndicator = false;
+      _showBrightnessIndicator = false;
+    });
+  }
+
+  void _hideFFIndicator() {
+    setState(() => _showFastForwardIndicator = false);
+  }
+
   Widget _buildVideoArea() {
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -668,8 +758,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         return Stack(
           fit: StackFit.expand,
           children: [
-            // 1. Video surface (no gesture handling of its own — media_kit's
-            //    Video widget is used purely for rendering).
+            // 1. Video surface
             Positioned.fill(
               child: Container(
                 color: Colors.black,
@@ -677,6 +766,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   controller: _controller,
                   fill: Colors.black,
                   controls: NoVideoControls,
+                  subtitleViewConfiguration: SubtitleViewConfiguration(
+                    style: TextStyle(
+                      fontSize: _subtitleSizeLabel == '小'
+                          ? 16.0
+                          : (_subtitleSizeLabel == '大' ? 26.0 : 20.0),
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      backgroundColor: Colors.black38,
+                    ),
+                    padding: EdgeInsets.only(
+                      bottom: _controlsVisible ? 100.0 : 24.0,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -701,26 +803,122 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ),
               ),
 
-            // 3. Top-level gesture layer. Sits ABOVE the video, BELOW the
-            //    controls overlay. Handles tap-to-toggle, double-tap ±10s,
-            //    horizontal drag to scrub. Crucially it is NOT a parent of the
-            //    controls, so the Slider/buttons get their own gestures; and
-            //    because it is above the Video widget, media_kit cannot swallow
-            //    the taps that should re-show the controls.
+            // 3. Top-level gesture layer
             if (!_controlsLocked && !_showQuizBlocker)
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
                   onTap: _toggleControls,
                   onDoubleTapDown: (details) {
-                    final isRight = details.localPosition.dx > videoWidth / 2;
-                    _seekRelative(Duration(
-                        seconds: isRight ? 10 : -10));
+                    final dx = details.localPosition.dx;
+                    if (dx < videoWidth * 0.35) {
+                      _seekRelative(const Duration(seconds: -10));
+                      _showFFRewindIndicator('-10s');
+                    } else if (dx > videoWidth * 0.65) {
+                      _seekRelative(const Duration(seconds: 10));
+                      _showFFRewindIndicator('+10s');
+                    } else {
+                      _togglePlayPause();
+                    }
                   },
                   onHorizontalDragStart: (_) => _onSeekDragStart(),
                   onHorizontalDragUpdate: (details) =>
                       _onSeekDragUpdate(details.delta.dx, videoWidth),
                   onHorizontalDragEnd: (_) => _onSeekDragEnd(),
+                  onVerticalDragStart: (details) {
+                    final isRight = details.localPosition.dx > videoWidth / 2;
+                    _dragStartOffset = details.localPosition.dy;
+                    if (isRight) {
+                      _dragVolumeStart = _player.state.volume;
+                    } else {
+                      _getBrightness().then((b) => _dragBrightnessStart = b);
+                    }
+                  },
+                  onVerticalDragUpdate: (details) {
+                    final isRight = details.localPosition.dx > videoWidth / 2;
+                    final dy = _dragStartOffset - details.localPosition.dy;
+                    final pct = dy / 200.0; // 200px drag represents 100% change
+                    if (isRight) {
+                      final newVol = (_dragVolumeStart + pct * 100).clamp(0.0, 100.0);
+                      _setVolume(newVol);
+                      _showVolumeOverlay(newVol);
+                    } else {
+                      final newBright = (_dragBrightnessStart + pct).clamp(0.0, 1.0);
+                      _setBrightness(newBright);
+                      _showBrightnessOverlay(newBright);
+                    }
+                  },
+                  onLongPressStart: (_) {
+                    _rateBeforeLongPress = _rate;
+                    _setRate(2.0);
+                    _showFastForwardOverlay("2.0x 倍速播放中");
+                  },
+                  onLongPressEnd: (_) {
+                    _setRate(_rateBeforeLongPress);
+                    _hideFFIndicator();
+                  },
+                ),
+              ),
+
+            // Volume Overlay Indicator
+            if (_showVolumeIndicator)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.volume_up_rounded, color: Colors.white, size: 24),
+                      const SizedBox(width: 8),
+                      Text(
+                        '音量: ${_volumeIndicatorVal.round()}%',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Brightness Overlay Indicator
+            if (_showBrightnessIndicator)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.brightness_5_rounded, color: Colors.white, size: 24),
+                      const SizedBox(width: 8),
+                      Text(
+                        '亮度: ${(_brightnessIndicatorVal * 100).round()}%',
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            // Fast Forward / Seek Overlay Indicator
+            if (_showFastForwardIndicator)
+              Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _fastForwardText,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
                 ),
               ),
 
@@ -748,6 +946,35 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             style:
                                 TextStyle(color: Colors.white, fontSize: 12)),
                       ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // Chevron tab to open helper panel when it is closed
+            if (!_isFullscreen && !_showHelperPanel)
+              Positioned(
+                right: 0,
+                top: 0,
+                bottom: 0,
+                child: Center(
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _showHelperPanel = true;
+                        _isFullscreen = false;
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
+                      decoration: const BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(16),
+                          bottomLeft: Radius.circular(16),
+                        ),
+                      ),
+                      child: const Icon(Icons.chevron_left_rounded, color: Colors.white, size: 24),
                     ),
                   ),
                 ),
@@ -791,11 +1018,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _iconControl(
             icon: Icons.arrow_back_rounded,
             onTap: () {
-              if (_isFullscreen) {
-                _toggleFullscreen();
-              } else {
-                Navigator.pop(context);
-              }
+              Navigator.pop(context);
             },
           ),
           const SizedBox(width: 12),
@@ -863,6 +1086,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     return Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        if (_activeMenu == 'speed') _buildSpeedInlineMenu(),
+                        if (_activeMenu == 'subtitle') _buildSubtitleInlineMenu(),
+                        if (_activeMenu == 'audio') _buildAudioInlineMenu(),
+                        const SizedBox(height: 8),
                         _buildSeekBar(position, duration, buffer),
                         const SizedBox(height: 10),
                         _buildControlsRow(position, duration),
@@ -953,6 +1180,301 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
 
+  List<Map<String, dynamic>> _getSubtitleOptions() {
+    final list = <Map<String, dynamic>>[];
+    list.add({'label': '关闭字幕', 'type': 'off'});
+
+    final cleanNativeSubs = _player.state.tracks.subtitle
+        .where((t) => _nativeSubtitleIds.contains(t.id))
+        .toList();
+    for (var track in cleanNativeSubs) {
+      final label = track.title ?? track.language ?? '内置字幕 ${track.id}';
+      list.add({
+        'label': label,
+        'type': 'native',
+        'track': track,
+      });
+    }
+
+    // Backend subtitles
+    final backendSubs = _playInfo?.subtitles ?? const [];
+    for (var sub in backendSubs) {
+      list.add({
+        'label': sub.label,
+        'type': 'backend',
+        'track': sub,
+      });
+    }
+    return list;
+  }
+
+  void _autoSelectDefaultSubtitle(List<Map<String, dynamic>> options) {
+    final currentTrack = _player.state.track.subtitle;
+    if (currentTrack.id != 'no') {
+      final idx = options.indexWhere((opt) => opt['type'] == 'native' && opt['track'].id == currentTrack.id);
+      if (idx != -1) {
+        setState(() => _selectedSubtitle = idx);
+        return;
+      }
+    }
+
+    final firstNativeIdx = options.indexWhere((opt) => opt['type'] == 'native');
+    if (firstNativeIdx != -1) {
+      _applySubtitleOption(options[firstNativeIdx], firstNativeIdx);
+      return;
+    }
+
+    final firstBackendIdx = options.indexWhere((opt) => opt['type'] == 'backend');
+    if (firstBackendIdx != -1) {
+      _applySubtitleOption(options[firstBackendIdx], firstBackendIdx);
+      return;
+    }
+
+    setState(() => _selectedSubtitle = 0);
+  }
+
+  Future<void> _applySubtitleOption(Map<String, dynamic> opt, int index) async {
+    setState(() => _selectedSubtitle = index);
+    final type = opt['type'];
+    if (type == 'off') {
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+    } else if (type == 'native') {
+      await _player.setSubtitleTrack(opt['track'] as SubtitleTrack);
+    } else if (type == 'backend') {
+      final sub = opt['track'];
+      final url = ApiService.absoluteUrl(sub.url);
+      await _player.setSubtitleTrack(SubtitleTrack.uri(url, title: sub.label));
+    }
+  }
+
+  List<Map<String, dynamic>> _getAudioOptions() {
+    final list = <Map<String, dynamic>>[];
+    final cleanAudioTracks = _player.state.tracks.audio
+        .where((t) => t.id != 'no' && t.id != 'auto')
+        .toList();
+    for (var track in cleanAudioTracks) {
+      final label = track.title ?? track.language ?? '音轨 ${track.id}';
+      list.add({
+        'label': label,
+        'track': track,
+      });
+    }
+    return list;
+  }
+
+  Future<void> _applyAudioOption(Map<String, dynamic> opt) async {
+    await _player.setAudioTrack(opt['track'] as AudioTrack);
+    setState(() {});
+  }
+
+  Widget _buildCustomChip({
+    required String label,
+    required bool selected,
+    required VoidCallback onTap,
+  }) {
+    return FocusButton(
+      onPressed: () {
+        onTap();
+        _scheduleAutoHide();
+      },
+      borderRadius: 16,
+      baseColor: selected ? AppTheme.primaryColor : Colors.white.withOpacity(0.12),
+      borderColor: Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (selected) ...[
+            const Icon(Icons.check_rounded, color: Colors.white, size: 14),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            label,
+            style: TextStyle(
+              color: selected ? Colors.white : Colors.white70,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInlineMenuWrapper({required Widget child}) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSpeedInlineMenu() {
+    return _buildInlineMenuWrapper(
+      child: Row(
+        children: [
+          const Text(
+            '播放速度：',
+            style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((r) {
+                  final isSelected = _rate == r;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: _buildCustomChip(
+                      label: '${r}x',
+                      selected: isSelected,
+                      onTap: () {
+                        _setRate(r);
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSubtitleInlineMenu() {
+    final subtitleOptions = _getSubtitleOptions();
+    return _buildInlineMenuWrapper(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                '字幕选择：',
+                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: subtitleOptions.asMap().entries.map((entry) {
+                      final idx = entry.key;
+                      final opt = entry.value;
+                      final isSelected = _selectedSubtitle == idx;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: _buildCustomChip(
+                          label: opt['label'],
+                          selected: isSelected,
+                          onTap: () async {
+                            await _applySubtitleOption(opt, idx);
+                            setState(() {});
+                          },
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              const Text(
+                '字幕大小：',
+                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(width: 8),
+              Row(
+                children: ['小', '中', '大'].map((size) {
+                  final isSelected = _subtitleSizeLabel == size;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8.0),
+                    child: _buildCustomChip(
+                      label: size,
+                      selected: isSelected,
+                      onTap: () {
+                        setState(() {
+                          _subtitleSizeLabel = size;
+                        });
+                      },
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAudioInlineMenu() {
+    final audioOptions = _getAudioOptions();
+    final currentAudio = _player.state.track.audio;
+    return _buildInlineMenuWrapper(
+      child: Row(
+        children: [
+          const Text(
+            '音轨选择：',
+            style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: audioOptions.isEmpty
+                ? const Text('无其它音轨', style: TextStyle(color: Colors.white70, fontSize: 13))
+                : SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: audioOptions.map((opt) {
+                        final track = opt['track'] as AudioTrack;
+                        final isSelected = currentAudio.id == track.id;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8.0),
+                          child: _buildCustomChip(
+                            label: opt['label'],
+                            selected: isSelected,
+                            onTap: () async {
+                              await _applyAudioOption(opt);
+                              setState(() {});
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleMute() {
+    final currentVol = _player.state.volume;
+    if (currentVol > 0.0) {
+      _volumeBeforeMute = currentVol;
+      _setVolume(0.0);
+    } else {
+      _setVolume(_volumeBeforeMute);
+    }
+  }
+
   Widget _buildControlsRow(Duration position, Duration duration) {
     final playing = _player.state.playing;
     return Row(
@@ -962,87 +1484,98 @@ class _PlayerScreenState extends State<PlayerScreen> {
           icon: playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
           onTap: _togglePlayPause,
         ),
-        const SizedBox(width: 8),
-        // Back 10s (clamped; no-op until duration is known)
-        _iconControl(
-          icon: Icons.replay_10_rounded,
-          onTap: () => _seekRelative(const Duration(seconds: -10)),
-        ),
-        const SizedBox(width: 8),
-        // Forward 10s (clamped; no-op until duration is known)
-        _iconControl(
-          icon: Icons.forward_10_rounded,
-          onTap: () => _seekRelative(const Duration(seconds: 10)),
-        ),
-        const SizedBox(width: 16),
-
-        // Volume: mute toggle + horizontal slider
-        _iconControl(
-          icon: (_volumeBeforeMute != null || _player.state.volume == 0)
-              ? Icons.volume_off_rounded
-              : Icons.volume_up_rounded,
-          onTap: _toggleMute,
-        ),
-        SizedBox(
-          width: 100,
-          child: SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 3,
-              thumbShape:
-                  const RoundSliderThumbShape(enabledThumbRadius: 6),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-            ),
-            child: StreamBuilder<double>(
-              stream: _player.stream.volume,
-              initialData: _player.state.volume,
-              builder: (context, snap) {
-                final v = snap.data ?? _player.state.volume;
-                return Slider(
-                  value: v.clamp(0.0, 100.0),
-                  min: 0,
-                  max: 100,
-                  activeColor: Colors.white,
-                  inactiveColor: Colors.white24,
-                  onChanged: _setVolume,
-                );
-              },
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-
-        // Playback speed picker
-        _popupControl(
-          icon: Icons.speed_rounded,
-          label: _rateLabel(_rate),
-          items: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-              .map((r) => _PopupItem(
-                    label: r == 1.0 ? '正常 (1.0x)' : '${r}x',
-                    onTap: () => _setRate(r),
-                  ))
-              .toList(),
-        ),
-        const SizedBox(width: 8),
-
-        // Subtitle picker
-        if ((_playInfo?.subtitles ?? []).isNotEmpty)
-          _popupControl(
-            icon: Icons.closed_caption_rounded,
-            label: _selectedSubtitle == 0
-                ? '字幕'
-                : _playInfo!.subtitles[_selectedSubtitle - 1].label,
-            items: [
-              _PopupItem(label: '关闭字幕', onTap: () => _selectSubtitle(0)),
-              ..._playInfo!.subtitles.asMap().entries.map((e) => _PopupItem(
-                    label: e.value.label,
-                    onTap: () => _selectSubtitle(e.key + 1),
-                  )),
-            ],
-          ),
-
         const Spacer(),
-
-        // Fullscreen toggle (also in top bar, mirrored here for one-thumb reach)
+        // Volume controls: Icon + Slider
+        StreamBuilder<double>(
+          stream: _player.stream.volume,
+          initialData: _player.state.volume,
+          builder: (context, snap) {
+            final v = snap.data ?? _player.state.volume;
+            final isMuted = v == 0.0;
+            return Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                GestureDetector(
+                  onTap: _toggleMute,
+                  child: Icon(
+                    isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                SizedBox(
+                  width: 70,
+                  child: SliderTheme(
+                    data: SliderTheme.of(context).copyWith(
+                      trackHeight: 3,
+                      activeTrackColor: AppTheme.primaryColor,
+                      inactiveTrackColor: Colors.white24,
+                      thumbColor: Colors.white,
+                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                      trackShape: const RectangularSliderTrackShape(),
+                    ),
+                    child: Slider(
+                      value: v.clamp(0.0, 100.0),
+                      min: 0,
+                      max: 100,
+                      onChanged: (val) {
+                        _setVolume(val);
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        const SizedBox(width: 12),
+        // Playback Speed
+        FocusButton(
+          onPressed: () {
+            setState(() {
+              _activeMenu = _activeMenu == 'speed' ? '' : 'speed';
+            });
+            _scheduleAutoHide();
+          },
+          borderRadius: 20,
+          baseColor: _activeMenu == 'speed' ? AppTheme.primaryColor : Colors.white12,
+          borderColor: Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Text(
+            '${_rate}x',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+          ),
+        ),
+        const SizedBox(width: 12),
+        // Subtitles
+        _iconControl(
+          icon: Icons.subtitles_rounded,
+          onTap: () {
+            setState(() {
+              _activeMenu = _activeMenu == 'subtitle' ? '' : 'subtitle';
+            });
+            _scheduleAutoHide();
+          },
+          active: _activeMenu == 'subtitle',
+        ),
+        const SizedBox(width: 12),
+        // Audio Tracks
+        if (_getAudioOptions().isNotEmpty) ...[
+          _iconControl(
+            icon: Icons.audiotrack_rounded,
+            onTap: () {
+              setState(() {
+                _activeMenu = _activeMenu == 'audio' ? '' : 'audio';
+              });
+              _scheduleAutoHide();
+            },
+            active: _activeMenu == 'audio',
+          ),
+          const SizedBox(width: 12),
+        ],
+        // Fullscreen toggle
         _iconControl(
           icon: _isFullscreen
               ? Icons.fullscreen_exit_rounded
@@ -1053,77 +1586,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
     );
   }
 
-  /// Human-readable label for the speed button, e.g. "倍速" or "1.5x".
-  String _rateLabel(double r) {
-    if (r == 1.0) return '倍速';
-    // Trim trailing zeros: 1.50 -> 1.5, 0.75 -> 0.75.
-    var s = r.toStringAsFixed(2);
-    s = s.replaceAll(RegExp(r'0+$'), '');
-    s = s.replaceAll(RegExp(r'\.$'), '');
-    return '${s}x';
-  }
-
   /// A D-pad focusable circular icon button used in the controls bar.
-  Widget _iconControl({required IconData icon, required VoidCallback onTap}) {
+  Widget _iconControl({
+    required IconData icon,
+    required VoidCallback onTap,
+    bool active = false,
+  }) {
     return FocusButton(
       onPressed: onTap,
       borderRadius: 24,
-      baseColor: Colors.white12,
+      baseColor: active ? AppTheme.primaryColor : Colors.white12,
       borderColor: Colors.transparent,
       padding: const EdgeInsets.all(8),
       child: Icon(icon, color: Colors.white, size: 28),
-    );
-  }
-
-  /// A focusable icon button that opens a popup menu (subtitle picker).
-  Widget _popupControl({
-    required IconData icon,
-    required String label,
-    required List<_PopupItem> items,
-  }) {
-    // NOTE: do NOT wrap the child in a GestureDetector/FocusButton that
-    // absorbs taps — that prevents PopupMenuButton from ever showing the
-    // menu (the previous version wrapped the child in a FocusButton with an
-    // empty onPressed, which is why the speed button did nothing).
-    return PopupMenuButton<int>(
-      tooltip: label,
-      color: const Color(0xFF1E293B),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      // Custom child renders our icon+label chip; PopupMenuButton still owns
-      // the tap → menu → onSelected flow.
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.white12,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: Colors.white, size: 20),
-            const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold)),
-          ],
-        ),
-      ),
-      itemBuilder: (_) => List.generate(items.length, (i) {
-        return PopupMenuItem<int>(
-          value: i,
-          child: Row(
-            children: [
-              Icon(icon, color: Colors.white70, size: 18),
-              const SizedBox(width: 8),
-              Text(items[i].label,
-                  style: const TextStyle(color: Colors.white)),
-            ],
-          ),
-        );
-      }),
-      onSelected: (i) => items[i].onTap(),
     );
   }
 
@@ -1162,6 +1637,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         fontSize: 20,
                         fontWeight: FontWeight.w900,
                         color: AppTheme.textWhite)),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, color: Color(0xFF94A3B8)),
+                  onPressed: () {
+                    setState(() {
+                      _showHelperPanel = false;
+                      _isFullscreen = true;
+                    });
+                  },
+                ),
               ],
             ),
             const SizedBox(height: 24),
@@ -1765,12 +2250,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-/// Tiny model for popup menu entries inside the controls bar.
-class _PopupItem {
-  final String label;
-  final VoidCallback onTap;
-  const _PopupItem({required this.label, required this.onTap});
-}
 
 /// A [SliderTrackShape] that paints a three-segment seek bar:
 ///   played (activeColor) | buffered (bufferedColor) | unbuffered (trackColor).
