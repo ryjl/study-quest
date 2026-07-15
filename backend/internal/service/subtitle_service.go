@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -62,8 +63,10 @@ type SubtitleJobService interface {
 	Complete(jobID uint, srtContent, language, label string) error
 
 	// Heartbeat refreshes claimed_at on a processing job (worker ping during a
-	// long transcription). No-op if the job isn't processing.
-	Heartbeat(jobID uint) error
+	// long transcription). progress, when non-nil, also records the worker's
+	// transcription ratio (0.0..1.0) for the admin progress display. No-op if
+	// the job isn't processing (e.g. already reaped/failed).
+	Heartbeat(jobID uint, progress *float64) error
 
 	Fail(jobID uint, errStr string) error
 	Skip(jobID uint) error
@@ -84,12 +87,32 @@ type SubtitleJobService interface {
 // ClaimResult is the payload returned to a worker on a successful claim. The
 // download URL + headers are minted fresh from the episode's storage provider
 // and MUST be used promptly — they expire.
+//
+// Beyond the download link, the result carries everything the worker needs to
+// (a) match a local cache copy (Filename + FileSize) and skip the netdisk, and
+// (b) build a Whisper initial_prompt from course context (subject/course/chapter
+// titles + the admin-authored AIHint). All of these are best-effort: a missing
+// course/chapter (NULL chapter, deleted course) just yields empty strings, and
+// the worker degrades gracefully (no cache hit, generic prompt).
 type ClaimResult struct {
 	Job            *model.SubtitleJob `json:"job"`
 	DownloadURL    string             `json:"download_url"`
 	DownloadHeader map[string]string  `json:"download_header,omitempty"`
 	EpisodeTitle   string             `json:"episode_title"`
 	DurationSec    *int               `json:"duration_seconds,omitempty"`
+	// Filename is the basename of the episode's video path (the trailing path
+	// segment, e.g. "lesson01.mp4"), preferring OriginalRelativePath and falling
+	// back to VideoRelativePath. Worker matches this against local cache dirs.
+	Filename string `json:"filename"`
+	// FileSize is the episode's stored byte size (nil if unknown). Worker uses
+	// it together with Filename for an unambiguous cache match.
+	FileSize *int64 `json:"file_size,omitempty"`
+	// Course context for the worker's Whisper initial_prompt. Subject is the
+	// subject key (e.g. "math"), not the display label. Empty when unavailable.
+	Subject      string `json:"subject,omitempty"`
+	CourseTitle  string `json:"course_title,omitempty"`
+	ChapterTitle string `json:"chapter_title,omitempty"`
+	AIHint       string `json:"ai_hint,omitempty"`
 }
 
 // SubtitleJobStats is the progress snapshot polled by the admin UI, mirroring
@@ -120,13 +143,18 @@ type subtitleJobService struct {
 	repo           repository.SubtitleJobRepository
 	episodeRepo    repository.EpisodeRepository
 	episodeService EpisodeService
+	courseRepo     repository.CourseRepository
+	chapterRepo    repository.ChapterRepository
+	subjectRepo    repository.SubjectRepository
 }
 
 // NewSubtitleJobService constructs a SubtitleJobService. episodeService backs
 // the download-URL minting and subtitle persistence; episodeRepo backs the
-// gate checks (entertainment filter, existing-subtitle lookup).
-func NewSubtitleJobService(repo repository.SubtitleJobRepository, episodeRepo repository.EpisodeRepository, es EpisodeService) SubtitleJobService {
-	return &subtitleJobService{repo: repo, episodeRepo: episodeRepo, episodeService: es}
+// gate checks (entertainment filter, existing-subtitle lookup). courseRepo,
+// chapterRepo and subjectRepo are only read in ClaimNext to enrich the claim
+// payload with the course context the worker builds its Whisper prompt from.
+func NewSubtitleJobService(repo repository.SubtitleJobRepository, episodeRepo repository.EpisodeRepository, es EpisodeService, courseRepo repository.CourseRepository, chapterRepo repository.ChapterRepository, subjectRepo repository.SubjectRepository) SubtitleJobService {
+	return &subtitleJobService{repo: repo, episodeRepo: episodeRepo, episodeService: es, courseRepo: courseRepo, chapterRepo: chapterRepo, subjectRepo: subjectRepo}
 }
 
 func (s *subtitleJobService) Enqueue(episodeID uint, priority int, language string) (*model.SubtitleJob, bool, string, error) {
@@ -227,11 +255,38 @@ func (s *subtitleJobService) ClaimNext(workerID, userAgent string) (*ClaimResult
 		return nil, fmt.Errorf("resolve stream url for job %d: %w", job.ID, err)
 	}
 
+	// Gather episode display fields + the cache/prompt context. All lookups are
+	// best-effort: a missing course/chapter just yields empty strings and the
+	// worker degrades (no cache hit, generic prompt) rather than failing.
 	title := ""
 	var dur *int
+	var filename string
+	var fileSize *int64
+	subject, courseTitle, chapterTitle, aiHint := "", "", "", ""
 	if ep, eerr := s.episodeRepo.FindByID(job.EpisodeID); eerr == nil && ep != nil {
 		title = ep.Title
 		dur = ep.DurationSeconds
+		fileSize = ep.FileSize
+		// Prefer OriginalRelativePath (stable across admin renames); fall back
+		// to VideoRelativePath. Keep the extension — the worker matches the full
+		// filename against its cache dirs.
+		path := ep.OriginalRelativePath
+		if path == "" {
+			path = ep.VideoRelativePath
+		}
+		filename = filepath.Base(path)
+		if course, cerr := s.courseRepo.FindByID(ep.CourseID); cerr == nil && course != nil {
+			courseTitle = course.Title
+			aiHint = course.AIHint
+			if subj, serr := s.subjectRepo.FindByID(course.SubjectID); serr == nil && subj != nil {
+				subject = subj.Key
+			}
+		}
+		if ep.ChapterID != nil {
+			if ch, herr := s.chapterRepo.FindByID(*ep.ChapterID); herr == nil && ch != nil {
+				chapterTitle = ch.Title
+			}
+		}
 	}
 
 	headers := link.Header
@@ -244,6 +299,12 @@ func (s *subtitleJobService) ClaimNext(workerID, userAgent string) (*ClaimResult
 		DownloadHeader: headers,
 		EpisodeTitle:   title,
 		DurationSec:    dur,
+		Filename:       filename,
+		FileSize:       fileSize,
+		Subject:        subject,
+		CourseTitle:    courseTitle,
+		ChapterTitle:   chapterTitle,
+		AIHint:         aiHint,
 	}, nil
 }
 
@@ -291,7 +352,7 @@ func (s *subtitleJobService) Complete(jobID uint, srtContent, language, label st
 	return nil
 }
 
-func (s *subtitleJobService) Heartbeat(jobID uint) error {
+func (s *subtitleJobService) Heartbeat(jobID uint, progress *float64) error {
 	job, err := s.repo.FindByID(jobID)
 	if err != nil || job == nil {
 		return err
@@ -299,7 +360,7 @@ func (s *subtitleJobService) Heartbeat(jobID uint) error {
 	if job.Status != model.SubtitleJobProcessing {
 		return nil // no-op: not currently being worked
 	}
-	return s.repo.TouchClaim(jobID)
+	return s.repo.TouchClaim(jobID, progress)
 }
 
 func (s *subtitleJobService) Fail(jobID uint, errStr string) error {

@@ -10,8 +10,8 @@ import (
 type CourseService interface {
 	GetCourses(userID uint, userRole string, grade string, subjectID uint, contentType model.ContentType) ([]model.Course, error)
 	GetCourseByID(id uint) (*model.Course, error)
-	CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error)
-	UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error)
+	CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error)
+	UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error)
 	DeleteCourse(id uint) error
 }
 
@@ -47,7 +47,7 @@ func (s *courseService) GetCourseByID(id uint) (*model.Course, error) {
 	return s.courseRepo.FindByID(id)
 }
 
-func (s *courseService) CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error) {
+func (s *courseService) CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error) {
 	for _, g := range grades {
 		if !g.Valid() {
 			return nil, errors.New("invalid course grade value: " + string(g))
@@ -67,6 +67,7 @@ func (s *courseService) CreateCourse(title string, grades []model.Grade, subject
 		ContentType:    contentType,
 		CoverURL:       coverURL,
 		AttachmentJSON: attachmentJSON,
+		AIHint:         aiHint,
 	}
 	if err := s.courseRepo.Create(c); err != nil {
 		return nil, err
@@ -92,7 +93,7 @@ func (s *courseService) CreateCourse(title string, grades []model.Grade, subject
 	return c, nil
 }
 
-func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string) (*model.Course, error) {
+func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error) {
 	for _, g := range grades {
 		if !g.Valid() {
 			return nil, errors.New("invalid course grade value: " + string(g))
@@ -119,6 +120,7 @@ func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade
 	c.ContentType = contentType
 	c.CoverURL = coverURL
 	c.AttachmentJSON = attachmentJSON
+	c.AIHint = aiHint
 
 	if err := s.courseRepo.Update(c); err != nil {
 		return nil, err

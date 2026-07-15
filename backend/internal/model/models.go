@@ -222,6 +222,11 @@ type Course struct {
 	Tags           []Tag     `gorm:"many2many:course_tags;constraint:OnDelete:CASCADE"`
 	Grades         []CourseGrade `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 	AttachmentJSON string    `gorm:"type:text"`          // JSON array of attachments
+	// AIHint is an optional, admin-authored hint fed to the subtitle worker's
+	// Whisper initial_prompt (and later the quiz agent): terminology, teacher
+	// accent notes, the key theorem to listen for, etc. Empty by default. Free
+	// text — kept short by the consumer (Whisper's prompt budget is ~244 tokens).
+	AIHint        string    `gorm:"type:text"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
@@ -385,6 +390,11 @@ type SubtitleJob struct {
 	CompletedAt *time.Time
 	Error       string `gorm:"type:text"`
 	Language    string `gorm:"size:50;default:'zh-CN'"` // target subtitle language
+	// Progress is the worker-reported transcription ratio in [0.0, 1.0], or nil
+	// when none has been reported (queued, or a worker not yet past the audio
+	// extraction step). Updated alongside claimed_at by the heartbeat. Cleared
+	// on terminal transitions so a requeued job doesn't show a stale percentage.
+	Progress    *float64
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

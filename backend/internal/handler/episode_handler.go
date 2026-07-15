@@ -63,8 +63,11 @@ func (h *episodeHandler) GetEpisodeByID(c *gin.Context) {
 }
 
 func (h *episodeHandler) GetSubtitleVTT(c *gin.Context) {
-	idStr := c.Param("id")
-	// Note: id here is the subtitle ID
+	// The route is /subtitles/:id.vtt. Gin does NOT split on the dot — the full
+	// param name is "id.vtt", so c.Param("id") returns "". We read the whole
+	// segment ("1.vtt") and strip the ".vtt" suffix ourselves.
+	raw := c.Param("id.vtt")
+	idStr := strings.TrimSuffix(raw, ".vtt")
 	id, err := strconv.ParseUint(idStr, 10, 32)
 	if err != nil {
 		c.String(http.StatusBadRequest, "invalid subtitle ID format")

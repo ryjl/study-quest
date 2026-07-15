@@ -51,7 +51,10 @@ type SubtitleJobRepository interface {
 	MarkQueued(jobID uint) error
 
 	// TouchClaim stamps claimed_at = now on a processing job (worker heartbeat).
-	TouchClaim(jobID uint) error
+	// progress, when non-nil, also persists the worker's transcription ratio
+	// (0.0..1.0) so the admin view can show how far along a long transcription is.
+	// progress==nil leaves the stored value untouched.
+	TouchClaim(jobID uint, progress *float64) error
 
 	// ReapStale flips processing jobs whose claimed_at is older than the given
 	// age back to queued, returning how many it reaped. A safety net for a
@@ -179,6 +182,7 @@ func (r *subtitleJobRepo) MarkDone(jobID uint) error {
 			"completed_at": now,
 			"updated_at":   now,
 			"error":        "",
+			"progress":     nil,
 		})
 	if res.Error != nil {
 		return res.Error
@@ -219,18 +223,22 @@ func (r *subtitleJobRepo) MarkQueued(jobID uint) error {
 		}).Error
 }
 
-func (r *subtitleJobRepo) TouchClaim(jobID uint) error {
+func (r *subtitleJobRepo) TouchClaim(jobID uint, progress *float64) error {
+	updates := map[string]interface{}{
+		"claimed_at": time.Now(),
+		"updated_at": time.Now(),
+	}
+	if progress != nil {
+		updates["progress"] = *progress
+	}
 	return r.db.Model(&model.SubtitleJob{}).Where("id = ?", jobID).
-		Updates(map[string]interface{}{
-			"claimed_at": time.Now(),
-			"updated_at": time.Now(),
-		}).Error
+		Updates(updates).Error
 }
 
 func (r *subtitleJobRepo) ReapStale(staleAfter time.Duration) (int, error) {
 	cutoff := time.Now().Add(-staleAfter)
 	res := r.db.Exec(`UPDATE subtitle_jobs
-		SET status = ?, claimed_at = NULL, claimed_by = '', updated_at = CURRENT_TIMESTAMP
+		SET status = ?, claimed_at = NULL, claimed_by = '', progress = NULL, updated_at = CURRENT_TIMESTAMP
 		WHERE status = ? AND claimed_at IS NOT NULL AND claimed_at < ?`,
 		model.SubtitleJobQueued, model.SubtitleJobProcessing, cutoff)
 	if res.Error != nil {

@@ -71,6 +71,13 @@ func (h *subtitleJobHandler) Claim(c *gin.Context) {
 			"id":               res.Job.EpisodeID,
 			"title":            res.EpisodeTitle,
 			"duration_seconds": res.DurationSec,
+			// Cache-matching keys + Whisper prompt context (see ClaimResult docs).
+			"filename":      res.Filename,
+			"file_size":     res.FileSize,
+			"subject":       res.Subject,
+			"course_title":  res.CourseTitle,
+			"chapter_title": res.ChapterTitle,
+			"ai_hint":       res.AIHint,
 		},
 	})
 }
@@ -116,7 +123,14 @@ func (h *subtitleJobHandler) Heartbeat(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
 		return
 	}
-	if err := h.svc.Heartbeat(id); err != nil {
+	// Body is optional: a worker may POST an empty body to just refresh
+	// claimed_at, or include progress_ratio (0.0..1.0) to report how far along
+	// the transcription is. Absent/unset leaves the stored progress untouched.
+	var req struct {
+		ProgressRatio *float64 `json:"progress_ratio"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if err := h.svc.Heartbeat(id, req.ProgressRatio); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "heartbeat failed: " + err.Error()})
 		return
 	}

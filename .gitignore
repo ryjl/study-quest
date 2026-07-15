@@ -35,6 +35,17 @@ __pycache__/
 venv/
 env/
 tools/video-pipeline/whisper-env/
+tools/video-pipeline/.venv/
+# Real worker config carries machine-specific paths + is paired with an
+# environment-only ingest key; commit the example instead.
+tools/video-pipeline/config.yaml
+# pytest cache
+.pytest_cache/
+
+# Private AI docs (handoff notes, design seeds, PRD) — never committed.
+docs/handoff-ai-*.md
+docs/ai-step3-seed.md
+study_quest_ai_prd.md
 
 # IDEs
 .idea/

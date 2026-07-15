@@ -97,6 +97,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		CoverURL       string `json:"cover_url"`
 		TagIDs         []uint `json:"tag_ids"`
 		AttachmentJSON string `json:"attachment_json"`
+		AIHint         string `json:"ai_hint"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -116,7 +117,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		contentType = model.ContentLearning
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON)
+	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -157,6 +158,7 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		CoverURL       string `json:"cover_url"`
 		TagIDs         []uint `json:"tag_ids"`
 		AttachmentJSON string `json:"attachment_json"`
+		AIHint         string `json:"ai_hint"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -176,7 +178,7 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		contentType = model.ContentLearning
 	}
 
-	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON)
+	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -558,6 +560,36 @@ func (h *adminHandler) SaveSubtitle(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "saved"})
+}
+
+// GetSubtitle returns the full subtitle (including SRT content) for admin
+// preview. ListSubtitles deliberately omits srt_content (it can be large and
+// the list view only needs metadata); this endpoint fetches one by id when the
+// admin wants to read the actual text.
+func (h *adminHandler) GetSubtitle(c *gin.Context) {
+	idStr := c.Param("id")
+	id, err := strconv.ParseUint(idStr, 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid subtitle ID"})
+		return
+	}
+	sub, err := h.episodeService.GetSubtitleByID(uint(id))
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if sub == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Subtitle not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":          sub.ID,
+		"episode_id":  sub.EpisodeID,
+		"language":    sub.Language,
+		"label":       sub.Label,
+		"srt_content": sub.SrtContent,
+		"created_at":  formatTime(sub.CreatedAt),
+	})
 }
 
 func (h *adminHandler) DeleteSubtitle(c *gin.Context) {

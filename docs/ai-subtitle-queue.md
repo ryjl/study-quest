@@ -307,9 +307,191 @@ N+1），`ListEpisodesByCourse` / `GetCourseDetail` 批量填进 DTO。这样课
 
 ---
 
-## 9. 演进方向（当前不做）
+## 9. Worker 实现（Step 2，已完成）
 
-- **字幕润色 LLM**：SRT 落库后可选过一遍 LLM 修 whisper 错别字。留扩展位，当前不做。
-- **字幕切片 + embedding（RAG）**：为出题 agent 准备语料，是 AI 模块 Step 3 的事。
+Python whisper worker 在 `tools/video-pipeline/`，消费上面的队列协议。
+
+### 9.1 架构
+
+```
+tools/video-pipeline/
+├── run.sh              启动器：在 shell 层 export LD_LIBRARY_PATH（cublas），再 exec python
+├── worker.py           主循环：GPU 预检 → 懒加载模型 → claim/转录/complete 循环
+├── api_client.py       后端 4 端点 HTTP 封装 + X-Ingest-Key/X-Worker-ID 鉴权
+├── cache.py            本地视频缓存匹配（filename + file_size 双匹配，多目录）
+├── audio.py            ffmpeg 抽音频（含 wav/mp4 双层缓存 + 断点续传下载）
+├── transcriber.py      faster-whisper 封装（懒加载 + initial_prompt 拼装 + 进度回调）
+├── config.py           YAML 配置 + 环境变量覆盖
+├── config.example.yaml 配置模板（进 git）
+├── pyproject.toml      uv 依赖（含 nvidia-*-cu12 CUDA 库）
+└── tests/              cache 匹配 + prompt 拼装的单测（14 个，无需 GPU）
+```
+
+模型**只加载一次常驻**：`Transcriber` 在 worker 主循环外创建，首次 `transcribe`
+时 `_ensure_model()` 加载，之后所有 job 复用同一实例。不会每个视频重新加载。
+
+### 9.2 initial_prompt 三段拼装
+
+Whisper 的 `initial_prompt` 不是自由指令，是解码器上下文（~244 token 预算），用来引导
+风格 + 注入热词。worker 从 claim 响应自动拼三段：
+
+1. **base_prompt**（config）——风格引导，如 `"以下是普通话的句子。"`
+2. **课程元数据**（claim 响应自动带）——subject/course_title/chapter_title，学科术语密集
+   的标题能压制 Whisper 把专有名词转错。
+3. **ai_hint**（admin 在课程编辑页手填）——针对性提示，如"老师口音重""重点听 ε-δ 定义"。
+   按课程设一次，该课所有 episode 共用。将来 Step 3 出题 agent 也复用这个字段。
+
+截断到 240 字符（CJK 保守估计 1 字符 ≈ 1 token）。不需要每个视频手写 prompt。
+
+### 9.3 进度上报
+
+heartbeat 端点请求体加了可选 `progress_ratio`（0.0–1.0）。faster-whisper 的 segment
+generator 是惰性的，每产出一个 segment 就回调更新进度。后台心跳线程每 30s 带上当前
+ratio 发一次 heartbeat，admin 队列页 processing 行显示百分比。旧 worker 发空 body 照常
+工作（向前兼容）。
+
+### 9.4 缓存设计（两层）
+
+**视频缓存**（`cache.py`，配置的 `cache.dirs`）：worker 启动时扫描，按 `filename +
+file_size` 双匹配。命中→直接用本地文件，跳过网盘下载（直链 sign 时效问题完全消失）。
+
+**音频缓存**（`audio.py`，`~/.cache/sq-whisper/wav/`）：ffmpeg 抽出的 16kHz mono WAV
+按 `(filename, file_size)` 的 hash 存盘。重试时复用，不重新下载/抽音频。下载的 mp4
+也缓存在同目录（同 key）。启动时自动清理 7 天以上的旧文件。
+
+### 9.5 GPU 策略（硬约束，不 fallback）
+
+GPU 是硬前提，不降级到 CPU：
+- 启动 `gpu_preflight` 检查 `ctranslate2.get_cuda_device_count()`，为 0 直接 `sys.exit(1)`。
+- `device` 配置成非 `cuda` 直接报错。
+- 模型加载失败（含 OOM）异常冒泡退出。
+
+理由：这是开发机上的批处理 worker，失败时人工介入（关占显存的程序、改 config）比静默
+降级到"CPU 转录几小时"更有用——后者只会让任务卡在队列里假装在跑。
+
+### 9.6 claim 响应扩展（Step 2 新增字段）
+
+claim 响应在 Step 1 基础上加了缓存键 + prompt 上下文（全部向前兼容，旧 worker 不读）：
+
+```json
+"episode": {
+  "id": 5, "title": "...", "duration_seconds": 1200,
+  "filename": "lesson01.mp4",       // basename，缓存匹配键
+  "file_size": 524288000,            // 字节，缓存匹配键（可能为 null）
+  "subject": "math",                 // 科目 key，prompt 用
+  "course_title": "高等数学",         // prompt 用
+  "chapter_title": "第一章 极限",     // prompt 用
+  "ai_hint": "重点听 ε-δ 定义"        // admin 手填，prompt 用
+}
+```
+
+后端 `ClaimNext` 顺路 join episode→course→chapter→subject 填上。`Course` model 新增
+`AIHint` 字段（text，admin 编辑页可填）。
+
+---
+
+## 10. Worker 实测踩坑记录（WSL2 + RTX 4060）
+
+以下每个都是真实踩到、花了时间排查的坑。换环境大概率会再踩，记录于此。
+
+### 10.1 `Invalid compute type: int8_fp16`
+
+ctranslate2 的合法 compute type 是 `int8_float16`（int8 量化权重 + float16 计算），
+**不是** `int8_fp16`。`int8_fp16` 会在模型加载时报 `ValueError`。
+
+合法值（`ctranslate2.get_supported_compute_types("cuda")`）：
+`float16, int8, int8_float16, int8_float32, int8_bfloat16, bfloat16, float32`。
+
+4060 8GB 用 `int8_float16`（~3G 显存），给 Windows 桌面占用留余量。
+
+### 10.2 `libcublas.so.12 is not found`（CUDA 库缺失）
+
+**现象**：模型能加载，但 `model.encode()` 时报 `RuntimeError: Library libcublas.so.12
+is not found or cannot be loaded`。
+
+**根因**：ctranslate2 在运行时 dlopen `libcublas.so.12` / `libcudart.so.12` 等 CUDA 库，
+但不把它们声明为 pip 依赖（它们是"系统级"可选依赖）。WSL2 只装了驱动（`libcuda.so`），
+没装 CUDA toolkit（`libcublas` 等）。
+
+**解法**：装 `nvidia-cublas-cu12` / `nvidia-cuda-runtime-cu12` / `nvidia-cufft-cu12` /
+`nvidia-cuda-nvrtc-cu12` / `nvidia-nvjitlink-cu12` pip 包（已写入 pyproject.toml）。
+它们把 `.so` 放进 `site-packages/nvidia/*/lib/`。
+
+**关键坑**：必须用 `run.sh` 启动 worker——它在 shell 层 `export LD_LIBRARY_PATH` 指向
+那些 lib 目录。glibc 的 dlopen 在**进程启动时**读 `LD_LIBRARY_PATH`，Python 进程内
+`os.environ` 设置**不可靠**（实测 worker 里设了还是找不到）。`run.sh` 在 python 启动前
+export，才能让动态链接器看到。
+
+### 10.3 ffmpeg 读网盘 https 流失败（tls End of file + moov atom not found）
+
+**现象**：ffmpeg `-i <alist直链>` 抽音频报 `[tls] IO error: End of file`，然后
+`moov atom not found`。
+
+**根因**：alist 直链 302 重定向到天翼云 OBS（https）。两个问题叠加：
+1. ffmpeg 默认不自动重连，TLS 流断了就报 `End of file`。
+2. MP4 的 `moov` atom 在文件尾部，ffmpeg 读 https 流要 HTTP range seek 到尾部读 moov，
+   但 TLS 流已断 → `moov atom not found`。
+
+**解法**：对 http(s) 输入，**先全量下载 mp4 到本地再 ffmpeg 抽音频**（`audio.py` 的
+`_download`）。本地文件没有 range/tls 问题，moov 一定能读到。下载的 mp4 也缓存（同 key），
+重试不重复下载。
+
+试过 `-reconnect 1 -reconnect_streamed 1`——能连上但 range seek 时流还是断，moov 读不到。
+全量下载是唯一可靠方案。
+
+### 10.4 下载中途 TLS 断流（SSL: UNEXPECTED_EOF_WHILE_READING）
+
+**现象**：requests 全量下载 145MB 视频，下到中途报
+`SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING]'))`。
+
+**根因**：天翼云 OBS 的直链带 `x-obs-traffic-limit=409600`（400KB/s 限速），145MB 要约
+6 分钟，长连接 TLS 会中途断。
+
+**解法**：`_download` 加**断点续传 + 重试**——用 HTTP Range header 从已下载的 byte 继续，
+最多 5 次，指数退避。partial 文件保存在 `.part` 文件里，跨重试不丢进度。
+
+### 10.5 WSL2 `/mnt/` 路径 Python `os.walk` 失败（9P readdir bug）
+
+**现象**：`os.walk("/mnt/e/BaiduNetdiskDownload/xq")` 返回 0 个文件，但 `ls` 能列出
+15 个。`os.listdir` / `os.scandir` / `pathlib.iterdir` 全报
+`[Errno 5] Input/output error`。
+
+**根因**：WSL2 访问 Windows 盘走 9P 文件系统，Python 的 `getdents64` 系统调用在某些
+9P 目录上失败。`ls`/`find`（coreutils）有重试/容错逻辑能部分工作。
+
+**解法**：`cache.py` 对 `/mnt/` 路径改用 `subprocess` 调 `find` 命令扫描（`find -printf
+"%s\t%f"` 一步拿到文件名+大小），不用 `os.walk`。`os.path.getsize` 对已知路径仍可用
+（stat 单文件没问题，只有 readdir 有问题）。
+
+**影响**：如果缓存目录在 `/mnt/` 下而不做这个处理，视频缓存永远 MISS，所有视频都走
+网盘下载——功能正确但慢。
+
+### 10.6 Gin 路由 `:id.vtt` 参数解析 bug（字幕不显示）
+
+**现象**：播放器字幕选项出现但选中后不显示字幕。`GET /api/v1/subtitles/1.vtt` 返回
+400 `invalid subtitle ID format`。
+
+**根因**：Gin v1.10.0 不按 `.` 截断参数名。路由模板 `/subtitles/:id.vtt` 注册的参数名是
+`"id.vtt"`（含点号），不是 `"id"`。handler 里 `c.Param("id")` 拿到空串，`ParseUint` 失败。
+
+**解法**：handler 改用 `c.Param("id.vtt")` 拿到 `"1.vtt"`，再 `TrimSuffix(".vtt")` 得
+`"1"`。路由模板不用改（play-info 生成的 url 仍带 `.vtt`，前端不用动）。已加回归测试
+`TestSubtitleVTTEndpoint` 锁住。
+
+### 10.7 `uv run` 产生孤儿子进程
+
+**现象**：`uv run python worker.py` 后台启动，TaskStop 杀的是 `uv` 外壳，python 子进程
+成孤儿继续跑。多个孤儿 worker 互相抢任务、日志丢失。
+
+**解法**：`run.sh` 用 `exec .venv/bin/python` 直接启动 python（不经 uv run），进程死了
+就是死了。Makefile 的 `make run` 调 `run.sh`。
+
+---
+
+## 11. 演进方向
+
+- **字幕润色 LLM**：SRT 落库后过一遍 LLM 修 whisper 错别字（象棋等专业领域术语错字
+  明显）。Step 3 的事，`ai_hint` 字段已为润色 prompt 预留。
+- **字幕切片 + embedding（RAG）**：为出题 agent 准备语料，Step 3。
 - **多语言**：当前默认 zh-CN，`Language` 字段已支持扩展。
-- **worker 主动推送进度**（百分比）：当前只有心跳，admin 看不到转录到哪了。
+- ~~**worker 主动推送进度**~~：已实现（§9.3）。

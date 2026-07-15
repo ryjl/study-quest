@@ -89,6 +89,7 @@ type AdminHandler interface {
 
 	// Subtitles
 	ListSubtitles(c *gin.Context)
+	GetSubtitle(c *gin.Context)
 	SaveSubtitle(c *gin.Context)
 	DeleteSubtitle(c *gin.Context)
 	AutoMatchSubtitle(c *gin.Context)

@@ -32,6 +32,7 @@ export function CreateEditCourseModal({
   const [contentType, setContentType] = useState<'learning' | 'entertainment'>('learning');
   const [coverUrl, setCoverUrl] = useState('');
   const [tagIDs, setTagIDs] = useState<number[]>([]);
+  const [aiHint, setAiHint] = useState('');
 
   useEffect(() => {
     if (open) {
@@ -43,6 +44,7 @@ export function CreateEditCourseModal({
       setSubject(ct === 'entertainment' ? 'entertainment' : (course?.subject ?? subjects[0]?.key ?? ''));
       setCoverUrl(course?.cover_url ?? '');
       setTagIDs(course?.tag_ids ?? []);
+      setAiHint(course?.ai_hint ?? '');
     }
   }, [open, course, subjects]);
 
@@ -60,6 +62,7 @@ export function CreateEditCourseModal({
         content_type: contentType,
         cover_url: coverUrl,
         tag_ids: tagIDs,
+        ai_hint: aiHint.trim(),
       };
       if (isEdit && course) return api.updateCourse(course.id, body);
       return api.createCourse(body);
@@ -129,6 +132,17 @@ export function CreateEditCourseModal({
         <div>
           <label className="mb-1 block text-xs text-muted">标签</label>
           <TagInput value={tagIDs} onChange={setTagIDs} />
+        </div>
+
+        <div>
+          <label className="mb-1 block text-xs text-muted">AI 提示（可选）</label>
+          <textarea
+            className="input min-h-[64px] resize-y"
+            placeholder="给字幕转录/出题的提示，如：重点听极限的 ε-δ 定义；老师口音较重"
+            value={aiHint}
+            onChange={(e) => setAiHint(e.target.value)}
+          />
+          <p className="mt-1 text-[11px] text-muted">拼入 Whisper 提示词，帮助压制学科术语错字。过长的内容会被截断。</p>
         </div>
 
         <button type="submit" className="btn-primary w-full" disabled={saveMut.isPending}>

@@ -119,7 +119,7 @@ func main() {
 	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
-	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService)
+	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService, courseRepo, chapterRepo, subjectRepo)
 
 	// Seed default badges and subjects (idempotent). Badges seed FIRST because
 	// subject seeding auto-generates subject_count badges and the order keeps

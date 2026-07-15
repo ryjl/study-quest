@@ -114,7 +114,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
-	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService)
+	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService, courseRepo, chapterRepo, subjectRepo)
 
 	// seed (subjects → tags → badges, same order as main.go; subjects must
 	// come first so the subject_count badge rules resolve against a populated

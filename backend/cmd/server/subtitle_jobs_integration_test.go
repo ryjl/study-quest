@@ -29,7 +29,14 @@ func (e *testEnv) newSubtitleJobRepo() repository.SubtitleJobRepository {
 	return repository.NewSubtitleJobRepository(e.db)
 }
 func (e *testEnv) newSubtitleJobService() service.SubtitleJobService {
-	return service.NewSubtitleJobService(e.newSubtitleJobRepo(), repository.NewEpisodeRepository(e.db), e.episodeServiceForTest())
+	return service.NewSubtitleJobService(
+		e.newSubtitleJobRepo(),
+		repository.NewEpisodeRepository(e.db),
+		e.episodeServiceForTest(),
+		repository.NewCourseRepository(e.db),
+		repository.NewChapterRepository(e.db),
+		repository.NewSubjectRepository(e.db),
+	)
 }
 
 // episodeServiceForTest returns the same EpisodeService the running server
@@ -523,7 +530,8 @@ func TestSubtitleJobWorkerClaimRequiresIngestKey(t *testing.T) {
 	subtitleRepo := repository.NewSubtitleJobRepository(db)
 	resolver := service.NewStorageProviderResolver(repository.NewStorageSourceRepository(db))
 	epSvc := service.NewEpisodeService(episodeRepo, resolver)
-	svc := service.NewSubtitleJobService(subtitleRepo, episodeRepo, epSvc)
+	svc := service.NewSubtitleJobService(subtitleRepo, episodeRepo, epSvc,
+		repository.NewCourseRepository(db), repository.NewChapterRepository(db), repository.NewSubjectRepository(db))
 	h := handler.NewSubtitleJobHandler(svc)
 
 	const key = "secret-key-123"
@@ -574,5 +582,209 @@ func (e *testEnv) giveSubtitle(t *testing.T, episodeID uint, srt string) {
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("give subtitle: %d %s", resp.Code, resp.Body.String())
+	}
+}
+
+// TestSubtitleJobClaimResponseContext verifies ClaimNext enriches the claim
+// payload with the cache-matching keys (filename + file_size) and the Whisper
+// prompt context (subject / course_title / chapter_title / ai_hint).
+//
+// It uses a webdav storage source on purpose: WebDAVProvider.GetDownloadURL is
+// pure URL construction (no network), so the storage round-trip inside
+// ClaimNext succeeds offline and the post-download enrichment runs.
+func TestSubtitleJobClaimResponseContext(t *testing.T) {
+	dbName := fmt.Sprintf("file:test_claim_ctx_%d?mode=memory&cache=shared", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	if err := model.AutoMigrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	// Seed subjects so SubjectID resolves to a key.
+	if err := service.NewSubjectService(db, repository.NewSubjectRepository(db), repository.NewBadgeRepository(db), service.NewBadgeService(db, repository.NewBadgeRepository(db), repository.NewProgressRepository(db))).SeedDefaultSubjects(); err != nil {
+		t.Fatalf("seed subjects: %v", err)
+	}
+
+	// A webdav source: GetDownloadURL builds a URL offline, so ClaimNext's
+	// storage resolution succeeds without a live server.
+	src := model.StorageSource{Name: "test-webdav", Type: "webdav", URL: "http://test-dav/", IsDefault: true}
+	if err := db.Create(&src).Error; err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+
+	// Course with an AI hint, under the "math" subject.
+	var mathSubject model.Subject
+	db.Where("key = ?", "math").First(&mathSubject)
+	course := model.Course{Title: "高等数学", SubjectID: mathSubject.ID, ContentType: model.ContentLearning, AIHint: "重点听极限的 ε-δ 定义，老师口音较重"}
+	if err := db.Create(&course).Error; err != nil {
+		t.Fatalf("create course: %v", err)
+	}
+	// A chapter so the chapter_title path is exercised.
+	chapter := model.Chapter{CourseID: course.ID, Title: "第一章 极限与连续", SortOrder: 1}
+	if err := db.Create(&chapter).Error; err != nil {
+		t.Fatalf("create chapter: %v", err)
+	}
+
+	// Episode with an original path (so basename prefers it), a file size, the
+	// chapter link, and the webdav source so GetStreamURL resolves.
+	size := int64(524288000)
+	ep := model.Episode{
+		CourseID:             course.ID,
+		ChapterID:            &chapter.ID,
+		Title:                "连续性的定义",
+		VideoRelativePath:    "/课程/连续性的定义.mp4",
+		OriginalRelativePath: "/课程/orig/连续性的定义.mp4",
+		FileSize:             &size,
+		SourceID:             &src.ID,
+		SortOrder:            1,
+	}
+	if err := db.Create(&ep).Error; err != nil {
+		t.Fatalf("create episode: %v", err)
+	}
+
+	episodeRepo := repository.NewEpisodeRepository(db)
+	subtitleRepo := repository.NewSubtitleJobRepository(db)
+	resolver := service.NewStorageProviderResolver(repository.NewStorageSourceRepository(db))
+	epSvc := service.NewEpisodeService(episodeRepo, resolver)
+	svc := service.NewSubtitleJobService(subtitleRepo, episodeRepo, epSvc,
+		repository.NewCourseRepository(db), repository.NewChapterRepository(db), repository.NewSubjectRepository(db))
+
+	if _, _, _, err := svc.Enqueue(ep.ID, 0, ""); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+
+	got, err := svc.ClaimNext("desktop-4060", "test-ua")
+	if err != nil {
+		t.Fatalf("ClaimNext: %v", err)
+	}
+	if got == nil {
+		t.Fatal("ClaimNext returned no job")
+	}
+
+	// Cache-matching keys.
+	if got.Filename != "连续性的定义.mp4" {
+		t.Errorf("Filename = %q, want 连续性的定义.mp4 (basename of OriginalRelativePath)", got.Filename)
+	}
+	if got.FileSize == nil || *got.FileSize != size {
+		t.Errorf("FileSize = %v, want %d", got.FileSize, size)
+	}
+	// Whisper prompt context.
+	if got.Subject != "math" {
+		t.Errorf("Subject = %q, want math", got.Subject)
+	}
+	if got.CourseTitle != "高等数学" {
+		t.Errorf("CourseTitle = %q, want 高等数学", got.CourseTitle)
+	}
+	if got.ChapterTitle != "第一章 极限与连续" {
+		t.Errorf("ChapterTitle = %q, want 第一章 极限与连续", got.ChapterTitle)
+	}
+	if got.AIHint != course.AIHint {
+		t.Errorf("AIHint = %q, want %q", got.AIHint, course.AIHint)
+	}
+	if got.EpisodeTitle != "连续性的定义" {
+		t.Errorf("EpisodeTitle = %q", got.EpisodeTitle)
+	}
+}
+
+// TestSubtitleJobHeartbeatProgress verifies a heartbeat can record the worker's
+// transcription ratio and that a terminal transition (Complete) clears it, so a
+// requeued/done job never shows a stale percentage.
+func TestSubtitleJobHeartbeatProgress(t *testing.T) {
+	env := newTestEnv(t)
+
+	c := env.createCourse(t, "课程", "math", nil)
+	ep := env.createEpisode(t, c, "第1集")
+	svc := env.newSubtitleJobService()
+	repo := env.newSubtitleJobRepo()
+
+	if _, _, _, err := svc.Enqueue(ep, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Claim at the repo layer to reach 'processing' without a storage round-trip.
+	if _, err := repo.ClaimNext("test-worker"); err != nil {
+		t.Fatal(err)
+	}
+	job, _ := repo.FindActiveByEpisode(ep)
+	if job == nil {
+		t.Fatal("active job not found")
+	}
+
+	// A heartbeat carrying a ratio must persist it.
+	ratio := 0.42
+	if err := svc.Heartbeat(job.ID, &ratio); err != nil {
+		t.Fatalf("heartbeat with progress: %v", err)
+	}
+	j, _ := repo.FindByID(job.ID)
+	if j.Progress == nil || *j.Progress != ratio {
+		t.Fatalf("progress = %v, want %v", j.Progress, ratio)
+	}
+
+	// A heartbeat with nil ratio refreshes claimed_at but must not wipe progress.
+	if err := svc.Heartbeat(job.ID, nil); err != nil {
+		t.Fatalf("heartbeat without progress: %v", err)
+	}
+	j, _ = repo.FindByID(job.ID)
+	if j.Progress == nil || *j.Progress != ratio {
+		t.Fatalf("progress after nil-ratio heartbeat = %v, want unchanged %v", j.Progress, ratio)
+	}
+
+	// Completing clears progress (terminal state must not show a stale %).
+	if err := svc.Complete(job.ID, "1\n00:00:01,000 --> 00:00:02,000\nx\n", "", ""); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	j, _ = repo.FindByID(job.ID)
+	if j.Progress != nil {
+		t.Fatalf("progress after complete = %v, want nil", j.Progress)
+	}
+}
+
+// TestSubtitleVTTEndpoint is a regression test for the Gin route
+// /subtitles/:id.vtt. Gin does NOT split the param name on ".", so the
+// registered param is "id.vtt" (not "id"), and c.Param("id") returns "". The
+// handler must read c.Param("id.vtt") and strip ".vtt" — otherwise every VTT
+// request 400s with "invalid subtitle ID format" and the player shows no
+// subtitles even though the SRT is in the DB.
+func TestSubtitleVTTEndpoint(t *testing.T) {
+	env := newTestEnv(t)
+	c := env.createCourse(t, "课程", "math", nil)
+	ep := env.createEpisode(t, c, "第1集")
+
+	srt := "1\n00:00:01,000 --> 00:00:02,000\n你好世界\n"
+	env.giveSubtitle(t, ep, srt)
+
+	// Find the subtitle id via the admin list endpoint.
+	resp := env.do(t, http.MethodGet, "/admin/api/episodes/"+strconv.FormatUint(uint64(ep), 10)+"/subtitles", nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("list subtitles: %d %s", resp.Code, resp.Body.String())
+	}
+	var subs []struct {
+		ID uint `json:"id"`
+	}
+	json.Unmarshal(resp.Body.Bytes(), &subs)
+	if len(subs) != 1 {
+		t.Fatalf("expected 1 subtitle, got %d", len(subs))
+	}
+	subID := subs[0].ID
+
+	// GET the VTT — this is the endpoint libmpv hits. Must return 200 + VTT text.
+	vttURL := "/api/v1/subtitles/" + strconv.FormatUint(uint64(subID), 10) + ".vtt"
+	resp = env.do(t, http.MethodGet, vttURL, nil)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("VTT endpoint returned %d (body: %s) — the :id.vtt param parsing is broken", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if !strings.HasPrefix(body, "WEBVTT") {
+		t.Errorf("VTT body should start with WEBVTT, got: %q", body[:min(40, len(body))])
+	}
+	// The SRT timestamp comma must be converted to a VTT dot.
+	if strings.Contains(body, "00:00:01,000") {
+		t.Errorf("VTT still contains SRT-style comma timestamp: %q", body)
+	}
+	if !strings.Contains(body, "00:00:01.000") {
+		t.Errorf("VTT missing dot-style timestamp: %q", body)
+	}
+	if !strings.Contains(body, "你好世界") {
+		t.Errorf("VTT missing subtitle text: %q", body)
 	}
 }

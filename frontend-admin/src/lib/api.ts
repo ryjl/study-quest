@@ -14,6 +14,7 @@ import type {
   SubjectMeta,
   TagMeta,
   Subtitle,
+  SubtitleDetail,
   SubtitleJob,
   SubtitleJobEnqueueResult,
   SubtitleJobStats,
@@ -250,6 +251,9 @@ export const api = {
   // ---- Subtitles ----
   async listSubtitles(episodeId: number): Promise<Subtitle[]> {
     return request(`/admin/api/episodes/${episodeId}/subtitles`);
+  },
+  async getSubtitle(id: number): Promise<SubtitleDetail> {
+    return request(`/admin/api/subtitles/${id}`);
   },
   async saveSubtitle(episodeId: number, body: { language: string; label: string; srt_content: string }): Promise<{ status: string }> {
     return request(`/admin/api/episodes/${episodeId}/subtitles`, { method: 'POST', body: JSON.stringify(body) });

@@ -161,6 +161,9 @@ function JobRow({
       </td>
       <td className="px-4 py-3">
         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
+        {job.status === 'processing' && job.progress != null && (
+          <span className="ml-1.5 text-xs text-muted">{Math.round(job.progress * 100)}%</span>
+        )}
       </td>
       <td className="px-4 py-3 text-xs text-muted">
         {job.claimed_by ? <span title="正在/曾经处理此任务的 worker">{job.claimed_by}</span> : '—'}

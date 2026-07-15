@@ -137,6 +137,10 @@ export interface Course {
   cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
   tags: string;
   attachment_json: string;
+  /** Admin-authored hint fed to the subtitle worker's Whisper prompt (and the
+   * future quiz agent): terminology, accent notes, the key topic to catch.
+   * Optional; empty when unset. */
+  ai_hint?: string;
   tags_list?: string[];
   tag_ids?: number[];
   grade_display?: string;
@@ -252,6 +256,11 @@ export interface Subtitle {
   language: string;
   label: string;
   created_at?: string;
+}
+
+/** Full subtitle including SRT text — fetched on demand when viewing content. */
+export interface SubtitleDetail extends Subtitle {
+  srt_content: string;
 }
 
 export interface ProbeStats {
@@ -483,6 +492,8 @@ export interface SubtitleJob {
   claimed_at?: string | null;
   completed_at?: string | null;
   error?: string;
+  /** Worker-reported transcription ratio 0..1, or null when none reported. */
+  progress?: number | null;
   duration_seconds?: number | null;
   created_at: string;
   updated_at: string;

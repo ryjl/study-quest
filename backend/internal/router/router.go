@@ -223,6 +223,7 @@ func RegisterRoutes(
 
 		// Subtitles
 		adm.GET("/api/episodes/:id/subtitles", admin.ListSubtitles)
+		adm.GET("/api/subtitles/:id", admin.GetSubtitle)
 		adm.POST("/api/episodes/:id/subtitles", admin.SaveSubtitle)
 		adm.DELETE("/api/subtitles/:id", admin.DeleteSubtitle)
 		adm.POST("/api/subtitles/auto-match", admin.AutoMatchSubtitle)

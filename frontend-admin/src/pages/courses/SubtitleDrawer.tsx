@@ -5,6 +5,49 @@ import type { Episode } from '../../lib/types';
 import { Drawer, LoadingState, EmptyState } from '../../components/ui';
 import { useToast, useConfirm } from '../../lib/toast';
 
+/** A single subtitle row with an expandable content preview. */
+function SubtitleRow({ id, language, label, onDelete }: { id: number; language: string; label: string; onDelete: () => void }) {
+  const [open, setOpen] = useState(false);
+  // Fetch the SRT content only when the row is first expanded (lazy), and cache
+  // it so re-opening is instant. The list endpoint omits srt_content on purpose.
+  const contentQ = useQuery({
+    queryKey: ['subtitle-content', id],
+    queryFn: () => api.getSubtitle(id),
+    enabled: open,
+    staleTime: Infinity,
+  });
+
+  return (
+    <div className="rounded-lg border border-border bg-card-2 px-3 py-2 text-sm">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="rounded bg-good/20 px-1.5 py-0.5 text-xs text-good">{language}</span>
+          <strong className="ml-2 text-txt">{label}</strong>
+        </div>
+        <div className="flex gap-1.5">
+          <button className="btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>
+            {open ? '收起' : '查看'}
+          </button>
+          <button className="btn-danger btn-sm" onClick={onDelete}>删除</button>
+        </div>
+      </div>
+      {open && (
+        <div className="mt-2">
+          {contentQ.isLoading ? (
+            <div className="py-4 text-center text-xs text-muted">加载中…</div>
+          ) : contentQ.isError ? (
+            <div className="py-4 text-center text-xs text-bad">加载失败</div>
+          ) : (
+            <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-black/5 p-2 text-xs leading-relaxed text-txt">
+              {contentQ.data?.srt_content || '(空)'}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -61,20 +104,15 @@ export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose
         ) : (
           <div className="space-y-2">
             {subs.map((s) => (
-              <div key={s.id} className="flex items-center justify-between rounded-lg border border-border bg-card-2 px-3 py-2 text-sm">
-                <div>
-                  <span className="rounded bg-good/20 px-1.5 py-0.5 text-xs text-good">{s.language}</span>
-                  <strong className="ml-2 text-txt">{s.label}</strong>
-                </div>
-                <button
-                  className="btn-danger btn-sm"
-                  onClick={async () => {
-                    if (await confirm({ message: `删除「${s.label}」字幕？`, danger: true })) delMut.mutate(s.id);
-                  }}
-                >
-                  删除
-                </button>
-              </div>
+              <SubtitleRow
+                key={s.id}
+                id={s.id}
+                language={s.language}
+                label={s.label}
+                onDelete={async () => {
+                  if (await confirm({ message: `删除「${s.label}」字幕？`, danger: true })) delMut.mutate(s.id);
+                }}
+              />
             ))}
           </div>
         )}

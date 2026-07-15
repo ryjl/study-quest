@@ -25,6 +25,9 @@ type subtitleJobDTO struct {
 	ClaimedAt       *string    `json:"claimed_at,omitempty"`
 	CompletedAt     *string    `json:"completed_at,omitempty"`
 	Error           string     `json:"error,omitempty"`
+	// Progress is the worker-reported transcription ratio (0.0..1.0), or null
+	// when none has been reported. The queue view shows it for processing jobs.
+	Progress        *float64   `json:"progress,omitempty"`
 	DurationSeconds *int       `json:"duration_seconds,omitempty"`
 	CreatedAt       string     `json:"created_at"`
 	UpdatedAt       string     `json:"updated_at"`
@@ -40,6 +43,7 @@ func toSubtitleJobDTO(r repository.SubtitleJobWithEpisode) subtitleJobDTO {
 		Language:        r.Language,
 		ClaimedBy:       r.ClaimedBy,
 		Error:           r.Error,
+		Progress:        r.Progress,
 		DurationSeconds: r.DurationSeconds,
 		CourseID:        r.EpisodeCourseID,
 		CreatedAt:       formatTime(r.CreatedAt),

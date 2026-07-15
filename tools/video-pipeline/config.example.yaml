@@ -1,0 +1,39 @@
+# Subtitle worker configuration.
+#
+# Copy to config.yaml and edit. The ingest key is NEVER put here — it comes
+# from the SQ_INGEST_KEY environment variable (see README). Any scalar below
+# can also be overridden by an env var of the form SQ_SECTION__KEY, e.g.
+#   SQ_WHISPER__COMPUTE_TYPE=int8
+#
+# `~` and `$VAR` are expanded against your home dir and environment.
+
+backend:
+  base_url: http://localhost:8080
+
+worker:
+  id: desktop-4060          # empty → uses hostname
+  poll_interval: 30         # seconds to sleep when the queue is empty
+  heartbeat_interval: 30    # seconds; reaper recycles at 30min silence
+
+# Local video cache: if a file matching (filename + size) is found here, the
+# worker uses it directly and never touches the netdisk. List as many dirs as
+# you like.
+cache:
+  dirs:
+    - ~/Videos/课程缓存
+    # - /mnt/d/Downloads
+
+audio:
+  sample_rate: 16000        # whisper requirement
+  channels: 1               # mono
+
+whisper:
+  model_path: ~/AI-Models/faster-whisper-large-v3
+  device: cuda              # ONLY cuda is supported — no CPU fallback
+  compute_type: int8_float16   # 8GB card (4060). If you OOM, this is what to reconsider;
+                            # do NOT silently switch to a CPU compute_type.
+  language: zh              # skip language detection (all study videos are Mandarin)
+  vad_filter: true          # skip silence, saves time
+  beam_size: 5
+  # Prepended to the auto-built course context. Style引导 + 简体倾向.
+  base_prompt: "以下是普通话的句子。"

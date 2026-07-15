@@ -31,6 +31,9 @@ type courseDTO struct {
 	TagIDs              []uint   `json:"tag_ids"`     // tag ids (for admin edit forms)
 	GradeDisplay        string   `json:"grade_display"`
 	AttachmentJSON      string   `json:"attachment_json"`
+	// AIHint is the admin-authored hint for the subtitle worker / quiz agent.
+	// Echoed back so the edit form can repopulate. See model.Course.AIHint.
+	AIHint              string   `json:"ai_hint"`
 	EpisodeCount        int64    `json:"episode_count"`
 	ChapterCount        int64    `json:"chapter_count"`
 	TotalDurationSeconds int64   `json:"total_duration_seconds"`
@@ -78,6 +81,7 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		TagIDs:               tagIDsOf(c.Tags), // []uint tag ids
 		GradeDisplay:         c.GradeDisplay(),
 		AttachmentJSON:       c.AttachmentJSON,
+		AIHint:               c.AIHint,
 		EpisodeCount:         eps,
 		ChapterCount:         chs,
 		TotalDurationSeconds: dur,
