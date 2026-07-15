@@ -135,5 +135,7 @@ per ABI; upload each under the matching ABI so all device types get served.
 - `design.md` — overall architecture & design tokens
 - `docs/architecture.md` — backend layering
 - `docs/adr.md` — architecture decision records
+- `docs/ai-subtitle-queue.md` — subtitle generation queue (Step 1/2)
+- `docs/ai-agent-module.md` — AI learning agent (Step 3: summary/quiz/chat)
 - `TESTING_PLAN.md` — coverage gaps & integration-test design
 - `frontend-admin/README.md` — SPA conventions (mutate→invalidate etc.)
