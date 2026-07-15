@@ -216,6 +216,14 @@ func RegisterRoutes(
 		adm.GET("/api/users/:id/storage-whitelist", admin.GetStorageWhitelist)
 		adm.PUT("/api/users/:id/storage-whitelist", admin.SetStorageWhitelist)
 
+		// AI module (Step 3) — provider config CRUD + test-connection + status.
+		adm.GET("/api/ai/providers", admin.ListAIProviders)
+		adm.POST("/api/ai/providers", admin.CreateAIProvider)
+		adm.PUT("/api/ai/providers/:id", admin.UpdateAIProvider)
+		adm.DELETE("/api/ai/providers/:id", admin.DeleteAIProvider)
+		adm.POST("/api/ai/providers/:id/test", admin.TestAIProvider)
+		adm.GET("/api/ai/status", admin.GetAIStatus)
+
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)
 		adm.POST("/api/probe/scan-missing", admin.ScanMissingDurations)

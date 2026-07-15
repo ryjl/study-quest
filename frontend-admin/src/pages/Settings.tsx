@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import { StorageSourcesSection } from './StorageSourcesSection';
+import { AiProvidersSection } from './AiProvidersSection';
 
 export function Settings() {
   const qc = useQueryClient();
@@ -31,6 +32,10 @@ export function Settings() {
 
       <div className="mb-5">
         <StorageSourcesSection />
+      </div>
+
+      <div className="mb-5">
+        <AiProvidersSection />
       </div>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">

@@ -226,9 +226,19 @@ type Course struct {
 	// Whisper initial_prompt (and later the quiz agent): terminology, teacher
 	// accent notes, the key theorem to listen for, etc. Empty by default. Free
 	// text — kept short by the consumer (Whisper's prompt budget is ~244 tokens).
-	AIHint        string    `gorm:"type:text"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	AIHint string `gorm:"type:text"`
+	// AISummaryEnabled controls whether the AI agent generates summaries for
+	// this course's episodes. Off by default: AI is an opt-in add-on, not every
+	// course needs it. The agent only processes episodes belonging to a course
+	// with this (and/or AIQuizEnabled) on. When off, the course behaves exactly
+	// as before — pure video viewing, no AI surface.
+	AISummaryEnabled bool `gorm:"default:false"`
+	// AIQuizEnabled controls whether the AI agent generates quizzes for this
+	// course's episodes. Independent from AISummaryEnabled so an admin can have
+	// summaries without quizzes (or vice versa) per course.
+	AIQuizEnabled bool `gorm:"default:false"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // CourseGrade is one row of a course's applicable-grade set. A course with no
@@ -897,6 +907,197 @@ type WatchEvent struct {
 }
 
 // AutoMigrate runs GORM schema auto-migration for all tables.
+// ---------------------------------------------------------------------------
+// AI module (Step 3 — learning agent: summary / quiz / chat)
+//
+// These tables are the agent's PRIVATE state. The rest of the backend never
+// reads or writes them directly; only internal/ai and its handler/service do.
+// AI is an opt-in add-on: if no provider is configured and no course has
+// AISummaryEnabled/AIQuizEnabled on, the system behaves exactly as before and
+// these tables sit empty.
+//
+// Capability constants for AIProvider.Capability.
+const (
+	AICapabilityChat      = "chat"      // LLM chat completion
+	AICapabilityEmbedding = "embedding" // text → vector
+	AICapabilityRerank    = "rerank"    // (reserved, not wired in MVP)
+)
+
+// AIProvider is one row of admin-configured provider credentials for one
+// capability. Modeled on StorageSource (multi-row, admin CRUD, test-connection
+// button). The three capabilities are independent: you can run chat against a
+// remote relay while embedding runs locally, and swap either without touching
+// the other. Credentials are stored plaintext (same posture as StorageSource;
+// at-rest encryption is a separate cross-cutting PR).
+type AIProvider struct {
+	ID           uint   `gorm:"primaryKey;autoIncrement"`
+	Capability   string `gorm:"size:20;not null;index"` // chat | embedding | rerank
+	Name         string `gorm:"size:100;not null"`      // display name, e.g. "主聊天模型"
+	ProviderType string `gorm:"size:30;not null"`       // openai_compat | onnx_local | ...
+	BaseURL      string `gorm:"size:1024"`              // chat relay base (no /v1); empty for onnx_local
+	APIKey       string `gorm:"size:1024"`              // bearer token; empty for onnx_local
+	ModelName    string `gorm:"size:255;not null"`      // model id (chat) or model dir (onnx)
+	ExtraJSON    string `gorm:"type:text"`              // capability-specific knobs (temperature, dim, seqLen...)
+	IsEnabled    bool   `gorm:"default:false"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// AIJob is one asynchronous AI generation task (segment/summary/quiz), modeled
+// on SubtitleJob's queue/claim/complete pattern. Generated offline so the
+// client reads already-produced content with zero latency (the user never waits
+// for a 20s LLM call). Status values mirror SubtitleJob: queued|processing|
+// done|failed|skipped.
+type AIJob struct {
+	ID          uint       `gorm:"primaryKey;autoIncrement"`
+	JobType     string     `gorm:"size:20;not null;index"` // segment | summary | quiz
+	EpisodeID   uint       `gorm:"index;not null"`
+	CourseID    uint       `gorm:"index;not null"`
+	Status      string     `gorm:"size:20;not null;default:'queued';index"`
+	Priority    int        `gorm:"default:0"`
+	Attempt     int        `gorm:"default:0"`
+	ClaimedAt   *time.Time `gorm:"index"`
+	CompletedAt *time.Time
+	Error       string `gorm:"type:text"`
+	Progress    *float64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// ContentChunk is one retrievable unit of the RAG corpus, source-agnostic so
+// subtitle segments AND attachment extracts (PDF/workbook text, future) live in
+// one table and are retrievable together. For subtitle chunks, StartTime/
+// EndTime let quiz/chat answers link back to an exact video timestamp ("this
+// concept is explained at 12:38") — the knowledge-point → video-jump feature.
+// Embedding is the JSON-serialized float32 vector from the Embedder; cosine
+// similarity is computed in Go (brute force) since per-episode chunk counts are
+// small (hundreds). StartTime/EndTime are NULL for attachment chunks.
+type ContentChunk struct {
+	ID         uint    `gorm:"primaryKey;autoIncrement"`
+	EpisodeID  uint    `gorm:"index:idx_chunk_ep_src;not null"`
+	CourseID   uint    `gorm:"index;not null"`
+	SourceType string  `gorm:"size:20;not null;index:idx_chunk_ep_src;default:'subtitle'"` // subtitle | attachment
+	SourceRef  string  `gorm:"size:255"`                                                 // subtitle_id or attachment identifier
+	ChunkIndex int     `gorm:"not null"`
+	StartTime  *int    // seconds; NULL for attachment
+	EndTime    *int    // seconds; NULL for attachment
+	Text       string  `gorm:"type:text;not null"`
+	Embedding  string  `gorm:"type:text"` // JSON []float32, length = embedder Dim
+	CreatedAt  time.Time
+}
+
+// AISummary is the agent-generated summary for one episode (one row per
+// episode). SummaryJSON is structured (key points, key concepts) so the client
+// can render it richly. Generated by the summarizer capability via an AIJob.
+type AISummary struct {
+	ID         uint   `gorm:"primaryKey;autoIncrement"`
+	EpisodeID  uint   `gorm:"uniqueIndex;not null"`
+	CourseID   uint   `gorm:"index;not null"`
+	SummaryJSON string `gorm:"type:text;not null"`
+	ModelUsed  string `gorm:"size:255"`
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
+}
+
+// KnowledgeMemory is the per-user learning state for one knowledge-point chunk
+// — the heart of the feedback loop. mastery (0.0–1.0) is updated on each answer
+// (correct +0.1 / wrong −0.2, clamped; a decay curve is a planned later step)
+// and READ by the quiz agent on the next generation, so it adapts to the
+// student's weak points. This is what makes the system an agent (state-driven,
+// self-adapting) rather than a stateless quiz generator.
+type KnowledgeMemory struct {
+	ID           uint       `gorm:"primaryKey;autoIncrement"`
+	UserID       uint       `gorm:"uniqueIndex:idx_mem_user_chunk;not null"`
+	EpisodeID    uint       `gorm:"index;not null"`
+	CourseID     uint       `gorm:"index;not null"`
+	ChunkID      uint       `gorm:"uniqueIndex:idx_mem_user_chunk;index;not null"` // the knowledge-point chunk
+	Mastery      float64    `gorm:"default:0"`                                      // 0.0–1.0
+	CorrectCount int        `gorm:"default:0"`
+	WrongCount   int        `gorm:"default:0"`
+	LastReviewed *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Quiz is one generated quiz set for a (user, episode). Questions belong to it.
+// Generated by the quizzer capability (which runs the agent loop with tool
+// calling) via an AIJob, then served read-only to the client.
+type Quiz struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement"`
+	EpisodeID  uint      `gorm:"index;not null"`
+	UserID     uint      `gorm:"index;not null"`
+	CourseID   uint      `gorm:"index;not null"`
+	Difficulty string    `gorm:"size:20;default:'adaptive'"` // adaptive = agent decides from memory
+	CreatedAt  time.Time
+}
+
+// Question is one question in a Quiz. ChunkID links it to the knowledge-point
+// chunk it tests, which (via ContentChunk.StartTime) gives the "jump to video"
+// timestamp. Options is a JSON string array for choice questions; Answer is the
+// 0-based correct index. Explanation is shown after answering.
+type Question struct {
+	ID          uint   `gorm:"primaryKey;autoIncrement"`
+	QuizID      uint   `gorm:"index;not null"`
+	ChunkID     uint   `gorm:"index"` // nullable: a question may be synthetic, not tied to one chunk
+	Type        string `gorm:"size:20;default:'choice'"`
+	Stem        string `gorm:"type:text;not null"`
+	Options     string `gorm:"type:text"` // JSON []string
+	Answer      int    // 0-based index into Options for choice
+	Explanation string `gorm:"type:text"`
+	CreatedAt   time.Time
+}
+
+// Answer records one user answer to one Question (append-only). Written on
+// submit, then used to update KnowledgeMemory (the feedback loop).
+type Answer struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement"`
+	QuestionID uint      `gorm:"index;not null"`
+	UserID     uint      `gorm:"index;not null"`
+	UserAnswer int       // 0-based index the user picked
+	Correct    bool
+	AnsweredAt time.Time
+}
+
+// AIRun records ONE LLM call's decision trace — input snapshot, the raw model
+// response, token usage, self-check outcome. Written for every agent step so
+// the admin AI Workflow page can REPLAY how the agent reasoned: what chunks it
+// retrieved, what memory weaknesses it saw, what it answered, whether its
+// self-check passed. This is both the observability layer (debug bad output)
+// and the learning material (see agent decision flow in action).
+type AIRun struct {
+	ID              uint   `gorm:"primaryKey;autoIncrement"`
+	JobID           uint   `gorm:"index"` // 0 for ad-hoc (e.g. chat) runs not tied to a job
+	Capability      string `gorm:"size:20;not null;index"` // summary | quiz | chat
+	InputJSON       string `gorm:"type:text"`              // snapshot: retrieved chunks, memory weaknesses
+	PromptTokens    int
+	CompletionTokens int
+	ModelUsed       string `gorm:"size:255"`
+	ResponseText    string `gorm:"type:text"` // the raw model output
+	SelfCheckResult string `gorm:"size:20;default:'skipped'"` // pass | fail | skipped
+	SelfCheckNote   string `gorm:"type:text"`
+	DurationMs      int
+	CreatedAt       time.Time
+}
+
+// ChatSession / ChatMessage hold the multi-turn chat (Phase D capability) so a
+// user can discuss a lesson with the agent. Tables are created in this phase so
+// the schema is stable, but the chat capability itself is implemented later.
+type ChatSession struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement"`
+	UserID     uint      `gorm:"index;not null"`
+	EpisodeID  uint      `gorm:"index;not null"`
+	CreatedAt  time.Time
+}
+
+type ChatMessage struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement"`
+	SessionID  uint      `gorm:"index;not null"`
+	Role       string    `gorm:"size:20;not null"` // user | assistant
+	Content    string    `gorm:"type:text;not null"`
+	ChunkRefs  string    `gorm:"type:text"`        // JSON [{text,start_time,end_time}] for video-jump links
+	CreatedAt  time.Time
+}
+
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&Setting{},
@@ -941,5 +1142,18 @@ func AutoMigrate(db *gorm.DB) error {
 		// backends; content points at one; user whitelist is the 防呆 gate).
 		&StorageSource{},
 		&UserStorageSource{},
+		// AI module (Step 3 — learning agent). Private to internal/ai; empty and
+		// inert when no provider is configured / no course has AI enabled.
+		&AIProvider{},
+		&AIJob{},
+		&ContentChunk{},
+		&AISummary{},
+		&KnowledgeMemory{},
+		&Quiz{},
+		&Question{},
+		&Answer{},
+		&AIRun{},
+		&ChatSession{},
+		&ChatMessage{},
 	)
 }

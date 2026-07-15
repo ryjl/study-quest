@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
 )
@@ -123,6 +124,13 @@ type AdminHandler interface {
 	PingStorageSource(c *gin.Context)
 	GetStorageWhitelist(c *gin.Context)
 	SetStorageWhitelist(c *gin.Context)
+	// AI module (Step 3) — provider config + diagnostics.
+	ListAIProviders(c *gin.Context)
+	CreateAIProvider(c *gin.Context)
+	UpdateAIProvider(c *gin.Context)
+	DeleteAIProvider(c *gin.Context)
+	TestAIProvider(c *gin.Context)
+	GetAIStatus(c *gin.Context)
 }
 
 type adminHandler struct {
@@ -153,6 +161,11 @@ type adminHandler struct {
 	watchEventRepo      repository.WatchEventRepository
 	storageSourceRepo   repository.StorageSourceRepository
 	storageResolver     *service.StorageProviderResolver
+	// AI module (Step 3). nil-safe: when the AI subsystem isn't wired, these
+	// stay nil and the admin AI endpoints respond with 503 / empty, so the rest
+	// of the panel is unaffected.
+	aiProviderRepo repository.AIProviderRepository
+	aiResolver     *ai.ProviderResolver
 }
 
 // NewAdminHandler creates an instance of AdminHandler.
@@ -191,6 +204,8 @@ type AdminHandlerDeps struct {
 	WatchEventRepo       repository.WatchEventRepository
 	StorageSourceRepo    repository.StorageSourceRepository
 	StorageResolver      *service.StorageProviderResolver
+	AIProviderRepo       repository.AIProviderRepository
+	AIResolver           *ai.ProviderResolver
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -226,6 +241,8 @@ func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHa
 func (d *AdminHandlerDeps) WithWatchEventRepo(r repository.WatchEventRepository) *AdminHandlerDeps { d.WatchEventRepo = r; return d }
 func (d *AdminHandlerDeps) WithStorageSources(r repository.StorageSourceRepository) *AdminHandlerDeps { d.StorageSourceRepo = r; return d }
 func (d *AdminHandlerDeps) WithStorageResolver(r *service.StorageProviderResolver) *AdminHandlerDeps { d.StorageResolver = r; return d }
+func (d *AdminHandlerDeps) WithAIProviderRepo(r repository.AIProviderRepository) *AdminHandlerDeps { d.AIProviderRepo = r; return d }
+func (d *AdminHandlerDeps) WithAIResolver(r *ai.ProviderResolver) *AdminHandlerDeps            { d.AIResolver = r; return d }
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
@@ -257,6 +274,8 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		watchEventRepo:       d.WatchEventRepo,
 		storageSourceRepo:    d.StorageSourceRepo,
 		storageResolver:      d.StorageResolver,
+		aiProviderRepo:       d.AIProviderRepo,
+		aiResolver:           d.AIResolver,
 	}
 }
 

@@ -33,6 +33,15 @@ type Config struct {
 	// folded into the row's wall-clock span (DurationSeconds still excludes
 	// them). 0 disables merging (every heartbeat = a new row). Default 60s.
 	WatchMergeWindow time.Duration
+
+	// AIModelsDir is the directory holding the local ONNX embedding artifacts
+	// (libonnxruntime.so, bge model_quantized.onnx, vocab.txt). Fetched by
+	// `make fetch-ai-models`. Boot-time only (changing it needs a restart), so
+	// it lives in env rather than the ai_providers table. Default points at the
+	// conventional backend/data/ai-models location. The AI subsystem degrades
+	// gracefully if the dir is missing/empty: embedding is unavailable but the
+	// server still starts and chat-only AI still works.
+	AIModelsDir string
 }
 
 // LoadConfig reads configuration from environment variables with safe defaults.
@@ -75,6 +84,11 @@ func LoadConfig() *Config {
 		}
 	}
 
+	aiModelsDir := os.Getenv("AI_MODELS_DIR")
+	if aiModelsDir == "" {
+		aiModelsDir = "./data/ai-models"
+	}
+
 	return &Config{
 		ServerAddr:      serverAddr,
 		DBPath:          dbPath,
@@ -82,5 +96,6 @@ func LoadConfig() *Config {
 		IngestKey:       os.Getenv("INGEST_KEY"),
 		TrustedProxies:  proxies,
 		WatchMergeWindow: time.Duration(mergeWindowSec) * time.Second,
+		AIModelsDir:     aiModelsDir,
 	}
 }

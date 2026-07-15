@@ -1,4 +1,4 @@
-.PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat
+.PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat fetch-ai-models clean-ai-models
 
 # Build the admin SPA (React/Vite). Output lands in
 # backend/internal/admin/spa/dist and is embedded into the Go binary via go:embed.
@@ -81,6 +81,58 @@ clean:
 	@rm -rf backend/internal/admin/spa/dist/*
 	@rm -rf frontend-admin/node_modules/
 	@rm -rf frontend/build/
+
+# ─── 本地 AI 模型 / ONNX 运行时 ───────────────────────────────────────────
+# 下载本地 embedding 所需的 ONNX 运行时与 BGE-small-zh int8 量化模型，放到
+# backend/data/ai-models/（该目录已被 .gitignore，二进制不进 git）。
+#   libonnxruntime.so.1.26.0  —— onnxruntime 官方 release v1.26.0 (linux x64)
+#   bge-small-zh-v1.5/...     —— Xenova/bge-small-zh-v1.5 的量化模型 + 词表
+# 幂等：每个文件已存在且大小 > 0 则跳过。
+AI_MODELS_DIR := backend/data/ai-models
+ORT_VERSION   := 1.26.0
+ORT_TGZ_URL   := https://github.com/microsoft/onnxruntime/releases/download/v$(ORT_VERSION)/onnxruntime-linux-x64-$(ORT_VERSION).tgz
+BGE_REPO      := Xenova/bge-small-zh-v1.5
+
+fetch-ai-models:
+	@echo "==> Fetching local AI models into $(AI_MODELS_DIR)/ ..."
+	@mkdir -p $(AI_MODELS_DIR)/bge-small-zh-v1.5
+	@# 1) onnxruntime C 库（带版本号的真 .so，不是符号链接）
+	@if [ -s "$(AI_MODELS_DIR)/libonnxruntime.so.$(ORT_VERSION)" ]; then \
+		echo "    ✓ libonnxruntime.so.$(ORT_VERSION) already present, skip"; \
+	else \
+		echo "    ↓ onnxruntime-linux-x64-$(ORT_VERSION).tgz"; \
+		tmp=$$(mktemp -d); \
+		curl -fL --retry 3 -o $$tmp/ort.tgz "$(ORT_TGZ_URL)"; \
+		tar -xzf $$tmp/ort.tgz -C $$tmp; \
+		cp $$tmp/onnxruntime-linux-x64-$(ORT_VERSION)/lib/libonnxruntime.so.$(ORT_VERSION) \
+			$(AI_MODELS_DIR)/libonnxruntime.so.$(ORT_VERSION); \
+		rm -rf $$tmp; \
+		echo "    ✓ libonnxruntime.so.$(ORT_VERSION)"; \
+	fi
+	@# 2) BGE-small-zh int8 量化模型
+	@if [ -s "$(AI_MODELS_DIR)/bge-small-zh-v1.5/model_quantized.onnx" ]; then \
+		echo "    ✓ bge-small-zh-v1.5/model_quantized.onnx already present, skip"; \
+	else \
+		echo "    ↓ bge-small-zh-v1.5/model_quantized.onnx"; \
+		curl -fL --retry 3 -o $(AI_MODELS_DIR)/bge-small-zh-v1.5/model_quantized.onnx \
+			"https://huggingface.co/$(BGE_REPO)/resolve/main/onnx/model_quantized.onnx"; \
+		echo "    ✓ bge-small-zh-v1.5/model_quantized.onnx"; \
+	fi
+	@# 3) 词表（Xenova 仓库自带 vocab.txt，格式同 bert-base-chinese）
+	@if [ -s "$(AI_MODELS_DIR)/bge-small-zh-v1.5/vocab.txt" ]; then \
+		echo "    ✓ bge-small-zh-v1.5/vocab.txt already present, skip"; \
+	else \
+		echo "    ↓ bge-small-zh-v1.5/vocab.txt"; \
+		curl -fL --retry 3 -o $(AI_MODELS_DIR)/bge-small-zh-v1.5/vocab.txt \
+			"https://huggingface.co/$(BGE_REPO)/resolve/main/vocab.txt"; \
+		echo "    ✓ bge-small-zh-v1.5/vocab.txt"; \
+	fi
+	@echo "==> AI models ready in $(AI_MODELS_DIR)/"
+
+# 删除已下载的 AI 模型 / ONNX 运行时。
+clean-ai-models:
+	@echo "==> Removing $(AI_MODELS_DIR)/ ..."
+	@rm -rf $(AI_MODELS_DIR)/
 
 # 一键部署到远程服务器
 deploy: docker-build

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/config"
 	"studyquest/backend/internal/handler"
 	"studyquest/backend/internal/model"
@@ -95,6 +96,7 @@ func main() {
 	watchEventRepo := repository.NewWatchEventRepository(db)
 	storageSourceRepo := repository.NewStorageSourceRepository(db)
 	subtitleJobRepo := repository.NewSubtitleJobRepository(db)
+	aiProviderRepo := repository.NewAIProviderRepository(db)
 
 	// 7. Initialize Services
 	userService := service.NewUserService(userRepo)
@@ -120,6 +122,11 @@ func main() {
 	readingArticleService := service.NewReadingArticleService(readingArticleRepo, readingSeriesRepo)
 	readingImportService := service.NewReadingImportService(db, readingSeriesRepo, readingBookRepo, subjectRepo, storageResolver)
 	subtitleJobService := service.NewSubtitleJobService(subtitleJobRepo, episodeRepo, episodeService, courseRepo, chapterRepo, subjectRepo)
+	// AI subsystem resolver (Step 3). Turns stored ai_providers config rows into
+	// live LLM/Embedder instances, cached in-process. Built unconditionally; if
+	// no provider is enabled the resolver returns ErrNoProvider and AI endpoints
+	// degrade gracefully — the rest of the server is unaffected.
+	aiResolver := ai.NewProviderResolver(aiProviderRepo, cfg.AIModelsDir)
 
 	// Seed default badges and subjects (idempotent). Badges seed FIRST because
 	// subject seeding auto-generates subject_count badges and the order keeps
@@ -172,6 +179,8 @@ func main() {
 		WithWatchEventRepo(watchEventRepo).
 		WithStorageSources(storageSourceRepo).
 		WithStorageResolver(storageResolver).
+		WithAIProviderRepo(aiProviderRepo).
+		WithAIResolver(aiResolver).
 		Build()
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)

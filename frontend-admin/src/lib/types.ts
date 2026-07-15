@@ -325,6 +325,28 @@ export interface StorageSource {
   is_default?: boolean;
 }
 
+// AiProvider is one configured AI capability backend (chat / embedding /
+// rerank). Mirrors the Go AiProvider model; field names are snake_case to match
+// the backend JSON tags. api_key is sensitive — it is NOT echoed back by the
+// server on GET; the edit form leaves it blank and "blank = don't change".
+export interface AiProvider {
+  id?: number;
+  capability: 'chat' | 'embedding' | 'rerank';
+  name: string; // display name, e.g. "主聊天模型"
+  provider_type: string; // 'openai_compat' | 'onnx_local'
+  base_url: string; // chat (openai_compat); empty for onnx_local
+  api_key: string; // chat (openai_compat); empty for onnx_local. Sensitive.
+  model_name: string; // model name (chat) or model path (onnx)
+  is_enabled: boolean;
+}
+
+// Result of POST /admin/api/ai/providers/:id/test.
+export interface AiProviderTestResult {
+  ok: boolean;
+  message: string;
+  latency_ms?: number;
+}
+
 // AppRelease is one published APK build. (version_code, abi) is the identity —
 // the same pair the OTA client contract keys on. is_active=false means the
 // build is withdrawn (hidden from clients, not downloadable) but kept for history.

@@ -31,6 +31,8 @@ import type {
   ReadingArticle,
   ReadingSeriesDetail,
   ReadingTargetType,
+  AiProvider,
+  AiProviderTestResult,
 } from './types';
 
 // Centralized API client. Same-origin cookies carry the admin session. All
@@ -493,5 +495,24 @@ export const api = {
   },
   async suggestWhitelist(sourceUrl: string): Promise<{ domains: string[] }> {
     return request('/admin/api/reading-articles/suggest-whitelist', { method: 'POST', body: JSON.stringify({ source_url: sourceUrl }) });
+  },
+
+  // ---- AI ----
+  // AI provider CRUD + per-provider connectivity test. Mirrors the
+  // storage-sources section: list/create/update/delete + a ping-style test.
+  async listAiProviders(): Promise<AiProvider[]> {
+    return request('/admin/api/ai/providers');
+  },
+  async createAiProvider(body: AiProvider): Promise<AiProvider> {
+    return request('/admin/api/ai/providers', { method: 'POST', body: JSON.stringify(body) });
+  },
+  async updateAiProvider(id: number, body: AiProvider): Promise<AiProvider> {
+    return request(`/admin/api/ai/providers/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+  },
+  async deleteAiProvider(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/ai/providers/${id}`, { method: 'DELETE' });
+  },
+  async testAiProvider(id: number): Promise<AiProviderTestResult> {
+    return request(`/admin/api/ai/providers/${id}/test`, { method: 'POST' });
   },
 };
