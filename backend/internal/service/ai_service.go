@@ -62,6 +62,10 @@ type AIService interface {
 	// returns the verdict + explanation + jump-to-video timestamp. answerIndex is
 	// used for choice, answerText for fill (exactly one is set per question type).
 	SubmitQuizAnswer(userID, questionID uint, answerIndex *int, answerText *string) (*AnswerResult, error)
+	// SubmitAllQuizAnswers 是 Phase B 的"统一交卷":一次性判分整张卷子,逐题返回
+	// 结果 + 更新 memory,然后给 quiz 盖 SubmittedAt 锁定。对已交卷的 quiz 返回
+	// ErrQuizAlreadySubmitted。answers 里缺的题视为漏答(计错误但仍 reveal 正确答案)。
+	SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizAnswerInput) ([]AnswerResult, error)
 	// RegenerateQuiz drops the user's current quiz and re-runs the agent against
 	// their latest memory (换题). Returns the new status ("generating").
 	RegenerateQuiz(userID, episodeID uint) (status string, err error)

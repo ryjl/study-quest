@@ -3,21 +3,24 @@ import 'package:flutter/material.dart';
 import '../../model/course.dart';
 import '../../model/quiz.dart';
 import '../../service/api_service.dart';
+import '../../service/quiz_draft_store.dart';
+import 'player_screen.dart';
 
 // AiStudyScreen — the Phase C AI learning page. Two sections:
 //   1. AI summary (headline / key points / concepts / takeaway) — read from
 //      /ai-summary. The LLM's agent_feedback (study advice) shows here too.
 //   2. Practice tab — fetch the quiz (lazily generated, polls while generating),
-//      answer choice/fill questions, see correctness + explanation + jump to
-//      the video timestamp, redo, or regenerate (换题).
+//      then the Phase B "统一提交" flow:
+//        a) answering(作答中):所有题展示,选择/填空可改,底部"提交全部"。不立即判分。
+//           草稿(未提交的选择/填空)按 (uid, eid) 缓存到本地,防止切后台丢失。
+//        b) submitted(已交卷):点"提交全部" → 调 submit-all 一次性判分 → 锁定所有题,
+//           逐题显示对错 + 正确答案 + 解析 + 跳转按钮(仅 has_jump=true 的题)。
+//        已交卷的 quiz 重新进入本页时直接进入 submitted 只读态(quiz.submitted)。
 //
 // Navigation: pushed from course_detail_screen's "AI 重点总结" button and from
-// the player. Pops a JumpRequest when the user taps a "[跳转 12:38]" link so the
-// player can seek — the caller (player) handles it via .then().
-//
-// The generation flow is the observable centerpiece: first GET returns
-// status=generating (the backend enqueued a per-user quiz job), so we poll every
-// few seconds until ready. This is the "lazy generation" UX decided in planning.
+// the player. 跳转按钮改为 push 一个标准 PlayerScreen(带 disableAiTab:true +
+// initialPosition),不再 pop JumpRequest——这样跳转出的播放器不能再进 AI 页,
+// 防止栈无限加深,且本页留在栈里、交卷结果状态保留。
 
 class AiStudyScreen extends StatefulWidget {
   final int activeUserId;
@@ -34,17 +37,24 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   EpisodeSummary? _summary;
   bool _summaryLoading = true;
 
-  // Quiz state machine: loading → generating/ready/unavailable → answered.
+  // Quiz state machine: loading → generating/ready/unavailable → (answering | submitted)。
   QuizStatus? _quizStatus;
   QuizView? _quiz;
   bool _quizLoading = true;
   Timer? _pollTimer;
 
+  // 本地已交卷标志。quiz.submitted(来自后端)或本地 _submitted=true 都表示"已交卷"。
+  // 本地标志的存在是为了:用户点完"提交全部"、submit-all 成功后立即切到 submitted 态,
+  // 不用等下次 fetch。
+  bool _submitted = false;
+
   // Per-question answer state (local until submit; holds the user's selection
-  // or text input, and the result once submitted).
+  // or text input, and the result once submitted)。
   final Map<int, int> _choicePicks = {}; // questionId → selected option index
   final Map<int, TextEditingController> _fillControllers = {};
-  final Map<int, QuizAnswerResult> _results = {}; // questionId → verdict
+  final Map<int, QuizAnswerResult> _results = {}; // questionId → verdict(交卷后逐题结果)
+  // 统一提交中(按钮置灰防重复点)。
+  bool _submittingAll = false;
 
   // Phase 3: archived (superseded) quiz history, shown read-only. Collapsed by
   // default — most students rarely reopen old attempts, but the data is
@@ -65,10 +75,16 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _disposeFillControllers();
+    super.dispose();
+  }
+
+  // 集中清理填空 controller。dispose()(页面销毁)和 _regenerate()(换卷子)都用。
+  void _disposeFillControllers() {
     for (final c in _fillControllers.values) {
       c.dispose();
     }
-    super.dispose();
+    _fillControllers.clear();
   }
 
   Future<void> _loadSummary() async {
@@ -91,6 +107,14 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         _quiz = resp.quiz;
         _quizLoading = false;
       });
+      // 已交卷(后端 quiz.SubmittedAt 非零):直接进入只读态,本页不需要草稿,
+      // 清掉残留草稿防错乱(例如学生交卷后没返回就切走,草稿可能还在)。
+      // 未交卷:尝试恢复本地草稿(防切后台丢答案)。
+      if (resp.quiz != null && resp.quiz!.submitted) {
+        QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
+      } else if (resp.status == QuizStatus.ready && resp.quiz != null) {
+        await _restoreDraft();
+      }
       // If generating, poll until ready (the backend enqueued a per-user job on
       // first GET; it takes a few seconds for the ReAct loop to finish).
       if (resp.status == QuizStatus.generating) {
@@ -99,6 +123,43 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     } catch (_) {
       if (mounted) setState(() => _quizLoading = false);
     }
+  }
+
+  // _restoreDraft 从本地草稿恢复选择/填空到 _choicePicks / _fillControllers。
+  // 只在 quiz 未交卷、且本地 _choicePicks/_fillControllers 为空(刚进页面)时调用。
+  // 草稿按 qid 存,但当前卷子的题 id 可能换过(regen 后),所以恢复时按 id 精确匹配:
+  // 卷子里没有的 qid 视为脏数据丢弃(宁可丢一题也别错位)。
+  Future<void> _restoreDraft() async {
+    final quiz = _quiz;
+    if (quiz == null) return;
+    final draft = await QuizDraftStore.loadDraft(widget.activeUserId, widget.episode.id);
+    if (!mounted || draft.isEmpty) return;
+    final qids = {for (final q in quiz.questions) q.id};
+    setState(() {
+      draft.choicePicks.forEach((qidStr, idx) {
+        final qid = int.tryParse(qidStr);
+        if (qid != null && qids.contains(qid)) {
+          _choicePicks[qid] = idx;
+        }
+      });
+      draft.fillTexts.forEach((qidStr, text) {
+        final qid = int.tryParse(qidStr);
+        if (qid != null && qids.contains(qid)) {
+          _fillControllers[qid] ??= TextEditingController();
+          _fillControllers[qid]!.text = text;
+        }
+      });
+    });
+  }
+
+  // _persistDraft 把当前选择/填空写到本地草稿(覆盖写)。调用方在 onPick/onChanged
+  // 里先 setState 改内存,再调本方法异步落盘。SharedPreferences 本地 IO 廉价,不抖。
+  void _persistDraft() {
+    final texts = <int, String>{};
+    _fillControllers.forEach((qid, c) {
+      if (c.text.isNotEmpty) texts[qid] = c.text;
+    });
+    QuizDraftStore.saveDraft(widget.activeUserId, widget.episode.id, _choicePicks, texts);
   }
 
   void _startPolling() {
@@ -138,20 +199,59 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     }
   }
 
-  Future<void> _submit(int questionId, QuizQuestion q) async {
-    final int? choiceIndex = _choicePicks[questionId];
-    final String? fillText = q.isFill ? _fillControllers[questionId]?.text : null;
+  // _submitAll 是 Phase B 的统一交卷:把整张卷子的选择/填空一次性提交给后端判分。
+  // 后端返回的 results 列表与 _quiz.questions 顺序一一对应(位置映射,不是 id),
+  // 这里把 results[i] 填到 _results[questions[i].id]。成功后:本地 _submitted=true
+  // (立即切只读态,不等下次 fetch)、清草稿(交卷了草稿作废)。
+  Future<void> _submitAll() async {
+    final quiz = _quiz;
+    if (quiz == null || _submittingAll) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('交卷?'),
+        content: const Text('提交后不能再修改答案,将一次性判分整张卷子。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('再想想')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('交卷')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    // 组装 answers:每个题给 {question_id, answer_index?, answer_text?}。
+    // 选择题给 answer_index(即便没选也给题 id,后端视为漏答),填空题给 answer_text。
+    final answers = <Map<String, dynamic>>[];
+    for (final q in quiz.questions) {
+      final Map<String, dynamic> a = {'question_id': q.id};
+      if (q.isFill) {
+        a['answer_text'] = _fillControllers[q.id]?.text ?? '';
+      } else {
+        final idx = _choicePicks[q.id];
+        if (idx != null) a['answer_index'] = idx;
+      }
+      answers.add(a);
+    }
+    setState(() => _submittingAll = true);
     try {
-      final result = await ApiService.submitQuizAnswer(
+      final results = await ApiService.submitAllQuizAnswers(
         activeUserId: widget.activeUserId,
         episodeId: widget.episode.id,
-        questionId: questionId,
-        answerIndex: q.isFill ? null : choiceIndex,
-        answerText: q.isFill ? fillText : null,
+        answers: answers,
       );
-      if (mounted) setState(() => _results[questionId] = result);
+      if (!mounted) return;
+      // results 与 questions 同序,位置映射回 qid。
+      setState(() {
+        for (int i = 0; i < quiz.questions.length && i < results.length; i++) {
+          _results[quiz.questions[i].id] = results[i];
+        }
+        _submitted = true;
+        _submittingAll = false;
+      });
+      // 交卷成功,草稿作废。
+      QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
     } catch (e) {
       if (mounted) {
+        setState(() => _submittingAll = false);
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('提交失败: $e')));
       }
     }
@@ -173,12 +273,18 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     try {
       await ApiService.regenerateQuiz(widget.activeUserId, widget.episode.id);
       if (!mounted) return;
+      // 新卷子:旧的草稿/已选/已判分全部作废。本地 _submitted 也要重置
+      // (换题前若已交卷,新卷子是未交卷的)。
       setState(() {
         _quizStatus = QuizStatus.generating;
         _quiz = null;
         _results.clear();
         _choicePicks.clear();
+        _submitted = false;
       });
+      _disposeFillControllers();
+      // 新卷子 id 全新,旧草稿(按旧 qid 存的)是脏数据,清掉。
+      QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
       _startPolling();
     } catch (e) {
       if (mounted) {
@@ -187,10 +293,22 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     }
   }
 
+  // _jumpTo: push 一个标准 PlayerScreen,带 initialPosition = 目标时间戳。
+  // disableAiTab:true 让跳转出的播放器不能再进 AI 页(否则栈会无限加深:
+  // AI 页 → 跳转 → 播放器 → AI 入口 → AI 页 → 跳转 → …)。
+  // push 而非 pop:本页(AiStudyScreen)留在栈里,返回键回到本页时 _submitted /
+  // _results 状态都保留。
   void _jumpTo(int seconds) {
-    // Pop a JumpRequest so the player (caller) can seek. The course_detail entry
-    // point ignores it (no player open).
-    Navigator.of(context).pop(JumpRequest(Duration(seconds: seconds)));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => PlayerScreen(
+          activeUserId: widget.activeUserId,
+          episode: widget.episode,
+          disableAiTab: true,
+          initialPosition: Duration(seconds: seconds),
+        ),
+      ),
+    );
   }
 
   @override
@@ -362,13 +480,18 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       return const SizedBox.shrink();
     }
     final questions = _quiz!.questions;
+    // 交卷态:后端 quiz.submitted(重进已交卷的卷子)或本地 _submitted(刚点完提交全部)。
+    final submitted = _quiz!.submitted || _submitted;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 8),
         child: Row(children: [
           const Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
           const SizedBox(width: 8),
-          Text('${_quiz!.answeredCount}/${questions.length} 已答', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
+          if (submitted)
+            const Text('已交卷', style: TextStyle(fontSize: 12, color: Color(0xFF10B981), fontWeight: FontWeight.w600))
+          else
+            Text('${_answeredCount()}/${questions.length} 已答', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
           const Spacer(),
           TextButton.icon(
             onPressed: _regenerate,
@@ -378,20 +501,85 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           ),
         ]),
       ),
-      ...questions.asMap().entries.map((e) => Padding(
+      ...questions.asMap().entries.map((e) {
+            // 交卷后的逐题结果:优先用 submit-all 返回的(刚交卷),没有就从
+            // question 自身的回填字段合成(重进已交卷页面,_results 为空但后端在
+            // QuizView 的 questions 里回填了 correct/correctIndex/explanation)。
+            final result = _results[e.value.id] ??
+                (submitted
+                    ? QuizAnswerResult(
+                        correct: e.value.correct,
+                        correctIndex: e.value.correctIndex,
+                        correctText: e.value.correctText,
+                        explanation: e.value.explanation,
+                        chunkStartTime: e.value.chunkStartTime,
+                      )
+                    : null);
+            return Padding(
             padding: const EdgeInsets.only(bottom: 12),
             child: _QuestionCard(
               index: e.key,
               question: e.value,
               pick: _choicePicks[e.value.id],
               fillController: e.value.isFill ? (_fillControllers[e.value.id] ??= TextEditingController()) : null,
-              result: _results[e.value.id],
-              onPick: (i) => setState(() => _choicePicks[e.value.id] = i),
-              onSubmit: () => _submit(e.value.id, e.value),
-              onJump: e.value.chunkStartTime == null ? null : () => _jumpTo(e.value.chunkStartTime!),
+              result: result,
+              submitted: submitted,
+              onPick: (i) {
+                setState(() => _choicePicks[e.value.id] = i);
+                _persistDraft();
+              },
+              onFillChanged: () {
+                // 只触发 rebuild 让按钮状态更新;实际落盘由 onChanged 里 debounce 调用。
+                setState(() {});
+                _persistDraft();
+              },
+              // 跳转按钮:只对 hasJump=true 的题渲染,且仅交卷态展示(看错题时才有用)。
+              onJump: (e.value.hasJump && e.value.chunkStartTime == null)
+                  ? null
+                  : (e.value.hasJump && e.value.chunkStartTime != null)
+                      ? () => _jumpTo(e.value.chunkStartTime!)
+                      : null,
             ),
-          )),
+          );
+          }),
+      // 未交卷:底部醒目的"提交全部"按钮(交卷后不再渲染)。
+      if (!submitted)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _submittingAll ? null : _submitAll,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF8B5CF6),
+                foregroundColor: Colors.white,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: _submittingAll
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Text('提交全部', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ),
     ]);
+  }
+
+  // _answeredCount:本地统计已作答题数(选择有 pick 或填空非空)。后端 answeredCount
+  // 只在 fetch 时更新,做题过程中的实时计数用本地状态更准。
+  int _answeredCount() {
+    final quiz = _quiz;
+    if (quiz == null) return 0;
+    int n = 0;
+    for (final q in quiz.questions) {
+      if (q.isFill) {
+        if ((_fillControllers[q.id]?.text ?? '').isNotEmpty) n++;
+      } else {
+        if (_choicePicks[q.id] != null) n++;
+      }
+    }
+    return n;
   }
 }
 
@@ -422,8 +610,12 @@ class _QuestionCard extends StatelessWidget {
   final TextEditingController? fillController;
   final QuizAnswerResult? result;
   final ValueChanged<int> onPick;
-  final VoidCallback onSubmit;
+  // 填空文本变化回调:触发 rebuild + 落盘草稿(选择用 onPick,填空用这个)。
+  final VoidCallback onFillChanged;
   final VoidCallback? onJump;
+  // 统一提交后整张卷子锁定。submitted=true 时所有题只读,
+  // 逐题展示 result(若 result 还没到——比如重进已交卷的卷子而 fetch 没带结果——则不展示判分)。
+  final bool submitted;
 
   const _QuestionCard({
     required this.index,
@@ -432,13 +624,13 @@ class _QuestionCard extends StatelessWidget {
     required this.fillController,
     required this.result,
     required this.onPick,
-    required this.onSubmit,
+    required this.onFillChanged,
     required this.onJump,
+    required this.submitted,
   });
 
   @override
   Widget build(BuildContext context) {
-    final submitted = result != null;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -470,19 +662,11 @@ class _QuestionCard extends StatelessWidget {
         Text(question.stem, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF0F172A))),
         const SizedBox(height: 10),
         if (question.isFill) _buildFillInput(submitted) else _buildChoiceOptions(submitted),
-        if (submitted) _buildVerdict(),
-        if (!submitted)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: question.isFill ? (fillController == null || fillController!.text.isEmpty ? null : onSubmit) : (pick == null ? null : onSubmit),
-                style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF8B5CF6), foregroundColor: Colors.white, elevation: 0),
-                child: const Text('提交', style: TextStyle(fontSize: 13)),
-              ),
-            ),
-          ),
+        // 判分展示:整卷已交卷,且这道题的 result 已就绪(submit-all 成功后填的)。
+        // 重进已交卷的卷子时若 result 还没 fetch 回来,这里就不展示,保持中性只读态。
+        if (submitted && result != null) _buildVerdict(),
+        // 跳转视频:仅 hasJump=true 的题渲染(onJump 已被 caller 门控),
+        // 且仅在交卷态展示(做错题看解析时跳回去复习)。
         if (onJump != null && submitted)
           Align(
             alignment: Alignment.centerLeft,
@@ -505,8 +689,11 @@ class _QuestionCard extends StatelessWidget {
 
   Widget _optionTile(int i, bool submitted) {
     final isSelected = pick == i;
-    final isCorrect = submitted && result!.correctIndex == i;
-    final isWrongPick = submitted && isSelected && !isCorrect;
+    // result 可能为 null:整卷已交卷(submitted=true)但 result 还没回来
+    // (重进一张已交卷的卷子时 GET 不带结果)。此时不渲染对错高亮,保持中性只读。
+    final hasVerdict = submitted && result != null;
+    final isCorrect = hasVerdict && result!.correctIndex == i;
+    final isWrongPick = hasVerdict && isSelected && !isCorrect;
     Color bg = Colors.white;
     Color border = const Color(0xFFE2E8F0);
     if (submitted) {
@@ -552,7 +739,7 @@ class _QuestionCard extends StatelessWidget {
     return TextField(
       controller: fillController,
       enabled: !submitted,
-      onChanged: (_) {}, // trigger rebuild for submit-button enable state
+      onChanged: (_) => onFillChanged(), // 触发 rebuild(已答计数) + 落盘草稿
       decoration: InputDecoration(
         hintText: '输入你的答案',
         hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),

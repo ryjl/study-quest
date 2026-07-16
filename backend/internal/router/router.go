@@ -90,6 +90,8 @@ func RegisterRoutes(
 		// gate as streaming (IsEpisodeVisible).
 		v1Restricted.GET("/episodes/:id/ai-quiz", ai.GetEpisodeQuiz)
 		v1Restricted.POST("/episodes/:id/ai-quiz/submit", ai.SubmitQuizAnswer)
+		// Phase B — 统一交卷(替代单题 submit 的主流程;单题 submit 端点保留兼容)。
+		v1Restricted.POST("/episodes/:id/ai-quiz/submit-all", ai.SubmitAllQuizAnswers)
 		v1Restricted.POST("/episodes/:id/ai-quiz/regenerate", ai.RegenerateQuiz)
 		// Phase 3 — read-only quiz history (archived/superseded generations).
 		v1Restricted.GET("/episodes/:id/ai-quiz/history", ai.GetEpisodeQuizHistory)

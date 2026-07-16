@@ -71,6 +71,17 @@ class QuizQuestion {
   final List<String> options; // choice only
   final int? chunkStartTime; // seconds, for "[跳转 12:38]"; null if synthetic
   final bool answered;
+  // has_jump:这题是否对应明确的视频片段。仅 has_jump=true 的题渲染"跳转视频"按钮,
+  // 综合题(贯穿全文无单一锚点)为 false 不给跳转。老数据缺省 false。
+  final bool hasJump;
+
+  // ── 仅在 quiz 已交卷(submitted)时由后端回填 ──
+  // 未交卷时为零值(后端 omitempty 不下发),不泄露答案。交卷后重进页面能 review。
+  final int? userAnswerIndex; // choice: 学生当时选的索引
+  final bool correct; // 这题对不对(交卷后才有意义)
+  final int? correctIndex; // choice: 正确选项索引
+  final String correctText; // fill: 标准答案
+  final String explanation; // 解析
 
   QuizQuestion({
     required this.id,
@@ -79,6 +90,12 @@ class QuizQuestion {
     required this.options,
     this.chunkStartTime,
     required this.answered,
+    this.hasJump = false,
+    this.userAnswerIndex,
+    this.correct = false,
+    this.correctIndex,
+    this.correctText = '',
+    this.explanation = '',
   });
 
   bool get isFill => type == 'fill';
@@ -90,6 +107,12 @@ class QuizQuestion {
         options: (j['options'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
         chunkStartTime: j['chunk_start_time'] == null ? null : (j['chunk_start_time'] as num).toInt(),
         answered: (j['answered'] ?? false) as bool,
+        hasJump: (j['has_jump'] ?? false) as bool,
+        userAnswerIndex: j['user_answer_index'] == null ? null : (j['user_answer_index'] as num).toInt(),
+        correct: (j['correct'] ?? false) as bool,
+        correctIndex: j['correct_index'] == null ? null : (j['correct_index'] as num).toInt(),
+        correctText: (j['correct_text'] ?? '').toString(),
+        explanation: (j['explanation'] ?? '').toString(),
       );
 }
 
@@ -101,6 +124,9 @@ class QuizView {
   final String agentFeedback; // LLM's study advice for this student
   final List<QuizQuestion> questions;
   final int answeredCount;
+  // submitted:该 quiz 是否已交卷(quiz.SubmittedAt 非空)。Phase B 统一提交后,
+  // 前端据此切到"只读看结果"状态:已交卷就锁定所有题、逐题展示对错。
+  final bool submitted;
 
   QuizView({
     required this.quizId,
@@ -109,6 +135,7 @@ class QuizView {
     required this.agentFeedback,
     required this.questions,
     required this.answeredCount,
+    this.submitted = false,
   });
 
   factory QuizView.fromJson(Map<String, dynamic> j) {
@@ -120,6 +147,7 @@ class QuizView {
       agentFeedback: (j['agent_feedback'] ?? '').toString(),
       questions: qs,
       answeredCount: (j['answered_count'] as num?)?.toInt() ?? 0,
+      submitted: (j['submitted'] ?? false) as bool,
     );
   }
 }
@@ -198,6 +226,12 @@ class ArchivedQuizQuestion {
   final String explanation;
   final int? chunkStartTime; // seconds, for "[跳转 12:38]"; null if synthetic
   final bool wrong; // true if the student answered this wrong at least once
+  // 历史 review 回放学生当时的作答:选择题给索引(0-based),填空题后端目前不回放原文。
+  // userIndex=null 表示当时没作答(漏答)。
+  final int? userIndex;
+  final String userText;
+  // hasJump:历史题是否可跳转视频(透传 question.HasJump)。仅 has_jump=true 才给按钮。
+  final bool hasJump;
 
   ArchivedQuizQuestion({
     required this.id,
@@ -209,6 +243,9 @@ class ArchivedQuizQuestion {
     required this.explanation,
     this.chunkStartTime,
     required this.wrong,
+    this.userIndex,
+    this.userText = '',
+    this.hasJump = false,
   });
 
   bool get isFill => type == 'fill';
@@ -223,6 +260,9 @@ class ArchivedQuizQuestion {
         explanation: (j['explanation'] ?? '').toString(),
         chunkStartTime: j['chunk_start_time'] == null ? null : (j['chunk_start_time'] as num).toInt(),
         wrong: (j['wrong'] ?? false) as bool,
+        userIndex: j['user_index'] == null ? null : (j['user_index'] as num).toInt(),
+        userText: (j['user_text'] ?? '').toString(),
+        hasJump: (j['has_jump'] ?? false) as bool,
       );
 }
 

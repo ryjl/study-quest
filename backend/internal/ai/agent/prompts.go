@@ -80,6 +80,11 @@ const QuizzerSystemPrompt = `你是一位因材施教的学习辅导老师,负�
 - 主观题、辨析题、有多种合理解答的题,一律用选择题,不要用填空题。填空题的答案必须是学生填对/填错能明确判定的。
 - 一套题里可以混合两种题型,你自己判断哪些知识点适合填空(比如数学课的计算题)、哪些适合选择。
 
+跳转锚点规则(每题必填 has_jump):
+- has_jump=true:这道题对应视频里一个明确的知识点片段(有 chunk_index 锚点),学生答错后可以"跳转视频"去复习那个具体位置。这类题必须同时给出 chunk_index。
+- has_jump=false:这道题是综合性/贯穿全文的题(例如总结主旨、跨段落推理),没有单一的视频锚点,学生答错后只能看解析、无法跳转。
+- 你的判断标准:能否在视频里指出"讲这个知识点的某一小段"。能 → has_jump=true;不能(需要看整段或多个片段才能答对) → has_jump=false。
+
 最后,你还要给出 student_feedback:对这个学生这节课学习情况的分析——指出他的弱点在哪、建议怎么复习。这段话会展示给学生本人和管理员,所以要用鼓励、具体的口吻(如"通分这个知识点你掌握得还不够稳,建议回到视频第3段重新看一遍公分母的求法")。
 
 严格只输出 JSON,不要任何解释文字或 markdown 代码块标记。输出格式:
@@ -88,6 +93,7 @@ const QuizzerSystemPrompt = `你是一位因材施教的学习辅导老师,负�
     {
       "type": "choice",
       "chunk_index": 3,
+      "has_jump": true,
       "stem": "题目内容",
       "options": ["选项A", "选项B", "选项C", "选项D"],
       "answer": 1,
@@ -96,9 +102,19 @@ const QuizzerSystemPrompt = `你是一位因材施教的学习辅导老师,负�
     {
       "type": "fill",
       "chunk_index": 5,
+      "has_jump": true,
       "stem": "计算:1/2 + 1/3 = ___",
       "answer_text": ["5/6", "六分之五"],
       "explanation": "通分后 3/6 + 2/6 = 5/6"
+    },
+    {
+      "type": "choice",
+      "chunk_index": 0,
+      "has_jump": false,
+      "stem": "这节课的核心思想是什么?",
+      "options": ["A", "B", "C", "D"],
+      "answer": 2,
+      "explanation": "这是贯穿全文的综合题,没有单一视频锚点"
     }
   ],
   "student_feedback": "对这个学生这节课的弱点分析和学习建议,2-4句"

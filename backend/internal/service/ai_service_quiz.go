@@ -34,10 +34,16 @@ type QuizView struct {
 	AgentFeedback string              `json:"agent_feedback,omitempty"`
 	Questions     []QuizViewQuestion  `json:"questions"`
 	AnsweredCount int                 `json:"answered_count"`
+	// Submitted 反映 quiz.SubmittedAt 是否非空(已交卷)。Phase B 改为统一提交后,
+	// 客户端据此切到"只读看结果"状态:已交卷就锁定所有题、逐题展示对错。
+	// 用专门字段而不是"answered_count==总数",因为单题 submit 兼容端点也会填 answer。
+	Submitted bool `json:"submitted"`
 }
 
-// QuizViewQuestion is one question as served to the client. No answer field —
-// the correct index/text is stripped here and only returned via submit.
+// QuizViewQuestion is one question as served to the client. Before submit, the
+// correct answer is stripped (防作弊). After submit (quiz.SubmittedAt != nil), the
+// result fields are filled so a student revisiting a submitted quiz sees their
+// verdict + the correct answer + explanation (not just a locked blank question).
 type QuizViewQuestion struct {
 	ID            uint     `json:"id"`
 	Type          string   `json:"type"`
@@ -45,6 +51,19 @@ type QuizViewQuestion struct {
 	Options       []string `json:"options,omitempty"`        // choice only
 	ChunkStartTime *int    `json:"chunk_start_time,omitempty"` // seconds, for video-jump; nil if synthetic
 	Answered      bool     `json:"answered"`
+	// HasJump 告诉前端这题是否可"跳转视频"。仅 has_jump=true 的题才渲染跳转按钮,
+	// 避免给综合性题(无单一锚点)放一个点了没用的按钮。老数据(无此字段)为 false。
+	HasJump bool `json:"has_jump"`
+
+	// ── 以下字段仅在 quiz 已交卷(submitted)时填充 ──
+	// 未交卷时为零值/omitempty,不暴露正确答案。交卷后从这里就能 review 当时的结果,
+	// 不必再调 submit(交卷后不能再提交)。
+	UserAnswerIndex *int   `json:"user_answer_index,omitempty"` // choice: 学生当时选的索引
+	UserAnswerText  string `json:"user_answer_text,omitempty"`  // fill: 学生当时填的
+	Correct         bool   `json:"correct,omitempty"`           // 这题对不对(交卷后才有意义)
+	CorrectIndex    *int   `json:"correct_index,omitempty"`     // choice: 正确选项索引
+	CorrectText     string `json:"correct_text,omitempty"`      // fill: 标准答案
+	Explanation     string `json:"explanation,omitempty"`       // 解析
 }
 
 // AnswerResult is the response to a submit. Reveals correctness, the correct
@@ -156,6 +175,14 @@ type QuizHistoryQuestion struct {
 	// (the panel highlights mistakes). False if answered-correct or never
 	// answered. Computed from the archived quiz's answer rows.
 	Wrong bool `json:"wrong"`
+	// UserIndex 是学生当时在这套历史 quiz 里选的选择题答案(0-based 索引)。
+	// 从该 quiz 的 answer 行里取最新一条(append-only,取最近一次作答)。nil 表示
+	// 这题当时没作答(例如统一提交时漏答)。前端据此高亮"你选了 X"。
+	UserIndex *int `json:"user_index,omitempty"`
+	// UserText 是学生当时填的填空题答案(填空题原文)。同样取最新一条;空串表示没作答。
+	UserText string `json:"user_text,omitempty"`
+	// HasJump 透传 question.HasJump,历史 review 里只有 has_jump=true 的题才给跳转按钮。
+	HasJump bool `json:"has_jump"`
 }
 
 // --- status constants for GetOrEnqueueQuiz ---
@@ -305,12 +332,20 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	chunkIDByIndex := agent.ResolveChunkIDs(res.Draft.Questions, chunks)
 	questions := make([]model.Question, 0, len(res.Draft.Questions))
 	for _, d := range res.Draft.Questions {
+		chunkID := chunkIDByIndex[d.ChunkIndex]
 		q := model.Question{
 			Type:        d.Type,
-			ChunkID:     chunkIDByIndex[d.ChunkIndex],
+			ChunkID:     chunkID,
 			Stem:        d.Stem,
 			Explanation: d.Explanation,
 		}
+		// has_jump:优先采信 agent 的判断;若 agent 没给(老 prompt 输出)则回退到
+		// "有 chunk 锚点就算可跳转"——保证向前兼容,新 prompt 上线前生成的题也能跳。
+		// 注意 ChunkIndex>0 但 ResolveChunkIDs 没命中(该 index 不存在)时 chunkID=0,
+		// 此时按"无锚点"处理,不会给一个虚假的跳转按钮。
+		// (这里用短路 OR 兜底,只填一次,不区分"显式 false"和"缺失"——JSON 的 false
+		// 经过解析就是 false,缺失也是 false,二者都走兜底。)
+		q.HasJump = d.HasJump || chunkID != 0
 		if d.Type == agent.QuestionChoice {
 			opts, _ := json.Marshal(d.Options)
 			q.Options = string(opts)
@@ -483,9 +518,13 @@ func (s *aiService) GetQuizForClient(userID, episodeID uint) (*QuizView, error) 
 		return nil, err
 	}
 	answeredQIDs := make(map[uint]bool, len(answers))
-	for _, a := range answers {
+	answerByQID := make(map[uint]*model.Answer, len(answers))
+	for i := range answers {
+		a := &answers[i]
 		answeredQIDs[a.QuestionID] = true
+		answerByQID[a.QuestionID] = a
 	}
+	submitted := quiz.SubmittedAt != nil
 
 	// Build a chunk_id → start_time map for video-jump.
 	chunks, _ := s.contentRepo.ListChunks(episodeID, "subtitle")
@@ -501,20 +540,42 @@ func (s *aiService) GetQuizForClient(userID, episodeID uint) (*QuizView, error) 
 		Difficulty:    quiz.Difficulty,
 		AgentFeedback: quiz.AgentFeedback,
 		Questions:     make([]QuizViewQuestion, 0, len(questions)),
+		Submitted:     submitted,
 	}
 	for _, q := range questions {
 		var opts []string
 		if q.Options != "" {
 			_ = json.Unmarshal([]byte(q.Options), &opts)
 		}
-		view.Questions = append(view.Questions, QuizViewQuestion{
+		qv := QuizViewQuestion{
 			ID:             q.ID,
 			Type:           q.Type,
 			Stem:           q.Stem,
 			Options:        opts,
 			ChunkStartTime: startByChunk[q.ChunkID],
 			Answered:       answeredQIDs[q.ID],
-		})
+			HasJump:        q.HasJump,
+		}
+		// 已交卷:回填该题的作答 + 判定 + 正确答案 + 解析,让学生重进页面能 review。
+		// 未交卷时这些字段保持零值(omitempty 不下发),不泄露答案。
+		// 注意:Answer.UserAnswer 是 int(choice 的选项索引);填空题的用户原文当前
+		// 没持久化(model 限制),填空题只能回填 Correct/CorrectText/Explanation。
+		if submitted {
+			if a := answerByQID[q.ID]; a != nil {
+				if q.Type == "choice" {
+					idx := a.UserAnswer
+					qv.UserAnswerIndex = &idx
+				}
+				qv.Correct = a.Correct
+			}
+			if q.Type == "choice" {
+				idx := q.Answer
+				qv.CorrectIndex = &idx
+			}
+			qv.CorrectText = q.AnswerText
+			qv.Explanation = q.Explanation
+		}
+		view.Questions = append(view.Questions, qv)
 		if answeredQIDs[q.ID] {
 			view.AnsweredCount++
 		}
@@ -603,6 +664,126 @@ func joinAcceptable(accept []string) string {
 	}
 	return out
 }
+
+// QuizAnswerInput 是批量提交里一道题的作答。选择题填 AnswerIndex,填空题填
+// AnswerText;另一字段留空。与单题 submit 的 request 字段名保持一致,方便前端复用。
+type QuizAnswerInput struct {
+	QuestionID  uint   `json:"question_id"`
+	AnswerIndex *int   `json:"answer_index,omitempty"`
+	AnswerText  string `json:"answer_text,omitempty"`
+}
+
+// SubmitAllQuizAnswers 是 Phase B 的"统一交卷":一次性判分本 quiz 全部题目,逐题
+// 返回结果(correct/正确答案/解析/跳转时间戳),并为每题落 answer 行 + 更新 memory。
+// 成功后给 quiz 盖 SubmittedAt,锁定该 quiz(一次提交=一次考试)。
+//
+// 设计要点:
+//   - 复用 SubmitQuizAnswer 的判分 + memory 更新逻辑(抽到 gradeOneAnswer),保证
+//     单题与批量两条路径的判分规则完全一致。
+//   - 已交卷(SubmittedAt != nil)的 quiz 直接拒绝(409 由 handler 转),防止重复交卷
+//     把 memory 算两遍、answer 行翻倍。
+//   - 一题没出现在 answers 里(学生漏答):不落 answer 行,返回的 result 里 correct=
+//     false 且不带正确答案 reveal——但前端展示结果时仍需要正确答案。所以这里对"漏答"
+//     也算出 correct=false 的结果,并 reveal 正确答案(交卷后整张卷子阅完,不再藏答案)。
+//   - 题目顺序:按 quiz 的 questions 顺序返回结果(而不是按 input 顺序),前端按题号
+//     渲染更自然。input 里没有的题视为漏答。
+func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizAnswerInput) ([]AnswerResult, error) {
+	quiz, err := s.contentRepo.GetQuiz(userID, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	if quiz == nil {
+		return nil, fmt.Errorf("quiz not found")
+	}
+	if quiz.SubmittedAt != nil {
+		return nil, ErrQuizAlreadySubmitted
+	}
+	questions, err := s.contentRepo.GetQuestions(quiz.ID)
+	if err != nil {
+		return nil, err
+	}
+	// chunk_id → start_time 一次性建好,避免每题 ListChunks 一遍。
+	chunks, _ := s.contentRepo.ListChunks(quiz.EpisodeID, "subtitle")
+	startByChunk := make(map[uint]*int, len(chunks))
+	for _, c := range chunks {
+		c := c
+		startByChunk[c.ID] = c.StartTime
+	}
+	// question_id → 用户作答,便于按题目顺序回放。
+	inputByQ := make(map[uint]QuizAnswerInput, len(answers))
+	for _, a := range answers {
+		inputByQ[a.QuestionID] = a
+	}
+
+	memory := agent.NewMemoryStore(s.contentRepo)
+	ctx := context.Background()
+	now := time.Now()
+
+	// 累计判分:落 answer 行 + 更新 memory,逐题产出 AnswerResult。任何一题失败直接
+	// 中断并返回错误——交卷是原子的,要么全交要么不交(已落的 answer 行不影响:还没盖
+	// SubmittedAt,quiz 仍可重新交卷;memory 更新也是幂等的增量,不会错乱)。
+	results := make([]AnswerResult, 0, len(questions))
+	for _, q := range questions {
+		input, answered := inputByQ[q.ID]
+		idx := -1
+		txt := ""
+		if answered && input.AnswerIndex != nil {
+			idx = *input.AnswerIndex
+		}
+		if answered {
+			txt = input.AnswerText
+		}
+		correct := false
+		if answered {
+			correct = agent.GradeAnswer(q, idx, txt)
+			s.contentRepo.CreateAnswer(&model.Answer{
+				QuestionID: q.ID,
+				QuizID:     quiz.ID,
+				UserID:     userID,
+				UserAnswer: idx,
+				Correct:    correct,
+				AnsweredAt: now,
+			})
+			// 更新 memory(feedback loop)。合成题(chunkID=0)是 no-op。
+			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, correct); err != nil {
+				log.Printf("AI: update memory for question %d failed: %v", q.ID, err)
+				// non-fatal,同单题 submit 的处理:答案已记录,memory 没更新不阻断交卷
+			}
+		}
+		// 交卷后阅卷,无论是否作答都揭示正确答案(学生要看错题解析)。
+		res := buildAnswerResult(q, correct, startByChunk[q.ChunkID])
+		results = append(results, res)
+	}
+
+	// 盖已交卷戳。放最后:前面有任何 error 都不会到这,quiz 仍是未交卷状态。
+	if err := s.contentRepo.MarkQuizSubmitted(quiz.ID, now); err != nil {
+		// answer/memory 已落,只是没盖戳——返回结果 + 日志。前端可凭 results 渲染,
+		// 下次进页面 GetQuizForClient 会发现 SubmittedAt=nil 而显示未交卷,这是个
+		// 罕见的不一致,但不会丢数据。这里不回滚已落的 answer(回滚更糟)。
+		log.Printf("AI: mark quiz %d submitted failed: %v", quiz.ID, err)
+	}
+	return results, nil
+}
+
+// buildAnswerResult 把一道题的判分结果组装成客户端要的 AnswerResult。choice 题
+// 给 correct_index,fill 题给 correct_text;有 chunk 锚点的题给 chunk_start_time。
+// 抽出来让 SubmitQuizAnswer 和 SubmitAllQuizAnswers 共用同一套 reveal 规则。
+func buildAnswerResult(q model.Question, correct bool, chunkStart *int) AnswerResult {
+	res := AnswerResult{Correct: correct, Explanation: q.Explanation, ChunkStartTime: chunkStart}
+	if q.Type == agent.QuestionFill {
+		var accept []string
+		_ = json.Unmarshal([]byte(q.AnswerText), &accept)
+		res.CorrectText = joinAcceptable(accept)
+	} else {
+		i := q.Answer
+		res.CorrectIndex = &i
+	}
+	return res
+}
+
+// ErrQuizAlreadySubmitted 在对已交卷的 quiz 再次调用 SubmitAllQuizAnswers 时返回。
+// handler 把它转成 409,前端据此提示"已交卷,不能重复提交"。
+var ErrQuizAlreadySubmitted = fmt.Errorf("quiz already submitted")
 
 // RegenerateQuiz drops the user's current quiz and re-enqueues generation. The
 // agent will read the user's current memory (updated by prior answers) and
@@ -843,13 +1024,22 @@ func (s *aiService) buildQuizHistoryView(quiz *model.Quiz) (*QuizHistoryView, er
 		startByChunk[c.ID] = c.StartTime
 	}
 	// Pull this archived quiz's answers (snapshot QuizID scopes them) to flag
-	// wrong questions. ListAnswersForQuiz already scopes by user + episode via
-	// the quiz_id → quiz → episode relationship; here the quiz IS the archived
-	// one, so it returns exactly this quiz's attempts.
+	// wrong questions + reveal what the student actually picked. Note
+	// ListAnswersForQuiz scopes to the (user, episode) across all quiz generations
+	// (it joins quiz_id → episode); for a history quiz that's the right set since
+	// each archived quiz is a distinct attempt at the same lesson. We pick the
+	// most recent answer per question (append-only: redo adds a new row).
 	rawAnswers, _ := s.contentRepo.ListAnswersForQuiz(quiz.ID, quiz.UserID)
 	wrongQIDs := make(map[uint]bool, len(rawAnswers))
 	wrongCount := 0
+	// latestByQ: question_id → 最新一条 answer(按 AnsweredAt 降序取第一条)。
+	// ListAnswersForQuiz 已经按 answered_at DESC 排序,所以第一次见某 question_id
+	// 的行就是该题最新作答。
+	latestByQ := make(map[uint]model.Answer, len(rawAnswers))
 	for _, a := range rawAnswers {
+		if _, seen := latestByQ[a.QuestionID]; !seen {
+			latestByQ[a.QuestionID] = a
+		}
 		if !a.Correct {
 			if !wrongQIDs[a.QuestionID] {
 				wrongQIDs[a.QuestionID] = true
@@ -883,6 +1073,7 @@ func (s *aiService) buildQuizHistoryView(quiz *model.Quiz) (*QuizHistoryView, er
 			Explanation:    q.Explanation,
 			ChunkStartTime: startByChunk[q.ChunkID],
 			Wrong:          wrongQIDs[q.ID],
+			HasJump:        q.HasJump,
 		}
 		if q.Type == agent.QuestionFill {
 			var accept []string
@@ -891,6 +1082,19 @@ func (s *aiService) buildQuizHistoryView(quiz *model.Quiz) (*QuizHistoryView, er
 		} else {
 			i := q.Answer
 			hq.CorrectIndex = &i
+		}
+		// 回放学生当时的作答:选择题给索引,填空题给原文。未作答的题两字段都为零值
+		// (UserIndex=nil,UserText=""),前端据此显示"未作答"。
+		if ans, ok := latestByQ[q.ID]; ok {
+			if q.Type == agent.QuestionFill {
+				// Answer.UserAnswer 对填空题没有意义(填空判分是文本归一化匹配,
+				// 我们没把原文存进 answer 行)。所以历史里填空题只展示对错和正确答案,
+				// 不回放学生原文——这是既有存储的限制,不在 Phase B 范围内补。
+				hq.UserText = ""
+			} else if ans.UserAnswer >= 0 {
+				idx := ans.UserAnswer
+				hq.UserIndex = &idx
+			}
 		}
 		out.Questions = append(out.Questions, hq)
 	}

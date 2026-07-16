@@ -40,11 +40,23 @@ class PlayerScreen extends StatefulWidget {
   /// falls back to placeholder copy.
   final List<String> preAdventureTasks;
 
+  /// 当为 true 时,helper panel 的 AI 学习入口和顶栏 AI 图标都不渲染。
+  /// 用于从 AI 学习页"跳转视频"push 出来的播放器:这个播放器是 AI 页的子页,
+  /// 它再进 AI 页就会形成 AI 页→播放器→AI 页→… 的无限栈。禁掉入口从根上断环。
+  final bool disableAiTab;
+
+  /// 可选的初始播放位置(秒级,但用 Duration 表达)。非 null 时,初始化阶段把
+  /// 它喂给现有的 _resumeTarget/_pendingResume 机制——播放器打开后会 seek 到这里。
+  /// 典型来源:AI 学习页"跳转视频 12:38"按钮传进来。
+  final Duration? initialPosition;
+
   const PlayerScreen({
     Key? key,
     required this.activeUserId,
     required this.episode,
     this.preAdventureTasks = const [],
+    this.disableAiTab = false,
+    this.initialPosition,
   }) : super(key: key);
 
   @override
@@ -215,6 +227,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (shouldResume) {
         _pendingResume = Duration(seconds: resumeSec);
       }
+      // initialPosition(AI 学习页"跳转视频"传进来的目标时间戳)优先级最高:
+      // 它是用户显式想看的位置,覆盖断点续播。复用同一套 _pendingResume /
+      // _resumeTarget / watchdog 机制,这样 CDN 掉线重连把位置重置回 0 时也会被
+      // 自动 seek 回跳转点(行为和断点续播一致)。
+      final jumpTo = widget.initialPosition;
+      final hasJump = jumpTo != null && jumpTo.inSeconds > 0;
+      if (hasJump) {
+        _pendingResume = jumpTo;
+      }
 
       // Build a media with per-source HTTP headers (115 netdisk needs Referer).
       // For resume, pass `start` so libmpv opens the demuxer at the resume
@@ -225,17 +246,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
       final media = Media(
         playInfo.url,
         httpHeaders: headers,
-        start: shouldResume ? _pendingResume : null,
+        start: (shouldResume || hasJump) ? _pendingResume : null,
       );
 
-      // Resume (断点续播): open with auto-play (default), then a watchdog
-      // re-seeks to the resume target whenever position gets reset. On these
-      // netdisk streams the CDN connection can drop mid-playback and libmpv
-      // re-opens the stream from 0; open(play:false) + seek + play doesn't
-      // help because play() itself resets position too. The only reliable
-      // approach is to keep re-seeking until playback stabilizes past the
-      // target. See _setupResumeSeek for the watchdog.
-      if (shouldResume) {
+      // Resume / 跳转目标:open with auto-play(默认),然后用 watchdog 在位置被
+      // 重置时 re-seek 回目标。netdisk 流的 CDN 连接可能中途断开,libmpv 会从 0
+      // 重开流;open(play:false)+seek+play 也不顶用(play() 自己会重置位置)。
+      // 唯一靠谱的办法是反复 seek,直到播放稳定越过目标位置。详见 _setupResumeSeek。
+      if (shouldResume || hasJump) {
         _resumeTarget = _pendingResume!;
         _player.open(media);
         _setupResumeSeek();
@@ -963,38 +981,40 @@ class _PlayerScreenState extends State<PlayerScreen> {
           // JumpRequest and we seek the player there.
           // Phase 2:三态 gating 与课程详情页一致(走同一 helper)。不可用时图标
           // 置灰(active=false)、点击弹 SnackBar 提示原因,不进入 AiStudyScreen。
-          Builder(builder: (iconCtx) {
-            final availability =
-                AiAvailabilityHelper.fromEpisode(widget.episode);
-            final enabled = availability == AiAvailability.enabled;
-            return _iconControl(
-              icon: Icons.auto_awesome_rounded,
-              active: enabled,
-              onTap: () async {
-                if (!enabled) {
-                  ScaffoldMessenger.of(iconCtx).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                          AiAvailabilityHelper.tooltipFor(availability)!),
-                      duration: const Duration(seconds: 2),
+          // disableAiTab(AI 跳转 push 出来的播放器):整个入口不渲染,防栈无限加深。
+          if (!widget.disableAiTab)
+            Builder(builder: (iconCtx) {
+              final availability =
+                  AiAvailabilityHelper.fromEpisode(widget.episode);
+              final enabled = availability == AiAvailability.enabled;
+              return _iconControl(
+                icon: Icons.auto_awesome_rounded,
+                active: enabled,
+                onTap: () async {
+                  if (!enabled) {
+                    ScaffoldMessenger.of(iconCtx).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                            AiAvailabilityHelper.tooltipFor(availability)!),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                    return;
+                  }
+                  final result = await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => AiStudyScreen(
+                        activeUserId: widget.activeUserId,
+                        episode: widget.episode,
+                      ),
                     ),
                   );
-                  return;
-                }
-                final result = await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => AiStudyScreen(
-                      activeUserId: widget.activeUserId,
-                      episode: widget.episode,
-                    ),
-                  ),
-                );
-                if (result is JumpRequest && mounted) {
-                  _seekTo(result.target);
-                }
-              },
-            );
-          }),
+                  if (result is JumpRequest && mounted) {
+                    _seekTo(result.target);
+                  }
+                },
+              );
+            }),
           const SizedBox(width: 8),
           _iconControl(
             icon: _controlsLocked
@@ -1672,7 +1692,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   // AI 学习入口卡片:常驻显示(不受 _controlsVisible 影响)。AI 开 + 有字幕时
   // 可点击进入 AiStudyScreen;不可用时置灰 + 点击弹 SnackBar 提示原因。
+  // disableAiTab=true 时整体不渲染(AI 跳转 push 出来的播放器不能再进 AI 页)。
   Widget _buildAiStudyEntry() {
+    if (widget.disableAiTab) return const SizedBox.shrink();
     final availability = AiAvailabilityHelper.fromEpisode(widget.episode);
     final enabled = availability == AiAvailability.enabled;
     return GestureDetector(

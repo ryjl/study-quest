@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -26,6 +27,8 @@ type AIHandler interface {
 	// may watch.
 	GetEpisodeQuiz(c *gin.Context)
 	SubmitQuizAnswer(c *gin.Context)
+	// SubmitAllQuizAnswers 是 Phase B 的统一交卷端点(替代单题 submit 的主流程)。
+	SubmitAllQuizAnswers(c *gin.Context)
 	RegenerateQuiz(c *gin.Context)
 	// GetEpisodeQuizHistory returns the user's archived (superseded) quizzes for
 	// an episode as fully read-only views (correct answers revealed). Phase 3.
@@ -213,6 +216,51 @@ func (h *aiHandler) SubmitQuizAnswer(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+// submitAllQuizRequest 是统一交卷的 body:answers 是一整张卷子的作答数组。
+// 选择题每条带 answer_index,填空题带 answer_text,另一字段省略。
+type submitAllQuizRequest struct {
+	Answers []service.QuizAnswerInput `json:"answers" binding:"required"`
+}
+
+// SubmitAllQuizAnswers 一次性判分整张卷子,逐题返回结果,并锁定该 quiz(一次提交=
+// 一次考试)。POST /api/v1/episodes/:id/ai-quiz/submit-all
+//
+// 状态码:200(交卷成功,返回每题结果数组)/ 409(已交卷,不能重复提交)/ 400(格式)。
+func (h *aiHandler) SubmitAllQuizAnswers(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
+		return
+	}
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI not available"})
+		return
+	}
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	if !h.canAccessEpisode(c, userID, uint(id)) {
+		return // canAccessEpisode 已写好错误响应
+	}
+	var req submitAllQuizRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
+		return
+	}
+	results, err := h.aiService.SubmitAllQuizAnswers(userID, uint(id), req.Answers)
+	if err != nil {
+		// 已交卷 → 409,告诉前端别重复提交。
+		if errors.Is(err, service.ErrQuizAlreadySubmitted) {
+			c.JSON(http.StatusConflict, gin.H{"error": "这套题已交卷,不能重复提交"})
+			return
+		}
+		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在或无权作答"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
 }
 
 // RegenerateQuiz drops the user's current quiz and re-runs the agent against

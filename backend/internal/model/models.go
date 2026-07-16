@@ -1038,6 +1038,11 @@ type Quiz struct {
 	// there was exactly one row per (user, episode).
 	Status     string     `gorm:"size:16;default:'active'"`
 	ArchivedAt *time.Time // set when Status flips to 'archived'; nil while active
+	// SubmittedAt 标记"已交卷"时间。Phase B 改成统一提交(一次提交 = 一次考试):
+	// 学生点"提交全部"后,该 quiz 被锁定,不可再改答案。nil = 尚未交卷(仍可作答)。
+	// 用专门字段而不是"是否存在 answer"来判断,因为单题 submit 端点(兼容保留)也会
+	// 产生 answer 行,后者不能误判为已交卷。
+	SubmittedAt *time.Time
 	CreatedAt  time.Time
 }
 
@@ -1065,6 +1070,11 @@ type Question struct {
 	Answer      int    // choice: 0-based index into Options
 	AnswerText  string `gorm:"type:text"` // fill: JSON []string of acceptable answers
 	Explanation string `gorm:"type:text"`
+	// HasJump 标记该题是否对应一个明确的视频片段(anchor chunk)。agent 出题时
+	// 判断:能锚定到具体知识点 chunk 的题 has_jump=true(答错可跳视频复习);
+	// 贯穿全文/综合性的题 has_jump=false(没有单一跳转锚点)。默认 false 兼容老数据
+	// (Phase B 之前生成的题没有此字段,视为不可跳转)。
+	HasJump bool `gorm:"default:false"`
 	CreatedAt   time.Time
 }
 

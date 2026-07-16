@@ -249,6 +249,30 @@ class ApiService {
     _fail(response.statusCode, '提交答案失败: ${response.statusCode}');
   }
 
+  /// Phase B 统一交卷:一次提交全部题,后端逐题判分 + 锁定 quiz。
+  /// answers 为一整张卷子的作答;选择题给 answerIndex,填空题给 answerText。
+  /// 返回每题结果(顺序与后端 quiz 题序一致)。已交卷(409)时抛异常。
+  static Future<List<QuizAnswerResult>> submitAllQuizAnswers({
+    required int activeUserId,
+    required int episodeId,
+    required List<Map<String, dynamic>> answers,
+  }) async {
+    final response = await _httpClient.post(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/submit-all'),
+      headers: _headers(activeUserId),
+      body: jsonEncode({'answers': answers}),
+    );
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body);
+      final list = (body is Map && body['results'] is List) ? body['results'] as List : const [];
+      return list.map((e) => QuizAnswerResult.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    if (response.statusCode == 409) {
+      _fail(response.statusCode, '这套题已交卷,不能重复提交');
+    }
+    _fail(response.statusCode, '提交失败: ${response.statusCode}');
+  }
+
   static Future<void> regenerateQuiz(int activeUserId, int episodeId) async {
     final response = await _httpClient.post(
       Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/regenerate'),

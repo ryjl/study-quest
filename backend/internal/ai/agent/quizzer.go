@@ -49,6 +49,9 @@ type QuestionDraft struct {
 	Answer      int      `json:"answer"`       // choice: 0-based index
 	AnswerText  []string `json:"answer_text"`  // fill: acceptable answers
 	Explanation string   `json:"explanation"`  // shown after answering
+	// HasJump 来自 agent 的判断(见 QuizzerSystemPrompt):true = 这题锚定到具体
+	// chunk,答错可跳视频复习;false = 综合/贯穿全文题,无单一跳转点。
+	HasJump bool `json:"has_jump"`
 }
 
 // QuizDraft is the full result of one generation: the questions + the LLM's

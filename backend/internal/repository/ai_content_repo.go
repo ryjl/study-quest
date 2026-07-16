@@ -108,6 +108,10 @@ type AIContentRepository interface {
 	// quiz adds a new row, it never edits the old one (so the full attempt
 	// history is preserved for observability).
 	CreateAnswer(a *model.Answer) error
+	// MarkQuizSubmitted 给 quiz 盖"已交卷"时间戳(SubmittedAt=now)。Phase B 统一
+	// 提交:一次 submit-all = 一次考试,提交后该 quiz 锁定不可再改。幂等:重复调用
+	// 只更新时间戳(用 Updates 只写 submitted_at 一列,不触碰其它字段)。
+	MarkQuizSubmitted(quizID uint, at time.Time) error
 
 	// ── knowledge_memories (Phase C feedback loop) ──
 	// GetMasteries returns a user's per-chunk mastery for an episode (the agent
@@ -529,6 +533,13 @@ func (r *aiContentRepo) ListAnswersForQuiz(quizID, userID uint) ([]model.Answer,
 
 func (r *aiContentRepo) CreateAnswer(a *model.Answer) error {
 	return r.db.Create(a).Error
+}
+
+// MarkQuizSubmitted 给 quiz 盖已交卷时间戳。用 map 形式 Updates 只写一列,避免
+// GORM 把零值字段一起带写。幂等:重复调用只刷新时间戳。
+func (r *aiContentRepo) MarkQuizSubmitted(quizID uint, at time.Time) error {
+	return r.db.Model(&model.Quiz{}).Where("id = ?", quizID).
+		Updates(map[string]interface{}{"submitted_at": at}).Error
 }
 
 // --- knowledge_memories (Phase C feedback loop) ---
