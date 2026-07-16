@@ -227,10 +227,20 @@ func (r *aiContentRepo) UpdateJobStatus(id uint, status string, errMsg string, p
 		"error":    errMsg,
 		"progress": progress,
 	}
+	// 终态写入(done/failed/skipped)加 status='processing' 守卫:worker 是进程内
+	// 单 goroutine,正常情况一个 job 只有一个 writer,本不需要守卫。但 admin 可以
+	// 手动 ResetJob(或 reaper 自动复位)把 processing 改回 queued —— 如果此时 worker
+	// 正好在一个长 LLM 调用里(30s+),调用返回时的终态写入若不加守卫,会把已被
+	// 复位的 queued job 又改回 done,让 reset/reap 静默失效。守卫保证:只有仍在
+	// processing 的 job 才接受终态;已被复位的 job 此处 RowsAffected=0,本次 LLM
+	// 结果自然不落盘(它会在下一轮 poll 被重新 claim 重跑)。
+	// 非终态(中间状态)不加守卫,保持原行为。
+	query := r.db.Model(&model.AIJob{}).Where("id = ?", id)
 	if status == "done" || status == "failed" || status == "skipped" {
 		updates["completed_at"] = gorm.Expr("CURRENT_TIMESTAMP")
+		query = query.Where("status = ?", "processing")
 	}
-	return r.db.Model(&model.AIJob{}).Where("id = ?", id).Updates(updates).Error
+	return query.Updates(updates).Error
 }
 
 // ClaimNextQueuedJob atomically claims the oldest queued job of one of the given

@@ -53,26 +53,33 @@ export function AIUserView() {
           className="input max-w-[260px]"
           list="ai-user-options"
           placeholder={usersQ.isLoading ? '加载用户…' : '搜索昵称选择用户'}
-          value={selectedUser ? selectedUser.nickname : query}
+          value={selectedUser ? `${selectedUser.nickname} (#${selectedUser.id})` : query}
           onChange={(e) => {
             const entered = e.target.value;
-            // Match a known user by nickname (exact) → select; otherwise treat
-            // as free-text filter so the list narrows as they type.
-            const match = users.find((u) => u.nickname === entered);
-            if (match) {
-              setUserId(match.id);
-              setQuery('');
-            } else {
-              setUserId(null);
-              setQuery(entered);
+            // 选中靠解析 value 尾部的 "(#id)" —— 而不是用 nickname 反查 find。
+            // 原因:nickname 可能重复(系统不强制唯一),用 find 会永远取第一个,且
+            // datalist 对相同 value 的 option 会去重,同名第二个根本显示不出来。
+            // 带上 (#id) 后,每个 option 的 value 唯一,重复昵称也能区分选中。
+            const idMatch = entered.match(/\(#(\d+)\)\s*$/);
+            if (idMatch) {
+              const id = Number(idMatch[1]);
+              if (users.some((u) => u.id === id)) {
+                setUserId(id);
+                setQuery('');
+                return;
+              }
             }
+            // 未命中已知用户:当作过滤词,边打边缩窄下拉列表。
+            setUserId(null);
+            setQuery(entered);
           }}
         />
         <datalist id="ai-user-options">
           {users
             .filter((u) => (query ? u.nickname.toLowerCase().includes(query.toLowerCase()) : true))
             .map((u) => (
-              <option key={u.id} value={u.nickname}>
+              // value 带 (#id):让重复昵称的 option 各自唯一,否则 datalist 会合并。
+              <option key={u.id} value={`${u.nickname} (#${u.id})`}>
                 {u.role}
               </option>
             ))}

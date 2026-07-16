@@ -224,9 +224,15 @@ func (s *aiService) EnqueueSegmentForCourse(courseID uint) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// 收集目标:有字幕,且当前没有在途 segment job(queued/processing)。这道去重
+	// 门对齐 quiz 路径的 hasPendingQuizJob —— 没有它的话,admin 反复切开关(off→on→
+	// off→on)或开关 on 时恰好 OnSubtitleCompleted 已入过 job,会堆出多条 segment
+	// job 重复跑 embedding。结果幂等(ReplaceChunksForEpisode 是 DELETE+INSERT),
+	// 但白白浪费 LLM/embedding 配额,也污染 admin 的 job 列表。注意:只在这个批量
+	// 回填路径去重;admin 手动 EnqueueSegment 走通用 enqueue,保留强制重跑能力。
 	targetIDs := make([]uint, 0, len(ids))
 	for _, id := range ids {
-		if subCounts[id] > 0 {
+		if subCounts[id] > 0 && !s.hasPendingJob("segment", id) {
 			targetIDs = append(targetIDs, id)
 		}
 	}
@@ -400,6 +406,9 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 	// 手动点按钮(那个 admin UI 其实一直没接,导致 summary 永远没人触发)。
 	// 三道门:课程开关、尚无 summary、尚无在途 summary 作业。最后一道防止
 	// 重复入队(例如重新分段时旧 summary job 还在跑)。
+	// 注意:GetSummary==nil 这道门意味着"重新分段(re-segment)不会自动刷新已有
+	// summary" —— 这是预期:re-segment 通常只是修切片,内容没变;若确实想刷新
+	// summary,admin 应走手动 EnqueueSummary(强制重跑,不经此链式门)。
 	if course, cerr := s.courseRepo.FindByID(job.CourseID); cerr == nil && course != nil && course.AISummaryEnabled {
 		if existing, serr := s.contentRepo.GetSummary(job.EpisodeID); serr == nil && existing == nil {
 			if !s.hasPendingJob("summary", job.EpisodeID) {
