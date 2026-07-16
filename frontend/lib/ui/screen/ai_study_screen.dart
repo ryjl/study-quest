@@ -109,9 +109,16 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       });
       // 已交卷(后端 quiz.SubmittedAt 非零):直接进入只读态,本页不需要草稿,
       // 清掉残留草稿防错乱(例如学生交卷后没返回就切走,草稿可能还在)。
+      // 同时从后端回填的 user_answer_index 恢复 _choicePicks,让重进时错项红框
+      // 能高亮(否则 _choicePicks 空,只显示正确项绿框,看不出"我选错了哪个")。
       // 未交卷:尝试恢复本地草稿(防切后台丢答案)。
       if (resp.quiz != null && resp.quiz!.submitted) {
         QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
+        for (final q in resp.quiz!.questions) {
+          if (q.userAnswerIndex != null) {
+            _choicePicks[q.id] = q.userAnswerIndex!;
+          }
+        }
       } else if (resp.status == QuizStatus.ready && resp.quiz != null) {
         await _restoreDraft();
       }
@@ -239,10 +246,19 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         answers: answers,
       );
       if (!mounted) return;
-      // results 与 questions 同序,位置映射回 qid。
+      // 按 question_id 映射结果到题目(后端每个 result 带 question_id),不依赖
+      // 返回顺序与题序一致——位置映射在并发删题/DB 排序漂移时会错位。
+      // 带 id 的走 id 映射;万一某条没带 id(理论不应发生),回退到位置映射兜底。
       setState(() {
-        for (int i = 0; i < quiz.questions.length && i < results.length; i++) {
-          _results[quiz.questions[i].id] = results[i];
+        final hasIds = results.any((r) => r.questionId != null);
+        if (hasIds) {
+          for (final r in results) {
+            if (r.questionId != null) _results[r.questionId!] = r;
+          }
+        } else {
+          for (int i = 0; i < quiz.questions.length && i < results.length; i++) {
+            _results[quiz.questions[i].id] = results[i];
+          }
         }
         _submitted = true;
         _submittingAll = false;

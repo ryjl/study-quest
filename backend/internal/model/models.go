@@ -1165,16 +1165,16 @@ type ChatMessage struct {
 // 快照",过期了就覆盖)。MasterySnapshotJSON 存当时 mastery 的 JSON 快照,供后续对比
 // "上次建议后学生进步了多少"(Phase D 可用,Phase C 先存下来)。
 type StudyAdvice struct {
-	ID                  uint      `gorm:"primaryKey;autoIncrement"`
-	UserID              uint      `gorm:"uniqueIndex:idx_advice_user_scope;not null"`
-	Scope               string    `gorm:"size:16;uniqueIndex:idx_advice_user_scope;not null"`  // episode | course | subject
-	ScopeID             uint      `gorm:"uniqueIndex:idx_advice_user_scope;not null"`          // episode_id / course_id / subject_id
-	AdviceText          string    `gorm:"type:text;not null"`                                   // 自然语言建议(agent 的 FinalText)
-	MasterySnapshotJSON string    `gorm:"type:text"`                                            // 生成时 mastery 快照 JSON,供对比
-	ModelUsed           string    `gorm:"size:255"`
-	GeneratedAt         time.Time `gorm:"not null"`
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                  uint      `gorm:"primaryKey;autoIncrement" json:"-"`
+	UserID              uint      `gorm:"uniqueIndex:idx_advice_user_scope;not null" json:"-"`
+	Scope               string    `gorm:"size:16;uniqueIndex:idx_advice_user_scope;not null" json:"scope"`        // episode | course | subject
+	ScopeID             uint      `gorm:"uniqueIndex:idx_advice_user_scope;not null" json:"scope_id"`             // episode_id / course_id / subject_id
+	AdviceText          string    `gorm:"type:text;not null" json:"advice_text"`                                   // 自然语言建议(agent 的 FinalText)
+	MasterySnapshotJSON string    `gorm:"type:text" json:"-"`                                                      // 生成时 mastery 快照,内部用,不下发客户端
+	ModelUsed           string    `gorm:"size:255" json:"model_used,omitempty"`
+	GeneratedAt         time.Time `gorm:"not null" json:"generated_at"`
+	CreatedAt           time.Time `json:"-"`
+	UpdatedAt           time.Time `json:"-"`
 }
 
 // AICourseSummary 是 Phase D 的课程级总结产物(course-unique)。和 StudyAdvice 的关键

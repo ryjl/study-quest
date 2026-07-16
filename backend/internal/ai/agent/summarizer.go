@@ -50,6 +50,30 @@ type PreAdventureItem struct {
 	Hint   string `json:"hint"`
 }
 
+// normalize 保证所有切片字段非 nil。模型可能省略某些数组字段(老 prompt 没有
+// sections/methods/common_mistakes),json.Unmarshal 留 nil;nil 切片 Marshal 成
+// null,前端 .map 会炸。统一初始化成空切片,Marshal 输出 []。
+func (s *SummaryResult) normalize() {
+	if s.KeyPoints == nil {
+		s.KeyPoints = []string{}
+	}
+	if s.Concepts == nil {
+		s.Concepts = []string{}
+	}
+	if s.Sections == nil {
+		s.Sections = []SummarySection{}
+	}
+	if s.Methods == nil {
+		s.Methods = []string{}
+	}
+	if s.CommonMistakes == nil {
+		s.CommonMistakes = []string{}
+	}
+	if s.PreAdventure == nil {
+		s.PreAdventure = []PreAdventureItem{}
+	}
+}
+
 // SummarizerRequest carries the inputs to one summary generation.
 type SummarizerRequest struct {
 	EpisodeID  uint
@@ -133,6 +157,10 @@ func (s *Summarizer) Summarize(ctx context.Context, req SummarizerRequest, jobID
 		s.repo.UpdateJobStatus(jobID, "failed", "summary JSON parse: "+err.Error(), nil)
 		return nil, fmt.Errorf("summarizer: parse response JSON: %w (raw: %.200s)", err, chatResp.Content)
 	}
+	// 保证切片非 nil:模型可能省略某些数组字段(老 prompt 生成的 summary 没有
+	// sections/methods/common_mistakes),json.Unmarshal 会留 nil。nil 切片
+	// json.Marshal 成 null,前端 .map 会炸。这里统一初始化成空切片。
+	result.normalize()
 
 	// Persist the summary (upsert).
 	summaryJSON, _ := json.Marshal(result)

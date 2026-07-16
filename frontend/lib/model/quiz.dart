@@ -61,7 +61,14 @@ class EpisodeSummary {
     );
   }
 
-  bool get isEmpty => headline.isEmpty && keyPoints.isEmpty && concepts.isEmpty && sections.isEmpty;
+  bool get isEmpty =>
+      headline.isEmpty &&
+      keyPoints.isEmpty &&
+      concepts.isEmpty &&
+      sections.isEmpty &&
+      methods.isEmpty &&
+      commonMistakes.isEmpty &&
+      takeaway.isEmpty;
 }
 
 /// 一个知识点小节:title 是知识点名称,points 是该知识点的要点。
@@ -211,6 +218,9 @@ class QuizResponse {
 /// The verdict returned by POST /ai-quiz/submit. Reveals correctness, the
 /// correct answer, the explanation, and the video-jump time.
 class QuizAnswerResult {
+  // questionId:后端在 submit-all 返回里带上,前端按 id 映射结果到题目,
+  // 不依赖返回顺序与题序一致(位置映射在并发删题/DB 排序漂移时会错位)。
+  final int? questionId;
   final bool correct;
   final int? correctIndex; // choice: the right option index
   final String correctText; // fill: canonical answer(s)
@@ -218,6 +228,7 @@ class QuizAnswerResult {
   final int? chunkStartTime; // seconds, for "[跳转 12:38]"
 
   QuizAnswerResult({
+    this.questionId,
     required this.correct,
     this.correctIndex,
     required this.correctText,
@@ -226,6 +237,7 @@ class QuizAnswerResult {
   });
 
   factory QuizAnswerResult.fromJson(Map<String, dynamic> j) => QuizAnswerResult(
+        questionId: j['question_id'] == null ? null : (j['question_id'] as num).toInt(),
         correct: (j['correct'] ?? false) as bool,
         correctIndex: j['correct_index'] == null ? null : (j['correct_index'] as num).toInt(),
         correctText: (j['correct_text'] ?? '').toString(),

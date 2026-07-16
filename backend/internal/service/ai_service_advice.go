@@ -315,16 +315,33 @@ func (s *aiService) enqueueAdviceJob(userID uint, scope string, scopeID uint) er
 
 // hasPendingAdviceJob 报告该 (user, scope, scope_id) 是否有在途 advice job(queued/
 // processing)。用于 lazy 生成 + 链式触发的去重,避免堆 job(同 quiz 的 hasPendingQuizJob)。
-// scope/scope_id 的匹配走 PayloadJSON 的 LIKE(advice job 的 scope 编码在 PayloadJSON 里)。
-// 这是一个简化:LIKE '%"scope":"<scope>"%' AND '%"scope_id":<id>%'。对 advice 的
-// 量级(每用户每 scope 至多一条在途)足够精确,误判风险低。
+//
+// 之前用 PayloadJSON 的 SQL LIKE 去重,但 LIKE '%"scope_id":1%' 会前缀误匹配
+// scope_id=11/100/1234(数字边界不被 LIKE 识别),导致同 scope 不同 id 的 advice
+// 被静默吞掉。现在改为:先按 (job_type, user_id, status) 查出该用户在途的 advice
+// job(量级极小——每用户每 scope 至多一条),Go 层解码 PayloadJSON 精确比较 scope/
+// scope_id。彻底消除前缀误判,代价是多一次内存遍历(行数 < 10,可忽略)。
 func (s *aiService) hasPendingAdviceJob(userID uint, scope string, scopeID uint) bool {
-	var count int64
-	s.db.Model(&model.AIJob{}).
-		Where("job_type = ? AND user_id = ? AND status IN ? AND payload_json LIKE ?",
-			"advice", userID, []string{"queued", "processing"},
-			fmt.Sprintf(`%%"scope":"%s"%%"scope_id":%d%%`, scope, scopeID),
-		).
-		Count(&count)
-	return count > 0
+	var jobs []model.AIJob
+	s.db.Where("job_type = ? AND user_id = ? AND status IN ?",
+		"advice", userID, []string{"queued", "processing"}).
+		Find(&jobs)
+	for _, j := range jobs {
+		if j.PayloadJSON == "" {
+			// 无 PayloadJSON 的 advice job 默认是 episode 级(buildAdviceRequest
+			// 的回退路径),用 job.EpisodeID 比较。
+			if scope == agent.ScopeEpisode && j.EpisodeID == scopeID {
+				return true
+			}
+			continue
+		}
+		var p struct {
+			Scope   string `json:"scope"`
+			ScopeID uint   `json:"scope_id"`
+		}
+		if json.Unmarshal([]byte(j.PayloadJSON), &p) == nil && p.Scope == scope && p.ScopeID == scopeID {
+			return true
+		}
+	}
+	return false
 }

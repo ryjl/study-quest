@@ -87,6 +87,29 @@ type summarySection struct {
 	Points []string `json:"points"`
 }
 
+// normalizeNilSlices 保证切片非 nil,避免 Marshal 成 null(前端 .map 会炸)。
+// 老 summary(Phase F 前生成)没有 sections/methods/common_mistakes,Unmarshal 留 nil。
+func (r *summaryResponse) normalizeNilSlices() {
+	if r.Sections == nil {
+		r.Sections = []summarySection{}
+	}
+	if r.KeyPoints == nil {
+		r.KeyPoints = []string{}
+	}
+	if r.Methods == nil {
+		r.Methods = []string{}
+	}
+	if r.CommonMistakes == nil {
+		r.CommonMistakes = []string{}
+	}
+	if r.Concepts == nil {
+		r.Concepts = []string{}
+	}
+	if r.PreAdventure == nil {
+		r.PreAdventure = []preAdventureItem{}
+	}
+}
+
 // preAdventureItem is one pre-class exploration question (open-ended, sparks
 // curiosity) plus a non-spoilery hint. Produced by the summarizer in the same
 // LLM call as the summary — zero extra cost.
@@ -137,6 +160,7 @@ func (h *aiHandler) GetEpisodeSummary(c *gin.Context) {
 		// Return a minimal valid response rather than crashing the client.
 		resp = summaryResponse{Headline: "(总结解析失败)"}
 	}
+	resp.normalizeNilSlices()
 	c.JSON(http.StatusOK, resp)
 }
 
@@ -375,8 +399,7 @@ func (h *aiHandler) canAccessEpisode(c *gin.Context, userID, episodeID uint) boo
 		}
 	}
 	if h.unlockService == nil {
-		// No unlock service wired (tests) — fail open for staff only. We only
-		// reach here for non-staff, so deny.
+		// No unlock service wired (tests) — non-staff denied (fail-closed).
 		c.JSON(http.StatusForbidden, gin.H{"error": "episode access cannot be verified"})
 		return false
 	}
@@ -387,6 +410,32 @@ func (h *aiHandler) canAccessEpisode(c *gin.Context, userID, episodeID uint) boo
 	}
 	if !visible {
 		c.JSON(http.StatusForbidden, gin.H{"error": "episode is locked"})
+		return false
+	}
+	return true
+}
+
+// canAccessCourse 检查学生是否有权访问某课程(staff bypass;非 staff 必须至少有
+// 一个可见 episode,即被授权了这门课)。用于 course 级 advice 端点——虽然 advice
+// 数据按 user_id 隔离(拿不到别人的),但不应让任意登录用户对未授权课程触发 LLM
+// job 或探测课程是否存在。
+func (h *aiHandler) canAccessCourse(c *gin.Context, userID, courseID uint) bool {
+	if roleVal, hasRole := c.Get("userRole"); hasRole {
+		if role, ok := roleVal.(string); ok && model.IsStaffRole(role) {
+			return true
+		}
+	}
+	if h.unlockService == nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": "course access cannot be verified"})
+		return false
+	}
+	vis, err := h.unlockService.ResolveVisibleEpisodes(userID, courseID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check course access"})
+		return false
+	}
+	if len(vis.VisibleIDs) == 0 {
+		c.JSON(http.StatusForbidden, gin.H{"error": "no access to this course"})
 		return false
 	}
 	return true
@@ -448,8 +497,9 @@ func (h *aiHandler) GetEpisodeAdvice(c *gin.Context) {
 // GetCourseAdvice 返回某门课程的整体弱点分析(course 级)。
 // GET /api/v1/courses/:id/ai-advice
 //
-// 访问控制:只需登录(advice 按 user_id 键存,不泄露跨用户数据——见接口注释)。
-// 若后续要严格校验课程访问权,可在 service 层加 userRepo.HasAccess 检查。
+// 访问控制:走 canAccessCourse(staff bypass;非 staff 必须被授权该课程)。
+// advice 数据本身按 user_id 键存(拿不到别人的),但这里仍校验课程访问权,
+// 避免任意登录用户对未授权课程触发 LLM job 或探测课程存在性。
 func (h *aiHandler) GetCourseAdvice(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -462,6 +512,9 @@ func (h *aiHandler) GetCourseAdvice(c *gin.Context) {
 	}
 	userID, ok := requireUserID(c)
 	if !ok {
+		return
+	}
+	if !h.canAccessCourse(c, userID, uint(id)) {
 		return
 	}
 	status, advice, err := h.aiService.GetOrEnqueueAdvice(userID, "course", uint(id))

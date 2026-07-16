@@ -69,6 +69,9 @@ type QuizViewQuestion struct {
 // AnswerResult is the response to a submit. Reveals correctness, the correct
 // answer, the explanation, and the jump-to-video time.
 type AnswerResult struct {
+	// QuestionID 让前端按 id 映射结果到题目,而不是依赖返回顺序与题序一致
+	// (位置映射是脆弱契约——并发删题或 DB 排序漂移会导致错位)。
+	QuestionID     uint   `json:"question_id"`
 	Correct        bool   `json:"correct"`
 	CorrectIndex   *int   `json:"correct_index,omitempty"`    // choice: the right option index
 	CorrectText    string `json:"correct_text,omitempty"`     // fill: the canonical answer(s)
@@ -664,7 +667,7 @@ func (s *aiService) SubmitQuizAnswer(userID, questionID uint, answerIndex *int, 
 	}
 
 	// Build the result, revealing the correct answer + jump time.
-	res := &AnswerResult{Correct: correct, Explanation: q.Explanation}
+	res := &AnswerResult{QuestionID: q.ID, Correct: correct, Explanation: q.Explanation}
 	if q.Type == agent.QuestionFill {
 		var accept []string
 		_ = json.Unmarshal([]byte(q.AnswerText), &accept)
@@ -810,7 +813,7 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 // 给 correct_index,fill 题给 correct_text;有 chunk 锚点的题给 chunk_start_time。
 // 抽出来让 SubmitQuizAnswer 和 SubmitAllQuizAnswers 共用同一套 reveal 规则。
 func buildAnswerResult(q model.Question, correct bool, chunkStart *int) AnswerResult {
-	res := AnswerResult{Correct: correct, Explanation: q.Explanation, ChunkStartTime: chunkStart}
+	res := AnswerResult{QuestionID: q.ID, Correct: correct, Explanation: q.Explanation, ChunkStartTime: chunkStart}
 	if q.Type == agent.QuestionFill {
 		var accept []string
 		_ = json.Unmarshal([]byte(q.AnswerText), &accept)
