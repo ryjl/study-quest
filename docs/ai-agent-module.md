@@ -1,4 +1,4 @@
-# AI Agent 模块（Learning Agent：总结 / 出题 / Chat）
+# AI Agent 模块（Learning Agent：总结 / 出题 / 建议 / 报告 / Chat）
 
 > 技术文档，进 git。对标 `docs/ai-subtitle-queue.md` 的深度，作为本模块的权威架构参考。
 > 设计 seed 见 `docs/ai-step3-seed.md`（不进 git）；交接笔记见 `docs/handoff-ai-step3.md`（不进 git）。
@@ -6,15 +6,20 @@
 
 ## 1. 背景与定位
 
-StudyQuest 的视频字幕（Step 1/2 的产物）落库后，AI Agent 模块把它们转化为**结构化的学习辅助**：课程总结、自适应出题、（未来）互动问答。这是整个 AI 模块的核心价值——不是"调 LLM 出题"的脚本，而是基于 memory + RAG **自主决策**、有反馈循环的 agent。
+StudyQuest 的视频字幕（Step 1/2 的产物）落库后，AI Agent 模块把它们转化为**结构化的学习辅助**：episode 总结、自适应出题、跨课程学习建议、课程级总结、admin 用户报告，（未来）互动问答。这是整个 AI 模块的核心价值——不是"调 LLM 出题/写建议"的脚本，而是基于 memory + RAG **自主决策**、有反馈循环的 agent。
 
-### 三能力，价值递进
+### 能力清单，价值递进
 
-| 能力 | 状态 | 用到的 agent 机制 |
-|---|---|---|
-| ① 总结 | ✅ Phase B | 单次 LLM 调用（无 tool calling） |
-| ② 出题 | ✅ Phase C | **ReAct loop + tool calling + self-check + memory 反馈循环**（agent 核心） |
-| ③ chat | ⏳ Phase D | 多轮对话 + RAG（复用 Phase C 的检索/memory） |
+两轮体验打磨后，能力从最初的"总结 + 出题"两件扩展到下面六件。其中后三件（建议/课程总结/用户报告）是**第二轮的核心**——它们不是单次 prompt engineering，而是复用同一套 ReAct loop（agent.go 的 `Run`），每个 agent 配自己的工具集 + system prompt，自己查数据自己分析（详见 §16）。
+
+| 能力 | 状态 | 落地阶段 | 用到的 agent 机制 |
+|---|---|---|---|
+| ① Episode 总结 | ✅ | Phase B（Phase F 丰富化） | 单次 LLM 调用（无 tool calling）；Phase F 扩展输出结构（sections/methods/common_mistakes/pre_adventure，见 §9） |
+| ② 出题 | ✅ | Phase C（第二轮做题流程重构） | **ReAct loop + tool calling + self-check + memory 反馈循环**（agent 核心）。第二轮新增统一交卷/历史/has_jump（见 §14、§17） |
+| ③ 学习建议（advice） | ✅ | Phase C 第二轮 | ReAct loop + advice 工具集（episode/course/subject 三级，自然语言输出） |
+| ④ 课程总结（course summary） | ✅ | Phase D | ReAct loop + course_summary 工具集（course-unique 纯内容总结，所有学生共享） |
+| ⑤ Admin 用户报告（user report） | ✅ | Phase E | ReAct loop + user_study 工具集（admin 视角跨课程画像报告） |
+| ⑥ chat | ⏳ | Phase D 原计划 | 多轮对话 + RAG（复用 Phase C 的检索/memory）。advice/course_summary/user_report 已部分占用了原 Phase D 的"agent 驱动"版图 |
 
 ### 第一性约束：纯附加层
 
@@ -34,14 +39,17 @@ StudyQuest 的视频字幕（Step 1/2 的产物）落库后，AI Agent 模块把
 │    onnx_embedder.go      embedding 实现（本地 ONNX，无网络）     │
 │    resolver.go           按 ai_providers 配置选择 + 缓存         │
 │    segmenter.go          SRT → content_chunks 切片              │
-│    agent/                ★ 决策逻辑（summarizer / quizzer...）   │
+│    agent/                ★ 决策逻辑（summarizer / quizzer /     │
+│                           advice / course_summary / user_study   │
+│                           —— 全部复用 agent.Run ReAct loop）       │
 │                                                                │
 │  service/ai_service.go   编排：job worker + 字幕完成 hook       │
 │  handler/                admin 配置/观测 + 客户端读取            │
 │                                                                │
 │  SQLite: ai_providers / content_chunks / ai_summaries /         │
 │          knowledge_memory / quizzes / questions / answers /     │
-│          ai_jobs / ai_runs / chat_sessions / chat_messages      │
+│          ai_jobs / ai_runs / chat_sessions / chat_messages /    │
+│          study_advices / ai_course_summaries / user_study_reports │
 └───────────────┬──────────────────────────┬─────────────────────┘
                 │                          │
         chat HTTPS                  embedding 本地推理
@@ -106,6 +114,8 @@ AIQuizEnabled    bool `gorm:"default:false"`  // 课程级 AI 出题开关（默
 ```
 课程级开关是 AI 的入口闸门：只有 admin 在课程上勾选启用，该课程的课时才进入 agent 工作范围。这比全局开关更直觉（"不是所有课都需要 AI"），也强化了附加层定位。
 
+> ✅ **第一轮打通了开关三层断链**。早期 `AISummaryEnabled/AIQuizEnabled` 只在 model 上声明，admin 改不了——handler struct、service 签名、create/update DTO 都没绑这两个字段，开关实际一直是 false。第一轮把三层都接上：`admin_content.go` 的 create/update DTO 加 `ai_summary_enabled/ai_quiz_enabled`，`CourseService.CreateCourse/UpdateCourse` 签名补两个 bool 参数，`UpdateCourse` 还会 diff 旧值——`off→on` 时触发 `EnqueueSegmentForCourse` 回填历史字幕的 segment job（开关关着时落地的字幕没产生任何 AI 工作，开关打开那一刻补一次）。客户端 DTO（`client_dto.go`）也回显这两个开关，前端据此决定是否渲染 AI 入口。
+
 ### AI 私有表
 
 **`ai_providers`** — provider 配置（参照 storage_sources）
@@ -128,7 +138,7 @@ id, episode_id(unique), course_id, summary_json, model_used
 ```
 summary_json 是结构化 JSON：`{headline, key_points[], concepts[], takeaway}`。concepts 供后续出题检索用。
 
-**`knowledge_memory`** — ⏳ 学习状态（Phase C 核心，反馈循环载体）
+**`knowledge_memory`** — ✅ 学习状态（Phase C 核心，反馈循环载体）
 ```
 id, user_id, episode_id, course_id, chunk_id(知识点单元),
 mastery(0.0-1.0), correct_count, wrong_count, last_reviewed
@@ -136,19 +146,39 @@ uniqueIndex(user_id, chunk_id)
 ```
 mastery 是"这个学生对这个知识点掌握到什么程度"。答题更新它，下次出题读它——这是让系统成为 agent（状态驱动、自适应）而非无状态出题脚本的关键。衰减曲线留 Phase D。
 
-**`quizzes` / `questions` / `answers`** — ⏳ 出题表（Phase C）
+> ✅ **第二轮加了跨课程聚合查询**。原来的 `Masteries(userID, episodeID)` 只能查一节课。advice/course_summary/user_report 三级 agent 要看更宽的视野，所以 repo（`ai_content_repo.go`）新增：
+> - `GetCourseMasteries(userID, courseID)` — 取该学生在某课程下所有课时的 mastery 行（`KnowledgeMemory` 已冗余 `course_id`，一次 WHERE 即可，无需 join）。
+> - `GetSubjectMasteries(userID, subjectID)` — 科目级聚合，JOIN `courses(courses.subject_id = ?)` 取该科目下所有课程的 mastery，用于"整个数学学得怎么样"。
+>
+> 两者的结果都按 mastery ASC 排序（弱点优先），让 agent 先看到最需要加强的知识点。这是 advice/user_study agent 的核心数据源。
+
+**`quizzes` / `questions` / `answers`** — ✅ 出题表（Phase C，第二轮扩展）
 ```
-quizzes:   id, episode_id, user_id, course_id, difficulty
-questions: id, quiz_id, chunk_id, type(choice), stem, options(JSON), answer, explanation
-answers:   id, question_id, user_id, user_answer, correct, answered_at
+quizzes:   id, episode_id, user_id, course_id, difficulty, agent_feedback,
+           status(active|archived), archived_at, submitted_at, created_at
+questions: id, quiz_id, chunk_id, type(choice|fill), stem, options(JSON),
+           answer(choice index), answer_text(fill JSON[]), explanation, has_jump, created_at
+answers:   id, question_id, quiz_id(denormalized), user_id, user_answer, correct, answered_at
 ```
 question.chunk_id → content_chunk.start_time 实现题目跳转视频时间点。
 
+第二轮新增/变化的字段：
+- **`quizzes.status` / `archived_at`** — quiz 历史保留。`regenerate`（换题）不再删旧 quiz，而是把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 `active` 行。旧卷子只读保留，学生可在历史面板 review。单 active 不变量靠**部分唯一索引**强制（`WHERE status='active'`，GORM 表达不了 partial index，AutoMigrate 后用 raw SQL 建，见 `migrateQuizActiveUniqueIndex`）。
+- **`quizzes.submitted_at`** — 统一交卷标记。第二轮做题流程改成"全部做完一次提交 = 一次考试"，点"提交全部"后填这个时间戳，quiz 锁定不可再改。用专门字段（而不是"是否存在 answer 行"）判断交卷状态，因为兼容保留的单题 submit 端点也会产生 answer 行，不能误判为已交卷。
+- **`questions.has_jump`** — agent 出题时判断每题是否对应明确视频片段。能锚定到具体 chunk 的题 `has_jump=true`（答错可跳视频复习）；贯穿全文/综合性的题 `has_jump=false`（无单一跳转锚点，不出跳转按钮）。默认 false 兼容老数据。前端据此决定渲染不渲染跳转按钮。
+- **`answers.quiz_id`** — denormalized snapshot，让历史答题列表在 regen 删旧 question 后仍能展示（详见 §14）。
+
 **`ai_jobs`** — 异步 job 队列
 ```
-id, job_type(segment|summary|quiz), episode_id, course_id,
-status(queued|processing|done|failed|skipped), priority, attempt, claimed_at, completed_at, error, progress
+id, job_type(segment|summary|quiz|advice|course_summary|user_report),
+episode_id, course_id, user_id(nullable), payload_json, priority,
+status(queued|processing|done|failed|skipped), attempt, claimed_at, completed_at, error, progress
 ```
+第二轮新增/变化的字段：
+- **6 种 job type**：原 segment/summary/quiz 三种 + 新增 advice/course_summary/user_report 三种（详见 §5）。
+- **`payload_json`** — job 类型特定参数。advice job 存 `scope`/`scope_id`/`subject_id`（因为 AIJob 表是 episode-centric 的，subject 级 advice 没有专门列）；其它 job 留空。宽松解析，容忍缺字段。
+- **`priority`** — 真正按优先级排队了（详见 §5）：quiz=10（学生正等着）、segment=2、summary/advice/course_summary/user_report=1。`ClaimNextQueuedJob` 按 priority DESC 取最高优先级的 queued job。
+- **`user_id`** — quiz/advice/user_report job 绑定具体用户（per-user 自适应）；segment/summary/course_summary 留 NULL。
 
 **`ai_runs`** — agent 决策痕迹（可观测性核心）
 ```
@@ -160,6 +190,26 @@ self_check_result(pass|fail|skipped), self_check_note, duration_ms
 
 **`chat_sessions` / `chat_messages`** — ⏳ Phase D 预留
 
+**`study_advices`** — ✅ 学习建议（Phase C 第二轮，advice agent 产出）
+```
+id, user_id, scope(episode|course|subject), scope_id, advice_text(text),
+mastery_snapshot_json, model_used, generated_at
+uniqueIndex(user_id, scope, scope_id)
+```
+按 `(user, scope, scope_id)` 唯一存储：episode 级是某节课交卷后的复习建议，course 级是某门课的整体弱点分析，subject 级是某科目跨多门课的弱点分析。重新生成替换旧记录（同 quiz 的 upsert 语义，但 advice 不保留历史——建议是"当前快照"）。`advice_text` 是 agent 的自然语言 `FinalText`（不是结构化 JSON，advice 是开放文本）。`mastery_snapshot_json` 存生成时的 mastery 快照，供后续对比"上次建议后进步多少"。
+
+**`ai_course_summaries`** — ✅ 课程级总结（Phase D，course-unique）
+```
+id, course_id(unique), summary_text(text), model_used, generated_at
+```
+和 `study_advices` 的关键差异：**按 course 唯一**（不含 user_id），是纯内容总结——课程整体脉络 + 学习路径建议，与具体学生无关。所有学生共享同一条总结，admin 生成一次即可，不必按 user 重复跑（不同学生的"针对建议"走 advice，那是 per-user 的）。`summary_text` 是 agent 的自然语言 `FinalText`（课程导览，不是结构化题库）。重新生成替换旧记录。
+
+**`user_study_reports`** — ✅ Admin 用户学习报告（Phase E，user-unique）
+```
+id, user_id(unique), report_text(text), model_used, generated_at
+```
+和 advice 的差异：advice 是给学生本人看的复习建议（单 scope），user_study_report 是给 admin（老师/家长）看的"这个学生跨所有课程学得怎么样"的画像报告。每用户一份最新报告（unique on user_id），重新生成替换。`report_text` 是 agent 的自然语言 `FinalText`。agent 走和 advice 同一套 ReAct loop，但工具集是 user_study 专用（按参数 course_id 查任意课程，见 §16）。
+
 ## 5. 状态机（ai_jobs）
 
 ```
@@ -167,13 +217,39 @@ self_check_result(pass|fail|skipped), self_check_note, duration_ms
         ┌──────────────────────────┐
         ▼                           │
      queued ──ClaimNextQueuedJob──▶ processing ──成功──▶ done
-        │                              │
+        │   (按 priority DESC        │
+        │    选最高优先级)            │
         │                              ├──失败──▶ failed ──retry──▶ queued
-        │                              └──跳过──▶ skipped
+        │                              ├──跳过──▶ skipped
+        │                              └──claimed_at > 30min──▶ reaper 复位 ──▶ queued
         └──────────────────────────────┘
 ```
 
-**与字幕队列的区别**：AI job 是**进程内 worker**（`ai_service.go runWorker`，单 goroutine 轮询），不是外部机器认领。所以没有 heartbeat / reaper / X-Ingest-Key 协议——一个 goroutine 拿到 job 就独占处理到结束。原子 claim（`ClaimNextQueuedJob`，单条 `UPDATE...RETURNING`）仍然保留，为将来并行化 worker 留余地。
+**与字幕队列的区别**：AI job 是**进程内 worker**（`ai_service.go runWorker`，单 goroutine 轮询 3s），不是外部机器认领。一个 goroutine 拿到 job 就独占处理到结束。原子 claim（`ClaimNextQueuedJob`，单条 `UPDATE...RETURNING`）仍然保留，为将来并行化 worker 留余地。
+
+### 6 种 job type
+
+worker（`runWorker` → `processOneJob`）认领并分发以下 6 种 job（详见各 `run*Job` 方法）：
+
+| job_type | 触发 | 优先级 | 跑什么 |
+|---|---|---|---|
+| `segment` | 字幕完成 hook / admin 开关 off→on 回填 / admin 手动 | 2 | SRT → content_chunks 切片 + embedding |
+| `summary` | segment job done 链式 / admin 手动 | 1 | summarizer 单次 LLM 调用 → ai_summaries |
+| `quiz` | 客户端 `GET /ai-quiz` 懒生成 | **10** | quizzer agent loop → quizzes/questions |
+| `advice` | 客户端 `GET /ai-advice` 懒生成 / submit-all 后链式 | 1 | advice agent loop → study_advices |
+| `course_summary` | admin 手动触发 | 1 | course summary agent loop → ai_course_summaries |
+| `user_report` | admin 手动触发 | 1 | user_study agent loop → user_study_reports |
+
+### Priority 排队（quiz 高优先级插队）
+
+`ClaimNextQueuedJob` 不再"先进先出"，而是按 `priority DESC` 选最高优先级的 queued job。设计意图（`ai_service.go` 的 priority 常量）：
+- **quiz=10**：学生正盯着屏幕等出题，响应延迟最刺眼，必须最先跑。
+- **segment=2**：summary/quiz 的上游，但属于后台批量，不抢在 quiz 前。
+- **summary/advice/course_summary/user_report=1**：纯派生/admin 触发，无学生在屏幕前干等（页面轮询显示 generating），低优先级不饿死 quiz。
+
+### Reaper（复位卡住的 processing job）
+
+第二轮加了 reaper（`ReapStaleJobs`，委托 repo，固定 **30 分钟阈值**）。一个 LLM 调用最多 ~30s，加上 ReAct 多轮也就几分钟；`claimed_at` 超过半小时还停在 processing 几乎可以肯定是 worker 挂了（进程被杀、panic 未恢复），重置回 queued 让下一轮 poll 重新认领。admin 也可单条手动复位（`ResetJob`，校验当前必须 processing，否则 409）。reaper 补上了早期文档里"没有 reaper"的缺口——进程内 worker 虽然"拿到 job 就独占到结束"，但进程崩溃会留下孤儿 processing job，必须有人复位。
 
 复用了字幕队列的原子 claim 模式（参照 `subtitle_job_repo.go:145`）：单条 `UPDATE ... WHERE id = (SELECT ... LIMIT 1) RETURNING *`，保证并发安全。
 
@@ -202,15 +278,30 @@ GET  /runs/:id           → 单条决策详情（完整 prompt/response/usage�
 
 ### 客户端端（`/api/v1/*`，UserAuthMiddleware Bearer token）
 ```
-GET /episodes/:id/ai-summary   读总结（无总结→404，客户端隐藏卡片）
+GET /episodes/:id/ai-summary   读 episode 总结（无总结→404，客户端隐藏卡片）
+GET /courses/:id/ai-summary    读课程级总结（course-unique，无总结→404）
 ```
-Phase C 新增（quiz，受 IsEpisodeVisible 访问控制）：
+quiz（受 `IsEpisodeVisible` 访问控制）：
 ```
 GET  /episodes/:id/ai-quiz            拉题（无题→202 generating 懒生成；ready 返回题,不下发答案）
-POST /episodes/:id/ai-quiz/submit     答题→按题型判对错→更新 memory→返回结果+解析+跳转时间
-POST /episodes/:id/ai-quiz/regenerate 换题（删旧基于最新 memory 重新生成→202 generating）
+                                       已交卷(submitted_at!=nil)时回填逐题结果(correct/correct_index/
+                                       explanation/user_answer_index),重进能 review
+POST /episodes/:id/ai-quiz/submit     单题即时判分(兼容保留)→更新 memory→返回结果+解析+跳转时间
+POST /episodes/:id/ai-quiz/submit-all 统一交卷(一次考试):一次性判分全部题→逐题返回结果→锁定 quiz
+                                       body:{answers:[{question_id, answer_index? | answer_text?}]}
+                                       已交卷→409 ErrQuizAlreadySubmitted
+POST /episodes/:id/ai-quiz/regenerate 换题(标 archived 只读保留旧 quiz→基于最新 memory 重新生成→202 generating)
+GET  /episodes/:id/ai-quiz/history    历史卷子(archived quiz 只读 review,含正确答案+逐题对错)
 ```
-submit body：`{question_id, answer_index? | answer_text?}`（选择题发 index，填空题发 text）。
+submit/submit-all body：选择题发 `answer_index`，填空题发 `answer_text`。
+
+advice（学习建议，agent 驱动，受 `canAccessEpisode` / `canAccessCourse` 访问控制）：
+```
+GET /episodes/:id/ai-advice   episode 级建议(无→202 generating 懒生成;ready 返回 advice_text)
+GET /courses/:id/ai-advice    course 级建议(跨课时聚合 mastery)
+GET /subjects/:id/ai-advice   subject 级建议(跨多门课聚合 mastery)
+```
+三个 advice 端点都是 lazy 生成 + 轮询（同 quiz 的 202/generating/ready 模式），`advice_text` 是 agent 自然语言输出。
 
 ### Admin 观测端（Phase C 新增）
 ```
@@ -218,6 +309,15 @@ GET /admin/api/ai/summaries/:episodeID   读已生成的总结内容（admin 回
 GET /admin/api/ai/users/:userID/quizzes  列出某用户所有题库（用户视图入口）
 GET /admin/api/ai/quizzes/:quizID        题库详情：题+答案+答题历史+memory+agent_feedback+ai_runs(trace)
 ```
+
+### Admin 生成端（第二轮新增，admin 触发 agent 跑）
+```
+POST /admin/api/ai/courses/:id/course-summary  触发某课程的课程级总结(course-unique,admin 生成一次所有学生共享)
+GET  /admin/api/ai/courses/:id/course-summary  读已生成的课程总结(无→generating/404)
+POST /admin/api/ai/users/:userID/study-report  触发某用户的跨课程学习报告(user-unique,admin 视角)
+GET  /admin/api/ai/users/:userID/study-report  读已生成的用户报告(无→generating/404)
+```
+这四个端点都是 admin 手动触发（入队 course_summary/user_report job）+ 轮询读。POST 返回 generating 状态，前端轮询 GET 直到 ready。和客户端 advice 端点的差异：advice 是学生自己打开页面 lazy 触发；course_summary/user_report 是 admin 主动为某课程/某学生生成（admin 可观测 + 可读性是第二轮的重点，admin 能看到 agent 怎么遍历数据）。
 
 ### API key 安全约定
 - GET **永不回显** api_key（DTO 里置空）
@@ -280,23 +380,42 @@ SRT → ParseSRT(cue 列表) → SegmentChunks(累积+边界对齐) → chunks
                                          Embedder.Embed(批量) → 存 content_chunks
 ```
 
-## 9. 总结 agent（Phase B，已有）
+## 9. 总结 agent（Phase B → Phase F 丰富化）
 
 ### 为什么总结不做 tool calling
-总结是**单次抽取**（读全文 → 提炼要点），不需要多步推理或查外部信息。所以 summarizer 是直接的 Chat 调用（temperature=0，结构化 JSON 输出），不走 ReAct loop。tool calling 留给出题（Phase C）——出题需要查 memory、检索弱点、决定考什么，那才是 agent loop 的用武之地。
+总结是**单次抽取**（读全文 → 提炼要点），不需要多步推理或查外部信息。所以 summarizer 是直接的 Chat 调用（temperature=0，结构化 JSON 输出），不走 ReAct loop。tool calling 留给出题（Phase C）和第二轮的 advice/course_summary/user_report（§16）——那些需要查 memory、检索弱点、跨课程遍历，才是 agent loop 的用武之地。
 
-### 输出结构
+### 输出结构（Phase F 丰富化）
+
+Phase F 把 summary 从"一串平铺要点"升级到接近真实学习笔记的结构。所有新增字段都是**同一次 LLM 调用**产出——零额外 token 成本，只是 prompt 让模型多输出几个结构。
+
 ```json
 {
   "headline": "一句话概括（20字内）",
   "key_points": ["3-6个要点"],
   "concepts": ["关键名词，供出题检索"],
+  "sections": [
+    { "title": "知识点名", "points": ["该知识点的一句话要点"] }
+  ],
+  "methods": ["这节课讲到的具体方法/技巧/公式，便于速查"],
+  "common_mistakes": ["这节课相关的常见错误/易错点，帮学生避坑"],
+  "pre_adventure": [
+    { "prompt": "开放式思考题（激发好奇心）", "hint": "不剧透答案的思考方向提示" }
+  ],
   "takeaway": "给学生的启发（可选）"
 }
 ```
 
+各字段的定位：
+- **`sections`** — 按知识点分的小节（`{title, points[]}`），让总结有结构而非平铺。一节课通常 2-5 节，前端可渲染成"知识点卡片"。
+- **`methods`** — 单独拎出来的方法/技巧/公式列表，便于速查（区别于 key_points 的"要点"，methods 是可操作的"怎么做"）。
+- **`common_mistakes`** — 易错点列表，帮学生避坑。
+- **`pre_adventure`** — 3 个课前探险问题（`{prompt, hint}`），开放式思考题 + 一句思考方向提示。**和 summary 同一次 LLM 调用产出**，前端在播放前展示，引导孩子带着问题进入视频。这取代了早期单独的"课前问题"管线。
+
+> 老的 summary（Phase F 之前生成的）没有 sections/methods/common_mistakes/pre_adventure 字段，`json.Unmarshal` 会留 nil。`SummaryResult.normalize()` 统一把所有切片字段初始化成空切片——避免 nil 切片 Marshal 成 `null` 让前端 `.map` 炸。
+
 ### 实测质量
-31min 小学数学计算课 → 总结准确提炼了"位值原理/对应思想/实境制（凑整）/加减互逆"四个算理 + 9 个 concepts。
+31min 小学数学计算课 → 总结准确提炼了"位值原理/对应思想/实境制（凑整）/加减互逆"四个算理 + 9 个 concepts。Phase F 丰富化后 sections/methods/common_mistakes/pre_adventure 都正常产出。
 
 ## 10. 并发与正确性设计
 
@@ -383,10 +502,10 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 
 ### 关键设计决策（落地时确定）
 
-**1. 题库模型：单套 + 可重做/换题**
-- `Quiz` 对 `(user_id, episode_id)` 加唯一复合索引 → 一个学生一节课**始终只有一套题**
+**1. 题库模型：单套 active + 可重做/换题/历史保留**
+- 「一个学生一节课**始终只有一套 active 题**」靠部分唯一索引强制（`WHERE status='active'`），不再是早期文档里的"删旧插新"——见下
 - 「重做」=同一套题再答（`Answer` append-only，每次答题加新行；mastery 累积更新）
-- 「换题」=`CreateQuiz` 事务内删旧 quiz+questions 插新（基于最新 memory 重新生成）
+- 「换题」=`CreateQuiz` 事务内把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 active quiz（基于最新 memory 重新生成）。**旧卷子不删，只读保留**，学生可在历史面板 review（`GET /ai-quiz/history`）。这是第二轮 quiz 历史功能的基础（详见 §17）
 - `Answer` 和 `KnowledgeMemory` 在换题时**不删**——mastery 代表长期学习状态
 
 **2. 按用户独立 + 懒生成**
@@ -416,11 +535,12 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - 两个观测视图：AIWorkflow（job 视图，run 详情含 trace 时间线）+ AIUserView（用户视图，选用户→题库→详情：题+答题历史+memory+评价+思考时间线）
 - admin 能看 AI 生成的总结内容（`GET /admin/api/ai/summaries/:episodeID`）
 
-### 砍掉的设计
-- **80% 弹题已废弃**——改为独立 AI 学习页。播放器加一个 AI 学习入口图标，跳转后 pop JumpRequest 回播放器 seek
-- **讨论 tab（chat）**留 Phase D；本次 AI 学习页只有总结 + 练习 tab
-- **streaming + memory 衰减曲线**留 Phase D
-- 旧 in-player quiz overlay（post_review_json mock）暂不清理，与新独立页并存
+### 砍掉 / 调整的设计
+- **80% 弹题已废弃**——改为独立 AI 学习页。播放器加一个 AI 学习入口图标
+- **讨论 tab（chat）**仍留未来；advice/course_summary/user_report 已部分占用原 Phase D 的 agent 版图
+- **streaming + memory 衰减曲线**仍留未来
+- 旧 in-player quiz overlay（post_review_json mock）已清理（死代码清理，第二轮）
+- 第二轮做题流程从"单题即时判分"改为"统一提交（一次考试）"，详见 §17。单题 submit 端点兼容保留（也写 answer 行 + 更新 memory），但客户端主流程走 submit-all
 
 ### Phase C 验收路径
 1. admin 在某课程勾选 AIQuizEnabled，该课程 episode 有切片+总结（Phase A/B）
@@ -431,11 +551,154 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 
 ## 15. 演进方向
 
-- Phase D：AI chat（复用 RAG + memory，多轮对话，答案带视频时间戳跳转）
-- 讨论 tab 接入独立 AI 学习页
-- memory 衰减曲线（艾宾浩斯，复用 knowledge_memory）
-- streaming 输出（SSE，改善等待体验）
+两轮打磨后，原"演进方向"里很多项已经落地。下面拆成"已实现"和"仍未来"两块，避免重复记录。
+
+### ✅ 已实现（从原演进方向 / 砍掉清单里清掉的）
+- AI 开关三层断链打通（admin 真的能开/关 `AISummaryEnabled/AIQuizEnabled`，off→on 回填历史字幕）—— 原本只是 model 字段
+- 自动 summary（segment job done 链式触发 summary job，admin 不用手动点）—— 原本 admin UI 没接，summary 永远没人触发
+- 课前探险问题（summary 的 `pre_adventure`，和 summary 同一次 LLM 调用产出）
+- 做题流程重构（统一提交 + quiz 历史 + has_jump 跳转控制）—— 原本是单题即时判分 + 换题删旧
+- quiz 历史保留（regen 标 archived 只读保留，不再删旧 quiz）
+- 学习建议 / 课程总结 / 用户报告 agent（advice/course_summary/user_report，全 ReAct agent 驱动）
+- summary 丰富化（Phase F：sections/methods/common_mistakes/pre_adventure）
+- admin 可读性（admin 能读 AI 生成的总结内容 + 触发课程总结/用户报告）
+- 死代码清理（旧 in-player quiz overlay 等）
+
+### ⏳ 仍未来
+- **chat（原 Phase D 原计划）**：advice/course_summary/user_report 已占了原 Phase D 的"agent 驱动"版图，chat 作为"多轮对话"能力仍未来（复用 RAG + memory，答案带视频时间戳跳转）
+- **memory 衰减曲线**（艾宾浩斯，复用 knowledge_memory；目前 mastery 是单调累积，不随时间衰减）
+- **streaming 输出（SSE）**：改善等待体验，目前 agent 跑完一次性返回
+- **填空题用户原文持久化**：当前 `Answer.UserAnswer` 是 int（选择题索引），填空题用户的原文没单独存（判题时归一化比较后只存 correct bool）—— Answer model 限制，未来若要展示"学生当时填了什么"需扩字段
+- **知识点命名标准化**：目前 agent 靠 LLM 推理关联 `chunk.text` 描述知识点（advice 之所以能说"通分掌握不好"，是因为工具把 chunk.text 注入了 observation）。未来可考虑给 chunk 打标签 / 建本体库，让知识点有稳定 ID 而非靠文本相似
 - admin 批量预热出题（`EnqueueQuiz` 结构已预留，接路由即可）
 - 附件提取入 content_chunks（PDF/练习册，source_type=attachment，schema 已预留）
 - rerank（数据量增大后上 rerank API，接口已预留）
-- 知识点关联图谱（LLM 给切片贴标签 + 建关联）
+
+## 16. Agent 驱动的学习建议 / 课程总结 / 用户报告（第二轮核心）
+
+这是第二轮体验打磨的核心。三个新能力（advice / course_summary / user_report）都**不是单次 prompt engineering**（不是"把所有数据塞进一个 prompt 让 LLM 写"），而是**全 agent 驱动**——每个都走 `agent.go` 的 ReAct `Run` loop，agent 自己用工具集查数据、自己决定分析深度、自己综合成自然语言输出。
+
+### 关键设计：全 agent 驱动（复用 agent.Run + Toolbox）
+
+三个新 agent 都复用同一套引擎，只换两样东西：
+
+| 维度 | 共享 | 各自不同 |
+|---|---|---|
+| ReAct loop | ✅ `agent.Run`（observe→think→act 循环，maxSteps 上限，达上限强制 ToolChoice=none 逼出答案） | — |
+| Toolbox 结构 | ✅ 同一个 `Toolbox`（register/Execute/Specs） | 工具集不同（每个 agent 注册自己的工具） |
+| LLM provider | ✅ 同一个 chat provider（resolver 解析） | — |
+| trace + usage | ✅ 同样的 `AgentResult{FinalText, Trace, Usage, Turns}`，写同一条 ai_runs | — |
+| system prompt | — | 每个agent自己的 system prompt（`AdviceSystemPrompt` / `CourseSummarySystemPrompt` / `UserStudySystemPrompt`） |
+| 工具集 | — | `NewAdviceToolbox` / `NewCourseSummaryToolbox` / `NewUserStudyToolbox` |
+| 输出 | — | 都是自然语言（`agentRes.FinalText` 直接用，不解析 JSON） |
+
+为什么不一次性 prompt engineering？因为课程大小、学生数据量差异巨大——小课程几节、大课程几十节；新学生无答题记录、老学生几十条 mastery。一次性塞进 prompt 要么撑爆 context，要么信息不全。agent 模式让 agent 自己按需调工具，大课程/数据多的学生多调几次，小课程少调几次，自适应。
+
+三个 agent 都**无 self-check**（quiz 需要"审题"保证答案正确性；advice/summary/report 是开放文本，无客观正误，只做轻量的非空 + 长度合理性检查）。
+
+### AdviceAgent（episode / course / subject 三级学习建议）
+
+给学生本人看的"哪里薄弱 + 怎么复习"。三级 scope：
+
+| scope | scope_id | 看什么 | pre-seed 来源 |
+|---|---|---|---|
+| `episode` | episode_id | 某节课交卷后的复习建议 | `Masteries(userID, episodeID)` |
+| `course` | course_id | 某门课的整体弱点分析（跨课时） | `CourseMasteries(userID, courseID)` |
+| `subject` | subject_id | 某科目跨多门课的弱点分析 | `SubjectMasteries(userID, subjectID)` |
+
+- **工具集**（`advice_tools.go` 的 `NewAdviceToolbox`，MaxSteps=10）：
+  - `get_user_mastery`（**增强版**，返回 mastery + `chunk.text`，让 agent 说"通分掌握不好"而非"chunk#37"）
+  - `get_course_mastery`（跨课时聚合，弱点优先）
+  - `get_subject_mastery`（科目级聚合）
+  - `list_user_courses`（该学生的课程列表）
+  - `get_episode_summary`（读已生成的 episode summary，引用知识点名）
+- **触发**：客户端 `GET /episodes|courses|subjects/:id/ai-advice` lazy 生成（202 generating → 轮询）；episode 级还在 `submit-all`（交卷）后链式触发（`EnqueueAdviceForEpisode`），学生交完卷就能看到复习建议。
+- **pre-seed**：按 scope 预先读对应 mastery 塞进 prompt（`buildAdviceSeed`），省一轮工具调用 + 同时收集 `MasterySnapshot`（存进 `StudyAdvice.MasterySnapshotJSON`，供后续对比"上次建议后进步多少"）。pre-seed 只列 mastery<0.8 的（已掌握的不值得列）。
+
+### CourseSummaryAgent（课程级纯内容总结，course-unique）
+
+给**所有学生**看的课程导览（与具体学生无关，按 course 唯一存储，admin 生成一次即可）。
+
+- **工具集**（`course_summary_tools.go` 的 `NewCourseSummaryToolbox`，MaxSteps=8）：
+  - `get_course_episodes`（列课程所有 episode：id + 标题）
+  - `get_episode_summary`（**带 episode_id 参数**，按需深入某节课的概念；和 advice 的同名工具区别——advice 版无参数读 toolbox 绑定的 episode）
+  - 工具按 courseID 限定，`get_episode_summary` 校验 episode_id 属于本课程，防 agent 越权查别的课程
+  - **无 mastery 类工具**（课程总结是纯内容，与具体学生无关）
+- **pre-seed**：遍历课程所有 episode + 读每集 AISummary 的 headline，拼成 episode 列表塞进 prompt（`buildCourseSummarySeed`），省掉 agent 逐个调 `get_course_episodes` + N 次 `get_episode_summary` 的初始轮次。agent 一上来就有完整课程结构 + 每集一句话概括，可以直接开写或选择性深入。
+- **触发**：admin 手动 `POST /admin/api/ai/courses/:id/course-summary`（admin 生成，前端轮询 GET）。
+
+### UserStudyAgent（admin 用户学习报告，user-unique）
+
+给 **admin（老师/家长）**看的"这个学生跨所有课程学得怎么样"的画像报告。和 advice 的关键差异——advice 绑定单个 scope，user_study 跨一个学生的所有课程，工具必须按参数查任意课程。
+
+- **工具集**（`user_study_tools.go` 的 `NewUserStudyToolbox`，MaxSteps=10）：
+  - `list_user_courses`（复用 advice 的实现，绑定 user_study 的 userID）
+  - `get_course_mastery`（**按参数 course_id**，不是读 toolbox 绑定的 courseID——agent 自己遍历课程）
+  - `get_course_summary`（按参数 course_id 读课程级总结；Phase D 未 merge 时降级提示，agent 据此改用 `get_course_mastery` 的 chunk.text）
+  - `get_user_advice`（读该用户已有的 StudyAdvice，复用 episode/course 级分析）
+- **pre-seed**：service 层（`runUserReportJob`）预算好"该学生每门课程的概要"（每课程平均 mastery + 最弱知识点，含 chunk.text 线索），塞进 `req.Courses`。`buildUserStudySeed` 按平均 mastery 升序排列（弱项课程在前），让 agent 优先关注需要加强的课程。避免 agent 第一轮就要调 `list_user_courses` + N 次 `get_course_mastery`。
+- **触发**：admin 手动 `POST /admin/api/ai/users/:userID/study-report`。
+
+### "说人话"的关键：formatMasteriesWithText
+
+三个 agent 能用自然语言描述知识点弱点（"通分掌握不好"而非"chunk#37 mastery=0.2"），关键在 `formatMasteriesWithText`（`advice_tools.go`）。这个函数把 mastery 行渲染成文本 observation 时，**把 `chunk.text` 片段一起注入**——通过 `chunkID → ContentChunk.Text` join（调用方 `loadChunksForMasteries` 先建全局 map）。
+
+```
+- mastery=0.20 (★弱点) | 对1 错4 | 最近复习:3天前
+  知识点线索: 通分就是把异分母分数分别化成和原来相等的同分母分数...(截断到120字)
+```
+
+agent 据此 observation 就能写出人话建议。这是"目前靠 LLM 推理关联 chunk.text"的体现（未来若给 chunk 打标签/建本体库，知识点会有稳定 ID，见 §15 的"知识点命名标准化"）。
+
+### 代码位置
+
+- agent 决策：`agent/advice.go` + `agent/advice_tools.go`、`agent/course_summary.go` + `agent/course_summary_tools.go`、`agent/user_study.go` + `agent/user_study_tools.go`
+- service 编排（GLUE：解析 job → 构造 agent → 跑 → 存产物 → 记 ai_run）：`service/ai_service_advice.go`、`service/ai_service_course_summary.go`、`service/ai_service_user_report.go`
+- system prompts：`agent/prompts.go`（`AdviceSystemPrompt` / `CourseSummarySystemPrompt` / `UserStudySystemPrompt`）
+- 复用的引擎：`agent/agent.go` 的 `Run` + `agent/tools.go` 的 `Toolbox`
+
+## 17. 做题流程 + 前端体验（第二轮重构）
+
+第二轮把做题从"单题即时判分"重构为"统一提交 = 一次考试"的体验，并配套前端缓存、跳转、历史、播放器入口等一整套打磨。
+
+### 统一提交（一次考试模型）
+
+- **流程**：单题即时判分 → 全部做完**统一提交**。提交前所有题可改，提交后锁定（`Quiz.SubmittedAt` 标记，不可再改答案）。
+- **`POST /episodes/:id/ai-quiz/submit-all`**：一次性判分整张卷子，逐题返回结果（correct/正确答案/解析/跳转时间戳），并为每题落 answer 行 + 更新 memory。已交卷 → 409 `ErrQuizAlreadySubmitted`（防重复提交）。
+- **`GET /episodes/:id/ai-quiz` 回填**：quiz 已交卷（`submitted_at != nil`）时，拉题响应回填逐题结果（`correct`/`correct_index`/`explanation`/`user_answer_index`），学生重进 AI 学习页直接进入只读 review 态，不用重新交卷。
+- 客户端状态机：`loading → generating/ready/unavailable → (answering | submitted)`。
+
+### has_jump（跳转按钮控制）
+
+agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`）。能锚定到具体 chunk 的题 `has_jump=true`（答错可跳视频复习）；贯穿全文/综合性的题 `has_jump=false`（无单一跳转锚点）。前端据此决定渲染不渲染跳转按钮——避免给"综合性题目"出一个误导性的"跳到 12:38"。
+
+### 跳转 push 播放器 + disableAiTab（防栈加深）
+
+第二轮把跳转从"pop JumpRequest 回原播放器 seek"改为**push 一个标准 `PlayerScreen`**（带 `initialPosition` = 目标时间戳）：
+- `PlayerScreen` 加 `disableAiTab` 参数：跳转 push 出来的播放器**不渲染 AI 入口**，否则学生能在跳转播放器里再进 AI 页、再跳转、再 push……栈无限加深。
+- `initialPosition` 优先级最高，进入跳转播放器直接 seek 到目标时间。
+- 本页（AI 学习页）留在栈里，交卷结果状态保留；看完视频返回回到 AI 页。
+
+### 本地缓存未提交草稿（QuizDraftStore）
+
+统一提交后，学生在点"提交全部"之前的选择/填空都只活在内存里——APP 切后台被杀、误触返回，做了一半的卷子就没了。`quiz_draft_store.dart`（shared_preferences）按 `(userID, episodeID)` 存未提交草稿：
+- key 形如 `quiz_draft.<uid>.<eid>`，多用户共用一台 PAD 时每人每节课草稿隔离。
+- 格式：`{choice_picks: {qid: idx}, fill_texts: {qid: text}}`。
+- 生命周期：改答案 → `saveDraft`（覆盖写）；提交成功 / 换题 → `clearDraft`；打开页面 quiz 未交卷且有草稿 → `loadDraft` 自动恢复填入。
+
+### quiz 历史（regen 不删旧）
+
+第二轮 quiz 历史功能：regenerate（换题）不再删旧 quiz，而是标 `archived`（设 `archived_at`）+ 插新的 active quiz。旧卷子只读保留，学生可在历史面板 review。
+- **`GET /episodes/:id/ai-quiz/history`**：返回 archived quiz 列表，每个含完整题 + 正确答案 + 逐题对错（只读）。总是 200（可能空数组）——没有历史是 regen 前的正常态，不是错误。
+- 单 active 不变量靠部分唯一索引强制（`WHERE status='active'`，见 §4）。
+- `Answer.QuizID`（denormalized snapshot）让历史答题列表在 regen 删旧 question 后仍能展示。
+
+### 播放器常驻 AI 入口
+
+第二轮把播放器的 AI 入口从"顶栏图标（随顶栏 4s 自动隐藏）"调整为：
+- **helper panel 常驻 AI 学习卡片 + 探索任务**：播放器右侧 helper panel 常驻"本节探索任务"（`_buildPreAdventureSection`，数据源是 summary 的 `pre_adventure`）+ AI 学习入口，不再随顶栏 4s 自动隐藏。学生随时能点开。
+- **课前探索任务不再前置弹窗**：`course_detail_screen` 的课前 modal（`_showPreAdventureModal`）移除，探索任务直接在播放器 helper panel 常驻显示——不再前置弹窗打断进入视频。
+
+### 代码位置
+- 客户端：`frontend/lib/ui/screen/ai_study_screen.dart`（AI 学习页重构：统一提交流 + 状态机 + 草稿恢复 + 跳转 push）、`frontend/lib/service/quiz_draft_store.dart`（草稿持久化）、`frontend/lib/ui/screen/player_screen.dart`（`disableAiTab`/`initialPosition`/helper panel 常驻 AI 卡片 + 探索任务）、`frontend/lib/ui/screen/course_detail_screen.dart`（课前 modal 移除）。
+- 后端：`handler/ai_handler.go`（`SubmitAllQuizAnswers` / `GetEpisodeQuizHistory`）、`service/ai_service_quiz.go`（`SubmitAllQuizAnswers` 统一交卷 + `ListQuizHistory` + quiz 拉题时回填逐题结果）、model 层 `Quiz.SubmittedAt` / `Question.HasJump` / quiz active/archived 状态。
