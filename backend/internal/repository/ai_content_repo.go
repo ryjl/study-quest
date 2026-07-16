@@ -69,19 +69,28 @@ type AIContentRepository interface {
 	ListRecentRuns(limit int) ([]model.AIRun, error)
 
 	// ── quizzes / questions / answers (Phase C) ──
-	// GetQuiz returns the single quiz for a (user, episode), or nil if none.
-	// Nil is the trigger for lazy generation: the service enqueues a quiz job.
+	// GetQuiz returns the single ACTIVE quiz for a (user, episode), or nil if
+	// none. Archived quizzes (superseded generations, Phase 3) are NOT returned
+	// here — they're read-only history surfaced via ListArchivedQuizzes. Nil is
+	// the trigger for lazy generation: the service enqueues a quiz job.
 	GetQuiz(userID, episodeID uint) (*model.Quiz, error)
 	// GetQuizByID loads one quiz by its primary key (admin detail view).
 	GetQuizByID(quizID uint) (*model.Quiz, error)
 	// GetQuestions returns a quiz's questions ordered by id.
 	GetQuestions(quizID uint) ([]model.Question, error)
-	// CreateQuiz replaces the quiz for a (user, episode) in one transaction:
-	// deletes the old quiz + its questions (换题/regenerate), then inserts the
-	// new quiz + questions. Answers and KnowledgeMemory are preserved (a quiz
-	// refresh never wipes a student's answer history or mastery). Returns the
-	// new quiz row's ID.
+	// CreateQuiz replaces the (user, episode) quiz in one transaction: ARCHIVES
+	// the prior active quiz (换题/regenerate) by flipping Status→archived and
+	// stamping ArchivedAt, then inserts a fresh active quiz + its questions. The
+	// old questions row stays attached to the archived quiz so the student's
+	// past attempts remain readable in history. Answers and KnowledgeMemory are
+	// preserved (a quiz refresh never wipes a student's answer history or
+	// mastery). The single-active invariant is also enforced by a partial unique
+	// index (see model.migrateQuizActiveUniqueIndex). Returns the new quiz ID.
 	CreateQuiz(quiz *model.Quiz, questions []model.Question) (uint, error)
+	// ListArchivedQuizzes returns a (user, episode)'s superseded quizzes
+	// (Status='archived') newest-archive-first, for the read-only history panel.
+	// Never includes the active quiz.
+	ListArchivedQuizzes(userID, episodeID uint) ([]model.Quiz, error)
 	// ListQuizzesForUser lists all of a user's quizzes (admin user view),
 	// newest first.
 	ListQuizzesForUser(userID uint) ([]model.Quiz, error)
@@ -336,7 +345,10 @@ func (r *aiContentRepo) ListRecentRuns(limit int) ([]model.AIRun, error) {
 
 func (r *aiContentRepo) GetQuiz(userID, episodeID uint) (*model.Quiz, error) {
 	var q model.Quiz
-	if err := r.db.Where("user_id = ? AND episode_id = ?", userID, episodeID).
+	// Only the active quiz is "current" — archived rows are history. The default
+	// 'active' on the column means rows created before Phase 3 (no explicit
+	// status) are also treated as active, preserving the old single-quiz view.
+	if err := r.db.Where("user_id = ? AND episode_id = ? AND status = 'active'", userID, episodeID).
 		First(&q).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -365,29 +377,44 @@ func (r *aiContentRepo) GetQuestions(quizID uint) ([]model.Question, error) {
 	return qs, nil
 }
 
-// CreateQuiz replaces the (user, episode) quiz in one transaction: delete the
-// old quiz + its questions, insert the new set. Answers + memory are NOT touched
-// — a quiz refresh is not an amnesia event for the student.
+// CreateQuiz replaces the (user, episode) quiz in one transaction: ARCHIVE the
+// prior active quiz (keep its row + questions for history), then insert the new
+// active quiz + questions. Answers + memory are NOT touched — a quiz refresh is
+// not an amnesia event for the student.
+//
+// Why archive (not delete): Phase 3 keeps the student's past generations visible
+// in the read-only history panel. The old quiz's questions stay attached to it
+// (quiz_id FK) so history can show what was asked. Answers already snapshot
+// QuizID, so they keep pointing at the archived quiz regardless.
 func (r *aiContentRepo) CreateQuiz(quiz *model.Quiz, questions []model.Question) (uint, error) {
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// Find the existing quiz for this (user, episode) and delete it + its
-		// questions. The unique index guarantees at most one.
+		// Find the existing ACTIVE quiz for this (user, episode) and archive it.
+		// Scoping to status='active' is important: archived rows from earlier
+		// regens must be left untouched, otherwise we'd overwrite their
+		// ArchivedAt and lose ordering in the history panel.
 		var old model.Quiz
-		findErr := tx.Where("user_id = ? AND episode_id = ?", quiz.UserID, quiz.EpisodeID).
+		findErr := tx.Where("user_id = ? AND episode_id = ? AND status = 'active'", quiz.UserID, quiz.EpisodeID).
 			First(&old).Error
 		if findErr == nil {
-			// Delete questions then the quiz row.
-			if err := tx.Where("quiz_id = ?", old.ID).Delete(&model.Question{}).Error; err != nil {
-				return err
-			}
-			if err := tx.Delete(&old).Error; err != nil {
+			// Flip the old quiz to archived in place — keep the row + its
+			// questions (the history view lists them). ArchivedAt drives the
+			// newest-first ordering of the history panel.
+			now := time.Now()
+			if err := tx.Model(&old).Updates(map[string]interface{}{
+				"status":      "archived",
+				"archived_at": now,
+			}).Error; err != nil {
 				return err
 			}
 		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return findErr
 		}
-		// Insert the new quiz row.
-		quiz.ID = 0 // ensure insert, not accidental update
+		// Insert the new active quiz row. The partial unique index
+		// idx_quiz_user_ep_active is the DB-level guard that the archive step
+		// ran first; within this single transaction the app-layer ordering above
+		// already guarantees it.
+		quiz.ID = 0        // ensure insert, not accidental update
+		quiz.Status = ""   // let the column default 'active' apply (avoid hardcoding)
 		if err := tx.Create(quiz).Error; err != nil {
 			return err
 		}
@@ -406,6 +433,19 @@ func (r *aiContentRepo) CreateQuiz(quiz *model.Quiz, questions []model.Question)
 		return 0, err
 	}
 	return quiz.ID, nil
+}
+
+// ListArchivedQuizzes returns a (user, episode)'s superseded quiz generations,
+// newest-archive-first. Each archived row carries its original questions (read
+// via GetQuestions) so the history panel can render a fully read-only past
+// attempt including correct answers.
+func (r *aiContentRepo) ListArchivedQuizzes(userID, episodeID uint) ([]model.Quiz, error) {
+	var quizzes []model.Quiz
+	if err := r.db.Where("user_id = ? AND episode_id = ? AND status = 'archived'", userID, episodeID).
+		Order("archived_at DESC").Find(&quizzes).Error; err != nil {
+		return nil, err
+	}
+	return quizzes, nil
 }
 
 func (r *aiContentRepo) ListQuizzesForUser(userID uint) ([]model.Quiz, error) {

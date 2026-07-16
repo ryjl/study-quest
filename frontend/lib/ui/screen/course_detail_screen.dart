@@ -2,9 +2,11 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../model/course.dart';
 import '../../model/progress.dart';
+import '../../model/quiz.dart';
 import '../../model/subject.dart';
 import '../../service/api_service.dart';
 import '../../theme.dart';
+import '../ai/ai_availability.dart';
 import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
@@ -45,6 +47,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   /// ("配套讲义" / "AI 重点总结") reflect real data instead of mock toggles.
   final Map<int, AILessonContent?> _aiCache = {};
   final Map<int, List<Attachment>> _attachmentCache = {};
+  // Phase 2:summary 缓存。课前探险问题的数据源从老的 /ai-content
+  // (preAdventureCards)切到 /ai-summary 的 pre_adventure。这里缓存避免
+  // 列表行点击弹窗 + 播放器进入时重复请求同一个 summary。失败/老数据存 null,
+  // 取不到就降级为"暂无探索任务"。
+  final Map<int, EpisodeSummary?> _summaryCache = {};
 
   // Subject catalog for resolving the course's subject key → label/color.
   List<Subject> _subjectsCatalog = const [];
@@ -87,6 +94,15 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         changed = true;
       } catch (_) {
         // Enrichment is best-effort; rows simply fall back to no-badge.
+      }
+      // Phase 2:课前探险问题数据源切到 summary.pre_adventure,与列表行的
+      // 富化并行预取(失败时静默,弹窗/播放器再按需 lazy fetch)。
+      try {
+        final summary = await ApiService.fetchEpisodeSummary(widget.activeUserId, ep.id);
+        _summaryCache[ep.id] = summary;
+        changed = true;
+      } catch (_) {
+        // summary 缺失(老数据/AI 未开/未生成)属正常态,降级即可。
       }
     }
     if (changed && mounted) {
@@ -520,12 +536,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         : 0;
     // Drive badges from real data: PDF attachment present + AI content present.
     final hasPdf = (_attachmentCache[ep.id] ?? const []).any((a) => a.isPdf);
-    // The "AI 学习" button is always shown: the Step-3 AI study screen fetches
-    // the real summary/quiz itself and degrades gracefully (hides sections when
-    // absent, e.g. when the course has AI off or no summary yet). We no longer
-    // gate on the legacy /ai-content mock cache (preAdventureCards), which was
-    // never populated for Step-3 content and hid the button permanently.
-    final hasSummary = true;
+    // Phase 2:AI 学习按钮的三态由 episode 上的 AI 开关 + 字幕标志决定。
+    // 按钮始终展示(保持入口可见),但不可用时变灰且点击只弹提示:
+    //   - enabled:亮色,进入 AiStudyScreen
+    //   - noSubtitle:灰色,提示"本节没有字幕,AI 功能暂不可用"
+    //   - disabled:灰色,提示"本课程未开启 AI 学习"
+    final aiAvailability = AiAvailabilityHelper.fromEpisode(ep);
 
     // Locked episodes render as a greyed-out row with a lock affordance and
     // refuse to open the player — the unlock schedule (drip) keeps them
@@ -600,10 +616,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         borderRadius: 20,
         borderColor: const Color(0xFFE2E8F0),
         onPressed: () {
-          // Only show the pre-adventure modal if there are actually tasks.
-          // Otherwise, directly play the episode.
-          final ai = _aiCache[ep.id];
-          if (ai != null && ai.preAdventureCards.isNotEmpty) {
+          // Phase 2:仅当 summary.pre_adventure 有任务时才弹课前探险弹窗;
+          // 否则直接播放。数据源从老的 /ai-content 切到了 summary。
+          final tasks = _cachedPreAdventureTasks(ep.id);
+          if (tasks.isNotEmpty) {
             _showPreAdventureModal(context, ep);
           } else {
             _playEpisode(ep);
@@ -741,11 +757,26 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ),
 
                       // Purple AI Study Button — opens the AI study page (summary +
-                      // practice). Replaces the old mock summary modal with the real
-                      // Step-3 summary + quiz (Phase C).
-                      if (hasSummary)
-                        GestureDetector(
+                      // practice). Phase 2:按钮始终展示,但可用性三态化。
+                      // enabled 才真正跳转,否则弹 SnackBar 提示原因。
+                      Builder(builder: (btnContext) {
+                        // 不可用时整套配色降到中性灰,视觉上明确"现在用不了"。
+                        final enabled = aiAvailability == AiAvailability.enabled;
+                        final bgColor = enabled ? const Color(0xFFF5F3FF) : const Color(0xFFF1F5F9);
+                        final borderColor = enabled ? const Color(0xFFDDD6FE) : const Color(0xFFE2E8F0);
+                        final iconColor = enabled ? const Color(0xFF8B5CF6) : const Color(0xFF94A3B8);
+                        final textColor = enabled ? const Color(0xFF6D28D9) : const Color(0xFF94A3B8);
+                        return GestureDetector(
                           onTap: () {
+                            if (!enabled) {
+                              ScaffoldMessenger.of(btnContext).showSnackBar(
+                                SnackBar(
+                                  content: Text(AiAvailabilityHelper.tooltipFor(aiAvailability)!),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                              return;
+                            }
                             Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (context) => AiStudyScreen(
@@ -758,23 +789,24 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(
-                              color: const Color(0xFFF5F3FF),
+                              color: bgColor,
                               borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFDDD6FE)),
+                              border: Border.all(color: borderColor),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
-                              children: const [
-                                Icon(Icons.auto_awesome_rounded, size: 12, color: Color(0xFF8B5CF6)),
-                                SizedBox(width: 4),
+                              children: [
+                                Icon(Icons.auto_awesome_rounded, size: 12, color: iconColor),
+                                const SizedBox(width: 4),
                                 Text(
                                   'AI 学习',
-                                  style: TextStyle(fontSize: 11, color: Color(0xFF6D28D9), fontWeight: FontWeight.bold),
+                                  style: TextStyle(fontSize: 11, color: textColor, fontWeight: FontWeight.bold),
                                 ),
                               ],
                             ),
                           ),
-                        ),
+                        );
+                      }),
                     ],
                   ),
                   // Resume progress indicator: shows how far the user got on
@@ -821,11 +853,17 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
+  /// Phase 2:课前探险问题数据源切到 summary.pre_adventure。优先用 _summaryCache
+  /// 里的缓存(prefetch 预填或弹窗内 lazy fetch 过)。返回空 List 表示本节暂无任务。
+  /// 注意:不删 _aiCache / preAdventureCards(老数据源,Phase 5 再清理),只是不再从它取。
+  List<String> _cachedPreAdventureTasks(int episodeId) {
+    final summary = _summaryCache[episodeId];
+    if (summary == null) return const [];
+    return summary.preAdventure.map((p) => p.prompt).toList();
+  }
+
   void _playEpisode(Episode ep) {
-    final tasks = _aiCache[ep.id]?.preAdventureCards
-            .map((c) => c.prompt)
-            .toList() ??
-        const <String>[];
+    final tasks = _cachedPreAdventureTasks(ep.id);
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -839,9 +877,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   }
 
   void _showPreAdventureModal(BuildContext context, Episode ep) {
-    // Resolve the latest AI pre-adventure tasks for this episode. If the
-    // background prefetch already filled the cache we use it directly;
-    // otherwise we show a loading state inside the modal until it resolves.
+    // Resolve the latest AI pre-adventure tasks for this episode. Phase 2 起从
+    // summary.pre_adventure 取;若 prefetch 已填缓存直接用,否则弹窗内 lazy fetch。
     showDialog(
       context: context,
       barrierColor: const Color(0x900F172A), // dim background
@@ -849,10 +886,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         return _PreAdventureDialog(
           episode: ep,
           activeUserId: widget.activeUserId,
-          cachedTasks: _aiCache[ep.id]?.preAdventureCards
-                  .map((c) => c.prompt)
-                  .toList() ??
-              const [],
+          cachedTasks: _cachedPreAdventureTasks(ep.id),
           onStart: () {
             Navigator.pop(dialogContext); // close dialog
             _playEpisode(ep);
@@ -1051,10 +1085,12 @@ class _PreAdventureDialogState extends State<_PreAdventureDialog> {
   Future<void> _loadTasks() async {
     setState(() => _loading = true);
     try {
-      final ai = await ApiService.fetchAILesson(widget.activeUserId, widget.episode.id);
+      // Phase 2:课前任务数据源切到 /ai-summary 的 pre_adventure。
+      // 失败 / 老数据 / 未生成时为空,弹窗自动降级为"AI 老师还没布置任务"。
+      final summary = await ApiService.fetchEpisodeSummary(widget.activeUserId, widget.episode.id);
       if (mounted) {
         setState(() {
-          _tasks = ai?.preAdventureCards.map((c) => c.prompt).toList() ?? const [];
+          _tasks = summary?.preAdventure.map((p) => p.prompt).toList() ?? const [];
           _loading = false;
         });
       }

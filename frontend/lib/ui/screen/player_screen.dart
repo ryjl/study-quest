@@ -12,6 +12,7 @@ import '../../config.dart';
 import '../../model/course.dart';
 import '../../model/quiz.dart';
 import '../../service/api_service.dart';
+import '../ai/ai_availability.dart';
 import 'ai_study_screen.dart';
 import '../../theme.dart';
 import '../widget/button_3d.dart';
@@ -69,6 +70,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   DateTime? _lastResumeRetry;
   List<Attachment> _attachments = [];
   AILessonContent? _aiContent;
+  // Phase 2:课前探险问题数据源切到 /ai-summary 的 pre_adventure。保留 _aiContent
+  // (postReviewQuiz 等 Phase 5 才清理),新增 _summary 供"带着问题看"读取。
+  EpisodeSummary? _summary;
   bool _loadingExtras = true;
 
   // Subtitle selection (0 = off, otherwise 1-based into subtitles list)
@@ -286,7 +290,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  /// Fetch AI content + real attachments in parallel (non-blocking for video).
+  /// Fetch AI content + real attachments + summary in parallel (non-blocking).
   Future<void> _loadExtras() async {
     try {
       final results = await Future.wait([
@@ -294,11 +298,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
             .catchError((_) => null),
         ApiService.fetchAttachments(widget.activeUserId, widget.episode.id)
             .catchError((_) => <Attachment>[]),
+        // Phase 2:summary.pre_adventure 是课前探险问题的新数据源。
+        // 404(无 summary / AI 未开)返回 null,这里再 catchError 兜底容错。
+        ApiService.fetchEpisodeSummary(widget.activeUserId, widget.episode.id)
+            .catchError((_) => null),
       ]);
       if (mounted) {
         setState(() {
           _aiContent = results[0] as AILessonContent?;
           _attachments = results[1] as List<Attachment>;
+          _summary = results[2] as EpisodeSummary?;
           _loadingExtras = false;
         });
       }
@@ -1039,22 +1048,40 @@ class _PlayerScreenState extends State<PlayerScreen> {
           // AI study entry — opens the AI study page (summary + practice). On
           // return, if the user tapped a "[跳转 12:38]" link, pop receives a
           // JumpRequest and we seek the player there.
-          _iconControl(
-            icon: Icons.auto_awesome_rounded,
-            onTap: () async {
-              final result = await Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => AiStudyScreen(
-                    activeUserId: widget.activeUserId,
-                    episode: widget.episode,
+          // Phase 2:三态 gating 与课程详情页一致(走同一 helper)。不可用时图标
+          // 置灰(active=false)、点击弹 SnackBar 提示原因,不进入 AiStudyScreen。
+          Builder(builder: (iconCtx) {
+            final availability =
+                AiAvailabilityHelper.fromEpisode(widget.episode);
+            final enabled = availability == AiAvailability.enabled;
+            return _iconControl(
+              icon: Icons.auto_awesome_rounded,
+              active: enabled,
+              onTap: () async {
+                if (!enabled) {
+                  ScaffoldMessenger.of(iconCtx).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                          AiAvailabilityHelper.tooltipFor(availability)!),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                  return;
+                }
+                final result = await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => AiStudyScreen(
+                      activeUserId: widget.activeUserId,
+                      episode: widget.episode,
+                    ),
                   ),
-                ),
-              );
-              if (result is JumpRequest && mounted) {
-                _seekTo(result.target);
-              }
-            },
-          ),
+                );
+                if (result is JumpRequest && mounted) {
+                  _seekTo(result.target);
+                }
+              },
+            );
+          }),
           const SizedBox(width: 8),
           _iconControl(
             icon: _controlsLocked
@@ -1783,9 +1810,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildPreAdventureSection() {
+    // Phase 2:数据源切到 /ai-summary 的 pre_adventure(课程详情页传进来的
+    // preAdventureTasks 也来自 summary)。优先用显式入参(列表页已缓存),
+    // 否则取本屏 lazy 加载的 _summary.preAdventure。
     final tasks = widget.preAdventureTasks.isNotEmpty
         ? widget.preAdventureTasks
-        : (_aiContent?.preAdventureCards.map((c) => c.prompt).toList() ?? const []);
+        : (_summary?.preAdventure.map((p) => p.prompt).toList() ?? const []);
     if (tasks.isEmpty) {
       return _placeholderTile(
         icon: Icons.casino_outlined,

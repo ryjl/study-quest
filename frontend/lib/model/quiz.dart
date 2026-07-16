@@ -10,22 +10,53 @@ class EpisodeSummary {
   final List<String> keyPoints;
   final List<String> concepts;
   final String takeaway;
+  // Phase 2:课前探险问题,和 summary 同一次 LLM 生成产出(零额外调用)。
+  // 引导孩子带着问题进入视频。老数据 / 生成失败时为空,前端优雅降级不展示。
+  final List<PreAdventurePrompt> preAdventure;
 
   EpisodeSummary({
     required this.headline,
     required this.keyPoints,
     required this.concepts,
     required this.takeaway,
+    this.preAdventure = const [],
   });
 
-  factory EpisodeSummary.fromJson(Map<String, dynamic> j) => EpisodeSummary(
-        headline: (j['headline'] ?? '').toString(),
-        keyPoints: (j['key_points'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
-        concepts: (j['concepts'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
-        takeaway: (j['takeaway'] ?? '').toString(),
-      );
+  factory EpisodeSummary.fromJson(Map<String, dynamic> j) {
+    final rawPre = j['pre_adventure'];
+    final List<PreAdventurePrompt> pre = (rawPre is List<dynamic>)
+        ? rawPre
+            .whereType<Map<String, dynamic>>()
+            .map(PreAdventurePrompt.fromJson)
+            // 过滤掉 prompt 为空的脏数据,避免渲染出空白任务卡
+            .where((p) => p.prompt.isNotEmpty)
+            .toList()
+        : const [];
+    return EpisodeSummary(
+      headline: (j['headline'] ?? '').toString(),
+      keyPoints: (j['key_points'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      concepts: (j['concepts'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      takeaway: (j['takeaway'] ?? '').toString(),
+      preAdventure: pre,
+    );
+  }
 
   bool get isEmpty => headline.isEmpty && keyPoints.isEmpty && concepts.isEmpty;
+}
+
+/// 一道课前探险问题。
+///   - prompt:问题本身(开放式,激发好奇心),展示在任务卡上。
+///   - hint:一句不剧透答案的思考方向提示(Phase 2 暂未单独展示,留给后续 UI)。
+class PreAdventurePrompt {
+  final String prompt;
+  final String hint;
+
+  const PreAdventurePrompt({required this.prompt, this.hint = ''});
+
+  factory PreAdventurePrompt.fromJson(Map<String, dynamic> j) => PreAdventurePrompt(
+        prompt: (j['prompt'] ?? '').toString(),
+        hint: (j['hint'] ?? '').toString(),
+      );
 }
 
 /// The status returned by GET /ai-quiz. Drives the screen's state machine.
@@ -147,4 +178,90 @@ class QuizAnswerResult {
 class JumpRequest {
   final Duration target;
   JumpRequest(this.target);
+}
+
+// --- Phase 3: archived quiz history (read-only) ---
+//
+// Mirrors the backend QuizHistoryView. A history quiz is FULLY revealed — the
+// correct answer is shown for every question because the student can only
+// review, not answer (no submit path). This is the one place the client model
+// carries the correct answer.
+
+/// One question in an archived (history) quiz, WITH the correct answer revealed.
+class ArchivedQuizQuestion {
+  final int id;
+  final String type; // "choice" | "fill"
+  final String stem;
+  final List<String> options; // choice only
+  final int? correctIndex; // choice: the right option index
+  final String correctText; // fill: canonical answer(s)
+  final String explanation;
+  final int? chunkStartTime; // seconds, for "[跳转 12:38]"; null if synthetic
+  final bool wrong; // true if the student answered this wrong at least once
+
+  ArchivedQuizQuestion({
+    required this.id,
+    required this.type,
+    required this.stem,
+    required this.options,
+    this.correctIndex,
+    required this.correctText,
+    required this.explanation,
+    this.chunkStartTime,
+    required this.wrong,
+  });
+
+  bool get isFill => type == 'fill';
+
+  factory ArchivedQuizQuestion.fromJson(Map<String, dynamic> j) => ArchivedQuizQuestion(
+        id: (j['id'] as num).toInt(),
+        type: (j['type'] ?? 'choice').toString(),
+        stem: (j['stem'] ?? '').toString(),
+        options: (j['options'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+        correctIndex: j['correct_index'] == null ? null : (j['correct_index'] as num).toInt(),
+        correctText: (j['correct_text'] ?? '').toString(),
+        explanation: (j['explanation'] ?? '').toString(),
+        chunkStartTime: j['chunk_start_time'] == null ? null : (j['chunk_start_time'] as num).toInt(),
+        wrong: (j['wrong'] ?? false) as bool,
+      );
+}
+
+/// One archived (superseded) quiz, fully read-only, for the history panel.
+class ArchivedQuizView {
+  final int quizId;
+  final int episodeId;
+  final String generatedAt; // when the set was generated (formatted)
+  final String archivedAt; // when it was superseded (formatted)
+  final int questionCount;
+  final int wrongCount; // answers with Correct=false against this quiz
+  final String agentFeedback;
+  final List<ArchivedQuizQuestion> questions;
+
+  ArchivedQuizView({
+    required this.quizId,
+    required this.episodeId,
+    required this.generatedAt,
+    required this.archivedAt,
+    required this.questionCount,
+    required this.wrongCount,
+    required this.agentFeedback,
+    required this.questions,
+  });
+
+  factory ArchivedQuizView.fromJson(Map<String, dynamic> j) {
+    final qs = (j['questions'] as List<dynamic>?)
+            ?.map((e) => ArchivedQuizQuestion.fromJson(e as Map<String, dynamic>))
+            .toList() ??
+        const [];
+    return ArchivedQuizView(
+      quizId: (j['quiz_id'] as num?)?.toInt() ?? 0,
+      episodeId: (j['episode_id'] as num?)?.toInt() ?? 0,
+      generatedAt: (j['generated_at'] ?? '').toString(),
+      archivedAt: (j['archived_at'] ?? '').toString(),
+      questionCount: (j['question_count'] as num?)?.toInt() ?? 0,
+      wrongCount: (j['wrong_count'] as num?)?.toInt() ?? 0,
+      agentFeedback: (j['agent_feedback'] ?? '').toString(),
+      questions: qs,
+    );
+  }
 }

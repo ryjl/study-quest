@@ -46,11 +46,20 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   final Map<int, TextEditingController> _fillControllers = {};
   final Map<int, QuizAnswerResult> _results = {}; // questionId → verdict
 
+  // Phase 3: archived (superseded) quiz history, shown read-only. Collapsed by
+  // default — most students rarely reopen old attempts, but the data is
+  // preserved so a curious/parent can review past generations + mistakes.
+  List<ArchivedQuizView> _history = const [];
+  bool _historyLoading = false;
+  // Per-history-quiz expanded state (quizId → expanded). Default collapsed.
+  final Map<int, bool> _historyExpanded = {};
+
   @override
   void initState() {
     super.initState();
     _loadSummary();
     _loadQuiz();
+    _loadHistory();
   }
 
   @override
@@ -104,11 +113,29 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             _quizStatus = resp.status;
             _quiz = resp.quiz;
           });
+          // A new active quiz just landed, which means the prior one was
+          // archived server-side. Refresh history so the panel reflects it.
+          _loadHistory();
         }
       } catch (_) {
         // keep polling on transient errors
       }
     });
+  }
+
+  // _loadHistory fetches the archived (superseded) quiz generations for the
+  // history panel. Best-effort: failures just leave the previous list (or
+  // empty) rather than blocking the page.
+  Future<void> _loadHistory() async {
+    if (mounted) setState(() => _historyLoading = true);
+    try {
+      final h = await ApiService.fetchQuizHistory(widget.activeUserId, widget.episode.id);
+      if (mounted) setState(() => _history = h);
+    } catch (_) {
+      // best-effort
+    } finally {
+      if (mounted) setState(() => _historyLoading = false);
+    }
   }
 
   Future<void> _submit(int questionId, QuizQuestion q) async {
@@ -190,7 +217,50 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           _buildAgentFeedbackCard(),
           const SizedBox(height: 16),
           _buildQuizSection(),
+          const SizedBox(height: 16),
+          _buildHistorySection(),
         ],
+      ),
+    );
+  }
+
+  // --- History section (Phase 3: archived quizzes, read-only) ---
+  //
+  // Collapsible. Hidden entirely while there's no history and none loading
+  // (the common case before the first regenerate), so the panel never shows an
+  // empty "history" block on a fresh lesson.
+  Widget _buildHistorySection() {
+    if (!_historyLoading && _history.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return _Card(
+      child: Theme(
+        // Keep the per-quiz ExpansionTile visuals consistent with the card.
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          initiallyExpanded: false,
+          tilePadding: EdgeInsets.zero,
+          iconColor: const Color(0xFF64748B),
+          collapsedIconColor: const Color(0xFF64748B),
+          title: Row(children: [
+            const Icon(Icons.history_rounded, size: 16, color: Color(0xFF64748B)),
+            const SizedBox(width: 6),
+            const Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+            const SizedBox(width: 8),
+            if (_historyLoading)
+              const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+            else
+              Text('${_history.length} 套', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
+          ]),
+          children: [
+            for (final h in _history) _HistoryQuizCard(
+              quiz: h,
+              expanded: _historyExpanded[h.quizId] ?? false,
+              onToggle: () => setState(() => _historyExpanded[h.quizId] = !(_historyExpanded[h.quizId] ?? false)),
+              onJump: (seconds) => _jumpTo(seconds),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -531,4 +601,174 @@ String _fmtJump(int seconds) {
   final m = seconds ~/ 60;
   final s = seconds % 60;
   return '$m:${s.toString().padLeft(2, '0')}';
+}
+
+// --- History quiz card (read-only, fully revealed) ---
+//
+// One archived quiz in the history panel. The header shows the generated time,
+// question count, and wrong count; tapping expands to reveal every question
+// WITH the correct answer + explanation (read-only — no submit). Wrong
+// questions get a red left border + a small "错" tag so mistakes stand out.
+class _HistoryQuizCard extends StatelessWidget {
+  final ArchivedQuizView quiz;
+  final bool expanded;
+  final VoidCallback onToggle;
+  final ValueChanged<int> onJump; // seconds → seek the player
+
+  const _HistoryQuizCard({
+    required this.quiz,
+    required this.expanded,
+    required this.onToggle,
+    required this.onJump,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    // Header is always visible; questions only when expanded.
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // Header row (tap to toggle).
+        InkWell(
+          onTap: onToggle,
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+            child: Row(children: [
+              Icon(expanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
+                  size: 18, color: const Color(0xFF64748B)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  // ArchivedAt is when it was superseded; fall back to generatedAt.
+                  quiz.archivedAt.isNotEmpty ? quiz.archivedAt : quiz.generatedAt,
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+                ),
+              ),
+              Text('${quiz.questionCount} 题', style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+              const SizedBox(width: 8),
+              if (quiz.wrongCount > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(5)),
+                  child: Text('错 ${quiz.wrongCount}', style: const TextStyle(fontSize: 10, color: Color(0xFFEF4444))),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(5)),
+                  child: const Text('全对', style: TextStyle(fontSize: 10, color: Color(0xFF059669))),
+                ),
+            ]),
+          ),
+        ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(10, 4, 10, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (int i = 0; i < quiz.questions.length; i++)
+                  _HistoryQuestionTile(index: i, q: quiz.questions[i], onJump: onJump),
+              ],
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+// One read-only question in a history quiz. Reveals the correct answer + a
+// per-option correctness highlight. Wrong questions get a red accent.
+class _HistoryQuestionTile extends StatelessWidget {
+  final int index;
+  final ArchivedQuizQuestion q;
+  final ValueChanged<int> onJump;
+
+  const _HistoryQuestionTile({required this.index, required this.q, required this.onJump});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border(
+          left: BorderSide(width: 3, color: q.wrong ? const Color(0xFFEF4444) : const Color(0xFFE2E8F0)),
+        ),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+          const SizedBox(width: 6),
+          if (q.wrong)
+            const Text('错', style: TextStyle(fontSize: 10, color: Color(0xFFEF4444), fontWeight: FontWeight.w700))
+          else
+            const Text('已掌握', style: TextStyle(fontSize: 10, color: Color(0xFF059669))),
+        ]),
+        const SizedBox(height: 6),
+        Text(q.stem, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0F172A))),
+        const SizedBox(height: 8),
+        if (q.isFill) _buildFillAnswer() else _buildChoiceOptions(),
+        if (q.explanation.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(q.explanation, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), height: 1.4)),
+        ],
+        if (q.chunkStartTime != null)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () => onJump(q.chunkStartTime!),
+              icon: const Icon(Icons.play_circle_outline_rounded, size: 14, color: Color(0xFF2563EB)),
+              label: Text('跳转视频 ${_fmtJump(q.chunkStartTime!)}',
+                  style: const TextStyle(fontSize: 11, color: Color(0xFF2563EB))),
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                minimumSize: const Size(0, 24),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+
+  Widget _buildChoiceOptions() {
+    return Column(children: [
+      for (int i = 0; i < q.options.length; i++)
+        Container(
+          margin: const EdgeInsets.only(bottom: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          decoration: BoxDecoration(
+            color: q.correctIndex == i ? const Color(0xFFECFDF5) : Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: q.correctIndex == i ? const Color(0xFF10B981) : const Color(0xFFE2E8F0)),
+          ),
+          child: Row(children: [
+            Expanded(child: Text(q.options[i], style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
+            if (q.correctIndex == i) const Icon(Icons.check_circle, size: 14, color: Color(0xFF10B981)),
+          ]),
+        ),
+    ]);
+  }
+
+  Widget _buildFillAnswer() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+      decoration: BoxDecoration(
+        color: const Color(0xFFECFDF5),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: const Color(0xFF10B981)),
+      ),
+      child: Text('正确答案: ${q.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669))),
+    );
+  }
 }

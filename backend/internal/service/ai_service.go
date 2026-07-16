@@ -65,6 +65,10 @@ type AIService interface {
 	// RegenerateQuiz drops the user's current quiz and re-runs the agent against
 	// their latest memory (换题). Returns the new status ("generating").
 	RegenerateQuiz(userID, episodeID uint) (status string, err error)
+	// ListQuizHistory returns a user's archived (superseded) quizzes for an
+	// episode as fully read-only views (correct answers revealed, no submit
+	// path). Powers the Phase 3 history panel. Newest-archive first.
+	ListQuizHistory(userID, episodeID uint) ([]QuizHistoryView, error)
 
 	// ── quiz: admin observability (Phase C) ──
 	ListQuizzesForUser(userID uint) ([]QuizDetailQuiz, error)

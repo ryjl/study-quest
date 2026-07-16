@@ -92,6 +92,8 @@ func RegisterRoutes(
 		v1Restricted.GET("/episodes/:id/ai-quiz", ai.GetEpisodeQuiz)
 		v1Restricted.POST("/episodes/:id/ai-quiz/submit", ai.SubmitQuizAnswer)
 		v1Restricted.POST("/episodes/:id/ai-quiz/regenerate", ai.RegenerateQuiz)
+		// Phase 3 — read-only quiz history (archived/superseded generations).
+		v1Restricted.GET("/episodes/:id/ai-quiz/history", ai.GetEpisodeQuizHistory)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
 		// Resolve the Nth attachment of an episode into a 302 download link.
 		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)

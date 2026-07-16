@@ -27,6 +27,9 @@ type AIHandler interface {
 	GetEpisodeQuiz(c *gin.Context)
 	SubmitQuizAnswer(c *gin.Context)
 	RegenerateQuiz(c *gin.Context)
+	// GetEpisodeQuizHistory returns the user's archived (superseded) quizzes for
+	// an episode as fully read-only views (correct answers revealed). Phase 3.
+	GetEpisodeQuizHistory(c *gin.Context)
 }
 
 type aiHandler struct {
@@ -226,6 +229,38 @@ func (h *aiHandler) RegenerateQuiz(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, quizResponse{Status: status})
+}
+
+// GetEpisodeQuizHistory returns the user's archived quizzes for an episode as
+// fully read-only views (correct answers + per-question wrong state revealed).
+// GET /api/v1/episodes/:id/ai-quiz/history
+//
+// Always 200 with a (possibly empty) list — absence of history is the normal
+// case before the first regenerate, not an error. Same canAccessEpisode gate as
+// the other quiz endpoints.
+func (h *aiHandler) GetEpisodeQuizHistory(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
+		return
+	}
+	if h.aiService == nil {
+		c.JSON(http.StatusOK, gin.H{"history": []interface{}{}})
+		return
+	}
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	if !h.canAccessEpisode(c, userID, uint(id)) {
+		return
+	}
+	history, err := h.aiService.ListQuizHistory(userID, uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load quiz history"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"history": history})
 }
 
 // requireUserID reads the authenticated user's ID from the gin context (set by

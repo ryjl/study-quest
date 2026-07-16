@@ -116,6 +116,44 @@ type QuizDetailMastery struct {
 	WrongCount   int     `json:"wrong_count"`
 }
 
+// --- read-only history view (Phase 3: archived quiz retention) ---
+//
+// QuizHistoryView is a single ARCHIVED quiz served fully read-only to the
+// client history panel. Unlike QuizView (the active quiz, which hides the
+// correct answer pre-submit), a history quiz exposes the correct answer for
+// every question — the student can't redo it, only review it. It also carries
+// the per-question answered/wrong state so the panel can highlight mistakes
+// without re-fetching.
+
+// QuizHistoryView is one archived quiz in the client history panel.
+type QuizHistoryView struct {
+	QuizID        uint                 `json:"quiz_id"`
+	EpisodeID     uint                 `json:"episode_id"`
+	GeneratedAt   string               `json:"generated_at"` // quiz.CreatedAt (when the set was generated)
+	ArchivedAt    string               `json:"archived_at"`  // when it was superseded; drives panel ordering
+	QuestionCount int                  `json:"question_count"`
+	WrongCount    int                  `json:"wrong_count"` // answers with Correct=false against this quiz
+	AgentFeedback string               `json:"agent_feedback,omitempty"`
+	Questions     []QuizHistoryQuestion `json:"questions"`
+}
+
+// QuizHistoryQuestion is one question in a history quiz, WITH the correct
+// answer exposed (read-only review — no submit path).
+type QuizHistoryQuestion struct {
+	ID             uint     `json:"id"`
+	Type           string   `json:"type"`
+	Stem           string   `json:"stem"`
+	Options        []string `json:"options,omitempty"`
+	CorrectIndex   *int     `json:"correct_index,omitempty"`   // choice
+	CorrectText    string   `json:"correct_text,omitempty"`    // fill
+	Explanation    string   `json:"explanation"`
+	ChunkStartTime *int     `json:"chunk_start_time,omitempty"`
+	// Wrong is true if the student answered this question wrong at least once
+	// (the panel highlights mistakes). False if answered-correct or never
+	// answered. Computed from the archived quiz's answer rows.
+	Wrong bool `json:"wrong"`
+}
+
 // --- status constants for GetOrEnqueueQuiz ---
 
 const (
@@ -717,4 +755,103 @@ func (s *aiService) findQuizRuns(quiz *model.Quiz) []model.AIRun {
 		return nil
 	}
 	return runs
+}
+
+// --- read-only history (Phase 3) ---
+
+// ListQuizHistory assembles the read-only views for every archived quiz of a
+// (user, episode). Each view is fully revealed (correct answers shown) since
+// the student can only review, not answer. Returns an empty slice (not nil)
+// when there's no history, so the client can render "no history yet" cleanly.
+//
+// The correct-answer/wrong highlighting per question comes from the archived
+// quiz's own answer rows (scoped by QuizID snapshot) — this is exactly why
+// Answer snapshots QuizID: even though the quiz is now archived, its answers
+// still point at it and we can join them without a question table lookup.
+func (s *aiService) ListQuizHistory(userID, episodeID uint) ([]QuizHistoryView, error) {
+	archived, err := s.contentRepo.ListArchivedQuizzes(userID, episodeID)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]QuizHistoryView, 0, len(archived))
+	for i := range archived {
+		v, err := s.buildQuizHistoryView(&archived[i])
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, *v)
+	}
+	return views, nil
+}
+
+// buildQuizHistoryView turns one archived Quiz row into a fully-revealed,
+// read-only client view (correct answers + per-question wrong state). Kept
+// separate from GetQuizDetail's assembly because the history panel needs a
+// different, lighter payload: no mastery/runs, correct answers always shown,
+// and a per-question "was this answered wrong?" flag.
+func (s *aiService) buildQuizHistoryView(quiz *model.Quiz) (*QuizHistoryView, error) {
+	questions, err := s.contentRepo.GetQuestions(quiz.ID)
+	if err != nil {
+		return nil, err
+	}
+	// chunk_id → start_time map for the video-jump link, same as the other views.
+	chunks, _ := s.contentRepo.ListChunks(quiz.EpisodeID, "subtitle")
+	startByChunk := make(map[uint]*int, len(chunks))
+	for _, c := range chunks {
+		c := c
+		startByChunk[c.ID] = c.StartTime
+	}
+	// Pull this archived quiz's answers (snapshot QuizID scopes them) to flag
+	// wrong questions. ListAnswersForQuiz already scopes by user + episode via
+	// the quiz_id → quiz → episode relationship; here the quiz IS the archived
+	// one, so it returns exactly this quiz's attempts.
+	rawAnswers, _ := s.contentRepo.ListAnswersForQuiz(quiz.ID, quiz.UserID)
+	wrongQIDs := make(map[uint]bool, len(rawAnswers))
+	wrongCount := 0
+	for _, a := range rawAnswers {
+		if !a.Correct {
+			if !wrongQIDs[a.QuestionID] {
+				wrongQIDs[a.QuestionID] = true
+				wrongCount++
+			}
+		}
+	}
+
+	out := &QuizHistoryView{
+		QuizID:        quiz.ID,
+		EpisodeID:     quiz.EpisodeID,
+		GeneratedAt:   quiz.CreatedAt.Format("2006-01-02 15:04"),
+		QuestionCount: len(questions),
+		WrongCount:    wrongCount,
+		AgentFeedback: quiz.AgentFeedback,
+		Questions:     make([]QuizHistoryQuestion, 0, len(questions)),
+	}
+	if quiz.ArchivedAt != nil {
+		out.ArchivedAt = quiz.ArchivedAt.Format("2006-01-02 15:04")
+	}
+	for _, q := range questions {
+		var opts []string
+		if q.Options != "" {
+			_ = json.Unmarshal([]byte(q.Options), &opts)
+		}
+		hq := QuizHistoryQuestion{
+			ID:             q.ID,
+			Type:           q.Type,
+			Stem:           q.Stem,
+			Options:        opts,
+			Explanation:    q.Explanation,
+			ChunkStartTime: startByChunk[q.ChunkID],
+			Wrong:          wrongQIDs[q.ID],
+		}
+		if q.Type == agent.QuestionFill {
+			var accept []string
+			_ = json.Unmarshal([]byte(q.AnswerText), &accept)
+			hq.CorrectText = joinAcceptable(accept)
+		} else {
+			i := q.Answer
+			hq.CorrectIndex = &i
+		}
+		out.Questions = append(out.Questions, hq)
+	}
+	return out, nil
 }

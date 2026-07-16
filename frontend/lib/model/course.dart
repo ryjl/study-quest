@@ -108,6 +108,12 @@ class Episode {
   final int fileSize;
   final int durationSeconds;
   final bool locked;
+  // Phase 2:课程级 AI 开关回显 + 该 episode 是否有字幕。三个字段都由后端
+  // 在 episode DTO 里下发(PascalCase,add-only),客户端据此决定 AI 学习入口
+  // 的可见性与可用提示。默认 false 兼容老后端(字段缺失视为"未开启/无字幕")。
+  final bool aiSummaryEnabled;
+  final bool aiQuizEnabled;
+  final bool hasSubtitle;
 
   Episode({
     required this.id,
@@ -122,6 +128,9 @@ class Episode {
     required this.fileSize,
     required this.durationSeconds,
     this.locked = false,
+    this.aiSummaryEnabled = false,
+    this.aiQuizEnabled = false,
+    this.hasSubtitle = false,
   });
 
   factory Episode.fromJson(Map<String, dynamic> json) {
@@ -142,6 +151,11 @@ class Episode {
       // `locked` flag derived from the unlock resolution. Default false so a
       // missing field (older backends) treats everything as visible.
       locked: json['locked'] == true,
+      // Phase 2 新增三字段:dual-key 读取,主读 PascalCase(与既有字段一致),
+      // 兼容老后端缺失时默认 false。
+      aiSummaryEnabled: json['AISummaryEnabled'] ?? json['ai_summary_enabled'] ?? false,
+      aiQuizEnabled: json['AIQuizEnabled'] ?? json['ai_quiz_enabled'] ?? false,
+      hasSubtitle: json['HasSubtitle'] ?? json['has_subtitle'] ?? false,
     );
   }
 

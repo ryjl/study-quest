@@ -277,6 +277,25 @@ class ApiService {
     }
   }
 
+  // Phase 3 — archived quiz history (read-only). Returns the user's superseded
+  // quiz generations for an episode; each is fully revealed (correct answers
+  // shown). Empty list when there's no history yet (normal before first regen).
+  static Future<List<ArchivedQuizView>> fetchQuizHistory(int activeUserId, int episodeId) async {
+    final response = await _httpClient.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/history'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body);
+      final list = (body is Map && body['history'] is List) ? body['history'] as List : const [];
+      return list
+          .map((e) => ArchivedQuizView.fromJson(e as Map<String, dynamic>))
+          .toList();
+    }
+    if (response.statusCode == 404) return const []; // AI off / no history
+    _fail(response.statusCode, '获取历史练习失败: ${response.statusCode}');
+  }
+
   // 6. Fetch play info (resolves direct streaming URL and custom HTTP headers for netdisk bypass)
   static Future<PlayInfo> fetchPlayInfo(int activeUserId, int episodeId) async {
     final response = await _httpClient.get(
