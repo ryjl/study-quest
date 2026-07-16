@@ -20,18 +20,39 @@ type fakeToolDeps struct {
 	courseMasteries  []model.KnowledgeMemory
 	subjectMasteries []model.KnowledgeMemory
 	userCourses      []uint
+	// course summary 工具集专用字段(Phase D)。零值时工具返回"暂无 episode"提示。
+	// courseEpisodes 是按 courseID 查 episode 列表的返回值(course summary agent 遍历用);
+	// episodesByID 让 get_episode_summary 工具按 episode_id 参数返回不同的 episode + summary。
+	courseEpisodes []model.Episode
+	episodesByID   map[uint]*model.Episode
+	summariesByID  map[uint]*model.AISummary
 }
 
 func (f *fakeToolDeps) ListChunks(episodeID uint) ([]model.ContentChunk, error) {
 	return f.chunks, f.chunkErr
 }
 func (f *fakeToolDeps) GetEpisode(episodeID uint) (*model.Episode, error) {
+	// 优先按 id map 返回(course summary 工具按 episode_id 参数查不同 episode);
+	// 没配置 map 时回退到单值字段(quiz/advice 测试的默认行为)。
+	if f.episodesByID != nil {
+		if ep, ok := f.episodesByID[episodeID]; ok {
+			return ep, nil
+		}
+		return nil, nil
+	}
 	return f.episode, nil
 }
 func (f *fakeToolDeps) GetCourse(courseID uint) (*model.Course, error) {
 	return f.course, nil
 }
 func (f *fakeToolDeps) GetSummary(episodeID uint) (*model.AISummary, error) {
+	// 同 GetEpisode:优先按 id map 返回(course summary 测试需要不同 episode 不同 summary)。
+	if f.summariesByID != nil {
+		if s, ok := f.summariesByID[episodeID]; ok {
+			return s, nil
+		}
+		return nil, nil
+	}
 	return f.summary, nil
 }
 // advice 工具集方法:满足 ToolDeps 接口(quiz 测试不会调用,返回 fake 字段即可)。
@@ -43,6 +64,11 @@ func (f *fakeToolDeps) GetCourseMasteries(userID, courseID uint) ([]model.Knowle
 }
 func (f *fakeToolDeps) GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error) {
 	return f.subjectMasteries, nil
+}
+// course summary 工具集方法(Phase D):满足 ToolDeps 接口。返回 fake 字段,quiz/advice
+// 测试用不到(它们不会调到这个方法)。
+func (f *fakeToolDeps) ListCourseEpisodes(courseID uint) ([]model.Episode, error) {
+	return f.courseEpisodes, nil
 }
 
 type fakeEmbedder struct{ vecs [][]float32 }

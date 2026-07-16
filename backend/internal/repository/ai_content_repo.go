@@ -144,6 +144,24 @@ type AIContentRepository interface {
 	// keeping only the latest snapshot. The unique index on the triple is the
 	// DB-level guard; this Save relies on it.
 	UpsertAdvice(a *model.StudyAdvice) error
+
+	// ── ai_course_summaries (Phase D: course-unique 课程级总结) ──
+	// GetCourseSummary 取某课程的总结(unique on course_id,所以最多一条)。无记录返回
+	// (nil, nil),让客户端/handler 决定是返回 "无总结" 还是触发 admin 生成。课程总结是
+	// course-unique 的纯内容总结(不含 user 维度),所有学生共享。
+	GetCourseSummary(courseID uint) (*model.AICourseSummary, error)
+	// UpsertCourseSummary 替换该课程的旧总结(unique index on course_id 是 DB 级守卫,
+	// 重新生成完全覆盖旧总结——和 UpsertAdvice/UpsertSummary 同语义)。admin 触发重生成
+	// 时调用。
+	UpsertCourseSummary(s *model.AICourseSummary) error
+
+	// ── user_study_reports (Phase E: admin 跨课程学习报告) ──
+	// GetUserStudyReport 取某用户的最新学习报告(unique on user_id,所以最多一条)。
+	// 无记录返回 (nil, nil),让 admin handler 决定是返回 "无报告" 还是触发生成。
+	GetUserStudyReport(userID uint) (*model.UserStudyReport, error)
+	// UpsertUserStudyReport 替换该用户的旧报告(unique index on user_id 是 DB 级守卫,
+	// 重新生成完全覆盖旧报告——和 UpsertAdvice 同语义)。admin 触发重生成时调用。
+	UpsertUserStudyReport(r *model.UserStudyReport) error
 }
 
 // ErrJobNotProcessing is returned by ResetJob when the targeted job isn't in
@@ -673,5 +691,62 @@ func (r *aiContentRepo) UpsertAdvice(a *model.StudyAdvice) error {
 			return err
 		}
 		return tx.Create(a).Error
+	})
+}
+
+// --- ai_course_summaries (Phase D: course-unique 课程级总结) ---
+
+// GetCourseSummary 按 course_id 取该课程的总结(unique index 保证最多一条)。无记录返回
+// (nil, nil),让客户端 handler 据此返回 "无总结"(404),或让 admin handler 触发生成。
+// 课程总结是 course-unique 的,不按 user 区分。
+func (r *aiContentRepo) GetCourseSummary(courseID uint) (*model.AICourseSummary, error) {
+	var s model.AICourseSummary
+	if err := r.db.Where("course_id = ?", courseID).First(&s).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &s, nil
+}
+
+// UpsertCourseSummary 替换同一 course_id 上的旧课程总结。先删后插(同 UpsertAdvice 语义),
+// 语义上更清晰:重新生成完全覆盖旧总结,符合课程总结的"当前导览"语义(course-unique,所有
+// 学生共享,不需要历史)。unique index on course_id 是 DB 级守卫。
+func (r *aiContentRepo) UpsertCourseSummary(s *model.AICourseSummary) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("course_id = ?", s.CourseID).
+			Delete(&model.AICourseSummary{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(s).Error
+	})
+}
+
+// --- user_study_reports (Phase E: admin 跨课程学习报告) ---
+
+// GetUserStudyReport 按 user_id 取该用户的最新学习报告(unique index 保证最多一条)。
+// 无记录返回 (nil, nil),调用方(admin handler)据此返回 "无报告" 或触发生成。
+func (r *aiContentRepo) GetUserStudyReport(userID uint) (*model.UserStudyReport, error) {
+	var rep model.UserStudyReport
+	if err := r.db.Where("user_id = ?", userID).First(&rep).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &rep, nil
+}
+
+// UpsertUserStudyReport 替换该用户的旧报告——delete-then-insert,和 UpsertAdvice 同
+// 语义(unique index on user_id 是 DB 守卫)。重新生成完全覆盖旧报告,符合"当前最新
+// 画像"的语义。事务内 delete+create,避免并发生成时出现两条(user_id unique 会拦,
+// 但事务更稳)。
+func (r *aiContentRepo) UpsertUserStudyReport(rep *model.UserStudyReport) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ?", rep.UserID).Delete(&model.UserStudyReport{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(rep).Error
 	})
 }

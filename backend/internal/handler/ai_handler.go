@@ -43,6 +43,10 @@ type AIHandler interface {
 	GetEpisodeAdvice(c *gin.Context)
 	GetCourseAdvice(c *gin.Context)
 	GetSubjectAdvice(c *gin.Context)
+	// ── Phase D — 课程级总结(course-unique 纯内容总结)端点 ──
+	// 客户端只读已生成的课程总结(不触发生成——总结是 course-unique 共享的,admin 生成)。
+	// 返回 {summary_text, model_used, generated_at}。无总结时 404(客户端隐藏课程总结卡片)。
+	GetCourseSummary(c *gin.Context)
 }
 
 type aiHandler struct {
@@ -483,4 +487,60 @@ func (h *aiHandler) GetSubjectAdvice(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, adviceResponse{Status: status, Scope: "subject", ID: uint(id), Advice: advice})
+}
+
+// ---------------------------------------------------------------------------
+// Phase D — 课程级总结端点(course-unique 纯内容总结)
+// ---------------------------------------------------------------------------
+
+// courseSummaryResponse 是 GET /courses/:id/ai-summary 的响应形状。课程总结是 course-unique
+// 的纯内容总结(不含个人维度),所有学生共享同一份。status 字段告诉客户端:
+//   - ready:总结已生成,summary_text/model_used/generated_at 带完整内容;
+//   - unavailable:AI 未配置,或该课程暂无总结(客户端隐藏课程总结卡片)。
+//
+// 注意:这里没有 "generating"——客户端不触发生成(course summary 是 admin 触发的);客户端
+// 只读已生成的,无总结就 404。admin 触发生成走 admin 端点(POST /admin/api/ai/course-summary)。
+type courseSummaryResponse struct {
+	Status      string `json:"status"`
+	SummaryText string `json:"summary_text,omitempty"`
+	ModelUsed   string `json:"model_used,omitempty"`
+	GeneratedAt string `json:"generated_at,omitempty"`
+}
+
+// GetCourseSummary 返回某门课程的课程级总结(course-unique 纯内容总结)。
+// GET /api/v1/courses/:id/ai-summary
+//
+// 客户端只读已生成的总结,不触发生成(课程总结是 admin 手动触发的——它是 course-unique
+// 共享的,不应让任一学生触发生成)。无总结时 404(status=unavailable),客户端隐藏卡片。
+// 访问控制:只需登录(总结是 course-unique 共享的,内容对所有能访问该课程的学生公开;
+// 若后续要严格校验课程访问权,可在 service 层加 userRepo.HasAccess 检查)。
+func (h *aiHandler) GetCourseSummary(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID"})
+		return
+	}
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, courseSummaryResponse{Status: "unavailable"})
+		return
+	}
+	// 只需登录(课程总结对所有学生共享,不按 user 区分)。
+	if _, ok := requireUserID(c); !ok {
+		return
+	}
+	summary, err := h.aiService.GetCourseSummary(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load course summary"})
+		return
+	}
+	if summary == nil {
+		c.JSON(http.StatusNotFound, courseSummaryResponse{Status: "unavailable"})
+		return
+	}
+	c.JSON(http.StatusOK, courseSummaryResponse{
+		Status:      "ready",
+		SummaryText: summary.SummaryText,
+		ModelUsed:   summary.ModelUsed,
+		GeneratedAt: summary.GeneratedAt.Format("2006-01-02 15:04"),
+	})
 }

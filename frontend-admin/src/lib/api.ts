@@ -40,6 +40,7 @@ import type {
   AiSummaryRow,
   AiQuizRow,
   AiQuizDetail,
+  UserStudyReport,
 } from './types';
 
 // Centralized API client. Same-origin cookies carry the admin session. All
@@ -561,5 +562,15 @@ export const api = {
   },
   async getQuizDetail(quizId: number): Promise<AiQuizDetail> {
     return request(`/admin/api/ai/quizzes/${quizId}`);
+  },
+
+  // Phase E — admin 用户学习报告(跨课程画像,agent 驱动)。
+  // triggerUserReport:触发生成(POST,异步入队 job),返回 status。
+  // getUserReport:取报告(GET),status 三态(ready/generating/'')。
+  async triggerUserReport(userId: number): Promise<{ status: string }> {
+    return request(`/admin/api/ai/users/${userId}/study-report`, { method: 'POST' });
+  },
+  async getUserReport(userId: number): Promise<UserStudyReport> {
+    return request(`/admin/api/ai/users/${userId}/study-report`);
   },
 };

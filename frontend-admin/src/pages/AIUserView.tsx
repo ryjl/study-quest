@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { AiQuizDetail, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
@@ -86,6 +86,11 @@ export function AIUserView() {
         </datalist>
       </div>
 
+      {/* 用户学习报告(Phase E)—— agent 驱动的跨课程画像,供 admin 查看。
+          选中用户后显示:有报告则渲染文本;无报告显示"生成"按钮;生成中显示 spinner +
+          轮询(类似 quiz 的 lazy 生成)。独立成组件,内部管理触发 + 轮询状态。 */}
+      {userId != null && <UserStudyReportSection userId={userId} />}
+
       {/* Quiz list */}
       <div className="space-y-3">
         <h2 className="text-base font-semibold">
@@ -137,6 +142,87 @@ export function AIUserView() {
 
       {/* Quiz detail modal */}
       <QuizDetailModal quizId={openQuizId} onClose={() => setOpenQuizId(null)} />
+    </div>
+  );
+}
+
+// UserStudyReportSection — Phase E admin 用户学习报告区块。
+// 三态渲染:
+//   - generating:无报告(或有旧报告)+ 有在途 job → 显示 spinner + "正在生成学习报告…",
+//     并用 refetchInterval 每 3s 轮询 GET 端点直到 ready(同 SubtitleQueue/AIWorkflow 的轮询模式)。
+//   - ready:有报告 → 渲染报告文本(whitespace-pre-wrap 支持段落/换行)+ 生成时间 + "重新生成"按钮。
+//   - '':无报告 + 未生成 → 显示"生成学习报告"按钮,点击触发 POST 然后开始轮询。
+//
+// 触发(triggerUserReport)后立即把 query 的数据标成 generating(乐观更新),并开启轮询——
+// 这样按钮点击后无需等待下一轮 poll 就能切到 spinner。
+function UserStudyReportSection({ userId }: { userId: number }) {
+  const qc = useQueryClient();
+  const reportQ = useQuery({
+    queryKey: ['ai-user-study-report', userId],
+    queryFn: () => api.getUserReport(userId),
+    // 只在 generating 时轮询;ready 或空时停止(省请求)。refetchIntervalInBackground
+    // 关掉,避免后台标签页无意义轮询(同 SubtitleQueue 的做法)。
+    refetchInterval: (q) => (q.state.data?.status === 'generating' ? 3000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const data = reportQ.data;
+  const generating = data?.status === 'generating';
+  const [triggering, setTriggering] = useState(false);
+
+  const trigger = async () => {
+    setTriggering(true);
+    try {
+      // POST 触发生成(异步入队 job)。乐观把缓存标成 generating 让 spinner 立刻出现,
+      // 真实 status 由后续轮询的 GET 校准(后端可能因在途 job 返回 generating,语义一致)。
+      qc.setQueryData(['ai-user-study-report', userId], { status: 'generating' });
+      await api.triggerUserReport(userId);
+      // 唤醒一次查询(若 refetchInterval 还没到,立即拉一次确认状态)。
+      await reportQ.refetch();
+    } catch {
+      // 触发失败:回滚到上一态,让用户能重试。错误用 toast/alert 太重,这里清掉 generating
+      // 标记即可——下次 refetch 会拿到真实的(很可能是 '')status。
+      qc.invalidateQueries({ queryKey: ['ai-user-study-report', userId] });
+    } finally {
+      setTriggering(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4">
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="text-base font-semibold">跨课程学习报告</h2>
+        {/* 任何时候都允许"重新生成"——报告是快照,admin 可刷新过期数据。
+            generating/triggering 时禁用按钮防连点(后端也有在途 job 去重,这是前端第二道)。 */}
+        <button
+          className="btn-ghost btn-sm"
+          onClick={trigger}
+          disabled={generating || triggering}
+          title={data?.status === 'ready' ? '重新生成(覆盖当前报告)' : '生成学习报告'}
+        >
+          {triggering ? '提交中…' : data?.status === 'ready' ? '重新生成' : '生成学习报告'}
+        </button>
+      </div>
+      {generating ? (
+        // 生成中:spinner + 提示。agent 跨课程分析 + ReAct 多轮,通常几十秒,提示用户稍候。
+        <div className="flex items-center gap-2 px-1 py-6 text-sm text-muted">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-transparent" />
+          正在生成学习报告…(agent 正在跨课程分析,约需数十秒)
+        </div>
+      ) : data?.status === 'ready' && data.report ? (
+        // ready:渲染报告文本。whitespace-pre-wrap 保留段落/换行,让报告的结构清晰。
+        <div className="space-y-2">
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-txt">{data.report}</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+            {data.generated_at && <span>生成于 {new Date(data.generated_at).toLocaleString('zh-CN')}</span>}
+            {data.model_used && <span>模型: {data.model_used}</span>}
+          </div>
+        </div>
+      ) : (
+        // 无报告未生成:占位 + 引导。数据不足时 agent 会在报告里说明,这里只是触发前的空态。
+        <div className="px-1 py-6 text-sm text-muted">
+          {reportQ.isLoading ? '加载中…' : '暂无学习报告。点击"生成学习报告",由 agent 分析该学生跨课程的学习情况(整体掌握度、强项弱项课程、跨课程关联、重点建议)。'}
+        </div>
+      )}
     </div>
   );
 }

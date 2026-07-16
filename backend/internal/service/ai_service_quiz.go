@@ -217,6 +217,9 @@ type agentToolDeps struct {
 
 type agentEpisodeLoader interface {
 	FindByID(id uint) (*model.Episode, error)
+	// ListByCourse 给 course summary agent 用(Phase D):遍历课程下所有 episode。
+	// repository.EpisodeRepository 已实现该方法,advice/quiz 路径的 episodeRepo 满足。
+	ListByCourse(courseID uint) ([]model.Episode, error)
 }
 type agentCourseLoader interface {
 	FindByID(id uint) (*model.Course, error)
@@ -251,6 +254,13 @@ func (d *agentToolDeps) GetCourseMasteries(userID, courseID uint) ([]model.Knowl
 }
 func (d *agentToolDeps) GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error) {
 	return d.contentRepo.GetSubjectMasteries(userID, subjectID)
+}
+
+// ── course summary 工具集专用方法(Phase D)──
+// ListCourseEpisodes 委托 episodeRepo.ListByCourse。course summary agent 用它遍历整门课。
+// repository.EpisodeRepository 已实现 ListByCourse,所以 episodeRepo 直接满足。
+func (d *agentToolDeps) ListCourseEpisodes(courseID uint) ([]model.Episode, error) {
+	return d.episodeRepo.ListByCourse(courseID)
 }
 
 // Compile-time: agentToolDeps satisfies the agent.ToolDeps interface.

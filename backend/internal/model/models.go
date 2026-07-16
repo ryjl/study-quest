@@ -1177,6 +1177,40 @@ type StudyAdvice struct {
 	UpdatedAt           time.Time
 }
 
+// AICourseSummary 是 Phase D 的课程级总结产物(course-unique)。和 StudyAdvice 的关键
+// 差异:它按 course 唯一存储(不含 user_id),是**纯内容总结**——课程整体脉络 + 学习路径
+// 建议,与具体学生无关。这样所有学生共享同一条总结,admin 生成一次即可,不必按 user
+// 重复跑(不同学生的"针对建议"走 advice,那是 per-user 的,不在这里)。
+//
+// 重新生成替换旧记录(同 AISummary.UpsertSummary / StudyAdvice.UpsertAdvice 语义)。
+// SummaryText 存 agent 的自然语言 FinalText(整体脉络 + 学习路径);课程总结是给所有
+// 学生看的导览,不是结构化题库,所以用纯文本而不是 JSON。
+type AICourseSummary struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement"`
+	CourseID    uint      `gorm:"uniqueIndex;not null"`
+	SummaryText string    `gorm:"type:text;not null"` // agent 的自然语言 FinalText(整体脉络 + 学习路径)
+	ModelUsed   string    `gorm:"size:255"`
+	GeneratedAt time.Time `gorm:"not null"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// UserStudyReport 是 Phase E 的产物:admin 视角下"某学生跨课程学习情况"的 agent 报告。
+// 和 StudyAdvice 的差异——advice 是给学生本人看的"复习建议"(episode/course/subject 级),
+// UserStudyReport 是给 admin 看的"这个学生整体学得怎么样"的跨课程画像报告。每用户一份
+// 最新报告(unique on user_id),重新生成替换。Agent 走和 advice 同一套 ReAct loop,但
+// 工具集是 user_study 专用(list_user_courses / get_course_mastery / get_course_summary /
+// get_user_advice),agent 自己遍历该学生所有课程交叉分析。
+type UserStudyReport struct {
+	ID          uint      `gorm:"primaryKey;autoIncrement"`
+	UserID      uint      `gorm:"uniqueIndex;not null"` // 每用户一份最新报告(unique on user_id,重新生成替换)
+	ReportText  string    `gorm:"type:text;not null"`   // 自然语言报告(agent 的 FinalText)
+	ModelUsed   string    `gorm:"size:255"`
+	GeneratedAt time.Time `gorm:"not null"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 func AutoMigrate(db *gorm.DB) error {
 	err := db.AutoMigrate(
 		&Setting{},
@@ -1235,6 +1269,10 @@ func AutoMigrate(db *gorm.DB) error {
 		&ChatMessage{},
 		// Phase C — agent 驱动的学习建议(advice agent 产出)。
 		&StudyAdvice{},
+		// Phase D — 课程级总结(course-unique 纯内容总结,agent 驱动综合所有 episode)。
+		&AICourseSummary{},
+		// Phase E — admin 用户学习报告(agent 驱动,跨课程交叉分析)。
+		&UserStudyReport{},
 	)
 	if err != nil {
 		return err

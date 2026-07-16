@@ -609,3 +609,152 @@ func (h *adminHandler) GetQuizDetail(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, detail)
 }
+
+// ---------------------------------------------------------------------------
+// Phase D — admin 课程级总结(course-unique 纯内容总结,agent 驱动)
+// ---------------------------------------------------------------------------
+
+// courseSummaryAdminDTO 是 ai_course_summary 的 admin JSON 视图。status 让前端区分:
+//   - ready:有总结(summary_text 字段非空)
+//   - generating:无总结 + 有在途 job(前端轮询)
+//   - 空 status + 无 summary:无总结也未生成(前端显示"生成总结"按钮)
+type courseSummaryAdminDTO struct {
+	Status      string `json:"status"`             // ready | generating | ""(无总结未生成)
+	SummaryText string `json:"summary_text,omitempty"`
+	ModelUsed   string `json:"model_used,omitempty"`
+	GeneratedAt string `json:"generated_at,omitempty"`
+}
+
+// TriggerCourseSummary 触发为某课程生成课程级总结(异步入队 course_summary job)。
+// 返回 status="generating"(或 unavailable,当 AI off 或课程不存在)。前端随后轮询 GET
+// 端点直到 ready。
+// POST /admin/api/ai/courses/:id/course-summary
+//
+// 设计为"强制重生成"语义:即使已有总结,POST 也会重跑(覆盖)。这让 admin 能刷新过期
+// 总结(比如课程新增了 episode 之后)。去重靠 service 的在途 job 检查(避免连点堆 job)。
+func (h *adminHandler) TriggerCourseSummary(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	courseID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的课程 id"})
+		return
+	}
+	status, err := h.aiService.EnqueueCourseSummary(courseID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": status})
+}
+
+// GetCourseSummary 取某课程的最新课程总结(供 admin GET 端点)。
+// GET /admin/api/ai/courses/:id/course-summary
+//
+// 响应 status 三态:
+//   - ready:有总结(返回 summary_text + 元数据)
+//   - generating:无总结 + 有在途 job(前端继续轮询 / 显示 spinner)
+//   - "":无总结 + 无在途 job(前端显示"生成总结"按钮)
+func (h *adminHandler) GetCourseSummary(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	courseID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的课程 id"})
+		return
+	}
+	summary, err := h.aiService.GetCourseSummary(courseID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	dto := courseSummaryAdminDTO{}
+	if summary != nil {
+		dto.Status = "ready"
+		dto.SummaryText = summary.SummaryText
+		dto.ModelUsed = summary.ModelUsed
+		dto.GeneratedAt = summary.GeneratedAt.Format(time.RFC3339)
+	} else if h.aiService.HasPendingCourseSummaryJob(courseID) {
+		// 无总结但正在生成——前端据此显示 spinner 并继续轮询。
+		dto.Status = "generating"
+	}
+	c.JSON(http.StatusOK, dto)
+}
+
+// ---------------------------------------------------------------------------
+// Phase E — admin 用户学习报告(agent 驱动,跨课程画像)
+// ---------------------------------------------------------------------------
+
+// userStudyReportDTO 是 user_study_report 的 admin JSON 视图。status 让前端区分:
+//   - ready:有报告(report 字段非空)
+//   - generating:无报告 + 有在途 job(前端轮询)
+//   - 空 status + 无 report:无报告也未生成(前端显示"生成报告"按钮)
+type userStudyReportDTO struct {
+	Status      string `json:"status"`             // ready | generating | ""(无报告未生成)
+	Report      string `json:"report,omitempty"`   // 报告文本(ready 时有)
+	ModelUsed   string `json:"model_used,omitempty"`
+	GeneratedAt string `json:"generated_at,omitempty"`
+}
+
+// TriggerUserStudyReport 触发为某用户生成学习报告(异步入队 user_report job)。
+// 返回 status="generating"(或 unavailable,当 AI off)。前端随后轮询 GET 端点直到 ready。
+// POST /admin/api/ai/users/:id/study-report
+//
+// 设计为"强制重生成"语义:即使已有报告,POST 也会重跑(覆盖)。这让 admin 能刷新过期
+// 报告。去重靠 service 的在途 job 检查(避免连点堆 job)。
+func (h *adminHandler) TriggerUserStudyReport(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	userID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 id"})
+		return
+	}
+	status, err := h.aiService.EnqueueUserReport(userID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": status})
+}
+
+// GetUserStudyReport 取某用户的最新学习报告(供 admin GET 端点)。
+// GET /admin/api/ai/users/:id/study-report
+//
+// 响应 status 三态:
+//   - ready:有报告(返回 report 文本 + 元数据)
+//   - generating:无报告 + 有在途 job(前端继续轮询 / 显示 spinner)
+//   - "":无报告 + 无在途 job(前端显示"生成报告"按钮)
+func (h *adminHandler) GetUserStudyReport(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	userID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 id"})
+		return
+	}
+	report, err := h.aiService.GetUserStudyReport(userID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	dto := userStudyReportDTO{}
+	if report != nil {
+		dto.Status = "ready"
+		dto.Report = report.ReportText
+		dto.ModelUsed = report.ModelUsed
+		dto.GeneratedAt = report.GeneratedAt.Format(time.RFC3339)
+	} else if h.aiService.HasPendingUserReportJob(userID) {
+		// 无报告但正在生成——前端据此显示 spinner 并继续轮询。
+		dto.Status = "generating"
+	}
+	c.JSON(http.StatusOK, dto)
+}

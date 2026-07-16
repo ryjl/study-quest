@@ -51,6 +51,13 @@ type ToolDeps interface {
 	// 翻译成"暂无答题记录"的 observation,agent 据此降级(基于内容给建议)。
 	GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error)
 	GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error)
+
+	// ── course summary 工具集专用(Phase D)──
+	// ListCourseEpisodes 返回课程下所有 episode(按 sort_order 升序),course summary agent
+	// 用它遍历整门课做综合。走 episodeRepo.ListByCourse。quiz/advice 路径用不到它(那些
+	// agent 已被 episode/course scope 绑定,不需要遍历),但接口要满足才能编译通过——
+	// 它们的 agentToolDeps adapter 实现时返回空即可(见 ai_service_quiz.go)。
+	ListCourseEpisodes(courseID uint) ([]model.Episode, error)
 }
 
 // embedder is the minimal slice of ai.Embedder the search tool needs.

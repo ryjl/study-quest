@@ -85,9 +85,36 @@ type AIService interface {
 	// 在途 advice job 不重复入队。
 	EnqueueAdviceForEpisode(userID, episodeID uint) error
 
+	// ── Phase D: 课程级总结(course-unique 纯内容总结,agent 驱动)──
+	// EnqueueCourseSummary 是 admin 手动触发"为某课程生成课程级总结"入口。入队低优先级
+	// course_summary job,返回 "generating"(无在途 job 时)或 "unavailable"(AI off /
+	// 课程不存在)。在途 job 不重复入队(避免堆 job)。和 advice 的 lazy 生成不同:
+	// course summary 纯 admin 触发(客户端只读已生成的总结,不触发生成——因为总结是
+	// course-unique 共享的,不应让任一学生触发)。courseID 必须指向存在的课程。
+	EnqueueCourseSummary(courseID uint) (status string, err error)
+	// GetCourseSummary 取某课程的最新课程总结(unique on course_id,所以最多一条)。无总结
+	// 返回 nil。客户端 GET /courses/:id/ai-summary 调此方法;nil → handler 返回 404
+	// ("暂无课程总结")。课程总结是 course-unique 的纯内容总结(不含个人维度)。
+	GetCourseSummary(courseID uint) (*model.AICourseSummary, error)
+	// HasPendingCourseSummaryJob 报告该课程是否有在途 course_summary job,handler/admin
+	// 据此区分"正在生成"(generating)vs"无总结未生成"(显示生成按钮)。
+	HasPendingCourseSummaryJob(courseID uint) bool
+
 	// ── quiz: admin observability (Phase C) ──
 	ListQuizzesForUser(userID uint) ([]QuizDetailQuiz, error)
 	GetQuizDetail(quizID uint) (*QuizDetail, error)
+
+	// ── Phase E: admin 用户学习报告(agent 驱动,跨课程画像)──
+	// EnqueueUserReport 是 admin 触发的"为某用户生成学习报告"入口。入队低优先级
+	// user_report job,返回 "generating"(无在途 job 时)或 "unavailable"(AI off)。
+	// 在途 job 不重复入队。和 advice 的 lazy 生成不同:user_report 纯 admin 触发。
+	EnqueueUserReport(userID uint) (status string, err error)
+	// GetUserStudyReport 取某用户的最新学习报告(unique on user_id)。无报告返回 nil。
+	// handler 结合 HasPendingUserReportJob 决定响应是 ready / generating / 空。
+	GetUserStudyReport(userID uint) (*model.UserStudyReport, error)
+	// HasPendingUserReportJob 报告该用户是否有在途 user_report job,handler 据此区分
+	// "正在生成"(generating)vs"无报告未生成"(显示生成按钮)。
+	HasPendingUserReportJob(userID uint) bool
 
 	// ── results (read) ──
 	GetSummary(episodeID uint) (*model.AISummary, error)
@@ -195,11 +222,19 @@ func (s *aiService) EnqueueSummary(episodeIDs []uint) ([]uint, map[uint]string, 
 //   - summary(1):纯派生展示数据,无人在等,放到最低。
 //   - advice(1):和 summary 同级——advice 是"打开建议页"或"交卷后"异步入队的,
 //     学生不在屏幕前干等(页面会显示 generating),低优先级不饿死 quiz(10)。
+//   - course_summary(1):课程级总结,admin 手动触发(无学生在屏幕前干等),后台慢慢跑即可。
+//   - user_report(1):admin 用户报告,同 course_summary——admin 触发,后台跑。
 const (
 	priorityQuiz    = 10
 	prioritySegment = 2
 	prioritySummary = 1
 	priorityAdvice  = 1
+	// priorityCourseSummary:和 advice/summary 同级——admin 手动触发,客户端轮询显示
+	// generating,不在屏幕前干等,低优先级不饿死 quiz。
+	priorityCourseSummary = 1
+	// priorityUserReport:和 advice/summary 同级——admin 触发,页面轮询显示 generating,
+	// 不在屏幕前干等,低优先级不饿死 quiz(学生正等的最高优先级)。
+	priorityUserReport = 1
 )
 
 // enqueue creates one job per episode. It resolves each episode's course_id and
@@ -335,7 +370,7 @@ func (s *aiService) hasPendingJob(jobType string, episodeID uint) bool {
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
 func (s *aiService) runWorker() {
-	jobTypes := []string{"segment", "summary", "quiz", "advice"}
+	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report"}
 	for {
 		s.processOneJob(jobTypes)
 		// Poll every 3s. A real impl might use a channel signaled on enqueue,
@@ -365,6 +400,10 @@ func (s *aiService) processOneJob(jobTypes []string) {
 		s.runQuizJob(job)
 	case "advice":
 		s.runAdviceJob(job)
+	case "course_summary":
+		s.runCourseSummaryJob(job)
+	case "user_report":
+		s.runUserReportJob(job)
 	default:
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "unknown job_type: "+job.JobType, nil)
 	}

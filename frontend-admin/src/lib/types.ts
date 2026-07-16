@@ -701,3 +701,20 @@ export interface AiQuizDetail {
   masteries: AiMasteryRow[];
   runs: AiRun[]; // the ai_runs that generated this quiz (trace lives here)
 }
+
+// ---------------------------------------------------------------------------
+// Phase E — admin 用户学习报告(跨课程画像,agent 驱动)
+// ---------------------------------------------------------------------------
+
+// 一个用户的学习报告响应(GET /admin/api/ai/users/:id/study-report)。
+// status 三态驱动前端渲染:
+//   - 'ready': 有报告(report 非空),渲染文本
+//   - 'generating': 无报告 + 有在途 job,显示 spinner + 轮询
+//   - '': 无报告 + 未生成,显示"生成学习报告"按钮
+// report/model_used/generated_at 仅 ready 时有值。
+export interface UserStudyReport {
+  status: 'ready' | 'generating' | '';
+  report?: string;
+  model_used?: string;
+  generated_at?: string;
+}

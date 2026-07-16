@@ -100,6 +100,8 @@ func RegisterRoutes(
 		v1Restricted.GET("/episodes/:id/ai-advice", ai.GetEpisodeAdvice)
 		v1Restricted.GET("/courses/:id/ai-advice", ai.GetCourseAdvice)
 		v1Restricted.GET("/subjects/:id/ai-advice", ai.GetSubjectAdvice)
+		// Phase D — 课程级总结(course-unique 纯内容总结,客户端只读,admin 触发生成)。
+		v1Restricted.GET("/courses/:id/ai-summary", ai.GetCourseSummary)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
 		// Resolve the Nth attachment of an episode into a 302 download link.
 		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)
@@ -250,6 +252,12 @@ func RegisterRoutes(
 		adm.GET("/api/ai/summaries/:episodeID", admin.GetAISummary)
 		adm.GET("/api/ai/users/:userID/quizzes", admin.ListUserQuizzes)
 		adm.GET("/api/ai/quizzes/:quizID", admin.GetQuizDetail)
+		// Phase D — admin 课程级总结(course-unique 纯内容总结,agent 驱动)。
+		adm.POST("/api/ai/courses/:id/course-summary", admin.TriggerCourseSummary)
+		adm.GET("/api/ai/courses/:id/course-summary", admin.GetCourseSummary)
+		// Phase E — admin 用户学习报告(跨课程画像,agent 驱动)。
+		adm.POST("/api/ai/users/:id/study-report", admin.TriggerUserStudyReport)
+		adm.GET("/api/ai/users/:id/study-report", admin.GetUserStudyReport)
 
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)
