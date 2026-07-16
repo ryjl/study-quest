@@ -372,6 +372,9 @@ func (s *aiService) GetOrEnqueueQuiz(userID, episodeID uint) (string, *model.Qui
 		CourseID:  ep.CourseID,
 		UserID:    &userID,
 		Status:    "queued",
+		// 学生正在客户端轮询等出题(每 3s 一次),quiz 必须排在 segment/summary
+		// 前面才能把可见延迟压到最低。priorityQuiz(10)远高于后台作业。
+		Priority:  priorityQuiz,
 	}
 	if err := s.contentRepo.CreateJob(job); err != nil {
 		return quizStatusUnavailable, nil, err
@@ -582,6 +585,8 @@ func (s *aiService) RegenerateQuiz(userID, episodeID uint) (string, error) {
 		CourseID:  ep.CourseID,
 		UserID:    &userID,
 		Status:    "queued",
+		// 换题同样走高优先级:学生点了"换题"在等新题,和首次生成一样紧迫。
+		Priority:  priorityQuiz,
 	}
 	if err := s.contentRepo.CreateJob(job); err != nil {
 		return quizStatusUnavailable, err

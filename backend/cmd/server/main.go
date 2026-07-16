@@ -153,7 +153,7 @@ func main() {
 	// 8. Initialize Handlers
 	healthHandler := handler.NewHealthHandler()
 	userHandler := handler.NewUserHandler(userService, sessionService)
-	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
+	courseHandler := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService, courseRepo, episodeRepo)
 	episodeHandler := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService, storageSourceRepo)
 	progressHandler := handler.NewProgressHandler(progressService)
 	ingestHandler := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
@@ -277,6 +277,16 @@ func main() {
 					log.Printf("[subtitle-reaper] error: %v", err)
 				} else if n > 0 {
 					log.Printf("[subtitle-reaper] reaped %d stale job(s) back to queued", n)
+				}
+				// AI job reaper 复用同一个 ticker/循环:进程被 hard-kill 时会把正在
+				// 跑的 LLM 作业留在 'processing',这里把它们捞回 queued。aiService 在
+				// 集成里始终被构造(非 nil),但加 nil 检查以防未来改成按需注入。
+				if aiService != nil {
+					if n, err := aiService.ReapStaleJobs(); err != nil {
+						log.Printf("[ai-reaper] error: %v", err)
+					} else if n > 0 {
+						log.Printf("[ai-reaper] reaped %d stale job(s) back to queued", n)
+					}
 				}
 			}
 		}

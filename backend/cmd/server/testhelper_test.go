@@ -132,7 +132,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	// handlers
 	healthH := handler.NewHealthHandler()
 	userH := handler.NewUserHandler(userService, sessionService)
-	courseH := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService)
+	courseH := handler.NewCourseHandler(courseService, episodeService, chapterService, subjectRepo, unlockService, courseRepo, episodeRepo)
 	episodeH := handler.NewEpisodeHandler(episodeService, progressService, settingsRepo, unlockService, storageSourceRepo)
 	progressH := handler.NewProgressHandler(progressService)
 	ingestH := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)

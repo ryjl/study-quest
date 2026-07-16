@@ -2,6 +2,7 @@ package handler
 
 import (
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -90,14 +91,16 @@ func (h *adminHandler) GetCourseDetail(c *gin.Context) {
 // GetSettings returns the storage + (non-sensitive) admin config as JSON.
 func (h *adminHandler) CreateCourse(c *gin.Context) {
 	var req struct {
-		Title          string `json:"title" binding:"required"`
-		Grades         string `json:"grades"`
-		Subject        string `json:"subject" binding:"required"`
-		ContentType    string `json:"content_type"`
-		CoverURL       string `json:"cover_url"`
-		TagIDs         []uint `json:"tag_ids"`
-		AttachmentJSON string `json:"attachment_json"`
-		AIHint         string `json:"ai_hint"`
+		Title            string `json:"title" binding:"required"`
+		Grades           string `json:"grades"`
+		Subject          string `json:"subject" binding:"required"`
+		ContentType      string `json:"content_type"`
+		CoverURL         string `json:"cover_url"`
+		TagIDs           []uint `json:"tag_ids"`
+		AttachmentJSON   string `json:"attachment_json"`
+		AIHint           string `json:"ai_hint"`
+		AISummaryEnabled bool   `json:"ai_summary_enabled"`
+		AIQuizEnabled    bool   `json:"ai_quiz_enabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -117,7 +120,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		contentType = model.ContentLearning
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint)
+	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint, req.AISummaryEnabled, req.AIQuizEnabled)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -151,14 +154,16 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 	}
 
 	var req struct {
-		Title          string `json:"title" binding:"required"`
-		Grades         string `json:"grades"`
-		Subject        string `json:"subject" binding:"required"`
-		ContentType    string `json:"content_type"`
-		CoverURL       string `json:"cover_url"`
-		TagIDs         []uint `json:"tag_ids"`
-		AttachmentJSON string `json:"attachment_json"`
-		AIHint         string `json:"ai_hint"`
+		Title            string `json:"title" binding:"required"`
+		Grades           string `json:"grades"`
+		Subject          string `json:"subject" binding:"required"`
+		ContentType      string `json:"content_type"`
+		CoverURL         string `json:"cover_url"`
+		TagIDs           []uint `json:"tag_ids"`
+		AttachmentJSON   string `json:"attachment_json"`
+		AIHint           string `json:"ai_hint"`
+		AISummaryEnabled bool   `json:"ai_summary_enabled"`
+		AIQuizEnabled    bool   `json:"ai_quiz_enabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -178,7 +183,13 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		contentType = model.ContentLearning
 	}
 
-	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint)
+	// 读取旧课程,用于检测 AI 开关是否从 false→true。开关从关到开意味着
+	// admin 现在想让历史字幕也参与 AI 处理,需要把该课程下所有"已有字幕"
+	// 的 episode 批量入队 segment job(交给 aiService.EnqueueSegmentForCourse)。
+	// 读在 Update 之前,避免更新后的值污染比较。
+	oldCourse, _ := h.courseRepo.FindByID(id)
+
+	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint, req.AISummaryEnabled, req.AIQuizEnabled)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -186,6 +197,24 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 	if course == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Course not found"})
 		return
+	}
+
+	// 开关 off→on:为该课程已有字幕的 episode 批量补入 segment 队列。AI 关着
+	// 时新到的字幕不会触发任何 AI 工作(OnSubtitleCompleted 早返回),所以历史
+	// 字幕需要在这个时机一次性补齐。任一开关被打开都触发:summary/quiz 都依赖
+	// segment 产出的 chunks 作为源材料。
+	if h.aiService != nil && oldCourse != nil {
+		summaryOn := !oldCourse.AISummaryEnabled && req.AISummaryEnabled
+		quizOn := !oldCourse.AIQuizEnabled && req.AIQuizEnabled
+		if summaryOn || quizOn {
+			if n, err := h.aiService.EnqueueSegmentForCourse(id); err != nil {
+				// 入队失败不阻断课程更新本身(主操作已成功);只记录日志,admin 可
+				// 之后在 AI Workflow 页手动触发。
+				log.Printf("[ai] EnqueueSegmentForCourse(course=%d) after AI toggle-on failed: %v", id, err)
+			} else if n > 0 {
+				log.Printf("[ai] course %d AI toggle-on: enqueued %d segment job(s)", id, n)
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, h.toCourseDTO(*course))

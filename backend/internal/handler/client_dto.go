@@ -73,11 +73,21 @@ type clientEpisodeDTO struct {
 	CreatedAt           time.Time  `json:"CreatedAt"`
 	UpdatedAt           time.Time  `json:"UpdatedAt"`
 	Locked              bool       `json:"locked"`
+	// 三个 add-only 字段(契约:PascalCase,与既有字段一致,只增不改):
+	//   - AISummaryEnabled/AIQuizEnabled:课程级 AI 开关回显,客户端据此决定是否
+	//     展示"AI 总结/练习"入口卡片。来自所属课程,同课程内所有 episode 相同。
+	//   - HasSubtitle:该 episode 是否有字幕。客户端据此决定是否提示"字幕就绪"
+	//     /能否播放(AI 之外,字幕本身也是播放体验的一部分)。
+	AISummaryEnabled    bool       `json:"AISummaryEnabled"`
+	AIQuizEnabled       bool       `json:"AIQuizEnabled"`
+	HasSubtitle         bool       `json:"HasSubtitle"`
 }
 
 // toClientEpisodeDTO projects a model.Episode into the client shape. `locked`
 // is the caller's per-user visibility flag (from the unlock resolver).
-func toClientEpisodeDTO(ep model.Episode, locked bool) clientEpisodeDTO {
+// aiSummaryEnabled/aiQuizEnabled 来自所属课程,hasSubtitle 来自批量查询结果
+// (调用方一次性 CountSubtitlesByEpisodes,避免每个 episode 单独查库)。
+func toClientEpisodeDTO(ep model.Episode, locked, aiSummaryEnabled, aiQuizEnabled, hasSubtitle bool) clientEpisodeDTO {
 	var chapterID uint
 	if ep.ChapterID != nil {
 		chapterID = *ep.ChapterID
@@ -98,6 +108,9 @@ func toClientEpisodeDTO(ep model.Episode, locked bool) clientEpisodeDTO {
 		CreatedAt:            ep.CreatedAt,
 		UpdatedAt:            ep.UpdatedAt,
 		Locked:               locked,
+		AISummaryEnabled:     aiSummaryEnabled,
+		AIQuizEnabled:        aiQuizEnabled,
+		HasSubtitle:          hasSubtitle,
 	}
 }
 

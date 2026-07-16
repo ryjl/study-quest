@@ -10,8 +10,11 @@ import (
 type CourseService interface {
 	GetCourses(userID uint, userRole string, grade string, subjectID uint, contentType model.ContentType) ([]model.Course, error)
 	GetCourseByID(id uint) (*model.Course, error)
-	CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error)
-	UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error)
+	// CreateCourse/UpdateCourse 末尾的 aiSummaryEnabled/aiQuizEnabled 透传 admin
+	// 的两个 AI 开关。放在签名尾部是为了让其它调用方(多为 admin handler 与测试)
+	// 只需追加两个 bool 参数即可适配,不必改动已有参数顺序。
+	CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string, aiSummaryEnabled, aiQuizEnabled bool) (*model.Course, error)
+	UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string, aiSummaryEnabled, aiQuizEnabled bool) (*model.Course, error)
 	DeleteCourse(id uint) error
 }
 
@@ -47,7 +50,7 @@ func (s *courseService) GetCourseByID(id uint) (*model.Course, error) {
 	return s.courseRepo.FindByID(id)
 }
 
-func (s *courseService) CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error) {
+func (s *courseService) CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string, aiSummaryEnabled, aiQuizEnabled bool) (*model.Course, error) {
 	for _, g := range grades {
 		if !g.Valid() {
 			return nil, errors.New("invalid course grade value: " + string(g))
@@ -62,12 +65,14 @@ func (s *courseService) CreateCourse(title string, grades []model.Grade, subject
 	}
 
 	c := &model.Course{
-		Title:          title,
-		SubjectID:      subjectID,
-		ContentType:    contentType,
-		CoverURL:       coverURL,
-		AttachmentJSON: attachmentJSON,
-		AIHint:         aiHint,
+		Title:             title,
+		SubjectID:         subjectID,
+		ContentType:       contentType,
+		CoverURL:          coverURL,
+		AttachmentJSON:    attachmentJSON,
+		AIHint:            aiHint,
+		AISummaryEnabled:  aiSummaryEnabled,
+		AIQuizEnabled:     aiQuizEnabled,
 	}
 	if err := s.courseRepo.Create(c); err != nil {
 		return nil, err
@@ -93,7 +98,7 @@ func (s *courseService) CreateCourse(title string, grades []model.Grade, subject
 	return c, nil
 }
 
-func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string) (*model.Course, error) {
+func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiHint string, aiSummaryEnabled, aiQuizEnabled bool) (*model.Course, error) {
 	for _, g := range grades {
 		if !g.Valid() {
 			return nil, errors.New("invalid course grade value: " + string(g))
@@ -121,6 +126,9 @@ func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade
 	c.CoverURL = coverURL
 	c.AttachmentJSON = attachmentJSON
 	c.AIHint = aiHint
+	// AI 开关同样透传:之前这两行漏掉,导致 admin 即便勾选了也会被丢弃。
+	c.AISummaryEnabled = aiSummaryEnabled
+	c.AIQuizEnabled = aiQuizEnabled
 
 	if err := s.courseRepo.Update(c); err != nil {
 		return nil, err

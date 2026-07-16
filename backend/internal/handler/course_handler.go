@@ -29,16 +29,23 @@ type courseHandler struct {
 	chapterService service.ChapterService
 	subjectRepo    repository.SubjectRepository
 	unlockService  service.UnlockService
+	// courseRepo/episodeRepo 用于在 episode 列表里回显课程的 AI 开关和每个
+	// episode 的 HasSubtitle。两个都是只读批量查询(一次 course + 一次字幕计数),
+	// 避免 per-episode N+1。
+	courseRepo     repository.CourseRepository
+	episodeRepo    repository.EpisodeRepository
 }
 
 // NewCourseHandler creates an instance of CourseHandler.
-func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs service.ChapterService, subj repository.SubjectRepository, us service.UnlockService) CourseHandler {
+func NewCourseHandler(cs service.CourseService, es service.EpisodeService, chs service.ChapterService, subj repository.SubjectRepository, us service.UnlockService, cr repository.CourseRepository, er repository.EpisodeRepository) CourseHandler {
 	return &courseHandler{
 		courseService:  cs,
 		episodeService: es,
 		chapterService: chs,
 		subjectRepo:    subj,
 		unlockService:  us,
+		courseRepo:     cr,
+		episodeRepo:    er,
 	}
 }
 
@@ -216,9 +223,22 @@ func (h *courseHandler) GetEpisodesByCourse(c *gin.Context) {
 	}
 
 	out := make([]clientEpisodeDTO, 0, len(episodes))
+	// 课程的 AI 开关同课程内一致,查一次即可;HasSubtitle 需要每 episode 一个,
+	// 用批量计数避免 N+1。两查询都 best-effort:失败时退化为零值(false),不阻断
+	// episode 列表本身(客户端把 false 当作"无 AI/无字幕"处理,不会崩)。
+	aiSummary, aiQuiz := false, false
+	if course, cerr := h.courseRepo.FindByID(uint(id)); cerr == nil && course != nil {
+		aiSummary = course.AISummaryEnabled
+		aiQuiz = course.AIQuizEnabled
+	}
+	epIDs := make([]uint, 0, len(episodes))
+	for _, ep := range episodes {
+		epIDs = append(epIDs, ep.ID)
+	}
+	subCounts, _ := h.episodeRepo.CountSubtitlesByEpisodes(epIDs)
 	for _, ep := range episodes {
 		_, visible := visibleSet[ep.ID]
-		out = append(out, toClientEpisodeDTO(ep, !visible))
+		out = append(out, toClientEpisodeDTO(ep, !visible, aiSummary, aiQuiz, subCounts[ep.ID] > 0))
 	}
 	c.JSON(http.StatusOK, out)
 }

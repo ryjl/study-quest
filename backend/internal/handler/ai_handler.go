@@ -70,6 +70,16 @@ func (h *aiHandler) GetEpisodeSummary(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "AI not available"})
 		return
 	}
+	// 访问控制:和 GetEpisodeQuiz/RegenerateQuiz 走同一道 canAccessEpisode 闸门。
+	// 之前这里漏了检查,任何登录用户都能凭 episode id 直接读别课程/被锁 episode
+	// 的 summary——和 quiz 端点不一致的权限漏洞。
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	if !h.canAccessEpisode(c, userID, uint(id)) {
+		return // canAccessEpisode 已经写好错误响应
+	}
 	summary, err := h.aiService.GetSummary(uint(id))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load summary"})

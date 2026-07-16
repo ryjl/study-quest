@@ -34,6 +34,12 @@ type courseDTO struct {
 	// AIHint is the admin-authored hint for the subtitle worker / quiz agent.
 	// Echoed back so the edit form can repopulate. See model.Course.AIHint.
 	AIHint              string   `json:"ai_hint"`
+	// AISummaryEnabled/AIQuizEnabled echo the per-course AI switches so the admin
+	// edit form (CourseModal) can repopulate the checkboxes. These previously
+	// existed on the model but were never projected here, so the form kept
+	// resetting them to off after a save.
+	AISummaryEnabled    bool     `json:"ai_summary_enabled"`
+	AIQuizEnabled       bool     `json:"ai_quiz_enabled"`
 	EpisodeCount        int64    `json:"episode_count"`
 	ChapterCount        int64    `json:"chapter_count"`
 	TotalDurationSeconds int64   `json:"total_duration_seconds"`
@@ -82,6 +88,8 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		GradeDisplay:         c.GradeDisplay(),
 		AttachmentJSON:       c.AttachmentJSON,
 		AIHint:               c.AIHint,
+		AISummaryEnabled:     c.AISummaryEnabled,
+		AIQuizEnabled:        c.AIQuizEnabled,
 		EpisodeCount:         eps,
 		ChapterCount:         chs,
 		TotalDurationSeconds: dur,

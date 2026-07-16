@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -55,6 +56,11 @@ type AIContentRepository interface {
 	ClaimNextQueuedJob(jobTypes []string) (*model.AIJob, error)
 	ListJobs(jobType string, status string, limit int) ([]model.AIJob, error)
 	JobStats() (map[string]int, error)
+	// ReapStaleJobs resets 'processing' jobs whose claimed_at is older than
+	// staleTimeout back to 'queued' (clearing the claim + error), so a worker
+	// that crashed mid-LLM-call doesn't strand a job in processing forever.
+	// Mirrors subtitle_job_repo.ReapStale. Returns the number of rows reset.
+	ReapStaleJobs(staleTimeout time.Duration) (int64, error)
 
 	// ── ai_runs ──
 	CreateRun(run *model.AIRun) error
@@ -272,6 +278,22 @@ func (r *aiContentRepo) JobStats() (map[string]int, error) {
 		out[r.Status] = r.Count
 	}
 	return out, nil
+}
+
+// ReapStaleJobs 把长时间停在 'processing' 的作业(claimed_at 早于 cutoff)重置
+// 回 'queued',并清空 claimed_at/error。AI worker 是进程内单 goroutine,正常情
+// 况不会滞留,但进程被 hard-kill(SIGKILL/断电)时会留下这种僵尸行——没有 reaper
+// 的话它们就永远卡在 processing,既占统计又永不重跑。参照 subtitle reaper。
+func (r *aiContentRepo) ReapStaleJobs(staleTimeout time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-staleTimeout)
+	res := r.db.Exec(`UPDATE ai_jobs
+		SET status = 'queued', claimed_at = NULL, error = '', updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'processing' AND claimed_at IS NOT NULL AND claimed_at < ?`,
+		cutoff)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
 }
 
 // --- ai_runs ---

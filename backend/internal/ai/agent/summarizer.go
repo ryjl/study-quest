@@ -20,7 +20,18 @@ type SummaryResult struct {
 	Headline  string   `json:"headline"`
 	KeyPoints []string `json:"key_points"`
 	Concepts  []string `json:"concepts"`
-	Takeaway  string   `json:"takeaway"`
+	// PreAdventure 是 3 个课前探险问题:开放式思考题 + 一句思考方向提示。
+	// 零额外 LLM 调用——和 summary 同一次生成产出,直接落进 summary_json。
+	// 前端在播放前展示,引导孩子带着问题进入视频。
+	PreAdventure []PreAdventureItem `json:"pre_adventure"`
+	Takeaway     string             `json:"takeaway"`
+}
+
+// PreAdventureItem 是一道课前探险问题:prompt 是问题本身(开放式,激发好奇心),
+// hint 是一句不剧透答案的思考方向提示。
+type PreAdventureItem struct {
+	Prompt string `json:"prompt"`
+	Hint   string `json:"hint"`
 }
 
 // SummarizerRequest carries the inputs to one summary generation.
