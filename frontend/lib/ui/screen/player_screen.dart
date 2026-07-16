@@ -1659,7 +1659,71 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
             const SizedBox(height: 12),
             _buildPreAdventureSection(),
+            const SizedBox(height: 28),
+
+            // AI 学习入口 —— 常驻 helper panel,不随顶栏自动隐藏。比顶栏那个
+            // 会消失的图标更可发现。三态 gating 与顶栏一致(走同一 helper)。
+            _buildAiStudyEntry(),
           ],
+        ),
+      ),
+    );
+  }
+
+  // AI 学习入口卡片:常驻显示(不受 _controlsVisible 影响)。AI 开 + 有字幕时
+  // 可点击进入 AiStudyScreen;不可用时置灰 + 点击弹 SnackBar 提示原因。
+  Widget _buildAiStudyEntry() {
+    final availability = AiAvailabilityHelper.fromEpisode(widget.episode);
+    final enabled = availability == AiAvailability.enabled;
+    return GestureDetector(
+      onTap: () async {
+        if (!enabled) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(AiAvailabilityHelper.tooltipFor(availability)!),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+          return;
+        }
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => AiStudyScreen(
+              activeUserId: widget.activeUserId,
+              episode: widget.episode,
+            ),
+          ),
+        );
+      },
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.5,
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_awesome_rounded,
+                  color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text('AI 学习',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w800,
+                        fontSize: 14)),
+              ),
+              const Icon(Icons.chevron_right_rounded,
+                  color: Colors.white70, size: 20),
+            ],
+          ),
         ),
       ),
     );

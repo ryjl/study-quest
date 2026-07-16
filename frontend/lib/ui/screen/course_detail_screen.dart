@@ -612,14 +612,9 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         borderRadius: 20,
         borderColor: const Color(0xFFE2E8F0),
         onPressed: () {
-          // Phase 2:仅当 summary.pre_adventure 有任务时才弹课前探险弹窗;
-          // 否则直接播放。数据源从老的 /ai-content 切到了 summary。
-          final tasks = _cachedPreAdventureTasks(ep.id);
-          if (tasks.isNotEmpty) {
-            _showPreAdventureModal(context, ep);
-          } else {
-            _playEpisode(ep);
-          }
+          // 直接播放:课前探索任务已改为在播放器右侧 helper panel 常驻显示
+          // (player_screen 的 _buildPreAdventureSection),不再前置弹窗打断。
+          _playEpisode(ep);
         },
         child: Row(
           children: [

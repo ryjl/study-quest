@@ -46,15 +46,27 @@ func NewAIHandler(aiService service.AIService, unlockService service.UnlockServi
 }
 
 // summaryResponse is the JSON shape served to the client. It's the parsed
-// summary JSON (headline / key_points / concepts / takeaway) plus a flag the
-// client uses to decide whether to show the AI card. We re-parse the stored
-// JSON rather than returning it raw so the client gets a stable, documented
-// shape even if the model's output drifts slightly.
+// summary JSON (headline / key_points / concepts / pre_adventure / takeaway).
+// We re-parse the stored JSON rather than returning it raw so the client gets a
+// stable, documented shape even if the model's output drifts slightly.
+//
+// pre_adventure mirrors agent.PreAdventureItem but is defined locally here to
+// keep the handler a pure wire-shape projection (no dependency on the agent
+// package). If the two ever drift, json.Unmarshal still tolerates missing keys.
 type summaryResponse struct {
-	Headline  string   `json:"headline"`
-	KeyPoints []string `json:"key_points"`
-	Concepts  []string `json:"concepts"`
-	Takeaway  string   `json:"takeaway"`
+	Headline     string              `json:"headline"`
+	KeyPoints    []string            `json:"key_points"`
+	Concepts     []string            `json:"concepts"`
+	PreAdventure []preAdventureItem  `json:"pre_adventure"`
+	Takeaway     string              `json:"takeaway"`
+}
+
+// preAdventureItem is one pre-class exploration question (open-ended, sparks
+// curiosity) plus a non-spoilery hint. Produced by the summarizer in the same
+// LLM call as the summary — zero extra cost.
+type preAdventureItem struct {
+	Prompt string `json:"prompt"`
+	Hint   string `json:"hint"`
 }
 
 // GetEpisodeSummary returns the AI summary for an episode.
