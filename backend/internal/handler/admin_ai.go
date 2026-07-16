@@ -711,7 +711,7 @@ func (h *adminHandler) TriggerUserStudyReport(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
 		return
 	}
-	userID, err := parseUintParam(c, "id")
+	userID, err := parseUintParam(c, "userID")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 id"})
 		return
@@ -736,7 +736,7 @@ func (h *adminHandler) GetUserStudyReport(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
 		return
 	}
-	userID, err := parseUintParam(c, "id")
+	userID, err := parseUintParam(c, "userID")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的用户 id"})
 		return

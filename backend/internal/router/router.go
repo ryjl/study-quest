@@ -256,8 +256,10 @@ func RegisterRoutes(
 		adm.POST("/api/ai/courses/:id/course-summary", admin.TriggerCourseSummary)
 		adm.GET("/api/ai/courses/:id/course-summary", admin.GetCourseSummary)
 		// Phase E — admin 用户学习报告(跨课程画像,agent 驱动)。
-		adm.POST("/api/ai/users/:id/study-report", admin.TriggerUserStudyReport)
-		adm.GET("/api/ai/users/:id/study-report", admin.GetUserStudyReport)
+		// 参数名用 :userID 和同前缀的 :userID/quizzes 对齐(gin 要求同路径前缀
+		// wildcard 名字一致,用 :id 会和 :userID 冲突 panic)。
+		adm.POST("/api/ai/users/:userID/study-report", admin.TriggerUserStudyReport)
+		adm.GET("/api/ai/users/:userID/study-report", admin.GetUserStudyReport)
 
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)
