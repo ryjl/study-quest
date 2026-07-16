@@ -11,6 +11,7 @@ import '../widget/button_3d.dart';
 import '../widget/state_widgets.dart';
 import '../responsive.dart';
 import 'player_screen.dart';
+import 'ai_study_screen.dart';
 
 class CourseDetailScreen extends StatefulWidget {
   final int activeUserId;
@@ -519,8 +520,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         : 0;
     // Drive badges from real data: PDF attachment present + AI content present.
     final hasPdf = (_attachmentCache[ep.id] ?? const []).any((a) => a.isPdf);
-    final hasSummary = (_aiCache[ep.id]?.preAdventureCards.isNotEmpty ?? false) ||
-        (_aiCache[ep.id]?.postReviewQuiz.isNotEmpty ?? false);
+    // The "AI 学习" button is always shown: the Step-3 AI study screen fetches
+    // the real summary/quiz itself and degrades gracefully (hides sections when
+    // absent, e.g. when the course has AI off or no summary yet). We no longer
+    // gate on the legacy /ai-content mock cache (preAdventureCards), which was
+    // never populated for Step-3 content and hid the button permanently.
+    final hasSummary = true;
 
     // Locked episodes render as a greyed-out row with a lock affordance and
     // refuse to open the player — the unlock schedule (drip) keeps them
@@ -735,10 +740,21 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                           ),
                         ),
 
-                      // Purple AI Summary Button
+                      // Purple AI Study Button — opens the AI study page (summary +
+                      // practice). Replaces the old mock summary modal with the real
+                      // Step-3 summary + quiz (Phase C).
                       if (hasSummary)
                         GestureDetector(
-                          onTap: () => _openResourceModal(context, 'summary', ep),
+                          onTap: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => AiStudyScreen(
+                                  activeUserId: widget.activeUserId,
+                                  episode: ep,
+                                ),
+                              ),
+                            );
+                          },
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                             decoration: BoxDecoration(
@@ -752,7 +768,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                 Icon(Icons.auto_awesome_rounded, size: 12, color: Color(0xFF8B5CF6)),
                                 SizedBox(width: 4),
                                 Text(
-                                  'AI 重点总结',
+                                  'AI 学习',
                                   style: TextStyle(fontSize: 11, color: Color(0xFF6D28D9), fontWeight: FontWeight.bold),
                                 ),
                               ],

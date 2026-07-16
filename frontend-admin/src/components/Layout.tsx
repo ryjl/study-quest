@@ -13,6 +13,7 @@ const NAV = [
   { to: '/admin/courses', label: '课程库管理', icon: '📚' },
   { to: '/admin/subtitle-queue', label: '字幕队列', icon: '💬' },
   { to: '/admin/ai-workflow', label: 'AI Workflow', icon: '🤖' },
+  { to: '/admin/ai-user', label: 'AI 用户视图', icon: '🧠' },
   { to: '/admin/reading-room', label: '阅读室', icon: '📖' },
   { to: '/admin/subjects', label: '科目管理', icon: '🏷️' },
   { to: '/admin/tags', label: '标签管理', icon: '🔖' },

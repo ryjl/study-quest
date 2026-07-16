@@ -9,6 +9,7 @@ import '../model/tag.dart';
 import '../model/progress.dart';
 import '../model/badge.dart';
 import '../model/reading.dart';
+import '../model/quiz.dart';
 
 class ApiService {
   /// Opaque session token issued by the backend at login. Carried in the
@@ -212,6 +213,68 @@ class ApiService {
       return AILessonContent.fromJson(data);
     }
     return null; // Gracefully fallback to skip blockers
+  }
+
+  // 5b. Phase C — AI summary + quiz. These hit the Step-3 LLM-generated
+  // endpoints (distinct from the Python-toolchain /ai-content above). The
+  // summary is read once; the quiz is lazily generated on first GET (returns
+  // status=generating, caller polls).
+
+  static Future<EpisodeSummary?> fetchEpisodeSummary(int activeUserId, int episodeId) async {
+    final response = await _httpClient.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-summary'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      return EpisodeSummary.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 404) return null; // no summary yet / AI off
+    _fail(response.statusCode, '获取总结失败: ${response.statusCode}');
+  }
+
+  static Future<QuizResponse> fetchEpisodeQuiz(int activeUserId, int episodeId) async {
+    final response = await _httpClient.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200 || response.statusCode == 202) {
+      return QuizResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 404) {
+      return QuizResponse(status: QuizStatus.unavailable);
+    }
+    _fail(response.statusCode, '获取练习失败: ${response.statusCode}');
+  }
+
+  static Future<QuizAnswerResult> submitQuizAnswer({
+    required int activeUserId,
+    required int episodeId,
+    required int questionId,
+    int? answerIndex,
+    String? answerText,
+  }) async {
+    final body = <String, dynamic>{'question_id': questionId};
+    if (answerIndex != null) body['answer_index'] = answerIndex;
+    if (answerText != null && answerText.isNotEmpty) body['answer_text'] = answerText;
+    final response = await _httpClient.post(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/submit'),
+      headers: _headers(activeUserId),
+      body: jsonEncode(body),
+    );
+    if (response.statusCode == 200) {
+      return QuizAnswerResult.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    _fail(response.statusCode, '提交答案失败: ${response.statusCode}');
+  }
+
+  static Future<void> regenerateQuiz(int activeUserId, int episodeId) async {
+    final response = await _httpClient.post(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/regenerate'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode != 202 && response.statusCode != 200) {
+      _fail(response.statusCode, '重新生成失败: ${response.statusCode}');
+    }
   }
 
   // 6. Fetch play info (resolves direct streaming URL and custom HTTP headers for netdisk bypass)

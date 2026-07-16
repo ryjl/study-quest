@@ -131,7 +131,7 @@ func main() {
 	// observability reads. Built unconditionally; when no provider is configured
 	// jobs are recorded but processed as "skipped: AI not configured".
 	aiContentRepo := repository.NewAIContentRepository(db)
-	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver)
+	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService)
 	// Connect Step 2 → Step 3: when a subtitle lands, auto-enqueue a segment job
 	// (only if the course has AI enabled). The callback keeps the subtitle
 	// service free of any AI import — it just calls a function if set.
@@ -196,7 +196,7 @@ func main() {
 	subjectHandler := handler.NewSubjectHandler(subjectService)
 	tagHandler := handler.NewTagHandler(tagService)
 	unlockHandler := handler.NewUnlockHandler(unlockService)
-	aiHandler := handler.NewAIHandler(aiService)
+	aiHandler := handler.NewAIHandler(aiService, unlockService)
 	releaseHandler := handler.NewReleaseHandler(releaseRepo)
 	readingHandler := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
 

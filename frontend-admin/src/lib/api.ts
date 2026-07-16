@@ -37,6 +37,9 @@ import type {
   AiJobsResponse,
   AiJobEnqueueResult,
   AiRun,
+  AiSummaryRow,
+  AiQuizRow,
+  AiQuizDetail,
 } from './types';
 
 // Centralized API client. Same-origin cookies carry the admin session. All
@@ -538,5 +541,18 @@ export const api = {
   },
   async getAiRun(id: number): Promise<AiRun> {
     return request(`/admin/api/ai/runs/${id}`);
+  },
+
+  // Phase C — quiz observability. The admin reads a generated summary, lists a
+  // user's quizzes, and drills into one quiz's full detail (questions + answers
+  // + memory + the agent's reasoning trace + its feedback).
+  async getAiSummary(episodeId: number): Promise<AiSummaryRow> {
+    return request(`/admin/api/ai/summaries/${episodeId}`);
+  },
+  async listUserQuizzes(userId: number): Promise<AiQuizRow[]> {
+    return request(`/admin/api/ai/users/${userId}/quizzes`);
+  },
+  async getQuizDetail(quizId: number): Promise<AiQuizDetail> {
+    return request(`/admin/api/ai/quizzes/${quizId}`);
   },
 };

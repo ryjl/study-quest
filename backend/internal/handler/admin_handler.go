@@ -137,6 +137,10 @@ type AdminHandler interface {
 	GetAIJob(c *gin.Context)
 	ListAIRuns(c *gin.Context)
 	GetAIRun(c *gin.Context)
+	// Phase C — quiz observability (per-user drill-down + summary content).
+	GetAISummary(c *gin.Context)
+	ListUserQuizzes(c *gin.Context)
+	GetQuizDetail(c *gin.Context)
 }
 
 type adminHandler struct {

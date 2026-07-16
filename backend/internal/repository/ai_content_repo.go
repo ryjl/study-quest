@@ -61,6 +61,41 @@ type AIContentRepository interface {
 	GetRun(id uint) (*model.AIRun, error)
 	ListRunsForJob(jobID uint) ([]model.AIRun, error)
 	ListRecentRuns(limit int) ([]model.AIRun, error)
+
+	// ── quizzes / questions / answers (Phase C) ──
+	// GetQuiz returns the single quiz for a (user, episode), or nil if none.
+	// Nil is the trigger for lazy generation: the service enqueues a quiz job.
+	GetQuiz(userID, episodeID uint) (*model.Quiz, error)
+	// GetQuizByID loads one quiz by its primary key (admin detail view).
+	GetQuizByID(quizID uint) (*model.Quiz, error)
+	// GetQuestions returns a quiz's questions ordered by id.
+	GetQuestions(quizID uint) ([]model.Question, error)
+	// CreateQuiz replaces the quiz for a (user, episode) in one transaction:
+	// deletes the old quiz + its questions (换题/regenerate), then inserts the
+	// new quiz + questions. Answers and KnowledgeMemory are preserved (a quiz
+	// refresh never wipes a student's answer history or mastery). Returns the
+	// new quiz row's ID.
+	CreateQuiz(quiz *model.Quiz, questions []model.Question) (uint, error)
+	// ListQuizzesForUser lists all of a user's quizzes (admin user view),
+	// newest first.
+	ListQuizzesForUser(userID uint) ([]model.Quiz, error)
+	// ListAnswersForQuiz returns every answer to any question in a quiz
+	// (admin detail view — shows the student's attempt history, supports redo).
+	ListAnswersForQuiz(quizID, userID uint) ([]model.Answer, error)
+	// CreateAnswer appends one answer record. Append-only by design: redoing a
+	// quiz adds a new row, it never edits the old one (so the full attempt
+	// history is preserved for observability).
+	CreateAnswer(a *model.Answer) error
+
+	// ── knowledge_memories (Phase C feedback loop) ──
+	// GetMasteries returns a user's per-chunk mastery for an episode (the agent
+	// reads this to find weak points). Empty for a new student.
+	GetMasteries(userID, episodeID uint) ([]model.KnowledgeMemory, error)
+	// UpsertMemoryOnAnswer atomically applies the feedback update after an
+	// answer: mastery ± (correct +0.1 / wrong -0.2, clamped 0-1), the right
+	// counter ticks, last_reviewed = now. INSERT ... ON CONFLICT so concurrent
+	// answers don't lose deltas (mirrors the progress atomic-accumulate rule).
+	UpsertMemoryOnAnswer(userID, chunkID, episodeID, courseID uint, correct bool) error
 }
 
 type aiContentRepo struct {
@@ -273,4 +308,173 @@ func (r *aiContentRepo) ListRecentRuns(limit int) ([]model.AIRun, error) {
 		return nil, err
 	}
 	return runs, nil
+}
+
+// --- quizzes / questions / answers (Phase C) ---
+
+func (r *aiContentRepo) GetQuiz(userID, episodeID uint) (*model.Quiz, error) {
+	var q model.Quiz
+	if err := r.db.Where("user_id = ? AND episode_id = ?", userID, episodeID).
+		First(&q).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &q, nil
+}
+
+func (r *aiContentRepo) GetQuizByID(quizID uint) (*model.Quiz, error) {
+	var q model.Quiz
+	if err := r.db.First(&q, quizID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &q, nil
+}
+
+func (r *aiContentRepo) GetQuestions(quizID uint) ([]model.Question, error) {
+	var qs []model.Question
+	if err := r.db.Where("quiz_id = ?", quizID).Order("id ASC").Find(&qs).Error; err != nil {
+		return nil, err
+	}
+	return qs, nil
+}
+
+// CreateQuiz replaces the (user, episode) quiz in one transaction: delete the
+// old quiz + its questions, insert the new set. Answers + memory are NOT touched
+// — a quiz refresh is not an amnesia event for the student.
+func (r *aiContentRepo) CreateQuiz(quiz *model.Quiz, questions []model.Question) (uint, error) {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// Find the existing quiz for this (user, episode) and delete it + its
+		// questions. The unique index guarantees at most one.
+		var old model.Quiz
+		findErr := tx.Where("user_id = ? AND episode_id = ?", quiz.UserID, quiz.EpisodeID).
+			First(&old).Error
+		if findErr == nil {
+			// Delete questions then the quiz row.
+			if err := tx.Where("quiz_id = ?", old.ID).Delete(&model.Question{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Delete(&old).Error; err != nil {
+				return err
+			}
+		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		// Insert the new quiz row.
+		quiz.ID = 0 // ensure insert, not accidental update
+		if err := tx.Create(quiz).Error; err != nil {
+			return err
+		}
+		// Stamp the FK on each question and bulk-insert.
+		for i := range questions {
+			questions[i].QuizID = quiz.ID
+		}
+		if len(questions) > 0 {
+			if err := tx.Create(&questions).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return quiz.ID, nil
+}
+
+func (r *aiContentRepo) ListQuizzesForUser(userID uint) ([]model.Quiz, error) {
+	var quizzes []model.Quiz
+	if err := r.db.Where("user_id = ?", userID).Order("created_at DESC").Find(&quizzes).Error; err != nil {
+		return nil, err
+	}
+	return quizzes, nil
+}
+
+func (r *aiContentRepo) ListAnswersForQuiz(quizID, userID uint) ([]model.Answer, error) {
+	// Answers carry a snapshot QuizID (set at submit time), so we scope by user +
+	// quiz WITHOUT joining questions. This is deliberate: regenerate (换题) deletes
+	// old questions, which would orphan a question-join. The QuizID on historical
+	// answers refers to the quiz row that existed at answer time; since a (user,
+	// episode) has at most one quiz row at a time but it's replaced on regen, we
+	// also include answers whose QuizID differs from the current one but share the
+	// episode — giving the full attempt history across regenerations.
+	// Resolve the episode from the current quiz first.
+	var quiz model.Quiz
+	if err := r.db.Select("episode_id").First(&quiz, quizID).Error; err != nil {
+		return nil, err
+	}
+	var answers []model.Answer
+	// All answers by this user on this episode (across all quiz generations).
+	// We match on episode via the quiz_id → quiz → episode relationship for
+	// answers that still point at a live quiz, OR fall back to the snapshot. The
+	// simplest correct query: answers.user_id match + the answer's question or
+	// snapshot quiz belongs to this episode. Since QuizID is snapshotted and
+	// points to potentially-deleted quiz rows, join through a subquery of quiz
+	// ids for this episode.
+	err := r.db.
+		Where("user_id = ? AND quiz_id IN (SELECT id FROM quizzes WHERE episode_id = ?)", userID, quiz.EpisodeID).
+		Order("answered_at DESC").
+		Find(&answers).Error
+	if err != nil {
+		return nil, err
+	}
+	return answers, nil
+}
+
+func (r *aiContentRepo) CreateAnswer(a *model.Answer) error {
+	return r.db.Create(a).Error
+}
+
+// --- knowledge_memories (Phase C feedback loop) ---
+
+func (r *aiContentRepo) GetMasteries(userID, episodeID uint) ([]model.KnowledgeMemory, error) {
+	var rows []model.KnowledgeMemory
+	if err := r.db.Where("user_id = ? AND episode_id = ?", userID, episodeID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// UpsertMemoryOnAnswer atomically applies the +0.1/-0.2 mastery update using
+// INSERT ... ON CONFLICT DO UPDATE. This is the feedback-loop write path and
+// MUST be atomic: a concurrent answer (e.g. rapid-fire submits) doing
+// read-modify-write would lose deltas — same bug class as the progress
+// watch-seconds accumulation, prevented the same way (single SQL statement).
+//
+// The mastery math is duplicated from agent.ApplyMastery intentionally — the DB
+// is the source of truth here (the Go helper is for tests that don't touch the
+// DB). Both apply identical clamp + step rules; keep them in sync.
+func (r *aiContentRepo) UpsertMemoryOnAnswer(userID, chunkID, episodeID, courseID uint, correct bool) error {
+	// Both the INSERT (first answer for this chunk) and the ON CONFLICT UPDATE
+	// (subsequent answers) must apply the same mastery delta + counter bump. The
+	// INSERT path uses the initial mastery (0) + the delta; the UPDATE path reads
+	// the existing mastery. deltas: correct +0.1 (clamp 1.0), wrong -0.2 (clamp 0).
+	var deltaUpdate, fieldUpdate, initMastery string
+	var initCorrect, initWrong int
+	if correct {
+		deltaUpdate = "MIN(mastery + 0.1, 1.0)"
+		fieldUpdate = "correct_count = correct_count + 1"
+		initMastery = "0.1"
+		initCorrect = 1
+	} else {
+		deltaUpdate = "MAX(mastery - 0.2, 0.0)"
+		fieldUpdate = "wrong_count = wrong_count + 1"
+		initMastery = "0.0" // 0 - 0.2 clamped to 0
+		initWrong = 1
+	}
+	// uniqueIndex(user_id, chunk_id) is the conflict target. episode_id/course_id
+	// are part of the INSERT (for new rows) but not the conflict key.
+	sql := `INSERT INTO knowledge_memories (user_id, episode_id, course_id, chunk_id, mastery, correct_count, wrong_count, last_reviewed, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT(user_id, chunk_id) DO UPDATE SET
+			mastery = ` + deltaUpdate + `,
+			` + fieldUpdate + `,
+			last_reviewed = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP`
+	return r.db.Exec(sql, userID, episodeID, courseID, chunkID, initMastery, initCorrect, initWrong).Error
 }

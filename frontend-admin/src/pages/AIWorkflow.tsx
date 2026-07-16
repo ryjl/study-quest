@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import type { AiJob, AiJobStatus, AiRun } from '../lib/types';
+import type { AiJob, AiJobStatus, AiRun, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
 
 // Status badge palette. Kept inline since only this page renders these badges.
@@ -260,13 +260,16 @@ function RunList({ runs, loading }: { runs: AiRun[]; loading: boolean }) {
 function SelfCheckBadge({ result }: { result?: string }) {
   if (!result) return <span className="text-muted">—</span>;
   const r = result.toLowerCase();
-  // Treat "" / pass / ok as good; anything mentioning fail as bad; else muted.
+  // pass/ok = good; fail = bad; regenerated = amber (first attempt failed,
+  // retried but not re-checked — honest middle state); skipped/other = muted.
   const cls =
     r === '' || r === 'pass' || r === 'ok'
       ? 'bg-emerald-500/15 text-emerald-600'
       : r.includes('fail')
         ? 'bg-bad/15 text-bad'
-        : 'bg-gray-500/15 text-muted';
+        : r === 'regenerated'
+          ? 'bg-amber-500/15 text-amber-600'
+          : 'bg-gray-500/15 text-muted';
   return <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>{result}</span>;
 }
 
@@ -278,6 +281,13 @@ function RunDetail({ run }: { run: AiRun }) {
   } catch {
     /* not JSON — keep raw */
   }
+  // Parse the ReAct trace (quiz runs carry it; summary runs don't).
+  let trace: AiTraceStep[] | null = null;
+  try {
+    if (run.trace_json) trace = JSON.parse(run.trace_json);
+  } catch {
+    /* malformed — leave null */
+  }
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
@@ -286,6 +296,34 @@ function RunDetail({ run }: { run: AiRun }) {
         <Meta label="Tokens" value={`${run.prompt_tokens} / ${run.completion_tokens}`} />
         <Meta label="耗时" value={`${run.duration_ms}ms`} />
       </div>
+
+      {/* The ReAct "思考时间线": the agent's step-by-step reasoning. This is the
+          learning centerpiece — each step shows the tool it called (with args)
+          and the observation it got back. Empty for single-shot runs (summary). */}
+      {trace && trace.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs font-medium text-muted">思考时间线 (ReAct 循环)</div>
+          <ol className="space-y-2">
+            {trace.map((s) => (
+              <li key={s.step} className="rounded-xl border border-border bg-card-2 p-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[11px] text-muted">#{s.step}</span>
+                  <span className="font-medium text-txt">{s.thought}</span>
+                  {s.is_final && <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-600">最终答案</span>}
+                </div>
+                {s.action && (
+                  <div className="mt-1 font-mono text-[11px] text-blue-600">
+                    → {s.action.tool}({s.action.args || ''})
+                  </div>
+                )}
+                {s.observation && (
+                  <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap text-[11px] text-muted">{s.observation}</pre>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
 
       <div>
         <div className="mb-1 text-xs font-medium text-muted">输入 (input_json)</div>
