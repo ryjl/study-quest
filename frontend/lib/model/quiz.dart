@@ -7,7 +7,13 @@
 /// Rendered at the top of the AI study screen.
 class EpisodeSummary {
   final String headline;
+  // Phase F:按知识点分的小节,让总结有结构(知识点卡片)而非平铺要点。
+  final List<SummarySection> sections;
   final List<String> keyPoints;
+  // 具体方法/技巧/公式,便于速查。
+  final List<String> methods;
+  // 易错点/易混淆处,帮学生避坑。
+  final List<String> commonMistakes;
   final List<String> concepts;
   final String takeaway;
   // Phase 2:课前探险问题,和 summary 同一次 LLM 生成产出(零额外调用)。
@@ -16,7 +22,10 @@ class EpisodeSummary {
 
   EpisodeSummary({
     required this.headline,
+    this.sections = const [],
     required this.keyPoints,
+    this.methods = const [],
+    this.commonMistakes = const [],
     required this.concepts,
     required this.takeaway,
     this.preAdventure = const [],
@@ -32,16 +41,40 @@ class EpisodeSummary {
             .where((p) => p.prompt.isNotEmpty)
             .toList()
         : const [];
+    final rawSections = j['sections'];
+    final List<SummarySection> secs = (rawSections is List<dynamic>)
+        ? rawSections
+            .whereType<Map<String, dynamic>>()
+            .map(SummarySection.fromJson)
+            .where((s) => s.title.isNotEmpty)
+            .toList()
+        : const [];
     return EpisodeSummary(
       headline: (j['headline'] ?? '').toString(),
+      sections: secs,
       keyPoints: (j['key_points'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      methods: (j['methods'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      commonMistakes: (j['common_mistakes'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
       concepts: (j['concepts'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
       takeaway: (j['takeaway'] ?? '').toString(),
       preAdventure: pre,
     );
   }
 
-  bool get isEmpty => headline.isEmpty && keyPoints.isEmpty && concepts.isEmpty;
+  bool get isEmpty => headline.isEmpty && keyPoints.isEmpty && concepts.isEmpty && sections.isEmpty;
+}
+
+/// 一个知识点小节:title 是知识点名称,points 是该知识点的要点。
+class SummarySection {
+  final String title;
+  final List<String> points;
+
+  const SummarySection({required this.title, this.points = const []});
+
+  factory SummarySection.fromJson(Map<String, dynamic> j) => SummarySection(
+        title: (j['title'] ?? '').toString(),
+        points: (j['points'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? const [],
+      );
 }
 
 /// 一道课前探险问题。

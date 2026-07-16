@@ -20,11 +20,27 @@ type SummaryResult struct {
 	Headline  string   `json:"headline"`
 	KeyPoints []string `json:"key_points"`
 	Concepts  []string `json:"concepts"`
+	// Sections 是按知识点分的小节,让总结有结构而非平铺要点。每节有标题(知识点)
+	// 和该知识点的要点列表。一节课通常 2-5 节。Phase F 丰富化:从 key_points 升级
+	// 到分知识点结构化,前端可渲染成"知识点卡片"。
+	Sections []SummarySection `json:"sections"`
+	// CommonMistakes 是这节课相关的常见错误/易错点,帮学生避坑。
+	CommonMistakes []string `json:"common_mistakes"`
+	// Methods 是这节课讲到的具体方法/技巧/公式,单独拎出来便于速查。
+	Methods []string `json:"methods"`
 	// PreAdventure 是 3 个课前探险问题:开放式思考题 + 一句思考方向提示。
 	// 零额外 LLM 调用——和 summary 同一次生成产出,直接落进 summary_json。
 	// 前端在播放前展示,引导孩子带着问题进入视频。
 	PreAdventure []PreAdventureItem `json:"pre_adventure"`
 	Takeaway     string             `json:"takeaway"`
+}
+
+// SummarySection 是一个知识点小节:title 是知识点名称,points 是该知识点的
+// 要点(每个一句话)。让总结从"一串平铺要点"升级到"按知识点分组",更接近
+// 真实的学习笔记结构。
+type SummarySection struct {
+	Title  string   `json:"title"`
+	Points []string `json:"points"`
 }
 
 // PreAdventureItem 是一道课前探险问题:prompt 是问题本身(开放式,激发好奇心),

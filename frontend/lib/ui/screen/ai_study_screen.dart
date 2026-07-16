@@ -403,7 +403,25 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           const SizedBox(height: 10),
           Text(s.headline, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1E293B))),
         ],
-        if (s.keyPoints.isNotEmpty) ...[
+        // 知识点小节(Phase F):按知识点分组的结构化要点,比平铺更像学习笔记。
+        // 优先展示 sections;如果老数据没有 sections 才回退到平铺 keyPoints。
+        if (s.sections.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          ...s.sections.map((sec) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(sec.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6D28D9))),
+                  const SizedBox(height: 4),
+                  ...sec.points.map((p) => Padding(
+                        padding: const EdgeInsets.only(bottom: 3, left: 10),
+                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
+                          Expanded(child: Text(p, style: const TextStyle(fontSize: 12.5, color: Color(0xFF334155)))),
+                        ]),
+                      )),
+                ]),
+              )),
+        ] else if (s.keyPoints.isNotEmpty) ...[
           const SizedBox(height: 10),
           ...s.keyPoints.map((p) => Padding(
                 padding: const EdgeInsets.only(bottom: 4),
@@ -412,6 +430,46 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                   Expanded(child: Text(p, style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
                 ]),
               )),
+        ],
+        // 方法/技巧/公式(Phase F):单独拎出来便于速查。
+        if (s.methods.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: const Color(0xFFF0FDF4), borderRadius: BorderRadius.circular(8)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Row(children: [
+                Icon(Icons.flag_outlined, size: 14, color: Color(0xFF16A34A)),
+                SizedBox(width: 4),
+                Text('方法技巧', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF15803D))),
+              ]),
+              const SizedBox(height: 4),
+              ...s.methods.map((m) => Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(m, style: const TextStyle(fontSize: 12, color: Color(0xFF166534))),
+                  )),
+            ]),
+          ),
+        ],
+        // 易错点(Phase F):帮学生避坑。
+        if (s.commonMistakes.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(8)),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Row(children: [
+                Icon(Icons.warning_amber_rounded, size: 14, color: Color(0xFFDC2626)),
+                SizedBox(width: 4),
+                Text('易错点', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFB91C1C))),
+              ]),
+              const SizedBox(height: 4),
+              ...s.commonMistakes.map((m) => Padding(
+                    padding: const EdgeInsets.only(bottom: 2),
+                    child: Text(m, style: const TextStyle(fontSize: 12, color: Color(0xFF991B1B))),
+                  )),
+            ]),
+          ),
         ],
         if (s.concepts.isNotEmpty) ...[
           const SizedBox(height: 10),

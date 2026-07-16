@@ -71,11 +71,20 @@ func NewAIHandler(aiService service.AIService, unlockService service.UnlockServi
 // keep the handler a pure wire-shape projection (no dependency on the agent
 // package). If the two ever drift, json.Unmarshal still tolerates missing keys.
 type summaryResponse struct {
-	Headline     string              `json:"headline"`
-	KeyPoints    []string            `json:"key_points"`
-	Concepts     []string            `json:"concepts"`
-	PreAdventure []preAdventureItem  `json:"pre_adventure"`
-	Takeaway     string              `json:"takeaway"`
+	Headline      string             `json:"headline"`
+	Sections      []summarySection   `json:"sections"`
+	KeyPoints     []string           `json:"key_points"`
+	Methods       []string           `json:"methods"`
+	CommonMistakes []string          `json:"common_mistakes"`
+	Concepts      []string           `json:"concepts"`
+	PreAdventure  []preAdventureItem `json:"pre_adventure"`
+	Takeaway      string             `json:"takeaway"`
+}
+
+// summarySection mirrors agent.SummarySection locally (知识点小节)。
+type summarySection struct {
+	Title  string   `json:"title"`
+	Points []string `json:"points"`
 }
 
 // preAdventureItem is one pre-class exploration question (open-ended, sparks
