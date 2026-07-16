@@ -156,8 +156,9 @@ func newTestEnv(t *testing.T) *testEnv {
 	releaseH := handler.NewReleaseHandler(releaseRepo)
 	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
 	// AI handler with nil service — tests don't exercise AI; the endpoints
-	// return 404/503 cleanly. Keeps the test harness AI-free.
-	aiH := handler.NewAIHandler(nil)
+	// return 404/503 cleanly. Keeps the test harness AI-free. unlockService is
+	// passed so the access-gate compiles, but it's never reached (nil service).
+	aiH := handler.NewAIHandler(nil, unlockService)
 
 	r := gin.New()
 	// Ingest key is intentionally empty for the default test env — the legacy

@@ -41,6 +41,29 @@ type AIService interface {
 	// the other's internals.
 	OnSubtitleCompleted(episodeID uint)
 
+	// ── quiz: client-driven lazy generation + answering (Phase C) ──
+	// GetOrEnqueueQuiz is the lazy-generation entry point. The client GETs the
+	// quiz; if none exists yet, one is enqueued for this user and the status is
+	// "generating" (client polls). Returns "ready" with the existing quiz, or
+	// "unavailable" when AI/quiz is off or the episode isn't ready (no chunks).
+	GetOrEnqueueQuiz(userID, episodeID uint) (status string, quiz *model.Quiz, err error)
+	// GetQuizForClient returns the quiz + questions in a client-safe shape: the
+	// question list NEVER exposes the correct answer/answer_text (that's revealed
+	// only after submit, via SubmitQuizAnswer). Includes per-question answered
+	// state so the client can show progress on a redo.
+	GetQuizForClient(userID, episodeID uint) (*QuizView, error)
+	// SubmitQuizAnswer grades one answer, persists it, updates memory, and
+	// returns the verdict + explanation + jump-to-video timestamp. answerIndex is
+	// used for choice, answerText for fill (exactly one is set per question type).
+	SubmitQuizAnswer(userID, questionID uint, answerIndex *int, answerText *string) (*AnswerResult, error)
+	// RegenerateQuiz drops the user's current quiz and re-runs the agent against
+	// their latest memory (换题). Returns the new status ("generating").
+	RegenerateQuiz(userID, episodeID uint) (status string, err error)
+
+	// ── quiz: admin observability (Phase C) ──
+	ListQuizzesForUser(userID uint) ([]QuizDetailQuiz, error)
+	GetQuizDetail(quizID uint) (*QuizDetail, error)
+
 	// ── results (read) ──
 	GetSummary(episodeID uint) (*model.AISummary, error)
 	ListJobs(jobType, status string, limit int) ([]model.AIJob, error)
@@ -52,29 +75,34 @@ type AIService interface {
 }
 
 type aiService struct {
-	db           *gorm.DB
-	contentRepo  repository.AIContentRepository
-	episodeRepo  repository.EpisodeRepository
-	courseRepo   repository.CourseRepository
-	subtitleRepo repository.EpisodeRepository // same repo, GetSubtitle lives here
-	resolver     *ai.ProviderResolver
+	db            *gorm.DB
+	contentRepo   repository.AIContentRepository
+	episodeRepo   repository.EpisodeRepository
+	courseRepo    repository.CourseRepository
+	subtitleRepo  repository.EpisodeRepository // same repo, GetSubtitle lives here
+	resolver      *ai.ProviderResolver
+	unlockService UnlockService // gates client quiz access (IsEpisodeVisible); nil in tests
 }
 
 // NewAIService constructs an AIService. resolver may be nil in degenerate
-// builds (AI disabled); the service degrades gracefully.
+// builds (AI disabled); the service degrades gracefully. unlockService gates
+// client-facing quiz access (IsEpisodeVisible); the existing unlock service
+// satisfies this interface.
 func NewAIService(
 	db *gorm.DB,
 	contentRepo repository.AIContentRepository,
 	episodeRepo repository.EpisodeRepository,
 	courseRepo repository.CourseRepository,
 	resolver *ai.ProviderResolver,
+	unlockService UnlockService,
 ) AIService {
 	s := &aiService{
-		db:          db,
-		contentRepo: contentRepo,
-		episodeRepo: episodeRepo,
-		courseRepo:  courseRepo,
-		resolver:    resolver,
+		db:            db,
+		contentRepo:   contentRepo,
+		episodeRepo:   episodeRepo,
+		courseRepo:    courseRepo,
+		resolver:      resolver,
+		unlockService: unlockService,
 	}
 	go s.runWorker() // single in-process worker goroutine; see runWorker
 	return s
@@ -164,7 +192,7 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
 func (s *aiService) runWorker() {
-	jobTypes := []string{"segment", "summary"}
+	jobTypes := []string{"segment", "summary", "quiz"}
 	for {
 		s.processOneJob(jobTypes)
 		// Poll every 3s. A real impl might use a channel signaled on enqueue,
@@ -190,6 +218,8 @@ func (s *aiService) processOneJob(jobTypes []string) {
 		s.runSegmentJob(job)
 	case "summary":
 		s.runSummaryJob(job)
+	case "quiz":
+		s.runQuizJob(job)
 	default:
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "unknown job_type: "+job.JobType, nil)
 	}

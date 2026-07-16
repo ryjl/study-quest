@@ -13,7 +13,7 @@ StudyQuest 的视频字幕（Step 1/2 的产物）落库后，AI Agent 模块把
 | 能力 | 状态 | 用到的 agent 机制 |
 |---|---|---|
 | ① 总结 | ✅ Phase B | 单次 LLM 调用（无 tool calling） |
-| ② 出题 | ⏳ Phase C | **ReAct loop + tool calling + self-check + memory 反馈循环**（agent 核心） |
+| ② 出题 | ✅ Phase C | **ReAct loop + tool calling + self-check + memory 反馈循环**（agent 核心） |
 | ③ chat | ⏳ Phase D | 多轮对话 + RAG（复用 Phase C 的检索/memory） |
 
 ### 第一性约束：纯附加层
@@ -204,10 +204,19 @@ GET  /runs/:id           → 单条决策详情（完整 prompt/response/usage�
 ```
 GET /episodes/:id/ai-summary   读总结（无总结→404，客户端隐藏卡片）
 ```
-⏳ Phase C 新增：
+Phase C 新增（quiz，受 IsEpisodeVisible 访问控制）：
 ```
-GET  /episodes/:id/ai-quiz          拉题（预生成落库，按 user memory 筛）
-POST /episodes/:id/ai-quiz/submit   答题→判对错→更新 memory→返回结果
+GET  /episodes/:id/ai-quiz            拉题（无题→202 generating 懒生成；ready 返回题,不下发答案）
+POST /episodes/:id/ai-quiz/submit     答题→按题型判对错→更新 memory→返回结果+解析+跳转时间
+POST /episodes/:id/ai-quiz/regenerate 换题（删旧基于最新 memory 重新生成→202 generating）
+```
+submit body：`{question_id, answer_index? | answer_text?}`（选择题发 index，填空题发 text）。
+
+### Admin 观测端（Phase C 新增）
+```
+GET /admin/api/ai/summaries/:episodeID   读已生成的总结内容（admin 回放）
+GET /admin/api/ai/users/:userID/quizzes  列出某用户所有题库（用户视图入口）
+GET /admin/api/ai/quizzes/:quizID        题库详情：题+答案+答题历史+memory+agent_feedback+ai_runs(trace)
 ```
 
 ### API key 安全约定
@@ -344,38 +353,89 @@ provider 构造结果缓存在内存（chat/embedder 各一个 slot）。admin �
 ### 框架约定
 React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + 全局 class `.card`/`.input`/`.btn-primary`）。**每个 mutation 必须 invalidate**（CLAUDE.md 硬规则）。颜色走 tailwind config token，不硬编码。
 
-## 14. ⏳ Phase C 设计（出题 agent，下一步）
+## 14. ✅ Phase C 实现（出题 agent，已落地）
 
-这是 agent 价值核心。详细交接见 `docs/handoff-ai-step3.md`，这里记架构要点。
+这是 agent 价值核心。下面记录**已落地**的设计与代码位置。
 
-### 要建
+### 已建的文件
 - `agent/agent.go` — ReAct loop（observe→think→act 循环，带详尽注释，★学习重点）
 - `agent/tools.go` — tool 定义 + 执行（search_subtitles / get_user_mastery / get_episode_info / get_related_chunks）
-- `agent/quizzer.go` — 出题（走 agent loop + LLM self-check 自我修正）
+- `agent/quizzer.go` — 出题（走 agent loop + LLM self-check 自我修正 + agent_feedback 评价）
 - `agent/memory.go` — memory 读写 + mastery 更新（+0.1/-0.2 线性，衰减留 Phase D）
-- service/handler/repo 接出题 + 前端 AI 学习页
+- `agent/prompts.go` — QuizzerSystemPrompt / QuizSelfCheckPrompt / buildQuizUserPrompt
+- `agent/grading.go` — GradeChoice / GradeFill / NormalizeText（填空题归一化判题）
+- `vector.go`（ai 根包）— CosineSim / TopK / ParseEmbedding / NormalizeText（纯函数）
+- `service/ai_service_quiz.go` — 出题编排：worker runQuizJob + 懒生成 + 答题 + 观测读
+- `handler/ai_handler.go`（客户端 quiz 3 方法）+ `handler/admin_ai.go`（观测 3 方法）
+- 前端：`ai_study_screen.dart`（独立 AI 学习页）+ admin `AIUserView.tsx`（用户视图）
 
-### ReAct loop
+### ReAct loop（agent.go）
 ```
-循环直到 LLM 给最终答案或达步数上限：
-  observe: 上一步工具结果喂回 LLM
-  think:   LLM 推理下一步
-  act:     LLM 选调 tool 或给最终答案
+循环直到 LLM 给最终答案或达步数上限（maxSteps=6）：
+  observe: 把上一步工具结果（RoleTool 消息）喂回 LLM
+  think:   LLM 推理（function calling 下，工具选择即推理的外化）
+  act:     LLM 选调 tool（ToolCalls）或给最终答案（FinishReason != tool_calls）
   执行 tool → 结果作下一步 observation
-全程写 ai_runs
+达上限 → 强制 ToolChoice="none" 逼出最终答案
+每步记录 TraceStep{step,thought,action,observation} 进 trace
 ```
-provider.go 的 `Tool`/`ToolSpec`/`ToolCall`/`ChatRequest.Tools` 已定义好，Phase C 直接用。中转站支持 function calling，走标准 `tools` 参数。
+全程聚合 usage 写**一条** ai_runs（capability=quiz），trace 序列化进 `trace_json` 字段。
+
+### 关键设计决策（落地时确定）
+
+**1. 题库模型：单套 + 可重做/换题**
+- `Quiz` 对 `(user_id, episode_id)` 加唯一复合索引 → 一个学生一节课**始终只有一套题**
+- 「重做」=同一套题再答（`Answer` append-only，每次答题加新行；mastery 累积更新）
+- 「换题」=`CreateQuiz` 事务内删旧 quiz+questions 插新（基于最新 memory 重新生成）
+- `Answer` 和 `KnowledgeMemory` 在换题时**不删**——mastery 代表长期学习状态
+
+**2. 按用户独立 + 懒生成**
+- 出题绑定具体用户（`AIJob.UserID`），agent 通过 `get_user_mastery` 工具读 per-user memory → 真·自适应
+- 触发：客户端首次 `GET /ai-quiz` 发现无 quiz → 入队 per-user quiz job → 返回 `202 generating` → 客户端轮询（3s）
+- admin 批量预热：结构预留（`EnqueueQuiz`），本次不接路由（懒加载够用，省钱符合纯附加层）
+
+**3. 题型：选择 + 填空混搭**
+- `Question.Type` = `choice | fill`
+- 选择题：`Options` JSON 数组 + `Answer` 索引；填空题：`AnswerText` JSON 数组（多等价答案）
+- **填空题仅限唯一答案的知识点**（数学计算/事实），prompt 强约束；主观/辨析一律选择
+- 判题：选择题比索引；填空题 `NormalizeText` 归一化（全角→半角、去标点空格、小写）后与可接受答案精确匹配——**不做模糊匹配**（数学题 11≠12）
+- `GradeChoice`/`GradeFill` 纯函数，单测覆盖
+
+**4. memory 两表分工**
+- `Answer`（append-only 做题流水）+ `KnowledgeMemory`（汇总掌握度，agent 读）
+- submit 时两表都写：先写 Answer 流水，再 `UpsertMemoryOnAnswer`（原子 `INSERT...ON CONFLICT DO UPDATE`，mastery +0.1/-0.2 clamp，count++）
+- 不对称增量：答对 +0.1，答错 -0.2——错误信号更强，弱点快速浮现
+
+**5. meta 充分利用**
+- `get_episode_info` 工具返回富信息包：标题、**文件名**（从 VideoRelativePath/OriginalRelativePath 提取，常带章节信息如"第3讲_分数加减法.mp4"）、时长、科目、标签、年级、AIHint、已生成 summary 的 concepts/key_points
+- 文件名帮 agent 快速锁定主题，比纯靠字幕召回更准更省 token
+
+**6. 可观测性（学习载体，非附属）**
+- `AIRun.TraceJSON`：quiz run 携带 `[{step,thought,action:{tool,args},observation}]`，admin "思考时间线"展开成步骤列表——学 agent 决策流的核心
+- `Quiz.AgentFeedback`：LLM 出题副产品（基于 memory 生成弱点分析+学习建议），不额外调 LLM；展示给学生 + admin
+- 两个观测视图：AIWorkflow（job 视图，run 详情含 trace 时间线）+ AIUserView（用户视图，选用户→题库→详情：题+答题历史+memory+评价+思考时间线）
+- admin 能看 AI 生成的总结内容（`GET /admin/api/ai/summaries/:episodeID`）
 
 ### 砍掉的设计
-- **80% 弹题已废弃**——改为独立 AI 学习页（用户决定）。播放器回归纯播放，AI 交互在独立页面（做题/反馈/讨论）。
-- **streaming + memory 衰减曲线**留 Phase D。
+- **80% 弹题已废弃**——改为独立 AI 学习页。播放器加一个 AI 学习入口图标，跳转后 pop JumpRequest 回播放器 seek
+- **讨论 tab（chat）**留 Phase D；本次 AI 学习页只有总结 + 练习 tab
+- **streaming + memory 衰减曲线**留 Phase D
+- 旧 in-player quiz overlay（post_review_json mock）暂不清理，与新独立页并存
+
+### Phase C 验收路径
+1. admin 在某课程勾选 AIQuizEnabled，该课程 episode 有切片+总结（Phase A/B）
+2. 客户端首次 GET /ai-quiz → 202 generating → 轮询 → ready（含填空题，数学课验证）
+3. admin AIWorkflow 看 quiz ai_runs（self-check 列、决策回放展开 trace 时间线、可见工具调用 + memory 数值）
+4. 客户端做题 → submit → 反馈 + 解析 + [跳转 xx:xx]（选择比索引、填空归一化）
+5. 换题 → agent 读更新后 memory → ai_runs 见 mastery 变化（自适应闭环）
 
 ## 15. 演进方向
 
-- Phase C：出题 agent（memory + ReAct + tool calling + self-check）
 - Phase D：AI chat（复用 RAG + memory，多轮对话，答案带视频时间戳跳转）
+- 讨论 tab 接入独立 AI 学习页
 - memory 衰减曲线（艾宾浩斯，复用 knowledge_memory）
 - streaming 输出（SSE，改善等待体验）
+- admin 批量预热出题（`EnqueueQuiz` 结构已预留，接路由即可）
 - 附件提取入 content_chunks（PDF/练习册，source_type=attachment，schema 已预留）
 - rerank（数据量增大后上 rerank API，接口已预留）
 - 知识点关联图谱（LLM 给切片贴标签 + 建关联）

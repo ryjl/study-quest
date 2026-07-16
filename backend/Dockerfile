@@ -3,6 +3,30 @@
 # Build with:  docker build -f backend/Dockerfile -t studyquest-backend .   (from repo root)
 # The Makefile docker-build target already does this.
 
+# Stage -1: Fetch the local ONNX embedding artifacts (libonnxruntime + BGE model).
+# These are baked into the image so a fresh `docker run` has working embeddings
+# with no host-volume dependency. ~45MB total; layer caches well (only changes
+# on an onnxruntime/BGE version bump). Version pins mirror Makefile's
+# fetch-ai-models target — keep them in sync.
+FROM alpine:3.19 AS ai-models
+RUN apk add --no-cache curl tar
+ARG ORT_VERSION=1.26.0
+WORKDIR /models
+# 1) onnxruntime C library (versioned .so — onnxruntime_go's ABI check needs the
+#    exact versioned path, not the unversioned symlink).
+RUN curl -fL --retry 3 -o /tmp/ort.tgz \
+      "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz" \
+    && tar -xzf /tmp/ort.tgz -C /tmp \
+    && cp /tmp/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so.${ORT_VERSION} \
+          /models/libonnxruntime.so.${ORT_VERSION} \
+    && rm -rf /tmp/*
+# 2) BGE-small-zh int8 quantized model + vocab.
+RUN mkdir -p /models/bge-small-zh-v1.5 \
+    && curl -fL --retry 3 -o /models/bge-small-zh-v1.5/model_quantized.onnx \
+       "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/onnx/model_quantized.onnx" \
+    && curl -fL --retry 3 -o /models/bge-small-zh-v1.5/vocab.txt \
+       "https://huggingface.co/Xenova/bge-small-zh-v1.5/resolve/main/vocab.txt"
+
 # Stage 0: Build the admin SPA (React + Vite + TypeScript).
 # Output: /build/backend/internal/admin/spa/dist — mirrors the embed path
 # inside the repo so the next stage can COPY it verbatim.
@@ -50,6 +74,12 @@ WORKDIR /app
 
 # Copy the self-contained binary (templates no longer needed — SPA is embedded)
 COPY --from=builder /app/server .
+
+# Bake the ONNX embedding artifacts into the image (from the ai-models stage).
+# Placed under /app/data/ai-models so AI_MODELS_DIR's default (./data/ai-models)
+# resolves correctly. This removes the runtime host-volume dependency — a fresh
+# container has working embeddings immediately. ~45MB.
+COPY --from=ai-models /models/ /app/data/ai-models/
 
 # Create volume folders for persistent SQLite and Subtitles storage
 RUN mkdir -p /app/data/subtitles

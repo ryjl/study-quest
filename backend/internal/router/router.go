@@ -87,6 +87,11 @@ func RegisterRoutes(
 		// AI module (Step 3) — client reads. 404 when AI is off / no summary yet,
 		// so the client can hide the AI card gracefully.
 		v1Restricted.GET("/episodes/:id/ai-summary", ai.GetEpisodeSummary)
+		// Phase C — quiz: lazy generation + answering + regenerate. Same access
+		// gate as streaming (IsEpisodeVisible).
+		v1Restricted.GET("/episodes/:id/ai-quiz", ai.GetEpisodeQuiz)
+		v1Restricted.POST("/episodes/:id/ai-quiz/submit", ai.SubmitQuizAnswer)
+		v1Restricted.POST("/episodes/:id/ai-quiz/regenerate", ai.RegenerateQuiz)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
 		// Resolve the Nth attachment of an episode into a 302 download link.
 		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)
@@ -233,6 +238,10 @@ func RegisterRoutes(
 		adm.GET("/api/ai/jobs/:id", admin.GetAIJob)
 		adm.GET("/api/ai/runs", admin.ListAIRuns)
 		adm.GET("/api/ai/runs/:id", admin.GetAIRun)
+		// Phase C — quiz observability (per-user drill-down + summary content).
+		adm.GET("/api/ai/summaries/:episodeID", admin.GetAISummary)
+		adm.GET("/api/ai/users/:userID/quizzes", admin.ListUserQuizzes)
+		adm.GET("/api/ai/quizzes/:quizID", admin.GetQuizDetail)
 
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)

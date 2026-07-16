@@ -10,7 +10,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import '../../config.dart';
 import '../../model/course.dart';
+import '../../model/quiz.dart';
 import '../../service/api_service.dart';
+import 'ai_study_screen.dart';
 import '../../theme.dart';
 import '../widget/button_3d.dart';
 import '../widget/focus_button.dart';
@@ -1032,6 +1034,26 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   fontWeight: FontWeight.bold,
                   fontSize: 15),
             ),
+          ),
+          const SizedBox(width: 8),
+          // AI study entry — opens the AI study page (summary + practice). On
+          // return, if the user tapped a "[跳转 12:38]" link, pop receives a
+          // JumpRequest and we seek the player there.
+          _iconControl(
+            icon: Icons.auto_awesome_rounded,
+            onTap: () async {
+              final result = await Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => AiStudyScreen(
+                    activeUserId: widget.activeUserId,
+                    episode: widget.episode,
+                  ),
+                ),
+              );
+              if (result is JumpRequest && mounted) {
+                _seekTo(result.target);
+              }
+            },
           ),
           const SizedBox(width: 8),
           _iconControl(

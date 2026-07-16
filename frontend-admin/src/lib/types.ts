@@ -596,13 +596,97 @@ export interface AiJobEnqueueResult {
 export interface AiRun {
   id: number;
   job_id: number;
-  capability: string; // "chat" | "embedding" | "rerank"
+  capability: string; // "summary" | "quiz" | "chat"
   input_json: string; // raw JSON string of the call's structured input
   prompt_tokens: number;
   completion_tokens: number;
   model_used: string;
   response_text: string;
+  // trace_json carries the ReAct step-by-step reasoning for quiz runs: an array
+  // of {step, thought, action:{tool,args}, observation, is_final}. Empty for
+  // single-shot capabilities (summary). The Workflow page renders this as the
+  // "思考时间线" — the centerpiece for learning how the agent decided.
+  trace_json?: string;
   self_check_result?: string; // "" / pass / fail / machine-readable result
+  self_check_note?: string;
   duration_ms: number;
   created_at: string;
+}
+
+// One step in an agent's ReAct trace (parsed from AiRun.trace_json).
+export interface AiTraceStep {
+  step: number;
+  thought: string;
+  action?: { tool: string; args: string };
+  observation?: string;
+  is_final?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — quiz observability types
+// ---------------------------------------------------------------------------
+
+// A generated summary row (GET /admin/api/ai/summaries/:episodeID).
+export interface AiSummaryRow {
+  episode_id: number;
+  course_id: number;
+  summary_json: string; // {headline, key_points[], concepts[], takeaway}
+  model_used: string;
+  created_at: string;
+}
+
+// One quiz for a user (GET /admin/api/ai/users/:userID/quizzes).
+export interface AiQuizRow {
+  id: number;
+  episode_id: number;
+  user_id: number;
+  course_id: number;
+  difficulty: string;
+  agent_feedback: string;
+  created_at: string;
+}
+
+// A question in a quiz (admin detail view — includes the answer).
+export interface AiQuizQuestion {
+  id: number;
+  quiz_id: number;
+  chunk_id?: number;
+  type: string; // "choice" | "fill"
+  stem: string;
+  options?: string; // JSON []string (choice)
+  answer: number; // choice: 0-based index
+  answer_text?: string; // fill: JSON []string of acceptable answers
+  explanation: string;
+  chunk_start_time?: number | null; // joined from content_chunks, for video-jump
+}
+
+// One student answer record (append-only history).
+export interface AiAnswerRow {
+  id: number;
+  question_id: number;
+  user_id: number;
+  user_answer: number;
+  correct: boolean;
+  answered_at: string;
+}
+
+// Per-chunk mastery (the feedback-loop state the agent reads).
+export interface AiMasteryRow {
+  id: number;
+  user_id: number;
+  episode_id: number;
+  chunk_id: number;
+  mastery: number;
+  correct_count: number;
+  wrong_count: number;
+  last_reviewed?: string | null;
+}
+
+// Full per-quiz observability bundle (GET /admin/api/ai/quizzes/:quizID).
+export interface AiQuizDetail {
+  quiz: AiQuizRow;
+  questions: AiQuizQuestion[];
+  answers: AiAnswerRow[];
+  masteries: AiMasteryRow[];
+  runs: AiRun[]; // the ai_runs that generated this quiz (trace lives here)
 }

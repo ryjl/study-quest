@@ -487,3 +487,86 @@ func (h *adminHandler) GetAIRun(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, run)
 }
+
+// ---------------------------------------------------------------------------
+// Phase C — quiz observability (admin): per-user quizzes + detail + summaries
+// ---------------------------------------------------------------------------
+
+// GetAISummary serves a generated summary's content to the admin. The AI
+// Workflow job view links a summary job to its episode; this endpoint lets the
+// admin read the actual headline/key_points/concepts without switching to the
+// client. GET /admin/api/ai/summaries/:episodeID
+func (h *adminHandler) GetAISummary(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	episodeID, err := parseUintParam(c, "episodeID")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 episodeID"})
+		return
+	}
+	summary, err := h.aiService.GetSummary(episodeID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if summary == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "该课时暂无总结"})
+		return
+	}
+	// Return the raw row; the admin SPA parses summary_json for rich display.
+	c.JSON(http.StatusOK, gin.H{
+		"episode_id":   summary.EpisodeID,
+		"course_id":    summary.CourseID,
+		"summary_json": summary.SummaryJSON,
+		"model_used":   summary.ModelUsed,
+		"created_at":   summary.CreatedAt.Format("2006-01-02 15:04:05"),
+	})
+}
+
+// ListUserQuizzes lists all of a user's quizzes (the per-user AI view entry).
+// GET /admin/api/ai/users/:userID/quizzes
+func (h *adminHandler) ListUserQuizzes(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusOK, []any{})
+		return
+	}
+	userID, err := parseUintParam(c, "userID")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 userID"})
+		return
+	}
+	quizzes, err := h.aiService.ListQuizzesForUser(userID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, quizzes)
+}
+
+// GetQuizDetail returns the full per-quiz observability bundle: questions WITH
+// answers, the student's answer history, their mastery, the agent's feedback,
+// and the ai_runs that produced it (trace_json lives on the runs — the SPA
+// renders the "思考时间线" from it). GET /admin/api/ai/quizzes/:quizID
+func (h *adminHandler) GetQuizDetail(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	quizID, err := parseUintParam(c, "quizID")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 quizID"})
+		return
+	}
+	detail, err := h.aiService.GetQuizDetail(quizID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if detail == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "题库不存在"})
+		return
+	}
+	c.JSON(http.StatusOK, detail)
+}
