@@ -20,7 +20,6 @@ type EpisodeHandler interface {
 	GetPlayInfo(c *gin.Context)
 	GetSubtitle(c *gin.Context)
 	GetSubtitleVTT(c *gin.Context)
-	GetAIContent(c *gin.Context)
 	GetAttachments(c *gin.Context)
 	StreamAttachment(c *gin.Context)
 }
@@ -332,28 +331,6 @@ func (h *episodeHandler) GetSubtitle(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, sub)
-}
-
-func (h *episodeHandler) GetAIContent(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.ParseUint(idStr, 10, 32)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID format"})
-		return
-	}
-
-	ai, err := h.episodeService.GetAIContent(uint(id))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to query AI content: " + err.Error()})
-		return
-	}
-
-	if ai == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "AI lesson content not generated for this episode"})
-		return
-	}
-
-	c.JSON(http.StatusOK, ai)
 }
 
 func (h *episodeHandler) GetAttachments(c *gin.Context) {

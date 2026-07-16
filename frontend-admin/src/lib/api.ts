@@ -534,6 +534,13 @@ export const api = {
   async getAiJob(id: number): Promise<{ job: AiJob; runs: AiRun[] }> {
     return request(`/admin/api/ai/jobs/${id}`);
   },
+  // Manually reset one stuck 'processing' job back to 'queued' (the admin
+  // counterpart of the automatic reaper). Throws on a 409 when the job isn't
+  // currently processing (already finished or was reaped) — the caller surfaces
+  // that as a benign "nothing to reset" toast.
+  async resetAiJob(id: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/jobs/${id}/reset`, { method: 'POST' });
+  },
   // Decision-trace runs: the recorded model invocations an agent made. limit
   // caps the window (the page shows the most recent N).
   async listAiRuns(limit = 20): Promise<AiRun[]> {

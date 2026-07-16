@@ -82,6 +82,10 @@ type QuizDetailQuiz struct {
 	Difficulty    string `json:"difficulty"`
 	AgentFeedback string `json:"agent_feedback"`
 	CreatedAt     string `json:"created_at"`
+	// Resolved display names so the admin list renders titles, not bare ids
+	// (the AIUserView page picked the user already, so no user_nickname here).
+	EpisodeTitle string `json:"episode_title"`
+	CourseTitle  string `json:"course_title"`
 }
 
 // QuizDetailQuestion is a question with its answer exposed (admin view only) +
@@ -647,20 +651,22 @@ func (s *aiService) getQuestion(id uint) (*model.Question, error) {
 
 // ListQuizzesForUser returns a user's quizzes as admin-snake_case DTOs (the
 // admin SPA's AiQuizRow type expects snake_case; raw model.Quiz marshals
-// PascalCase).
+// PascalCase). Episode/course titles are batch-resolved (one lookup per
+// distinct id, not per row) so the AIUserView list renders titles not bare ids.
 func (s *aiService) ListQuizzesForUser(userID uint) ([]QuizDetailQuiz, error) {
 	quizzes, err := s.contentRepo.ListQuizzesForUser(userID)
 	if err != nil {
 		return nil, err
 	}
+	names := s.resolveQuizNames(quizzes)
 	out := make([]QuizDetailQuiz, 0, len(quizzes))
 	for _, q := range quizzes {
-		out = append(out, toQuizDTO(q))
+		out = append(out, toQuizDTO(q, names))
 	}
 	return out, nil
 }
 
-func toQuizDTO(q model.Quiz) QuizDetailQuiz {
+func toQuizDTO(q model.Quiz, names quizNameCache) QuizDetailQuiz {
 	return QuizDetailQuiz{
 		ID:            q.ID,
 		EpisodeID:     q.EpisodeID,
@@ -669,7 +675,42 @@ func toQuizDTO(q model.Quiz) QuizDetailQuiz {
 		Difficulty:    q.Difficulty,
 		AgentFeedback: q.AgentFeedback,
 		CreatedAt:     q.CreatedAt.Format("2006-01-02 15:04:05"),
+		EpisodeTitle:  names.episodeTitles[q.EpisodeID],
+		CourseTitle:   names.courseTitles[q.CourseID],
 	}
+}
+
+// quizNameCache is the quiz-list analogue of jobNameCache: batch-resolved
+// episode/course titles keyed by id, for a set of quizzes. Best-effort (a
+// missing id → empty title).
+type quizNameCache struct {
+	episodeTitles map[uint]string
+	courseTitles  map[uint]string
+}
+
+// resolveQuizNames loads episode/course titles for a quiz set in one pass per
+// distinct id. Same best-effort posture as resolveJobNames.
+func (s *aiService) resolveQuizNames(quizzes []model.Quiz) quizNameCache {
+	c := quizNameCache{
+		episodeTitles: make(map[uint]string, len(quizzes)),
+		courseTitles:  make(map[uint]string, len(quizzes)),
+	}
+	seenEp, seenCourse := map[uint]bool{}, map[uint]bool{}
+	for _, q := range quizzes {
+		if !seenEp[q.EpisodeID] {
+			seenEp[q.EpisodeID] = true
+			if ep, err := s.episodeRepo.FindByID(q.EpisodeID); err == nil && ep != nil {
+				c.episodeTitles[q.EpisodeID] = ep.Title
+			}
+		}
+		if !seenCourse[q.CourseID] {
+			seenCourse[q.CourseID] = true
+			if course, err := s.courseRepo.FindByID(q.CourseID); err == nil && course != nil {
+				c.courseTitles[q.CourseID] = course.Title
+			}
+		}
+	}
+	return c
 }
 
 // GetQuizDetail assembles the full per-quiz admin view: questions (with answers
@@ -731,7 +772,7 @@ func (s *aiService) GetQuizDetail(quizID uint) (*QuizDetail, error) {
 	}
 	runs := s.findQuizRuns(quiz)
 	return &QuizDetail{
-		Quiz:      toQuizDTO(*quiz),
+		Quiz:      toQuizDTO(*quiz, s.resolveQuizNames([]model.Quiz{*quiz})),
 		Questions: detailQuestions,
 		Answers:   detailAnswers,
 		Masteries: detailMasteries,

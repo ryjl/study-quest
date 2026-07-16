@@ -135,6 +135,7 @@ type AdminHandler interface {
 	EnqueueAIJobs(c *gin.Context)
 	ListAIJobs(c *gin.Context)
 	GetAIJob(c *gin.Context)
+	ResetAIJob(c *gin.Context)
 	ListAIRuns(c *gin.Context)
 	GetAIRun(c *gin.Context)
 	// Phase C — quiz observability (per-user drill-down + summary content).

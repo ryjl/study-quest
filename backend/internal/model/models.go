@@ -429,16 +429,6 @@ func IsTerminalSubtitleJobStatus(status string) bool {
 	return status == SubtitleJobDone || status == SubtitleJobFailed || status == SubtitleJobSkipped
 }
 
-// AILessonContent holds AI pre-adventure and post-review questions.
-type AILessonContent struct {
-	EpisodeID         uint    `gorm:"primaryKey"`
-	Episode           Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
-	PreAdventureJSON  string  `gorm:"type:text"` // JSON array of 3 exploration prompts
-	PostReviewJSON    string  `gorm:"type:text"` // JSON of summary + 3 multiple choice questions
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-}
-
 // UserPoint holds active point balance.
 type UserPoint struct {
 	UserID            uint `gorm:"primaryKey"`
@@ -1163,7 +1153,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&Episode{},
 		&Subtitle{},
 		&SubtitleJob{},
-		&AILessonContent{},
 		&UserPoint{},
 		&PointsLedger{},
 		&UserProgress{},

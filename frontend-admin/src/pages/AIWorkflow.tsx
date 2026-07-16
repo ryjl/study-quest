@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { useToast } from '../lib/toast';
 import type { AiJob, AiJobStatus, AiRun, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
 
@@ -130,12 +131,13 @@ export function AIWorkflow() {
                 <th className="px-4 py-3 text-left font-medium">耗时</th>
                 <th className="px-4 py-3 text-left font-medium">创建时间</th>
                 <th className="px-4 py-3 text-left font-medium">错误</th>
+                <th className="px-4 py-3 text-right font-medium">操作</th>
               </tr>
             </thead>
             <tbody>
               {jobs.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-muted">
+                  <td colSpan={8} className="px-4 py-10 text-center text-muted">
                     {jobsQ.isLoading ? '加载中…' : '暂无任务'}
                   </td>
                 </tr>
@@ -161,20 +163,41 @@ export function AIWorkflow() {
 }
 
 function JobRow({ job }: { job: AiJob }) {
+  const qc = useQueryClient();
+  const toast = useToast();
   const meta = STATUS_META[job.status];
   const showProgress = job.status === 'processing' && job.progress != null;
+
+  // Manual reset of a stuck 'processing' job (admin counterpart of the auto
+  // reaper). Inherited from SubtitleQueue's retryMut pattern: invalidate the
+  // jobs list on success so the row re-renders as 'queued'. The 409 (not
+  // processing) path surfaces as a benign toast, not a scary error.
+  const resetMut = useMutation({
+    mutationFn: () => api.resetAiJob(job.id),
+    onSuccess: () => {
+      toast.success('已重置回排队');
+      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
   return (
     <tr className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
       <td className="px-4 py-3">
         <span className="font-medium">{jobTypeLabel(job.job_type)}</span>
         <span className="ml-1.5 text-[11px] text-muted">{job.job_type}</span>
+        {job.user_nickname && (
+          <span className="ml-1.5 rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-600" title="此任务的定向用户">
+            {job.user_nickname}
+          </span>
+        )}
       </td>
       <td className="px-4 py-3">
         <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
       </td>
       <td className="px-4 py-3">
-        <span className="text-muted">#{job.episode_id}</span>
-        {job.course_id != null && <span className="ml-1.5 text-[11px] text-muted">课程 {job.course_id}</span>}
+        <div className="font-medium text-txt">{job.episode_title || `#${job.episode_id}`}</div>
+        <div className="text-[11px] text-muted">{job.course_title ? `${job.course_title}` : `课程 ${job.course_id}`}</div>
       </td>
       <td className="px-4 py-3">
         {showProgress ? (
@@ -192,6 +215,18 @@ function JobRow({ job }: { job: AiJob }) {
       <td className="px-4 py-3 text-xs text-muted">{fmtTime(job.created_at)}</td>
       <td className="max-w-[280px] px-4 py-3">
         {job.error ? <span className="line-clamp-2 text-xs text-bad" title={job.error}>{job.error}</span> : '—'}
+      </td>
+      <td className="px-4 py-3 text-right">
+        {job.status === 'processing' && (
+          <button
+            className="btn-ghost btn-sm"
+            disabled={resetMut.isPending}
+            onClick={() => resetMut.mutate()}
+            title="重置回排队(worker 可能卡住时手动触发)"
+          >
+            重置
+          </button>
+        )}
       </td>
     </tr>
   );

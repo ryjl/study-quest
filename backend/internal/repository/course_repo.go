@@ -101,7 +101,6 @@ func (r *courseRepo) Delete(id uint) error {
 		tx.Where("course_id = ?", id).Find(&episodes)
 		for _, ep := range episodes {
 			tx.Delete(&model.Subtitle{}, "episode_id = ?", ep.ID)
-			tx.Delete(&model.AILessonContent{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.UserProgress{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.EntertainmentProgress{}, "episode_id = ?", ep.ID)
 		}

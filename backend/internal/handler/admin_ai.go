@@ -10,6 +10,8 @@ import (
 
 	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/model"
+	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/service"
 )
 
 // aiProviderDTO is the JSON shape for an AIProvider row. The api_key field is
@@ -366,26 +368,33 @@ func (h *adminHandler) EnqueueAIJobs(c *gin.Context) {
 	c.JSON(http.StatusOK, aiEnqueueResponse{Enqueued: enqueued, Skipped: skipped})
 }
 
-// aiJobDTO is the admin-facing job view. Includes episode/course ids for
-// display; the admin UI joins to titles client-side if needed.
+// aiJobDTO is the admin-facing job view. Includes episode/course ids AND the
+// resolved display names (episode_title/course_title/user_nickname) so the UI
+// renders titles instead of bare ids. Name resolution happens in the service
+// layer (see service.AIJobView); the handler just projects it to JSON.
 type aiJobDTO struct {
-	ID          uint    `json:"id"`
-	JobType     string  `json:"job_type"`
-	EpisodeID   uint    `json:"episode_id"`
-	CourseID    uint    `json:"course_id"`
-	Status      string  `json:"status"`
-	Attempt     int     `json:"attempt"`
-	Error       string  `json:"error,omitempty"`
-	Progress    *float64 `json:"progress,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	CompletedAt string  `json:"completed_at,omitempty"`
+	ID           uint     `json:"id"`
+	JobType      string   `json:"job_type"`
+	EpisodeID    uint     `json:"episode_id"`
+	CourseID     uint     `json:"course_id"`
+	Status       string   `json:"status"`
+	Attempt      int      `json:"attempt"`
+	Error        string   `json:"error,omitempty"`
+	Progress     *float64 `json:"progress,omitempty"`
+	CreatedAt    string   `json:"created_at"`
+	CompletedAt  string   `json:"completed_at,omitempty"`
+	EpisodeTitle string   `json:"episode_title,omitempty"`
+	CourseTitle  string   `json:"course_title,omitempty"`
+	UserNickname string   `json:"user_nickname,omitempty"`
 }
 
-func toAIJobDTO(j model.AIJob) aiJobDTO {
+func toAIJobDTO(v service.AIJobView) aiJobDTO {
+	j := v.Job
 	d := aiJobDTO{
 		ID: j.ID, JobType: j.JobType, EpisodeID: j.EpisodeID, CourseID: j.CourseID,
 		Status: j.Status, Attempt: j.Attempt, Error: j.Error, Progress: j.Progress,
 		CreatedAt: j.CreatedAt.Format(time.RFC3339),
+		EpisodeTitle: v.EpisodeTitle, CourseTitle: v.CourseTitle, UserNickname: v.UserNickname,
 	}
 	if j.CompletedAt != nil {
 		d.CompletedAt = j.CompletedAt.Format(time.RFC3339)
@@ -402,14 +411,14 @@ func (h *adminHandler) ListAIJobs(c *gin.Context) {
 	}
 	jobType := c.Query("job_type")
 	status := c.Query("status")
-	jobs, err := h.aiService.ListJobs(jobType, status, 100)
+	views, err := h.aiService.ListJobs(jobType, status, 100)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	out := make([]aiJobDTO, 0, len(jobs))
-	for _, j := range jobs {
-		out = append(out, toAIJobDTO(j))
+	out := make([]aiJobDTO, 0, len(views))
+	for _, v := range views {
+		out = append(out, toAIJobDTO(v))
 	}
 	// Include stats so the UI can show counts without a second request.
 	stats, _ := h.aiService.JobStats()
@@ -428,18 +437,18 @@ func (h *adminHandler) GetAIJob(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 id"})
 		return
 	}
-	job, err := h.aiService.GetJob(id)
+	view, err := h.aiService.GetJob(id)
 	if err != nil {
 		respondError(c, err)
 		return
 	}
-	if job == nil {
+	if view == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "job 不存在"})
 		return
 	}
 	// Include the decision runs for this job so the detail view can replay them.
 	runs, _ := h.aiService.ListRunsForJob(id)
-	c.JSON(http.StatusOK, gin.H{"job": toAIJobDTO(*job), "runs": runs})
+	c.JSON(http.StatusOK, gin.H{"job": toAIJobDTO(*view), "runs": runs})
 }
 
 // ListAIRuns returns recent decision runs (across all jobs), newest first.
@@ -486,6 +495,36 @@ func (h *adminHandler) GetAIRun(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, run)
+}
+
+// ResetAIJob manually resets one 'processing' AI job back to 'queued' on admin
+// demand — the manual counterpart of the automatic reaper. Use case: the worker
+// is alive but a relay call hung without crashing, so the job isn't stale
+// enough for the 30min reaper yet, but the admin has judged it stuck. Clears
+// claimed_at + error so the next worker poll re-claims it cleanly.
+// POST /admin/api/ai/jobs/:id/reset
+func (h *adminHandler) ResetAIJob(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 id"})
+		return
+	}
+	if err := h.aiService.ResetJob(id); err != nil {
+		// ErrJobNotProcessing is non-fatal: the job already finished or was
+		// reaped. Surface 409 so the UI can say "nothing to reset" rather than
+		// silently pretending success (which would hide a double-reset).
+		if err == repository.ErrJobNotProcessing {
+			c.JSON(http.StatusConflict, gin.H{"error": "任务不在处理中(可能已完成或已被重置)"})
+			return
+		}
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // ---------------------------------------------------------------------------

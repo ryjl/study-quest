@@ -61,6 +61,13 @@ type AIContentRepository interface {
 	// that crashed mid-LLM-call doesn't strand a job in processing forever.
 	// Mirrors subtitle_job_repo.ReapStale. Returns the number of rows reset.
 	ReapStaleJobs(staleTimeout time.Duration) (int64, error)
+	// ResetJob resets ONE processing job back to 'queued' on admin demand — the
+	// manual equivalent of ReapStaleJobs for a job the admin has judged stuck
+	// (e.g. the worker is alive but a relay call hung without crashing). Clears
+	// claimed_at + error so the next worker poll re-claims it cleanly. Returns
+	// ErrJobNotProcessing (non-fatal) if the job isn't currently processing, so
+	// the handler can surface "nothing to reset" instead of a silent no-op.
+	ResetJob(jobID uint) error
 
 	// ── ai_runs ──
 	CreateRun(run *model.AIRun) error
@@ -112,6 +119,11 @@ type AIContentRepository interface {
 	// answers don't lose deltas (mirrors the progress atomic-accumulate rule).
 	UpsertMemoryOnAnswer(userID, chunkID, episodeID, courseID uint, correct bool) error
 }
+
+// ErrJobNotProcessing is returned by ResetJob when the targeted job isn't in
+// 'processing' state. The handler treats this as a non-fatal "nothing to do"
+// (the admin reset a job that already finished or was reaped) rather than 500.
+var ErrJobNotProcessing = errors.New("job is not in processing state")
 
 type aiContentRepo struct {
 	db *gorm.DB
@@ -303,6 +315,24 @@ func (r *aiContentRepo) ReapStaleJobs(staleTimeout time.Duration) (int64, error)
 		return 0, res.Error
 	}
 	return res.RowsAffected, nil
+}
+
+// ResetJob 是 ReapStaleJobs 的"单行手动版":admin 判定某条 processing 任务卡死
+// (worker 还活着但 LLM 调用挂住,没崩)后,把它重置回 queued,清掉 claimed_at +
+// error,让下一轮 worker poll 干净地重新认领。WHERE status='processing' 防止把
+// 已完成/已失败的任务误重置(那会复活一条终态记录)。非 processing 返回
+// ErrJobNotProcessing,handler 据此返回 409 而不是静默成功。
+func (r *aiContentRepo) ResetJob(jobID uint) error {
+	res := r.db.Exec(`UPDATE ai_jobs
+		SET status = 'queued', claimed_at = NULL, error = '', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status = 'processing'`, jobID)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrJobNotProcessing
+	}
+	return nil
 }
 
 // --- ai_runs ---

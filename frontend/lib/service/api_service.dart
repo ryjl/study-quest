@@ -198,27 +198,9 @@ class ApiService {
     _fail(response.statusCode, '获取课时明细失败: ${response.statusCode}');
   }
 
-  // 5. Load AI cards and quiz questions for an episode
-  static Future<AILessonContent?> fetchAILesson(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-content'),
-      headers: _headers(activeUserId),
-    );
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      // Backend returns null or empty JSON if no cards exist
-      if (data == null || data['EpisodeID'] == 0 || data['episode_id'] == 0) {
-        return null;
-      }
-      return AILessonContent.fromJson(data);
-    }
-    return null; // Gracefully fallback to skip blockers
-  }
-
-  // 5b. Phase C — AI summary + quiz. These hit the Step-3 LLM-generated
-  // endpoints (distinct from the Python-toolchain /ai-content above). The
-  // summary is read once; the quiz is lazily generated on first GET (returns
-  // status=generating, caller polls).
+  // AI summary + quiz. These hit the Step-3 LLM-generated endpoints.
+  // The summary is read once; the quiz is lazily generated on first GET
+  // (returns status=generating, caller polls).
 
   static Future<EpisodeSummary?> fetchEpisodeSummary(int activeUserId, int episodeId) async {
     final response = await _httpClient.get(

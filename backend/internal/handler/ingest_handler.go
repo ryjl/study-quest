@@ -13,7 +13,6 @@ import (
 // IngestHandler manages bulk ingest pipelines from local tool scripts.
 type IngestHandler interface {
 	IngestEpisodes(c *gin.Context)
-	IngestAIContent(c *gin.Context)
 }
 
 type ingestHandler struct {
@@ -124,32 +123,4 @@ func (h *ingestHandler) IngestEpisodes(c *gin.Context) {
 		"updated":  updatedCount,
 		"status":   "success",
 	})
-}
-
-func (h *ingestHandler) IngestAIContent(c *gin.Context) {
-	var req struct {
-		EpisodeID        uint   `json:"episode_id" binding:"required"`
-		PreAdventureJSON string `json:"pre_adventure_json"`
-		PostReviewJSON    string `json:"post_review_json"`
-	}
-
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body format"})
-		return
-	}
-
-	// Verify episode exists
-	ep, err := h.episodeRepo.FindByID(req.EpisodeID)
-	if err != nil || ep == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "associated episode not found"})
-		return
-	}
-
-	err = h.episodeService.SaveAIContent(req.EpisodeID, req.PreAdventureJSON, req.PostReviewJSON)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save AI content: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"status": "success", "episode_id": req.EpisodeID})
 }

@@ -38,10 +38,6 @@ type EpisodeService interface {
 	SaveSubtitle(episodeID uint, lang, label, srtContent string) error
 	DeleteSubtitle(id uint) error
 
-	// AI Content
-	GetAIContent(episodeID uint) (*model.AILessonContent, error)
-	SaveAIContent(episodeID uint, preJSON, postJSON string) error
-
 	// Streaming Stream Link Resolution
 	GetStreamURL(episodeID uint, userAgent string) (*storage.DownloadLink, error)
 
@@ -192,19 +188,6 @@ func (s *episodeService) SaveSubtitle(episodeID uint, lang, label, srtContent st
 
 func (s *episodeService) DeleteSubtitle(id uint) error {
 	return s.episodeRepo.DeleteSubtitle(id)
-}
-
-func (s *episodeService) GetAIContent(episodeID uint) (*model.AILessonContent, error) {
-	return s.episodeRepo.GetAIContent(episodeID)
-}
-
-func (s *episodeService) SaveAIContent(episodeID uint, preJSON, postJSON string) error {
-	ai := &model.AILessonContent{
-		EpisodeID:        episodeID,
-		PreAdventureJSON: preJSON,
-		PostReviewJSON:    postJSON,
-	}
-	return s.episodeRepo.SaveAIContent(ai)
 }
 
 func (s *episodeService) GetStreamURL(episodeID uint, userAgent string) (*storage.DownloadLink, error) {

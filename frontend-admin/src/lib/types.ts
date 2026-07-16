@@ -143,7 +143,8 @@ export interface Course {
   ai_hint?: string;
   /** Course-level switches for AI post-processing of its episodes. When false,
    * the worker skips summary / quiz generation for this course even if the AI
-   * pipeline is globally configured. Optional (absent = enabled, the default). */
+   * pipeline is globally configured. Optional (absent = disabled, the model
+   * default is false — AI is an opt-in add-on per course). */
   ai_summary_enabled?: boolean;
   ai_quiz_enabled?: boolean;
   tags_list?: string[];
@@ -558,7 +559,11 @@ export interface AiJob {
   id: number;
   job_type: string; // "summarize" | "quiz" | ...
   episode_id: number;
-  course_id?: number;
+  // course_id is always populated by the backend (model column is non-null),
+  // so it's required here. Episode/course/user_*_title are best-effort
+  // display names resolved server-side (empty when the referenced row was
+  // deleted); user_nickname only exists on per-user quiz jobs.
+  course_id: number;
   status: AiJobStatus;
   attempt: number;
   error?: string;
@@ -566,6 +571,9 @@ export interface AiJob {
   progress?: number | null;
   created_at: string;
   completed_at?: string | null;
+  episode_title?: string;
+  course_title?: string;
+  user_nickname?: string;
 }
 
 // Aggregate counts for the jobs stats bar (returned alongside the job list).
@@ -644,6 +652,9 @@ export interface AiQuizRow {
   difficulty: string;
   agent_feedback: string;
   created_at: string;
+  /** Resolved display names (best-effort, empty when the row was deleted). */
+  episode_title?: string;
+  course_title?: string;
 }
 
 // A question in a quiz (admin detail view — includes the answer).

@@ -69,9 +69,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   int _resumeRetries = 0;
   DateTime? _lastResumeRetry;
   List<Attachment> _attachments = [];
-  AILessonContent? _aiContent;
-  // Phase 2:课前探险问题数据源切到 /ai-summary 的 pre_adventure。保留 _aiContent
-  // (postReviewQuiz 等 Phase 5 才清理),新增 _summary 供"带着问题看"读取。
+  // Phase 2:课前探险问题数据源切到 /ai-summary 的 pre_adventure,"带着问题看"
+  // 也读 _summary.pre_adventure。老管线 /ai-content 已在 Phase 5 删除。
   EpisodeSummary? _summary;
   bool _loadingExtras = true;
 
@@ -81,16 +80,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Anti-cheat progress logging
   Timer? _progressTimer;
   int _lastLoggedPosition = 0;
-  bool _hasTriggered80Percent = false;
   // Resume bookkeeping — the seek must wait until media_kit reports a real
   // duration, otherwise the seek silently no-ops.
-
-  // Quiz gate state
-  bool _showQuizBlocker = false;
-  int _currentQuizIndex = 0;
-  int? _selectedAnswerIndex;
-  bool _quizFinished = false;
-  int _earnedPoints = 0;
 
   // Auto-hide controls
   bool _controlsVisible = true;
@@ -150,7 +141,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     _initializeVideo();
     _loadExtras();
-    _setupKeyListeners();
     _tuneMpvForNetdisk();
   }
 
@@ -225,9 +215,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (shouldResume) {
         _pendingResume = Duration(seconds: resumeSec);
       }
-      if (playInfo.isCompleted) {
-        _hasTriggered80Percent = true; // already finished — don't re-prompt
-      }
 
       // Build a media with per-source HTTP headers (115 netdisk needs Referer).
       // For resume, pass `start` so libmpv opens the demuxer at the resume
@@ -290,43 +277,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
-  /// Fetch AI content + real attachments + summary in parallel (non-blocking).
+  /// Fetch real attachments + summary in parallel (non-blocking).
   Future<void> _loadExtras() async {
     try {
       final results = await Future.wait([
-        ApiService.fetchAILesson(widget.activeUserId, widget.episode.id)
-            .catchError((_) => null),
         ApiService.fetchAttachments(widget.activeUserId, widget.episode.id)
             .catchError((_) => <Attachment>[]),
-        // Phase 2:summary.pre_adventure 是课前探险问题的新数据源。
+        // summary.pre_adventure 是课前探险问题的数据源。
         // 404(无 summary / AI 未开)返回 null,这里再 catchError 兜底容错。
         ApiService.fetchEpisodeSummary(widget.activeUserId, widget.episode.id)
             .catchError((_) => null),
       ]);
       if (mounted) {
         setState(() {
-          _aiContent = results[0] as AILessonContent?;
-          _attachments = results[1] as List<Attachment>;
-          _summary = results[2] as EpisodeSummary?;
+          _attachments = results[0] as List<Attachment>;
+          _summary = results[1] as EpisodeSummary?;
           _loadingExtras = false;
         });
       }
     } catch (_) {
       if (mounted) setState(() => _loadingExtras = false);
     }
-  }
-
-  void _setupKeyListeners() {
-    // Trigger the 80% quiz gate based on position progress.
-    _player.stream.position.listen((position) {
-      final duration = _player.state.duration;
-      if (!_hasTriggered80Percent &&
-          duration.inSeconds > 0 &&
-          position.inSeconds / duration.inSeconds >= 0.8) {
-        _hasTriggered80Percent = true;
-        _pauseAndTriggerQuiz();
-      }
-    });
   }
 
   /// Resume seek helper: after open(play:false), wait for the demuxer to
@@ -417,59 +388,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
   }
 
-  Future<void> _reportPing({int delta = 1}) async {
-    try {
-      await ApiService.reportProgress(
-        activeUserId: widget.activeUserId,
-        episodeId: widget.episode.id,
-        positionSeconds: _player.state.position.inSeconds,
-        deltaWatchSeconds: delta,
-      );
-    } catch (_) {}
-  }
-
-  // ---------------------------------------------------------------------------
-  // Quiz gate
-  // ---------------------------------------------------------------------------
-
-  void _pauseAndTriggerQuiz() {
-    _player.pause();
-    setState(() {
-      if (_aiContent != null && _aiContent!.postReviewQuiz.isNotEmpty) {
-        _showQuizBlocker = true;
-      } else {
-        _reportPing();
-        _quizFinished = true;
-        _showQuizBlocker = true;
-      }
-    });
-  }
-
-  void _onAnswerSelected(int index) {
-    if (_selectedAnswerIndex != null) return;
-    final quiz = _aiContent!.postReviewQuiz[_currentQuizIndex];
-    final isCorrect = index == quiz.answerIndex;
-    setState(() {
-      _selectedAnswerIndex = index;
-      if (isCorrect) _earnedPoints += 10;
-    });
-  }
-
-  Future<void> _onQuizNext() async {
-    if (_aiContent == null) return;
-    if (_currentQuizIndex < _aiContent!.postReviewQuiz.length - 1) {
-      setState(() {
-        _currentQuizIndex++;
-        _selectedAnswerIndex = null;
-      });
-    } else {
-      setState(() => _quizFinished = true);
-      await _reportPing(); // triggers completion grant server-side
-    }
-  }
-
-
-
   // ---------------------------------------------------------------------------
   // Controls auto-hide
   // ---------------------------------------------------------------------------
@@ -477,7 +395,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _scheduleAutoHide() {
     _hideTimer?.cancel();
     _hideTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && _player.state.playing && !_showQuizBlocker) {
+      if (mounted && _player.state.playing) {
         setState(() {
           _controlsVisible = false;
           _activeMenu = '';
@@ -600,24 +518,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
               // and we only show it while actually playing — a paused player
               // reports buffering too, which would leave a stale spinner after
               // a seek that lands in a buffered region.
-              if (!_showQuizBlocker)
-                StreamBuilder<bool>(
-                  stream: _player.stream.buffering,
-                  initialData: _player.state.buffering,
-                  builder: (context, snap) {
-                    final buffering = snap.data ?? false;
-                    if (!buffering || !_player.state.playing) {
-                      return const SizedBox.shrink();
-                    }
-                    return const Center(
-                      child: CircularProgressIndicator(color: Colors.white70),
-                    );
-                  },
+              StreamBuilder<bool>(
+                stream: _player.stream.buffering,
+                initialData: _player.state.buffering,
+                builder: (context, snap) {
+                  final buffering = snap.data ?? false;
+                  if (!buffering || !_player.state.playing) {
+                    return const SizedBox.shrink();
+                  }
+                  return const Center(
+                    child: CircularProgressIndicator(color: Colors.white70),
+                  );
+                },
                 ),
-
-              // Quiz blocker overlay
-              if (_showQuizBlocker && _aiContent != null)
-                _buildQuizBlockerOverlay(),
             ],
           ),
         ),
@@ -815,7 +728,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
 
             // 3. Top-level gesture layer
-            if (!_controlsLocked && !_showQuizBlocker)
+            if (!_controlsLocked)
               Positioned.fill(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
@@ -993,7 +906,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
             // 5. Controls overlay (top bar + bottom bar). When hidden, this
             //    subtree is removed so taps fall through to layer 3.
-            if (_controlsVisible && !_showQuizBlocker)
+            if (_controlsVisible)
               Positioned.fill(
                 child: Stack(
                   children: [
@@ -1999,250 +1912,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
         const SnackBar(content: Text('无法打开此附件，请稍后重试。')),
       );
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Quiz blocker + completion (reused & tightened from previous version)
-  // ---------------------------------------------------------------------------
-
-  Widget _buildQuizBlockerOverlay() {
-    if (_quizFinished) return _buildQuizFinishedScreen();
-    final quiz = _aiContent!.postReviewQuiz[_currentQuizIndex];
-    return Positioned.fill(
-      child: Container(
-        color: const Color(0x900F172A),
-        child: Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 650),
-            child: GlassPanel(
-              borderRadius: 32,
-              baseColor: Colors.white,
-              borderColor: Colors.white,
-              borderWidth: 2,
-              padding: const EdgeInsets.all(36),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: AppTheme.accentGreen.withOpacity(0.15),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          children: const [
-                            Icon(Icons.emoji_events_rounded,
-                                color: AppTheme.accentGreen, size: 18),
-                            SizedBox(width: 8),
-                            Text('课后小挑战',
-                                style: TextStyle(
-                                    color: AppTheme.accentGreen,
-                                    fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
-                      Text(
-                        '问题 ${_currentQuizIndex + 1} / ${_aiContent!.postReviewQuiz.length}',
-                        style: const TextStyle(
-                            color: AppTheme.textMuted,
-                            fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 24),
-                  Text(quiz.question,
-                      style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          height: 1.4,
-                          color: AppTheme.textWhite)),
-                  const SizedBox(height: 24),
-                  Column(
-                    children: List.generate(quiz.options.length, (index) {
-                      final optionText = quiz.options[index];
-                      final isSelected = _selectedAnswerIndex == index;
-                      final isCorrect = quiz.answerIndex == index;
-                      Color bg = Colors.white;
-                      Color shadow = const Color(0xFFE2E8F0);
-                      Border customBorder = Border.all(
-                          color: const Color(0xFFF1F5F9), width: 2.0);
-                      if (_selectedAnswerIndex != null) {
-                        if (isCorrect) {
-                          bg = const Color(0xFFECFDF5);
-                          shadow = const Color(0xFFA7F3D0);
-                          customBorder = Border.all(
-                              color: AppTheme.accentGreen, width: 2.0);
-                        } else if (isSelected) {
-                          bg = const Color(0xFFFEF2F2);
-                          shadow = const Color(0xFFFCA5A5);
-                          customBorder = Border.all(
-                              color: Colors.redAccent, width: 2.0);
-                        }
-                      }
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        width: double.infinity,
-                        child: Button3D(
-                          borderRadius: 20,
-                          backgroundColor: bg,
-                          shadowColor: shadow,
-                          border: customBorder,
-                          onPressed: () => _onAnswerSelected(index),
-                          padding: const EdgeInsets.all(16),
-                          child: Row(
-                            children: [
-                              Container(
-                                width: 32,
-                                height: 32,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: isSelected
-                                      ? AppTheme.primaryColor
-                                      : const Color(0xFFF1F5F9),
-                                ),
-                                child: Text(
-                                  String.fromCharCode(65 + index),
-                                  style: TextStyle(
-                                      fontWeight: FontWeight.w900,
-                                      color: isSelected
-                                          ? Colors.white
-                                          : AppTheme.textWhite),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Text(optionText,
-                                    style: const TextStyle(
-                                        fontSize: 15,
-                                        color: AppTheme.textWhite,
-                                        fontWeight: FontWeight.bold)),
-                              ),
-                              if (_selectedAnswerIndex != null && isCorrect)
-                                const Icon(Icons.check_circle_rounded,
-                                    color: AppTheme.accentGreen),
-                              if (_selectedAnswerIndex != null &&
-                                  isSelected &&
-                                  !isCorrect)
-                                const Icon(Icons.cancel_rounded,
-                                    color: Colors.redAccent),
-                            ],
-                          ),
-                        ),
-                      );
-                    }),
-                  ),
-                  const SizedBox(height: 24),
-                  if (_selectedAnswerIndex != null)
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Button3D.blue(
-                        onPressed: _onQuizNext,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 32, vertical: 12),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: const [
-                            Text('下一题',
-                                style: TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 16,
-                                    color: Colors.white)),
-                            SizedBox(width: 8),
-                            Icon(Icons.arrow_forward_rounded,
-                                size: 20, color: Colors.white),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildQuizFinishedScreen() {
-    return Positioned.fill(
-      child: Container(
-        color: const Color(0x900F172A),
-        child: Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 500),
-            child: GlassPanel(
-              borderRadius: 36,
-              baseColor: Colors.white,
-              borderColor: Colors.white,
-              borderWidth: 2,
-              padding: const EdgeInsets.all(40),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.stars_rounded,
-                      color: AppTheme.accentOrange, size: 80),
-                  const SizedBox(height: 24),
-                  const Text('恭喜你通关成功！',
-                      style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w900,
-                          color: AppTheme.accentOrange)),
-                  const SizedBox(height: 12),
-                  Text('您已看完了课时：${widget.episode.title}',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                          color: AppTheme.textMuted,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 32),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 24, vertical: 16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: const Color(0xFFE2E8F0)),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Text('本次学习奖励积分：',
-                            style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textWhite)),
-                        Text(' +$_earnedPoints 星币',
-                            style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w900,
-                                color: AppTheme.accentGreen)),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 40),
-                  Button3D.blue(
-                    onPressed: () => Navigator.pop(context),
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 48, vertical: 16),
-                    child: const Text('好的，关闭播放',
-                        style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w900,
-                            color: Colors.white)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   // ---------------------------------------------------------------------------

@@ -42,14 +42,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   // Built once per load in _refreshData; the FutureBuilder reads this.
   late Future<List<dynamic>> _combinedFuture;
 
-  /// Per-episode enrichment data (AI content + attachments), keyed by episode
-  /// id. Fetched lazily once the episode list is available so the row badges
-  /// ("配套讲义" / "AI 重点总结") reflect real data instead of mock toggles.
-  final Map<int, AILessonContent?> _aiCache = {};
+  /// Per-episode attachments cache, keyed by episode id. Fetched lazily once
+  /// the episode list is available so the row badge ("配套讲义") reflects real
+  /// data instead of a mock toggle.
   final Map<int, List<Attachment>> _attachmentCache = {};
-  // Phase 2:summary 缓存。课前探险问题的数据源从老的 /ai-content
-  // (preAdventureCards)切到 /ai-summary 的 pre_adventure。这里缓存避免
-  // 列表行点击弹窗 + 播放器进入时重复请求同一个 summary。失败/老数据存 null,
+  // summary 缓存。课前探险问题的数据源是 /ai-summary 的 pre_adventure。这里缓存
+  // 避免列表行点击弹窗 + 播放器进入时重复请求同一个 summary。失败/老数据存 null,
   // 取不到就降级为"暂无探索任务"。
   final Map<int, EpisodeSummary?> _summaryCache = {};
 
@@ -87,16 +85,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     bool changed = false;
     for (final ep in episodes) {
       try {
-        final ai = await ApiService.fetchAILesson(widget.activeUserId, ep.id);
         final atts = await ApiService.fetchAttachments(widget.activeUserId, ep.id);
-        _aiCache[ep.id] = ai;
         _attachmentCache[ep.id] = atts;
         changed = true;
       } catch (_) {
         // Enrichment is best-effort; rows simply fall back to no-badge.
       }
-      // Phase 2:课前探险问题数据源切到 summary.pre_adventure,与列表行的
-      // 富化并行预取(失败时静默,弹窗/播放器再按需 lazy fetch)。
+      // 课前探险问题数据源是 summary.pre_adventure,与列表行的富化并行预取
+      // (失败时静默,弹窗/播放器再按需 lazy fetch)。
       try {
         final summary = await ApiService.fetchEpisodeSummary(widget.activeUserId, ep.id);
         _summaryCache[ep.id] = summary;
@@ -853,9 +849,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  /// Phase 2:课前探险问题数据源切到 summary.pre_adventure。优先用 _summaryCache
-  /// 里的缓存(prefetch 预填或弹窗内 lazy fetch 过)。返回空 List 表示本节暂无任务。
-  /// 注意:不删 _aiCache / preAdventureCards(老数据源,Phase 5 再清理),只是不再从它取。
+  /// 课前探险问题数据源是 summary.pre_adventure。优先用 _summaryCache 里的缓存
+  /// (prefetch 预填或弹窗内 lazy fetch 过)。返回空 List 表示本节暂无任务。
   List<String> _cachedPreAdventureTasks(int episodeId) {
     final summary = _summaryCache[episodeId];
     if (summary == null) return const [];

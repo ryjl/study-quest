@@ -83,7 +83,6 @@ func RegisterRoutes(
 		v1Restricted.GET("/episodes/:id/stream", episode.Stream)
 		v1Restricted.GET("/episodes/:id/play-info", episode.GetPlayInfo)
 		v1Restricted.GET("/episodes/:id/subtitle", episode.GetSubtitle)
-		v1Restricted.GET("/episodes/:id/ai-content", episode.GetAIContent)
 		// AI module (Step 3) — client reads. 404 when AI is off / no summary yet,
 		// so the client can hide the AI card gracefully.
 		v1Restricted.GET("/episodes/:id/ai-summary", ai.GetEpisodeSummary)
@@ -125,7 +124,6 @@ func RegisterRoutes(
 	v1Ingest.Use(middleware.IngestKeyMiddleware(ingestKey))
 	{
 		v1Ingest.POST("/ingest/episodes", ingest.IngestEpisodes)
-		v1Ingest.POST("/ingest/ai-content", ingest.IngestAIContent)
 
 		// Subtitle generation worker protocol. Shares the X-Ingest-Key gate —
 		// the whisper worker is another member of the Python toolchain.
@@ -238,6 +236,7 @@ func RegisterRoutes(
 		adm.POST("/api/ai/jobs", admin.EnqueueAIJobs)
 		adm.GET("/api/ai/jobs", admin.ListAIJobs)
 		adm.GET("/api/ai/jobs/:id", admin.GetAIJob)
+		adm.POST("/api/ai/jobs/:id/reset", admin.ResetAIJob)
 		adm.GET("/api/ai/runs", admin.ListAIRuns)
 		adm.GET("/api/ai/runs/:id", admin.GetAIRun)
 		// Phase C — quiz observability (per-user drill-down + summary content).

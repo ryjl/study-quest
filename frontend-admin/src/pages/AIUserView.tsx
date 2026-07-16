@@ -1,22 +1,29 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { AiQuizDetail, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
 
-// AIUserView — the per-student observability page. Pick a user (by id), see
-// their generated quizzes, drill into one to see: the questions WITH answers,
-// the student's answer history, their mastery per chunk, the agent's feedback
-// (its analysis of the student), and the reasoning trace that produced it.
+// AIUserView — the per-student observability page. Pick a user (from a
+// searchable dropdown of all users), see their generated quizzes, drill into
+// one to see: the questions WITH answers, the student's answer history, their
+// mastery per chunk, the agent's feedback (its analysis of the student), and
+// the reasoning trace that produced it.
 //
 // This is where you watch the feedback loop in action: answer → mastery updates
 // → next generation adapts. It complements the job-centric AIWorkflow page
 // (which shows generation jobs across all students).
 
 export function AIUserView() {
-  const [userIdInput, setUserIdInput] = useState('');
   const [userId, setUserId] = useState<number | null>(null);
+  const [query, setQuery] = useState(''); // filters the user dropdown by nickname
   const [openQuizId, setOpenQuizId] = useState<number | null>(null);
+
+  // The user list drives the picker. Carried once on mount; typically small
+  // (a family-scale install has a handful of users) so a client-filtered
+  // datalist is enough — no server-side search round-trip needed.
+  const usersQ = useQuery({ queryKey: ['users'], queryFn: api.listUsers });
+  const users = usersQ.data ?? [];
 
   const quizzesQ = useQuery({
     queryKey: ['ai-user-quizzes', userId],
@@ -25,6 +32,7 @@ export function AIUserView() {
   });
 
   const quizzes = quizzesQ.data ?? [];
+  const selectedUser = useMemo(() => users.find((u) => u.id === userId) ?? null, [users, userId]);
 
   return (
     <div className="space-y-6">
@@ -36,33 +44,49 @@ export function AIUserView() {
         </p>
       </div>
 
-      {/* User picker. A free-form id input — the admin typically reaches here
-          from a user list (future) or by knowing the id. Kept minimal for now. */}
-      <form
-        className="flex items-center gap-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const n = Number(userIdInput);
-          if (Number.isFinite(n) && n > 0) setUserId(n);
-        }}
-      >
+      {/* User picker — a searchable combobox over api.listUsers(). An <input>
+          filters by nickname; a native <datalist> offers matches. Picking one
+          sets the user id; a small "查看" button makes the selection explicit
+          (datalist selection also updates via onChange). */}
+      <div className="flex flex-wrap items-center gap-2">
         <input
-          className="input max-w-[200px]"
-          placeholder="用户 ID"
-          value={userIdInput}
-          onChange={(e) => setUserIdInput(e.target.value)}
+          className="input max-w-[260px]"
+          list="ai-user-options"
+          placeholder={usersQ.isLoading ? '加载用户…' : '搜索昵称选择用户'}
+          value={selectedUser ? selectedUser.nickname : query}
+          onChange={(e) => {
+            const entered = e.target.value;
+            // Match a known user by nickname (exact) → select; otherwise treat
+            // as free-text filter so the list narrows as they type.
+            const match = users.find((u) => u.nickname === entered);
+            if (match) {
+              setUserId(match.id);
+              setQuery('');
+            } else {
+              setUserId(null);
+              setQuery(entered);
+            }
+          }}
         />
-        <button className="btn-primary btn-sm" type="submit">
-          查询
-        </button>
-      </form>
+        <datalist id="ai-user-options">
+          {users
+            .filter((u) => (query ? u.nickname.toLowerCase().includes(query.toLowerCase()) : true))
+            .map((u) => (
+              <option key={u.id} value={u.nickname}>
+                {u.role}
+              </option>
+            ))}
+        </datalist>
+      </div>
 
       {/* Quiz list */}
       <div className="space-y-3">
-        <h2 className="text-base font-semibold">题库列表</h2>
+        <h2 className="text-base font-semibold">
+          {selectedUser ? `正在查看:${selectedUser.nickname}` : '题库列表'}
+        </h2>
         {userId == null ? (
           <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">
-            输入用户 ID 查询
+            选择一个用户查看
           </div>
         ) : quizzesQ.isLoading ? (
           <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">加载中…</div>
@@ -85,8 +109,10 @@ export function AIUserView() {
                 {quizzes.map((q) => (
                   <tr key={q.id} className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
                     <td className="px-4 py-3 font-medium">#{q.id}</td>
-                    <td className="px-4 py-3 text-muted">#{q.episode_id}</td>
-                    <td className="px-4 py-3 text-muted">{q.course_id}</td>
+                    <td className="px-4 py-3">
+                      <span className="text-txt">{q.episode_title || `#${q.episode_id}`}</span>
+                    </td>
+                    <td className="px-4 py-3 text-muted">{q.course_title || `课程 ${q.course_id}`}</td>
                     <td className="px-4 py-3 text-muted">{q.difficulty}</td>
                     <td className="px-4 py-3 text-xs text-muted">{q.created_at}</td>
                     <td className="px-4 py-3 text-right">

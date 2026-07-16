@@ -76,8 +76,12 @@ type AIService interface {
 
 	// ── results (read) ──
 	GetSummary(episodeID uint) (*model.AISummary, error)
-	ListJobs(jobType, status string, limit int) ([]model.AIJob, error)
-	GetJob(id uint) (*model.AIJob, error)
+	// ListJobs/GetJob return AIJobView (job row + resolved human-readable names
+	// for episode/course/user) so the admin UI renders titles instead of bare
+	// ids. Name resolution lives in the service layer, mirroring the subtitle
+	// queue's SubtitleJobWithEpisode join pattern (see subtitle_service.Claim).
+	ListJobs(jobType, status string, limit int) ([]AIJobView, error)
+	GetJob(id uint) (*AIJobView, error)
 	ListRunsForJob(jobID uint) ([]model.AIRun, error)
 	ListRecentRuns(limit int) ([]model.AIRun, error)
 	GetRun(id uint) (*model.AIRun, error)
@@ -89,6 +93,11 @@ type AIService interface {
 	// doesn't leave a job stuck forever. Mirrors the subtitle reaper; the AI
 	// worker is in-process so this is mainly insurance against a hard kill.
 	ReapStaleJobs() (int64, error)
+	// ResetJob is the single-job, admin-triggered counterpart of ReapStaleJobs:
+	// it resets one 'processing' job the admin has judged stuck back to 'queued'
+	// (clearing claimed_at + error). Returns repository.ErrJobNotProcessing if
+	// the job isn't currently processing (so the handler can 409 cleanly).
+	ResetJob(jobID uint) error
 }
 
 type aiService struct {
@@ -99,6 +108,19 @@ type aiService struct {
 	subtitleRepo  repository.EpisodeRepository // same repo, GetSubtitle lives here
 	resolver      *ai.ProviderResolver
 	unlockService UnlockService // gates client quiz access (IsEpisodeVisible); nil in tests
+}
+
+// AIJobView is one admin-facing job row WITH the human-readable names resolved
+// from the episode/course/user repos. The job field carries the raw model row
+// (so existing code that reads Status/Error/Attempt keeps working); the three
+// title fields are best-effort lookups (empty when the referenced row was
+// deleted). Mirrors repository.SubtitleJobWithEpisode — name resolution lives
+// in the service, not the handler, so handlers stay thin.
+type AIJobView struct {
+	Job           model.AIJob
+	EpisodeTitle  string
+	CourseTitle   string
+	UserNickname  string
 }
 
 // NewAIService constructs an AIService. resolver may be nil in degenerate
@@ -461,12 +483,33 @@ func (s *aiService) GetSummary(episodeID uint) (*model.AISummary, error) {
 	return s.contentRepo.GetSummary(episodeID)
 }
 
-func (s *aiService) ListJobs(jobType, status string, limit int) ([]model.AIJob, error) {
-	return s.contentRepo.ListJobs(jobType, status, limit)
+func (s *aiService) ListJobs(jobType, status string, limit int) ([]AIJobView, error) {
+	jobs, err := s.contentRepo.ListJobs(jobType, status, limit)
+	if err != nil {
+		return nil, err
+	}
+	names := s.resolveJobNames(jobs)
+	out := make([]AIJobView, 0, len(jobs))
+	for _, j := range jobs {
+		v := AIJobView{Job: j}
+		v.EpisodeTitle, v.CourseTitle, v.UserNickname = names.forJob(&j)
+		out = append(out, v)
+	}
+	return out, nil
 }
 
-func (s *aiService) GetJob(id uint) (*model.AIJob, error) {
-	return s.contentRepo.GetJob(id)
+func (s *aiService) GetJob(id uint) (*AIJobView, error) {
+	job, err := s.contentRepo.GetJob(id)
+	if err != nil {
+		return nil, err
+	}
+	if job == nil {
+		return nil, nil
+	}
+	v := &AIJobView{Job: *job}
+	names := s.resolveJobNames([]model.AIJob{*job})
+	v.EpisodeTitle, v.CourseTitle, v.UserNickname = names.forJob(job)
+	return v, nil
 }
 
 func (s *aiService) ListRunsForJob(jobID uint) ([]model.AIRun, error) {
@@ -490,6 +533,82 @@ func (s *aiService) JobStats() (map[string]int, error) {
 // 是 worker 挂了,重置回 queued 让下一轮 poll 重新认领。
 func (s *aiService) ReapStaleJobs() (int64, error) {
 	return s.contentRepo.ReapStaleJobs(30 * time.Minute)
+}
+
+// ResetJob 委托给 repo:把单条 processing 任务重置回 queued。repo 会校验当前
+// 必须处于 processing,否则返回 ErrJobNotProcessing(非致命,handler 转 409)。
+func (s *aiService) ResetJob(jobID uint) error {
+	return s.contentRepo.ResetJob(jobID)
+}
+
+// jobNameCache holds batch-resolved id→title maps for a set of jobs, so the list
+// view can render names without an N+1 (one query per distinct episode/course/
+// user, not one per job). Titles are best-effort: a missing id (deleted row)
+// simply isn't in the map, and forJob returns "" for it.
+type jobNameCache struct {
+	episodeTitles map[uint]string
+	courseTitles  map[uint]string
+	userNicknames map[uint]string
+}
+
+func (c jobNameCache) forJob(j *model.AIJob) (string, string, string) {
+	ep, course, user := "", "", ""
+	// Episode lookup is by job.EpisodeID via the course chain: the episode row
+	// gives us the title AND its CourseID (which we trust over job.CourseID for
+	// title resolution, since the episode is the source of truth for course
+	// membership). job.CourseID is denormalized at enqueue time.
+	if t, ok := c.episodeTitles[j.EpisodeID]; ok {
+		ep = t
+	}
+	if t, ok := c.courseTitles[j.CourseID]; ok {
+		course = t
+	}
+	if j.UserID != nil {
+		if t, ok := c.userNicknames[*j.UserID]; ok {
+			user = t
+		}
+	}
+	return ep, course, user
+}
+
+// resolveJobNames batch-loads episode/course/user titles for a job set. It
+// collects the distinct ids referenced, then issues one Find per type (the
+// repos expose single-id FindByID only, so we loop — counts are small: a list
+// page is capped at 100 jobs, and most share a handful of episodes/courses).
+// Lookups are best-effort: any error degrades to an empty title for that id.
+func (s *aiService) resolveJobNames(jobs []model.AIJob) jobNameCache {
+	c := jobNameCache{
+		episodeTitles: make(map[uint]string, len(jobs)),
+		courseTitles:  make(map[uint]string, len(jobs)),
+		userNicknames: make(map[uint]string, len(jobs)),
+	}
+	seenEp, seenCourse, seenUser := map[uint]bool{}, map[uint]bool{}, map[uint]bool{}
+	for _, j := range jobs {
+		if !seenEp[j.EpisodeID] {
+			seenEp[j.EpisodeID] = true
+			if ep, err := s.episodeRepo.FindByID(j.EpisodeID); err == nil && ep != nil {
+				c.episodeTitles[j.EpisodeID] = ep.Title
+			}
+		}
+		if !seenCourse[j.CourseID] {
+			seenCourse[j.CourseID] = true
+			if course, err := s.courseRepo.FindByID(j.CourseID); err == nil && course != nil {
+				c.courseTitles[j.CourseID] = course.Title
+			}
+		}
+		if j.UserID != nil && !seenUser[*j.UserID] {
+			seenUser[*j.UserID] = true
+			// Resolve nickname via db directly: aiService doesn't carry a
+			// UserRepository (its constructor predates this need), and a single
+			// column read is cheap. A real userRepo dependency would be cleaner
+			// but would ripple into NewAIService + main.go + tests for one field.
+			var nick string
+			if err := s.db.Model(&model.User{}).Select("nickname").Where("id = ?", *j.UserID).Take(&nick).Error; err == nil {
+				c.userNicknames[*j.UserID] = nick
+			}
+		}
+	}
+	return c
 }
 
 // sleep is a thin wrapper around time.Sleep used by the worker poll loop. Kept

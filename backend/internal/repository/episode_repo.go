@@ -56,10 +56,6 @@ type EpisodeRepository interface {
 	// queue gate to refuse entertainment content.
 	FindCourseContentType(episodeID uint) (string, error)
 
-	// AI Lesson Content operations
-	GetAIContent(episodeID uint) (*model.AILessonContent, error)
-	SaveAIContent(content *model.AILessonContent) error
-
 	// BatchAccessibleEpisodeCounts returns user_id → count of episodes across
 	// that user's granted courses (one query, JOIN user_course_accesses ↔
 	// episodes). Used by the admin user list to render "X/Y 课时".
@@ -160,7 +156,6 @@ func (r *episodeRepo) Update(episode *model.Episode) error {
 func (r *episodeRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		tx.Delete(&model.Subtitle{}, "episode_id = ?", id)
-		tx.Delete(&model.AILessonContent{}, "episode_id = ?", id)
 		tx.Delete(&model.UserProgress{}, "episode_id = ?", id)
 		return tx.Delete(&model.Episode{}, id).Error
 	})
@@ -259,31 +254,6 @@ func (r *episodeRepo) SaveSubtitle(subtitle *model.Subtitle) error {
 
 func (r *episodeRepo) DeleteSubtitle(id uint) error {
 	return r.db.Delete(&model.Subtitle{}, id).Error
-}
-
-func (r *episodeRepo) GetAIContent(episodeID uint) (*model.AILessonContent, error) {
-	var ai model.AILessonContent
-	if err := r.db.First(&ai, "episode_id = ?", episodeID).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &ai, nil
-}
-
-func (r *episodeRepo) SaveAIContent(content *model.AILessonContent) error {
-	var ai model.AILessonContent
-	err := r.db.First(&ai, "episode_id = ?", content.EpisodeID).Error
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return r.db.Create(content).Error
-		}
-		return err
-	}
-	ai.PreAdventureJSON = content.PreAdventureJSON
-	ai.PostReviewJSON = content.PostReviewJSON
-	return r.db.Save(&ai).Error
 }
 
 // BatchAccessibleEpisodeCounts counts episodes each user can access, by
