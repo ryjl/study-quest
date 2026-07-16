@@ -33,6 +33,16 @@ type AIHandler interface {
 	// GetEpisodeQuizHistory returns the user's archived (superseded) quizzes for
 	// an episode as fully read-only views (correct answers revealed). Phase 3.
 	GetEpisodeQuizHistory(c *gin.Context)
+	// ── Phase C — agent 驱动的学习建议(advice)端点 ──
+	// 三档 scope 各一个端点,都走 GetOrEnqueueAdvice 的 lazy 生成。返回
+	// {status: ready/generating/unavailable, advice: {...}}。访问控制:episode 走
+	// canAccessEpisode(和 quiz 同闸门);course/subject 级只需要登录——advice 数据
+	// 按 user_id 键存(GetAdvice(userID, scope, scopeID)),绝不泄露跨用户数据,所以
+	// 即便学生查一个没权限的 course,也只会拿到他自己在这个 course 上的(多半空的)
+	// 建议,看不到别人的数据。
+	GetEpisodeAdvice(c *gin.Context)
+	GetCourseAdvice(c *gin.Context)
+	GetSubjectAdvice(c *gin.Context)
 }
 
 type aiHandler struct {
@@ -374,3 +384,103 @@ func (h *aiHandler) canAccessEpisode(c *gin.Context, userID, episodeID uint) boo
 // referenced via _ to avoid an unused-warning if encoding/json grows import
 // needs elsewhere.
 var _ = json.Marshal
+
+// ---------------------------------------------------------------------------
+// Phase C — advice endpoints (agent 驱动的学习建议)
+// ---------------------------------------------------------------------------
+
+// adviceResponse 是三个 advice 端点统一的响应形状。status 字段告诉客户端:
+//   - ready:advice 已生成,advice 字段带完整内容;
+//   - generating:已入队生成中,客户端稍后轮询;
+//   - unavailable:AI 未配置或该 scope 不支持,客户端隐藏/降级。
+//
+// advice 字段在非 ready 时省略(omitempty)。复用 model.StudyAdvice 的 JSON(tag 已定义)。
+type adviceResponse struct {
+	Status string              `json:"status"`
+	Scope  string              `json:"scope"`
+	ID     uint                `json:"id"`
+	Advice *model.StudyAdvice  `json:"advice,omitempty"`
+}
+
+// GetEpisodeAdvice 返回某节课的复习建议(episode 级)。
+// GET /api/v1/episodes/:id/ai-advice
+//
+// 和 quiz 端点同一道 canAccessEpisode 闸门:能看这节课视频才能看它的建议。
+// 第一次访问触发 lazy 生成(入队 advice job),返回 generating 让客户端轮询。
+func (h *aiHandler) GetEpisodeAdvice(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
+		return
+	}
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI not available"})
+		return
+	}
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	if !h.canAccessEpisode(c, userID, uint(id)) {
+		return // canAccessEpisode 已写好错误响应
+	}
+	status, advice, err := h.aiService.GetOrEnqueueAdvice(userID, "episode", uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load advice"})
+		return
+	}
+	c.JSON(http.StatusOK, adviceResponse{Status: status, Scope: "episode", ID: uint(id), Advice: advice})
+}
+
+// GetCourseAdvice 返回某门课程的整体弱点分析(course 级)。
+// GET /api/v1/courses/:id/ai-advice
+//
+// 访问控制:只需登录(advice 按 user_id 键存,不泄露跨用户数据——见接口注释)。
+// 若后续要严格校验课程访问权,可在 service 层加 userRepo.HasAccess 检查。
+func (h *aiHandler) GetCourseAdvice(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID"})
+		return
+	}
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI not available"})
+		return
+	}
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	status, advice, err := h.aiService.GetOrEnqueueAdvice(userID, "course", uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load advice"})
+		return
+	}
+	c.JSON(http.StatusOK, adviceResponse{Status: status, Scope: "course", ID: uint(id), Advice: advice})
+}
+
+// GetSubjectAdvice 返回某科目(跨多门课)的弱点分析(subject 级)。
+// GET /api/v1/subjects/:id/ai-advice
+//
+// 访问控制:只需登录(同 course 级理由)。
+func (h *aiHandler) GetSubjectAdvice(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid subject ID"})
+		return
+	}
+	if h.aiService == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "AI not available"})
+		return
+	}
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	status, advice, err := h.aiService.GetOrEnqueueAdvice(userID, "subject", uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load advice"})
+		return
+	}
+	c.JSON(http.StatusOK, adviceResponse{Status: status, Scope: "subject", ID: uint(id), Advice: advice})
+}

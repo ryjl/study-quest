@@ -16,6 +16,10 @@ type fakeToolDeps struct {
 	course   *model.Course
 	summary  *model.AISummary
 	chunkErr error
+	// advice 工具集专用字段(Phase C)。零值时工具返回空 observation,quiz 测试用不到。
+	courseMasteries  []model.KnowledgeMemory
+	subjectMasteries []model.KnowledgeMemory
+	userCourses      []uint
 }
 
 func (f *fakeToolDeps) ListChunks(episodeID uint) ([]model.ContentChunk, error) {
@@ -29,6 +33,16 @@ func (f *fakeToolDeps) GetCourse(courseID uint) (*model.Course, error) {
 }
 func (f *fakeToolDeps) GetSummary(episodeID uint) (*model.AISummary, error) {
 	return f.summary, nil
+}
+// advice 工具集方法:满足 ToolDeps 接口(quiz 测试不会调用,返回 fake 字段即可)。
+func (f *fakeToolDeps) ListUserCourses(userID uint) ([]uint, error) {
+	return f.userCourses, nil
+}
+func (f *fakeToolDeps) GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error) {
+	return f.courseMasteries, nil
+}
+func (f *fakeToolDeps) GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error) {
+	return f.subjectMasteries, nil
 }
 
 type fakeEmbedder struct{ vecs [][]float32 }

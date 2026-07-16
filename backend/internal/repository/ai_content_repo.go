@@ -122,6 +122,28 @@ type AIContentRepository interface {
 	// counter ticks, last_reviewed = now. INSERT ... ON CONFLICT so concurrent
 	// answers don't lose deltas (mirrors the progress atomic-accumulate rule).
 	UpsertMemoryOnAnswer(userID, chunkID, episodeID, courseID uint, correct bool) error
+
+	// ── cross-course aggregation (Phase C: advice agent) ──
+	// GetCourseMasteries 跨课时聚合:返回一个学生在某课程下所有课时的掌握度行,
+	// 用于 advice agent 的"跨课程弱点分析"。KnowledgeMemory 已冗余 course_id
+	// (见 model.migrateQuizActiveUniqueIndex 之上的迁移),所以一次 WHERE 就够。
+	// 调用方(MemoryStore.CourseMasteries)负责按 mastery ASC 排序,弱点优先。
+	GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error)
+	// GetSubjectMasteries 科目级聚合:JOIN courses 取出该 subject 下所有课程的
+	// mastery。比 GetCourseMasteries 多一层 course→subject 归属,用于"整个数学
+	// 科目的弱点分析"。返回顺序同样由调用方排序。
+	GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error)
+
+	// ── study_advices (Phase C: advice generation result) ──
+	// GetAdvice returns the stored advice for a (user, scope, scope_id) triple, or
+	// nil if none has been generated yet. scope ∈ {"episode","course","subject"}.
+	// Used by the client GET endpoints; nil triggers lazy generation via a job.
+	GetAdvice(userID uint, scope string, scopeID uint) (*model.StudyAdvice, error)
+	// UpsertAdvice replaces any existing advice for the (user, scope, scope_id)
+	// triple — re-generation fully replaces (mirrors AISummary.UpsertSummary),
+	// keeping only the latest snapshot. The unique index on the triple is the
+	// DB-level guard; this Save relies on it.
+	UpsertAdvice(a *model.StudyAdvice) error
 }
 
 // ErrJobNotProcessing is returned by ResetJob when the targeted job isn't in
@@ -590,4 +612,66 @@ func (r *aiContentRepo) UpsertMemoryOnAnswer(userID, chunkID, episodeID, courseI
 			last_reviewed = CURRENT_TIMESTAMP,
 			updated_at = CURRENT_TIMESTAMP`
 	return r.db.Exec(sql, userID, episodeID, courseID, chunkID, initMastery, initCorrect, initWrong).Error
+}
+
+// --- cross-course aggregation (Phase C: advice agent) ---
+
+// GetCourseMasteries 跨课时聚合:KnowledgeMemory 已冗余 course_id,所以一次 WHERE
+// 取出该学生在该课程下所有 (episode, chunk) 的掌握度行。不在此处排序——
+// MemoryStore.CourseMasteries 统一按 mastery ASC 排序,保持与 Masteries 一致
+// (弱点优先)的语义。
+func (r *aiContentRepo) GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error) {
+	var rows []model.KnowledgeMemory
+	if err := r.db.Where("user_id = ? AND course_id = ?", userID, courseID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// GetSubjectMasteries 科目级聚合:JOIN courses(courses.subject_id = ?)取该科目下
+// 所有课程的 mastery 行。一次 SQL,避免在应用层逐课程循环(科目下课程数通常十几条,
+// 但 JOIN 更省往返)。用 Joins 而不是 Preload,因为我们只要 knowledge_memories 行,
+// 不要把 Course 整个加载进每条 memory(预加载会塞进 CourseID 的关联对象,浪费且改变结构)。
+func (r *aiContentRepo) GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error) {
+	var rows []model.KnowledgeMemory
+	if err := r.db.
+		Joins("JOIN courses ON courses.id = knowledge_memories.course_id").
+		Where("knowledge_memories.user_id = ? AND courses.subject_id = ?", userID, subjectID).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// --- study_advices (Phase C: advice generation result) ---
+
+// GetAdvice 按 (user, scope, scope_id) 唯一定位一条 advice。scope ∈
+// {"episode","course","subject"}。scope_id 是对应实体(id)。无记录返回 (nil, nil),
+// 让调用方决定是入队 job 还是返回 unavailable。
+func (r *aiContentRepo) GetAdvice(userID uint, scope string, scopeID uint) (*model.StudyAdvice, error) {
+	var a model.StudyAdvice
+	if err := r.db.Where("user_id = ? AND scope = ? AND scope_id = ?", userID, scope, scopeID).
+		First(&a).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
+// UpsertAdvice 替换同一 (user, scope, scope_id) 上的旧 advice。Save 在主键冲突时
+// UPDATE,但我们靠 uniqueIndex(user_id, scope, scope_id) 保证只有一条——所以先删除
+// 旧的再插入,语义上更清晰(也避免 GORM Save 在没有主键时的行为歧义)。重新生成
+// 完全覆盖旧快照,符合 advice 的"当前建议"语义(不像 quiz 要保留历史)。
+func (r *aiContentRepo) UpsertAdvice(a *model.StudyAdvice) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// 清掉同 key 的旧行(若有)。WHERE 命中 unique index 上的三列,精确。
+		if err := tx.Where("user_id = ? AND scope = ? AND scope_id = ?", a.UserID, a.Scope, a.ScopeID).
+			Delete(&model.StudyAdvice{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(a).Error
+	})
 }

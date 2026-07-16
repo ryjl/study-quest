@@ -31,6 +31,13 @@ type MemoryRepo interface {
 	// UpsertMemoryOnAnswer applies the feedback update atomically: correct
 	// nudges mastery up, wrong nudges it down, counts tick, last_reviewed = now.
 	UpsertMemoryOnAnswer(userID, chunkID, episodeID, courseID uint, correct bool) error
+	// ── 跨课程聚合(Phase C: advice agent 用)──
+	// GetCourseMasteries 取某学生在某课程下所有 chunk 的掌握度行。KnowledgeMemory
+	// 已冗余 course_id(models.go),所以就是 WHERE user_id AND course_id。
+	GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error)
+	// GetSubjectMasteries 取某学生在某科目下所有课程的掌握度行(repo 里 JOIN
+	// courses)。用于 advice agent 的"科目级弱点分析"。
+	GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error)
 }
 
 // MemoryStore reads and updates per-user learning state. It is the read-side
@@ -56,9 +63,43 @@ func (m *MemoryStore) Masteries(ctx context.Context, userID, episodeID uint) ([]
 	if err != nil {
 		return nil, err
 	}
-	// Sort worst-first (ascending mastery) so the agent's prompt lists the most
-	// urgent weaknesses at the top. Insertion sort — per-episode chunk counts
-	// are small (tens).
+	sortMasteriesWorstFirst(rows)
+	return rows, nil
+}
+
+// CourseMasteries 跨课时聚合:返回该学生在某课程下所有 chunk 的掌握度行,按 mastery
+// ASC 排序(弱点优先)。advice agent 用它做"这整门课你哪里薄弱"的分析。新学生无记录
+// 返回空切片。注意:跨课程可能存在多个 episode 的同名知识点,但目前 chunk 粒度上
+// chunk.text 是唯一线索(agent 从 chunk.text 推断知识点名),所以这里按 chunk 原样返回,
+// 不做跨 episode 的知识点聚合(留给 agent 自己判断)。
+func (m *MemoryStore) CourseMasteries(ctx context.Context, userID, courseID uint) ([]model.KnowledgeMemory, error) {
+	_ = ctx
+	rows, err := m.repo.GetCourseMasteries(userID, courseID)
+	if err != nil {
+		return nil, err
+	}
+	sortMasteriesWorstFirst(rows)
+	return rows, nil
+}
+
+// SubjectMasteries 科目级聚合:返回该学生在某科目下所有课程的掌握度行,同样按
+// mastery ASC 排序。科目级建议(如"整个数学科目你最薄弱的是通分")依赖这个聚合。
+func (m *MemoryStore) SubjectMasteries(ctx context.Context, userID, subjectID uint) ([]model.KnowledgeMemory, error) {
+	_ = ctx
+	rows, err := m.repo.GetSubjectMasteries(userID, subjectID)
+	if err != nil {
+		return nil, err
+	}
+	sortMasteriesWorstFirst(rows)
+	return rows, nil
+}
+
+// sortMasteriesWorstFirst 按 mastery ASC 原地排序(弱点优先),让 agent 的 prompt
+// 把最需要加强的知识点列在最前。复用同一份排序逻辑给 episode / course / subject 三种
+// 聚合。插入排序:跨课程聚合的行数仍是几十到几百量级,简单排序足够,且稳定(保留
+// repo 返回的相对顺序)。Masteries/CourseMasteries/SubjectMasteries 之前各自内联同一份
+// 循环,抽出来避免漂移。
+func sortMasteriesWorstFirst(rows []model.KnowledgeMemory) {
 	for i := 1; i < len(rows); i++ {
 		j := i
 		for j > 0 && rows[j].Mastery < rows[j-1].Mastery {
@@ -66,7 +107,6 @@ func (m *MemoryStore) Masteries(ctx context.Context, userID, episodeID uint) ([]
 			j--
 		}
 	}
-	return rows, nil
 }
 
 // RecordAnswer updates mastery after a student answers. correct=true ⇒ mastery

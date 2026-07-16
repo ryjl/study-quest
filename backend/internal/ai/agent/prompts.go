@@ -4,6 +4,8 @@
 // contributes to the decision, since the whole point is understanding the flow.
 package agent
 
+import "strings"
+
 // SummarizerSystemPrompt is the system instruction for the summary capability.
 //
 // Design: we ask for STRUCTURED JSON (not free prose) so the client can render
@@ -191,4 +193,101 @@ func fmtUint(n uint) string {
 		n /= 10
 	}
 	return string(digits[i:])
+}
+
+// ---------------------------------------------------------------------------
+// Phase C — Advice agent prompt (agent 驱动的跨课程学习建议)
+// ---------------------------------------------------------------------------
+
+// AdviceSystemPrompt 是 advice agent 的 system instruction。和 QuizzerSystemPrompt 平行,
+// 但产出是自然语言(不是 JSON)——这是建议,不是结构化题库。
+//
+// 关键设计:
+//   - agent 驱动:不是一次性把 mastery 全塞进 prompt 让模型写。agent 自己用工具查
+//     跨课程 mastery(episode/course/subject 三档),自己决定分析深度。这样:
+//     (a) episode 级 advice 只查 episode mastery;subject 级 advice 会跨多门课聚合,
+//         数据量差异大,固定 prompt 撑不住,交给 agent 按需调工具更合理;
+//     (b) 后续 Phase D/E 复用这个 agent loop,只换工具集。
+//   - 用人话描述知识点:工具返回 mastery 时附了 chunk.text 片段(见 advice_tools.go 的
+//     formatMasteriesWithText)。prompt 反复强调"从字幕片段文本推断知识点名",禁止说
+//     "chunk#37 mastery=0.2"这种机器话——学生看不懂。
+//   - 鼓励 + 具体 + 可执行:建议要落到"回到视频某段复习""先做哪类题"这种动作上,不
+//     是空泛的"加油"。
+//   - 输出纯文本:不要求 JSON、不要求 markdown 代码块,直接自然语言段落。前端按段落
+//     渲染即可(Phase D 再考虑结构化)。
+const AdviceSystemPrompt = `你是一位耐心的学习导师,负责为一个中小学生分析他的学习弱点并给出复习建议。
+
+你可以调用工具收集信息(这是你的核心优势,请善用):
+- get_user_mastery: 查这节课各知识点的掌握度 + 字幕片段文本。弱点(mastery<0.4,标★)优先关注。
+- get_course_mastery: 跨课时聚合,查整门课的弱点(用于课程级建议)。
+- get_subject_mastery: 科目级聚合,查整个科目(可能跨多门课)的弱点(用于科目级建议)。
+- list_user_courses: 列学生正在学的课程,用于"建议从哪门课开始复习"。
+- get_episode_summary: 读这节课的 AI 总结(核心概念/要点),帮你引用准确的知识点名。
+
+工作方式:
+1. 先按建议的范围(scope)调对应的 mastery 工具。episode 级建议用 get_user_mastery;
+   course 级用 get_course_mastery;subject 级用 get_subject_mastery。需要时再补调
+   get_episode_summary 拿知识点名。
+2. 基于真实 mastery 数据给建议——不要泛泛而谈。如果学生是新学生(无记录),明确说
+   "还没有答题记录,建议先完成几节课的练习",并基于课程内容给通用学习建议。
+3. 跨课程/科目分析时,找出"反复出现的薄弱知识点"(不同课里都掌握得不好)——这种
+   系统性弱点比单节课的更值得建议。
+
+输出要求(重要):
+- 直接输出自然语言段落,不要 JSON,不要 markdown 代码块标记,不要任何前缀。
+- 用人话描述知识点:从 mastery 工具返回的"知识点线索(字幕片段文本)"里推断知识点
+  名(例如字幕里讲"通分""公分母",就说"通分这个知识点")。绝对不要说"chunk#37
+  mastery=0.2"这种机器话——学生看不懂。
+- 结构:先一句话总览这个学生目前的学习状态;再列 2-4 个具体弱点(每个弱点说清是
+  什么知识点、掌握到什么程度);最后给 2-3 条可执行的复习建议(回到哪节课/哪段
+  视频、先做什么类型的练习)。用鼓励的口吻,但要有实质内容。
+- 长度适中:总长 200-500 字。太短没价值,太长学生读不下去。
+- 如果某节课/课程/科目确实没有弱点(mastery 都 ≥0.7),真诚地肯定学生,并建议
+  往前学新课或挑战更难的内容,不要硬编弱点。`
+
+// buildAdviceUserPrompt 组装 advice agent 的 user message。pre-seed 学生该 scope 的
+// 弱点摘要(省一轮 get_user_mastery 工具调用),并告诉 agent 这次建议的范围(episode/
+// course/subject)和对应实体的标题/科目等元数据。agent 仍可调用工具深入查询。
+func buildAdviceUserPrompt(req AdviceRequest, masterySeed string) string {
+	var b strings.Builder
+	scopeLabel := map[string]string{
+		ScopeEpisode: "这节课",
+		ScopeCourse:  "这门课程",
+		ScopeSubject: "这个科目",
+	}[req.Scope]
+	if scopeLabel == "" {
+		scopeLabel = "本次"
+	}
+	b.WriteString("请为这个学生分析 ")
+	b.WriteString(scopeLabel)
+	b.WriteString(" 的学习情况并给出复习建议。\n\n")
+	b.WriteString("建议范围: ")
+	b.WriteString(req.Scope)
+	if req.ScopeTitle != "" {
+		b.WriteString(" (")
+		b.WriteString(req.ScopeTitle)
+		b.WriteString(")")
+	}
+	b.WriteString(", ID ")
+	b.WriteString(fmtUint(req.ScopeID))
+	b.WriteString("\n")
+	if req.Subject != "" {
+		b.WriteString("科目: ")
+		b.WriteString(req.Subject)
+		b.WriteString("\n")
+	}
+	if req.ExtraContext != "" {
+		b.WriteString("上下文: ")
+		b.WriteString(req.ExtraContext)
+		b.WriteString("\n")
+	}
+	if masterySeed != "" {
+		b.WriteString("\n当前已知弱点(弱点优先,已按 mastery 升序):\n")
+		b.WriteString(masterySeed)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("\n当前无答题记录(新学生或该范围尚未做题)。\n")
+	}
+	b.WriteString("\n请按需调用工具补全信息(尤其是跨课程聚合时),然后直接输出自然语言建议。\n")
+	return b.String()
 }

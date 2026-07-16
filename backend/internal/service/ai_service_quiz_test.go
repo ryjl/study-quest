@@ -20,8 +20,9 @@ func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentReposit
 		contentRepo,
 		repository.NewEpisodeRepository(db),
 		repository.NewCourseRepository(db),
-		nil, // no provider resolver — submit path doesn't need it
-		nil, // no unlock service — not exercised here
+		nil,                  // no provider resolver — submit path doesn't need it
+		nil,                  // no unlock service — not exercised here
+		repository.NewUserRepository(db), // advice tools need userRepo, but submit path won't call it
 	).(*aiService)
 	return svc, contentRepo
 }

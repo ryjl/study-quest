@@ -26,6 +26,12 @@ import (
 // Methods that load by id return (nil, nil) when not found — tools translate
 // that into an "empty" observation rather than an error, so the agent can reason
 // about missing data ("no summary yet") instead of crashing.
+//
+// 该接口同时服务 quiz 工具集(NewQuizToolbox)和 advice 工具集(NewAdviceToolbox)。
+// advice 独有的方法(ListUserCourses / GetCourseMasteries / GetSubjectMasteries)对
+// quiz 无意义,quiz 路径的 agentToolDeps adapter 实现它们时返回空(nil/error)即可
+// ——quiz agent 永远不会调用 advice 工具,所以这些空实现不会被触发,但接口要满足才能
+// 编译通过(见 ai_service_quiz.go 的 agentToolDeps)。
 type ToolDeps interface {
 	// Chunks for an episode's subtitle track, ordered by index (chronological).
 	ListChunks(episodeID uint) ([]model.ContentChunk, error)
@@ -35,6 +41,16 @@ type ToolDeps interface {
 	// The generated summary (concepts/key_points), if any — a rich starting
 	// point for deciding what to quiz on.
 	GetSummary(episodeID uint) (*model.AISummary, error)
+
+	// ── advice 工具集专用(Phase C)──
+	// ListUserCourses 返回学生当前被授权的所有课程 id(用于 list_user_courses 工具,
+	// 让 advice agent 知道学生有几门课、可以建议从哪门开始复习)。走 userRepo.GetAccessList。
+	ListUserCourses(userID uint) ([]uint, error)
+	// GetCourseMasteries / GetSubjectMasteries 是跨课程/科目聚合的 mastery 读取,
+	// advice agent 用它们做"整门课 / 整个科目的弱点分析"。返回 nil/empty 时由工具
+	// 翻译成"暂无答题记录"的 observation,agent 据此降级(基于内容给建议)。
+	GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error)
+	GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error)
 }
 
 // embedder is the minimal slice of ai.Embedder the search tool needs.

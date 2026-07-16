@@ -10,9 +10,11 @@ import (
 
 // fakeMemoryRepo is a minimal in-memory MemoryRepo for testing MemoryStore.
 type fakeMemoryRepo struct {
-	rows     []model.KnowledgeMemory
-	upserts  []upsertCall // recorded calls to UpsertMemoryOnAnswer
-	upsertFn func(userID, chunkID, episodeID, courseID uint, correct bool) error
+	rows             []model.KnowledgeMemory
+	courseRows       []model.KnowledgeMemory // 返回给 GetCourseMasteries
+	subjectRows      []model.KnowledgeMemory // 返回给 GetSubjectMasteries
+	upserts          []upsertCall            // recorded calls to UpsertMemoryOnAnswer
+	upsertFn         func(userID, chunkID, episodeID, courseID uint, correct bool) error
 }
 
 type upsertCall struct {
@@ -29,6 +31,19 @@ func (f *fakeMemoryRepo) UpsertMemoryOnAnswer(userID, chunkID, episodeID, course
 		return f.upsertFn(userID, chunkID, episodeID, courseID, correct)
 	}
 	return nil
+}
+// 跨课程聚合方法(Phase C advice 用)。未配置字段时返回 nil,测试可在构造时塞入。
+func (f *fakeMemoryRepo) GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error) {
+	if f.courseRows != nil {
+		return f.courseRows, nil
+	}
+	return nil, nil
+}
+func (f *fakeMemoryRepo) GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error) {
+	if f.subjectRows != nil {
+		return f.subjectRows, nil
+	}
+	return nil, nil
 }
 
 func TestApplyMastery(t *testing.T) {
@@ -71,6 +86,40 @@ func TestMasteriesOrderedWorstFirst(t *testing.T) {
 	}
 	if len(got) != 3 || got[0].ChunkID != 2 || got[1].ChunkID != 3 || got[2].ChunkID != 1 {
 		t.Errorf("expected worst-first [2,3,1], got %+v", got)
+	}
+}
+
+// TestCourseMasteriesOrderedWorstFirst 验证跨课程聚合也按 mastery ASC 排序(弱点优先)。
+// advice agent 的 prompt 依赖这个顺序——最该加强的知识点要列在最前。
+func TestCourseMasteriesOrderedWorstFirst(t *testing.T) {
+	repo := &fakeMemoryRepo{courseRows: []model.KnowledgeMemory{
+		{ChunkID: 1, Mastery: 0.9},
+		{ChunkID: 2, Mastery: 0.1},
+		{ChunkID: 3, Mastery: 0.5},
+	}}
+	store := NewMemoryStore(repo)
+	got, err := store.CourseMasteries(context.Background(), 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0].ChunkID != 2 || got[1].ChunkID != 3 || got[2].ChunkID != 1 {
+		t.Errorf("expected worst-first [2,3,1], got %+v", got)
+	}
+}
+
+// TestSubjectMasteriesOrderedWorstFirst 科目级聚合同样按 mastery ASC 排序。
+func TestSubjectMasteriesOrderedWorstFirst(t *testing.T) {
+	repo := &fakeMemoryRepo{subjectRows: []model.KnowledgeMemory{
+		{ChunkID: 1, Mastery: 0.7},
+		{ChunkID: 2, Mastery: 0.3},
+	}}
+	store := NewMemoryStore(repo)
+	got, err := store.SubjectMasteries(context.Background(), 1, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].ChunkID != 2 || got[1].ChunkID != 1 {
+		t.Errorf("expected worst-first [2,1], got %+v", got)
 	}
 }
 

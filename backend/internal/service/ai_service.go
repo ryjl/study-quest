@@ -74,6 +74,17 @@ type AIService interface {
 	// path). Powers the Phase 3 history panel. Newest-archive first.
 	ListQuizHistory(userID, episodeID uint) ([]QuizHistoryView, error)
 
+	// ── Phase C: agent 驱动的学习建议(advice)──
+	// GetOrEnqueueAdvice 是建议的 lazy 生成入口(同 GetOrEnqueueQuiz 的模式):
+	// 已有 advice → "ready" + advice;无 + AI 配置好 → 入队低优先级 advice job,返回
+	// "generating"(客户端轮询);AI off → "unavailable"。scope ∈ {episode,course,
+	// subject},scopeID 是对应实体 id。访问控制由 handler 在调用前做。
+	GetOrEnqueueAdvice(userID uint, scope string, scopeID uint) (status string, advice *model.StudyAdvice, err error)
+	// EnqueueAdviceForEpisode 是 submit-all 成功后的链式触发:异步入队 episode 级
+	// advice job(低优先级),让学生交卷后过一会能看到"这节课的复习建议"。幂等:已有
+	// 在途 advice job 不重复入队。
+	EnqueueAdviceForEpisode(userID, episodeID uint) error
+
 	// ── quiz: admin observability (Phase C) ──
 	ListQuizzesForUser(userID uint) ([]QuizDetailQuiz, error)
 	GetQuizDetail(quizID uint) (*QuizDetail, error)
@@ -112,6 +123,17 @@ type aiService struct {
 	subtitleRepo  repository.EpisodeRepository // same repo, GetSubtitle lives here
 	resolver      *ai.ProviderResolver
 	unlockService UnlockService // gates client quiz access (IsEpisodeVisible); nil in tests
+	// userRepo feeds advice agent 的 list_user_courses 工具(查学生被授权的课程 id)。
+	// nil 时该工具回退返回空(advice agent 据此降级)。quiz 路径不用它。
+	userRepo aiUserCourseLister
+}
+
+// aiUserCourseLister 是 aiService 对 userRepo 的窄依赖:只暴露 advice 工具需要的
+// GetAccessList(查学生被授权的课程 id)。和 agentEpisodeLoader / agentCourseLoader
+// 同思路——不把整个 repository.UserRepository 拉进 service 包,保持可测试性 +
+// 依赖最小化。nil 时 advice 的 list_user_courses 工具回退返回空。
+type aiUserCourseLister interface {
+	GetAccessList(userID uint) ([]uint, error)
 }
 
 // AIJobView is one admin-facing job row WITH the human-readable names resolved
@@ -130,7 +152,9 @@ type AIJobView struct {
 // NewAIService constructs an AIService. resolver may be nil in degenerate
 // builds (AI disabled); the service degrades gracefully. unlockService gates
 // client-facing quiz access (IsEpisodeVisible); the existing unlock service
-// satisfies this interface.
+// satisfies this interface. userRepo feeds the advice agent's list_user_courses
+// tool (查询学生被授权的课程);nil 时该工具回退返回空(advice 据此降级),传
+// repository.UserRepository 即可满足 aiUserCourseLister 接口。
 func NewAIService(
 	db *gorm.DB,
 	contentRepo repository.AIContentRepository,
@@ -138,6 +162,7 @@ func NewAIService(
 	courseRepo repository.CourseRepository,
 	resolver *ai.ProviderResolver,
 	unlockService UnlockService,
+	userRepo aiUserCourseLister,
 ) AIService {
 	s := &aiService{
 		db:            db,
@@ -146,6 +171,7 @@ func NewAIService(
 		courseRepo:    courseRepo,
 		resolver:      resolver,
 		unlockService: unlockService,
+		userRepo:      userRepo,
 	}
 	go s.runWorker() // single in-process worker goroutine; see runWorker
 	return s
@@ -167,10 +193,13 @@ func (s *aiService) EnqueueSummary(episodeIDs []uint) ([]uint, map[uint]string, 
 //   - quiz(10):学生正盯着屏幕等出题,响应延迟最刺眼,必须最先跑。
 //   - segment(2):summary/quiz 的上游,但属于后台批量,不需要抢在 quiz 前。
 //   - summary(1):纯派生展示数据,无人在等,放到最低。
+//   - advice(1):和 summary 同级——advice 是"打开建议页"或"交卷后"异步入队的,
+//     学生不在屏幕前干等(页面会显示 generating),低优先级不饿死 quiz(10)。
 const (
 	priorityQuiz    = 10
 	prioritySegment = 2
 	prioritySummary = 1
+	priorityAdvice  = 1
 )
 
 // enqueue creates one job per episode. It resolves each episode's course_id and
@@ -306,7 +335,7 @@ func (s *aiService) hasPendingJob(jobType string, episodeID uint) bool {
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
 func (s *aiService) runWorker() {
-	jobTypes := []string{"segment", "summary", "quiz"}
+	jobTypes := []string{"segment", "summary", "quiz", "advice"}
 	for {
 		s.processOneJob(jobTypes)
 		// Poll every 3s. A real impl might use a channel signaled on enqueue,
@@ -334,6 +363,8 @@ func (s *aiService) processOneJob(jobTypes []string) {
 		s.runSummaryJob(job)
 	case "quiz":
 		s.runQuizJob(job)
+	case "advice":
+		s.runAdviceJob(job)
 	default:
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "unknown job_type: "+job.JobType, nil)
 	}

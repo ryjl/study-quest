@@ -95,6 +95,11 @@ func RegisterRoutes(
 		v1Restricted.POST("/episodes/:id/ai-quiz/regenerate", ai.RegenerateQuiz)
 		// Phase 3 — read-only quiz history (archived/superseded generations).
 		v1Restricted.GET("/episodes/:id/ai-quiz/history", ai.GetEpisodeQuizHistory)
+		// Phase C — agent 驱动的学习建议(advice)。三档 scope 各一个端点,都走 lazy 生成。
+		// episode 级和 quiz 同闸门(canAccessEpisode);course/subject 级只需登录。
+		v1Restricted.GET("/episodes/:id/ai-advice", ai.GetEpisodeAdvice)
+		v1Restricted.GET("/courses/:id/ai-advice", ai.GetCourseAdvice)
+		v1Restricted.GET("/subjects/:id/ai-advice", ai.GetSubjectAdvice)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
 		// Resolve the Nth attachment of an episode into a 302 download link.
 		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)

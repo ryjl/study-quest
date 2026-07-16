@@ -205,9 +205,14 @@ type agentToolDeps struct {
 	contentRepo interface {
 		ListChunks(episodeID uint, sourceType string) ([]model.ContentChunk, error)
 		GetSummary(episodeID uint) (*model.AISummary, error)
+		GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error)
+		GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error)
 	}
 	episodeRepo agentEpisodeLoader
 	courseRepo  agentCourseLoader
+	// userRepo 只在 advice 路径用(ListUserCourses)。quiz 路径构造时留 nil,
+	// ListUserCourses 会回退返回 nil —— quiz agent 永远不会调到那个工具。
+	userRepo aiUserCourseLister
 }
 
 type agentEpisodeLoader interface {
@@ -228,6 +233,24 @@ func (d *agentToolDeps) GetCourse(courseID uint) (*model.Course, error) {
 }
 func (d *agentToolDeps) GetSummary(episodeID uint) (*model.AISummary, error) {
 	return d.contentRepo.GetSummary(episodeID)
+}
+
+// ── advice 工具集专用方法(Phase C)──
+// 这些方法是 ToolDeps 接口的一部分,quiz 路径用不到它们(quiz agent 不会调用
+// advice 工具),但接口要满足才能编译通过。实现走真实的 repo:这样 agentToolDeps
+// 既能给 quiz 用(忽略这些方法),也能给 advice 用(真正调用它们)——
+// 一个 adapter 服务两个 agent,避免重复。advice job 里会注入携带 userRepo 的版本。
+func (d *agentToolDeps) ListUserCourses(userID uint) ([]uint, error) {
+	if d.userRepo == nil {
+		return nil, nil
+	}
+	return d.userRepo.GetAccessList(userID)
+}
+func (d *agentToolDeps) GetCourseMasteries(userID, courseID uint) ([]model.KnowledgeMemory, error) {
+	return d.contentRepo.GetCourseMasteries(userID, courseID)
+}
+func (d *agentToolDeps) GetSubjectMasteries(userID, subjectID uint) ([]model.KnowledgeMemory, error) {
+	return d.contentRepo.GetSubjectMasteries(userID, subjectID)
 }
 
 // Compile-time: agentToolDeps satisfies the agent.ToolDeps interface.
@@ -761,6 +784,14 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 		// 下次进页面 GetQuizForClient 会发现 SubmittedAt=nil 而显示未交卷,这是个
 		// 罕见的不一致,但不会丢数据。这里不回滚已落的 answer(回滚更糟)。
 		log.Printf("AI: mark quiz %d submitted failed: %v", quiz.ID, err)
+	}
+
+	// Phase C 链式触发:交卷成功后异步入队 episode 级 advice job。理由——学生刚交完
+	// 卷,memory 已是最新(本次答题已更新),这时跑 advice 最准;且"复习建议"和"错题
+	// 解析"是自然的后续动作。低优先级(priorityAdvice=1),不饿死 quiz;幂等(已有在途
+	// advice job 不重复入队)。失败只记日志,绝不阻断交卷主流程——advice 是 nice-to-have。
+	if uerr := s.EnqueueAdviceForEpisode(userID, quiz.EpisodeID); uerr != nil {
+		log.Printf("AI: chain-enqueue advice for (user %d, episode %d) failed: %v", userID, quiz.EpisodeID, uerr)
 	}
 	return results, nil
 }

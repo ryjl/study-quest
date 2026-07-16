@@ -941,7 +941,7 @@ type AIProvider struct {
 // done|failed|skipped.
 type AIJob struct {
 	ID          uint       `gorm:"primaryKey;autoIncrement"`
-	JobType     string     `gorm:"size:20;not null;index"` // segment | summary | quiz
+	JobType     string     `gorm:"size:20;not null;index"` // segment | summary | quiz | advice
 	EpisodeID   uint       `gorm:"index;not null"`
 	CourseID    uint       `gorm:"index;not null"`
 	UserID      *uint      `gorm:"index"` // nullable: segment/summary leave it NULL; quiz jobs bind to a specific user (per-user adaptive generation)
@@ -952,6 +952,10 @@ type AIJob struct {
 	CompletedAt *time.Time
 	Error       string `gorm:"type:text"`
 	Progress    *float64
+	// PayloadJSON 存 job 类型特定的参数(Phase C advice 用:scope/scope_id/subject_id,
+	// 因为 AIJob 表是 episode-centric 的,subject 级 advice 没有专门列)。quiz/segment/
+	// summary job 留空。JSON 文本,宽松解析(buildAdviceRequest 容忍缺字段)。
+	PayloadJSON string `gorm:"type:text"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }
@@ -1150,6 +1154,29 @@ type ChatMessage struct {
 	CreatedAt  time.Time
 }
 
+// StudyAdvice 是 Phase C 的 agent 驱动学习建议产物。和 quiz 不同,advice 的产出是
+// 自然语言文本(不是结构化 JSON),由 advice agent 跑 ReAct loop 跨课程查 mastery 后
+// 生成。按 (user, scope, scope_id) 唯一存储:
+//   - scope="episode", scope_id=episode_id:某节课交卷后的复习建议
+//   - scope="course",  scope_id=course_id:某门课的整体弱点分析
+//   - scope="subject", scope_id=subject_id:某科目(跨多门课)的弱点分析
+//
+// 重新生成替换旧记录(同 quiz 的 Upsert 语义,但 advice 不保留历史——建议是"当前
+// 快照",过期了就覆盖)。MasterySnapshotJSON 存当时 mastery 的 JSON 快照,供后续对比
+// "上次建议后学生进步了多少"(Phase D 可用,Phase C 先存下来)。
+type StudyAdvice struct {
+	ID                  uint      `gorm:"primaryKey;autoIncrement"`
+	UserID              uint      `gorm:"uniqueIndex:idx_advice_user_scope;not null"`
+	Scope               string    `gorm:"size:16;uniqueIndex:idx_advice_user_scope;not null"`  // episode | course | subject
+	ScopeID             uint      `gorm:"uniqueIndex:idx_advice_user_scope;not null"`          // episode_id / course_id / subject_id
+	AdviceText          string    `gorm:"type:text;not null"`                                   // 自然语言建议(agent 的 FinalText)
+	MasterySnapshotJSON string    `gorm:"type:text"`                                            // 生成时 mastery 快照 JSON,供对比
+	ModelUsed           string    `gorm:"size:255"`
+	GeneratedAt         time.Time `gorm:"not null"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 func AutoMigrate(db *gorm.DB) error {
 	err := db.AutoMigrate(
 		&Setting{},
@@ -1206,6 +1233,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&AIRun{},
 		&ChatSession{},
 		&ChatMessage{},
+		// Phase C — agent 驱动的学习建议(advice agent 产出)。
+		&StudyAdvice{},
 	)
 	if err != nil {
 		return err
