@@ -489,8 +489,41 @@ provider 构造结果缓存在内存（chat/embedder 各一个 slot）。admin �
 - **`AIWorkflow.tsx`**（独立页）— 观测：job 状态统计+轮询、job 列表、决策痕迹回放（点 run 展开 response_text/input_json）
 - **`CourseModal.tsx`** — AI 总结/出题开关（默认关，符合附加层原则）
 
+### 信息架构（产品视角重构）
+
+admin 后台左侧导航从"扁平 14 项功能清单"重构为**按运营者任务分组的 5 组可折叠导航**（不再像程序员的模块清单）：
+
+```
+概览          📊 控制台（三段式：待办/异常 + 数据概览 + 最近活动流）
+内容运营      📚 课程库管理 · 💬 字幕队列 · 📥 文件导入 · 📖 阅读室
+用户与授权    👥 用户与授权 · 📅 观看历史
+AI 运营       🤖 AI Workflow · 🧠 AI 用户视图
+系统配置      🏷️ 分类与标签（科目+标签合并页）· 🏅 荣誉徽章 · 📦 版本发布 · ⚙️ 系统设置
+```
+
+每组带组标题（小字 muted）+ 可折叠（当前组有 active 项自动展开）。科目管理 + 标签管理合并为「分类与标签」单页双 Tab（`Classification.tsx`，URL `?tab=` 保深链），后端两套表不动。
+
+### 设计系统（全量重设计的地基）
+
+为消除"程序员感"，建立了一套产品化 UI 原语（`components/PageHeader.tsx` + `components/ui.tsx` 扩展）：
+
+- **`PageHeader`** — 统一页头（标题 + 描述 + 面包屑组名 + 右对齐主操作），所有页面顶部统一使用，替代各页散落的 `<h1>`。
+- **`Section`** — 可折叠内容区块（标题 + icon + 计数 badge + 右侧操作 + 折叠箭头），把长页面/抽屉分段。
+- **`StatusCard`** — 状态色卡片（ok 绿/warn 琥珀/danger 红/info 主色），控制台待办/异常区用。
+- **`TodoItem`** — 可点跳转的待办条目（icon + 标题 + 数字 + →）。
+- **`ActivityFeed`** — 时间线（最近动态流，新用户/AI 任务/新增课时合并排序）。
+- **`Tabs`** — 下划线 Tab 切换（分类页用）。
+- **`DropdownMenu`** — 轻量 ⋯ 下拉（课程卡片操作收进这里），点击外部/Esc 关闭。
+
+### 关键交互改造
+
+- **课程库卡片**：封面左侧大号展开箭头 + 整卡头部可点展开（hover 反馈）+ 操作按钮（编辑/解锁节奏/删除）收进右上 ⋯ 菜单，卡片更大气。
+- **用户授权抽屉**（去程序员感核心）：顶加用户概要卡；课程授权**按科目分组**（每组全选/清空 + 搜索）；**解锁节奏/积分徽章默认折叠**；**staged 保存**（本地暂存 diff，顶部 sticky「有 N 项未保存」+ 保存/放弃，保存时并行发 per-item grant/revoke，后端无批量端点用 Promise.allSettled + 部分失败提示）。
+- **控制台**：三段式（待办/异常置顶 → 数据概览降级 → 最近活动流），全正常时显示绿色「✅ 一切正常」。
+- **课程编辑年级 bug 修复**：`CourseModal` 读 `course.grades`（复数，后端 DTO 字段）而非 `course.grade`，保存时发两份字段兼容。
+
 ### 框架约定
-React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + 全局 class `.card`/`.input`/`.btn-primary`）。**每个 mutation 必须 invalidate**（CLAUDE.md 硬规则）。颜色走 tailwind config token，不硬编码。
+React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + 全局 class `.card`/`.input`/`.btn-primary` + 上述设计系统原语）。**每个 mutation 必须 invalidate**（CLAUDE.md 硬规则）。颜色走 tailwind config token，不硬编码。
 
 ## 14. ✅ Phase C 实现（出题 agent，已落地）
 
@@ -758,6 +791,16 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 
 这三项之后，AI 模块的表结构进入"定档"状态。
 
+### Admin 重设计轮的 DB 操作（定档后的两处 schema 相关改动）
+
+全量 admin 重设计 + bug 修复轮做了两处和 schema 相关的操作，这里显式留痕（它们是定档后**仅有的**两处，且都是**零风险/一次性的安全变更**）：
+
+1. **FK 约束真正生效**（`cmd/server/main.go`）：DSN 加 `_foreign_keys=on`。这不是 schema 变更（约束一直在 CREATE TABLE DDL 里，只是之前 PRAGMA per-connection 导致池里大部分连接 FK 关闭、约束没触发）。修好后 GORM 声明的 20+ 个 `OnDelete:CASCADE/RESTRICT` 在所有连接生效。**升级安全**：已用真实 dev DB 副本验证 `PRAGMA foreign_key_check` 为空（零违规），AutoMigrate 不会因孤儿行失败。手动 cascade 仍保留作双保险（AI 相关表如 ai_summaries/content_chunks/quizzes 没有 GORM foreignKey 声明，只靠手动 cascade）。
+
+2. **`a_iproviders` → `ai_providers` 表重命名**（`model/models.go`）：GORM 默认 snake-case 把 `AIProvider` 解析成 `a_iproviders`（每个大写字母前加下划线再 trim → 难看的名字）。给 struct 加 `TableName()` 返回 `ai_providers` 固定名字，并写 `migrateAIProvidersTableName` 在 AutoMigrate **之前**用 SQLite 原生 `ALTER TABLE ... RENAME TO` 原地重命名（保留所有行 + 索引，零数据移动）。**这是定档后唯一一次"改表名"操作**——属于"改唯一索引/主键"级别的特例，但用 `ALTER TABLE RENAME` 实现所以仍是零风险无缝升级。幂等（重命名后检测到新表存在就跳过；两表都在则告警不猜）。升级安全已用真实 dev DB 副本 + 3 个单元测试验证（重命名/幂等/全新安装）。
+
+> **关于"定档"承诺的诚实说明**：这两处是定档后发生的 schema 相关操作。#1 不动 schema（只是让既有约束生效）。#2 是表重命名，技术上属于"定档"想避免的类别，但因为用 `ALTER TABLE RENAME` 实现（SQLite 原生、保留数据、幂等、AutoMigrate 前跑），实际升级路径仍是 `make deploy` 零手动干预。记录在此提醒未来：表名/列名一旦定，再改就要走这种"AutoMigrate 前 raw SQL 迁移"的路径——能做但要谨慎。
+
 > **注**：第三轮还有一块 provider UX 改造（embedding 干净化不进 DB、chat 单例表单、模型下拉拉取、docker 卷遮蔽修复）—— 这块**不动 ai_providers 表结构**（embedding 现在完全不用这张表，直接从镜像文件构造），只是改了 admin UI 怎么配 + resolver 怎么找 embedding + Dockerfile/Makefile 的模型路径。详见 §3「Round-3 Provider UX 定档」。表结构定档不受影响。
 
 ## 19. 部署架构（第三轮：alpine → debian-slim + 三个踩坑）
@@ -794,15 +837,23 @@ spa 阶段 `WORKDIR /build` + vite outDir `../backend/...`（相对当前目录�
 
 > 共同教训（三个坑都是）：**本地 `make run` 和 `docker build/deploy` 是两套完全不同的构建/运行路径**。前者从不触发 docker 的卷遮蔽、多阶段路径错位、libc 兼容问题。本地测过的 docker 不一定能跑——这是真实的测试盲区。要彻底消除，得让本地也用 docker 跑（加 `make run-docker` 目标，未来工作）。
 
-### 镜像大小现状 + 优化方向（下阶段）
+### 镜像大小现状（已优化）
 
-当前镜像 **~665MB**（用户判定不可接受，下阶段必做优化）。`docker history` 占比：
-- **apt `ffmpeg` ~470MB** ← 绝对大头。代码只用 ffprobe（metadata）+ ffmpeg 截一帧/提封面（`extractScreenshot`/`extractEmbeddedCover`，不转码），但 apt ffmpeg 拖了全套 libav codec 依赖。
-- ONNX 模型 ~47MB（必要，baked-in）
+镜像已从 **~665MB 优化到 ~370MB**（省 ~295MB，44% 缩减）。优化手段：把 apt `ffmpeg`（~470MB，拖了全套 libav codec 依赖）换成 ffbinaries 预编译的静态 ffmpeg+ffprobe（johnvansickle GPL 静态版，~58MB 两文件）。
+
+代码只用到三个 ffmpeg 调用（`episode_service.go`），静态 GPL 版全覆盖：
+- `ffprobe` 探测 metadata（时长/编码/分辨率）
+- `ffmpeg -vframes 1` 截一帧做封面（`extractScreenshot`）
+- `ffmpeg -c copy` 提内嵌封面（`extractEmbeddedCover`）
+不转码，所以不需要 apt ffmpeg 的全套编码器依赖。
+
+`Dockerfile` 实现细节：新增独立 `ffmpeg-static` stage 下载解压两个静态二进制到 `/usr/local/bin/`，运行时 stage `apt-get install` 里**删掉 `ffmpeg`**，改用 `COPY --from=ffmpeg-static`。源是 GitHub release zip（ffbinaries-prebuilt v6.1），`--retry 3` 兜底早期 docker build 里偶发的 404。实测在容器内对真实 mp4 跑 ffprobe + ffmpeg 截帧均正常。
+
+`docker history` 各层占比（优化后）：
 - debian-slim 基础 ~75MB
-- Go 二进制 ~14MB（没 UPX 压缩）
+- ONNX 模型 ~47MB（必要，baked-in）
+- Go 二进制 ~14MB
+- 静态 ffmpeg+ffprobe ~58MB
+- ca-certs/tzdata/curl ~15MB
 
-优化方向（详见 handoff-ai-round3-ux.md）：
-1. **换静态 ffmpeg/ffprobe**（最大收益，省 ~390MB）：ffbinaries 预编译静态版替代 apt ffmpeg。本次试过但 GitHub download 在 docker build 里 404，待查。
-2. **go-mp4 纯库读 metadata**：若视频都是 MP4，`github.com/abema/go-mp4` 纯 Go 解析 box，零外部依赖——但 mkv/avi 不支持。
-3. UPX 压缩二进制（小收益）、probe worker 外置（架构级，本次不动）。
+仍可能的后续优化（暂不做）：UPX 压缩二进制（省 ~10MB，收益小）、probe worker 外置（架构级，主镜像完全不带 ffmpeg）。
