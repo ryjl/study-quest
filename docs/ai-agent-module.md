@@ -72,6 +72,24 @@ StudyQuest 的视频字幕（Step 1/2 的产物）落库后，AI Agent 模块把
 - 用户后期可能换中转站 → chat 配置可独立改，不动 embedding
 - rerank 暂不实现但预留 → 接口已定义，将来加一个 case 即可
 
+### Round-3 Provider UX 定档（admin 只配 chat）
+
+第三轮把 provider 配置从"列表 + 可加多个"收敛为**admin 只配 chat 单例**：
+
+- **embedding 不进 DB，对 admin 不可见**：embedding 模型（BGE-small-zh）打进 docker image，`resolveEmbed`（`resolver.go`）**直接用 `AIModelsDir` + 内置常量 `DefaultEmbeddingModel` 构造本地 ONNX embedder，不查 `ai_providers` 表**。embedding 子系统完全脱离 DB——没有行、没有 seed、没有 admin 配置、没有"配了又找不到"的混乱。`buildLocalEmbedder` 带文件健全检查（`.so`/`.onnx`/`vocab` 缺任一给清晰中文报错）。admin UI 完全隐藏 embedding/rerank。
+- **外部 embedding 扩展钩子（未来）**：`resolveEmbed` 先查 DB 有没有 enabled 的**外部** embedding 行（`provider_type != onnx_local`），有就用外部（`buildEmbedExternal`，目前未实现返回 not implemented，是预留钩子），没有才 fallback 到本地内置。将来要换外部 embedding API = 加一行 `ai_providers`(capability=embedding, provider_type=外部类型) + 在 `buildEmbedExternal` 加一个 case，本地模型自动退为 fallback。**不破坏 DB 定档**（加行 = 安全）。
+- **chat 是单例固定表单**：去掉"新增 Provider"按钮和列表，chat 只有一份配置（无则初次配置/创建，有则编辑）。resolver 本来就按"每 capability 一个 active provider"工作（`enabledRow` 取最低 ID 那条），UI 现在和这个语义对齐，不再让 admin 误以为可以堆多个。
+- **模型从下拉选，不手填**：`OpenAICompatProvider.ListModels`（`openai_compat.go`）打中转站 `GET /v1/models`，admin 填完 base_url + api_key 后点"拉取可用模型"→ 下拉选 model_name（替代之前手填、容易填错）。新路由 `POST /admin/api/ai/providers/models` 用**临时的** base_url+key 探测（不需要先保存），所以新建 provider 时也能先看有哪些模型再选。端点若不支持 `/v1/models`（返回空），回退成手填输入框。
+- **测试连通性保留**：`POST /admin/api/ai/providers/:id/test`（chat 发一条 ping 消息）。
+
+> 注意：拉取模型用的是 admin **当场填的 key**（已存的 key 永不回显，无法复用）。编辑已存 chat provider 时，要拉模型必须重新输 key——这是偶发诊断动作，可接受。
+
+### ⚠️ 部署路径陷阱（docker 卷遮蔽，已修）
+
+`make deploy` 用主机卷 `-v ~/data/studyquest-data:/app/data` 持久化 SQLite + 字幕。早期 Dockerfile 把 embedding 模型 COPY 到 `/app/data/ai-models/`——**这会被主机卷遮蔽**（bind mount 盖掉镜像对应路径），容器看到空目录 → embedding 报"data 目录下没有"，与 DB 配不配无关。
+
+**修法**：Dockerfile 把模型 COPY 到 `/app/ai-models/`（**在持久化卷之外**），`make deploy` 的 `docker run` 设 `-e AI_MODELS_DIR=/app/ai-models` 指过去。本地开发不受影响（`config.go` 默认值仍是 `./data/ai-models`，`make fetch-ai-models` 下载到这里，`make run` 用默认值）。**规则：任何 COPY 进镜像的文件，都不能放在被 `-v` 挂载的路径下，否则会被主机卷遮蔽。**
+
 ### LLMProvider / Embedder 接口（provider.go）
 
 ```go
@@ -95,8 +113,8 @@ type Embedder interface {
 
 | provider_type | 能力 | 实现 | 网络依赖 |
 |---|---|---|---|
-| `openai_compat` | chat | `openai_compat.go`（OpenAI 兼容 `/v1/chat/completions`） | 是（中转站） |
-| `onnx_local` | embedding | `onnx_embedder.go`（BGE-small-zh int8） | 否（本地） |
+| `openai_compat` | chat | `openai_compat.go`（OpenAI 兼容 `/v1/chat/completions` + `/v1/models` 模型列表） | 是（中转站） |
+| `onnx_local` | embedding | `onnx_embedder.go`（BGE-small-zh int8，docker image 内置，代码直接构造不进 DB） | 否（本地） |
 
 `openai_compat` 覆盖所有 OpenAI 兼容端点（DeepSeek / Moonshot / vLLM / 中转站），只需改 base_url + api_key + model_name。
 
@@ -259,11 +277,13 @@ worker（`runWorker` → `processOneJob`）认领并分发以下 6 种 job（详
 
 **Provider 配置**
 ```
-GET    /providers            列出（api_key 不回显）
-POST   /providers            新建（api_key 必填）
+GET    /providers            列出（api_key 不回显；admin UI 只展示 chat 行,embedding 不进 DB 对 admin 不可见）
+POST   /providers            新建（api_key 必填）— chat 单例,UI 不再暴露"新增"
 PUT    /providers/:id        更新（api_key 空 = 不修改）
 DELETE /providers/:id
 POST   /providers/:id/test   测连通（chat 发测试消息；embedding 加载模型 embed 一句）
+POST   /providers/models     用临时 {base_url, api_key} 探测中转站 /v1/models → {ok, models[]}
+                            （不需先保存,新建时也能先看有哪些模型再选）
 GET    /status               就绪状态 {chat, embedding, rerank, configured}
 ```
 
@@ -563,12 +583,14 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - summary 丰富化（Phase F：sections/methods/common_mistakes/pre_adventure）
 - admin 可读性（admin 能读 AI 生成的总结内容 + 触发课程总结/用户报告）
 - 死代码清理（旧 in-player quiz overlay 等）
+- **填空题用户原文持久化**：`Answer` 加 `UserAnswerText` 列，交卷后/历史 review 能回放"你当时填的什么"（之前判完就丢，只能看对错）—— 原 §15"仍未来"项，第三轮补上
+- **advice 前端展示**：客户端 `AiStudyScreen` 接 `/ai-advice` 端点，展示 advice agent 的自然语言建议（advice 优先，空则回退 quiz 的 `agent_feedback`）—— handoff 列的头号待办，第三轮补上
+- advice/course_summary/user_report 三表 Upsert 改 `ON CONFLICT`（原 delete-then-insert），无并发窗口
 
 ### ⏳ 仍未来
 - **chat（原 Phase D 原计划）**：advice/course_summary/user_report 已占了原 Phase D 的"agent 驱动"版图，chat 作为"多轮对话"能力仍未来（复用 RAG + memory，答案带视频时间戳跳转）
 - **memory 衰减曲线**（艾宾浩斯，复用 knowledge_memory；目前 mastery 是单调累积，不随时间衰减）
 - **streaming 输出（SSE）**：改善等待体验，目前 agent 跑完一次性返回
-- **填空题用户原文持久化**：当前 `Answer.UserAnswer` 是 int（选择题索引），填空题用户的原文没单独存（判题时归一化比较后只存 correct bool）—— Answer model 限制，未来若要展示"学生当时填了什么"需扩字段
 - **知识点命名标准化**：目前 agent 靠 LLM 推理关联 `chunk.text` 描述知识点（advice 之所以能说"通分掌握不好"，是因为工具把 chunk.text 注入了 observation）。未来可考虑给 chunk 打标签 / 建本体库，让知识点有稳定 ID 而非靠文本相似
 - admin 批量预热出题（`EnqueueQuiz` 结构已预留，接路由即可）
 - 附件提取入 content_chunks（PDF/练习册，source_type=attachment，schema 已预留）
@@ -702,3 +724,85 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 ### 代码位置
 - 客户端：`frontend/lib/ui/screen/ai_study_screen.dart`（AI 学习页重构：统一提交流 + 状态机 + 草稿恢复 + 跳转 push）、`frontend/lib/service/quiz_draft_store.dart`（草稿持久化）、`frontend/lib/ui/screen/player_screen.dart`（`disableAiTab`/`initialPosition`/helper panel 常驻 AI 卡片 + 探索任务）、`frontend/lib/ui/screen/course_detail_screen.dart`（课前 modal 移除）。
 - 后端：`handler/ai_handler.go`（`SubmitAllQuizAnswers` / `GetEpisodeQuizHistory`）、`service/ai_service_quiz.go`（`SubmitAllQuizAnswers` 统一交卷 + `ListQuizHistory` + quiz 拉题时回填逐题结果）、model 层 `Quiz.SubmittedAt` / `Question.HasJump` / quiz active/archived 状态。
+
+## 18. 数据库定档声明（第三轮：schema freeze）
+
+> **第三轮把 AI 模块的全部表结构定档。** 之后除非出现无法用"加列/加表/加枚举值"覆盖的需求，不再动现有表的列定义、列类型、唯一索引。目的是让线上升级永远走 GORM `AutoMigrate` 的零风险路径（SQLite 加列不丢数据、不停机），避免"改列类型/删列/改唯一索引"这类需要停机 + 迁移脚本的升级困难。
+
+### 当前 schema 已 forward-safe
+
+下表把"未来可能的需求"逐一对照"它需要什么 schema 变更"，确认全部落在安全变更类别：
+
+| 未来需求 | 需要的变更 | 类别 | 风险 |
+|---|---|---|---|
+| memory 衰减曲线（艾宾浩斯） | `KnowledgeMemory` 加 `decay_*` 列 + 读时算 | 加列 | 零风险 |
+| chat 多轮对话 | 用已预留的 `ChatSession`/`ChatMessage`（见下） | 加表内容 | 零风险 |
+| 更多题型（多选/连线/排序） | `Question.Type` 加枚举值 | 加枚举值 | 零风险 |
+| 附件提取入 content_chunks（PDF/练习册） | `ContentChunk.SourceType` 加 `"attachment"` 值 | 加枚举值 | 零风险 |
+| rerank | `AIProvider.Capability` 加 `"rerank"` 值 + resolver 一个 case | 加枚举值 | 零风险 |
+| 多 provider 轮询/failover | resolver 逻辑改，不动表 | 无 schema 变更 | 零风险 |
+
+**"升级困难"只发生在**：改列类型、删列、改/删唯一索引、改主键。当前 schema 里没有这些隐患的设计——所有唯一性都靠建表时定好的 unique index（advice 三列、course_summary on course_id、user_report on user_id、memory on user+chunk、quiz partial active），未来不需要动它们。
+
+### ChatSession / ChatMessage 为什么留空不乱预留
+
+`ChatSession`/`ChatMessage` 表已建（AutoMigrate 注册），但字段是**最小骨架**——只够建表，不够承载真实 chat。这是刻意的：chat 的字段需求未定（可能纯 RAG 检索、可能 agent 多轮、可能带工具调用 trace），现在按猜测加一堆列，真做 chat 时大概率加错，反而要改/删列（触发"升级困难"）。
+
+所以策略是：**留空表骨架，字段等真做 chat 时按当时确定的需求加**。加字段 = 加列 = 零风险，不破坏"定档"承诺。`AIRun`/`TraceJSON` 已经能承载 chat 的可观测性，`ContentChunk` 已经能承载 chat 的 RAG 语料，chat 真正缺的只是会话状态表的具体列——那是"加列"，安全。
+
+### 第三轮的具体 DB 变更（本次定档前的最后一次调整）
+
+1. **`Answer` 加 `UserAnswerText` 列**（text）—— 填补唯一真实结构缺口：填空题用户原文之前判完就丢（`Answer.UserAnswer` 只有 int），交卷后/历史 review 无法回放"你当时填了什么"。加列后，写路径（`SubmitQuizAnswer`/`SubmitAllQuizAnswers`）落原文，读路径（`QuizViewQuestion`/`QuizHistoryQuestion`/admin `QuizDetailAnswer`）回放。
+2. **三表 Upsert 改 `ON CONFLICT`** —— `UpsertAdvice`/`UpsertCourseSummary`/`UpsertUserStudyReport` 从 delete-then-insert 改为 GORM `clause.OnConflict`（和 `UpsertMemoryOnAnswer` 同语义）。功能等价、无并发窗口、语义更清晰。纯实现层，schema 不变。
+3. **`AIJob.JobType` 注释更正** —— 注释从 `segment|summary|quiz|advice` 更新为 6 种 job type（漏了 course_summary/user_report）。纯注释，列定义（`size:20`）不变，老数据兼容。
+
+这三项之后，AI 模块的表结构进入"定档"状态。
+
+> **注**：第三轮还有一块 provider UX 改造（embedding 干净化不进 DB、chat 单例表单、模型下拉拉取、docker 卷遮蔽修复）—— 这块**不动 ai_providers 表结构**（embedding 现在完全不用这张表，直接从镜像文件构造），只是改了 admin UI 怎么配 + resolver 怎么找 embedding + Dockerfile/Makefile 的模型路径。详见 §3「Round-3 Provider UX 定档」。表结构定档不受影响。
+
+## 19. 部署架构（第三轮：alpine → debian-slim + 三个踩坑）
+
+第三轮实机部署暴露了三个**本地 `make run` 永远测不到**的 docker 特有 bug，叠在一起让 embedding 在服务器上完全跑不通。这里记录定档的修法和教训，避免下次再踩。
+
+### 运行时镜像：alpine → debian:bookworm-slim
+
+**决定**：运行时镜像从 `alpine:3.19` 换成 `debian:bookworm-slim`。builder 阶段也一起换成 `golang:1.23-bookworm`（保证 CGO 编译链接的是 glibc，和运行时一致——避免 musl 编译的 go-sqlite3 在 glibc 运行时 ABI 不匹配）。
+
+**唯一原因**：`libonnxruntime.so.1.26.0`（微软官方 release）是 glibc 版，依赖 `ld-linux-x86-64.so.2`（glibc 动态链接器）+ `__vsnprintf_chk` 等 glibc 符号。Alpine 用 musl libc，没有这些 → ONNX 库加载失败。debian 是原生 glibc，一劳永逸消除 musl/glibc 兼容类问题。
+
+**权衡**：debian-slim (~30MB) 比 alpine (~5MB) 大 25MB，但换来的是"以后任何 glibc 的 .so / cgo 依赖都不会再踩坑"。曾考虑 gcompat（alpine 的 glibc 兼容层），但是补丁方案、不彻底——弃用。
+
+### 三个踩坑（按定位顺序）
+
+**踩坑一：docker 卷遮蔽（embedding 模型找不到）**
+
+`make deploy` 用 `-v ~/data/studyquest-data:/app/data` 持久化 SQLite+字幕。旧 Dockerfile 把 embedding 模型 COPY 到 `/app/data/ai-models/`——**bind-mount 会遮蔽镜像里该路径的内容**（主机目录初始为空），容器看到空目录。**修法**：模型 COPY 到 `/app/ai-models/`（在持久化卷之外），`Makefile` deploy 设 `-e AI_MODELS_DIR=/app/ai-models`。
+
+> 规则：**任何 COPY 进镜像的文件，都不能放在被 `-v` 挂载的路径下**，否则会被主机卷遮蔽。
+
+**踩坑二：Dockerfile spa 阶段 WORKDIR 错位（SPA 永远是旧的）**
+
+spa 阶段 `WORKDIR /build` + vite outDir `../backend/...`（相对当前目录）→ 在 docker 里解析成 `/backend/...`（跳出 /build），而 `COPY --from=spa /build/backend/...` 拿空 → builder 用 `COPY backend/` 带进来的**本地脏 dist** 凑数 → embed 旧 SPA。症状是"代码改了、build 成功、deploy 成功，但页面还是旧的"。
+
+**修法**：spa 阶段 `WORKDIR /build/frontend-admin`，outDir 解析成 `/build/backend/...`（和 COPY --from 一致）。
+
+> 教训：vite outDir 相对路径 + docker 多阶段 WORKDIR 是组合陷阱。本地 `make run` 时 vite 在 `frontend-admin/` 里跑、解析正确，**docker 多阶段的 WORKDIR 和本地 cwd 不一致才暴露**——本地测试覆盖不了 docker 的路径正确性。
+
+**踩坑三：ONNX glibc vs Alpine musl（库加载失败）**
+
+见上面"运行时镜像"——`libonnxruntime.so` 要 glibc，Alpine 是 musl。本地 WSL2 是 glibc 直接能跑，docker 用 alpine 才暴露。
+
+> 共同教训（三个坑都是）：**本地 `make run` 和 `docker build/deploy` 是两套完全不同的构建/运行路径**。前者从不触发 docker 的卷遮蔽、多阶段路径错位、libc 兼容问题。本地测过的 docker 不一定能跑——这是真实的测试盲区。要彻底消除，得让本地也用 docker 跑（加 `make run-docker` 目标，未来工作）。
+
+### 镜像大小现状 + 优化方向（下阶段）
+
+当前镜像 **~665MB**（用户判定不可接受，下阶段必做优化）。`docker history` 占比：
+- **apt `ffmpeg` ~470MB** ← 绝对大头。代码只用 ffprobe（metadata）+ ffmpeg 截一帧/提封面（`extractScreenshot`/`extractEmbeddedCover`，不转码），但 apt ffmpeg 拖了全套 libav codec 依赖。
+- ONNX 模型 ~47MB（必要，baked-in）
+- debian-slim 基础 ~75MB
+- Go 二进制 ~14MB（没 UPX 压缩）
+
+优化方向（详见 handoff-ai-round3-ux.md）：
+1. **换静态 ffmpeg/ffprobe**（最大收益，省 ~390MB）：ffbinaries 预编译静态版替代 apt ffmpeg。本次试过但 GitHub download 在 docker build 里 404，待查。
+2. **go-mp4 纯库读 metadata**：若视频都是 MP4，`github.com/abema/go-mp4` 纯 Go 解析 box，零外部依赖——但 mkv/avi 不支持。
+3. UPX 压缩二进制（小收益）、probe worker 外置（架构级，本次不动）。
