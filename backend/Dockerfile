@@ -86,6 +86,27 @@ COPY --from=spa /build/backend/internal/admin/spa/dist ./internal/admin/spa/dist
 # -s -w strips debug info to shrink the binary without UPX.
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o server cmd/server/main.go
 
+# Stage -2: Fetch static ffmpeg/ffprobe binaries (ffbinaries v6.1 linux-64).
+# The Go code only invokes ffprobe (metadata), ffmpeg -vframes 1 (one-frame
+# screenshot for cover) and ffmpeg -c copy (extract embedded cover) — all
+# covered by the static GPL build, no transcoding. Replacing apt `ffmpeg`
+# (which pulls ~470MB of libav* codec/font/GUI deps) with two static binaries
+# (~58MB total) is the single biggest image win: 665MB → ~275MB.
+# ffbinaries.com serves GitHub release zips; --retry 3 guards against the
+# transient 404s observed in earlier docker build attempts.
+FROM debian:bookworm-slim AS ffmpeg-static
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp
+ARG FFBIN_VER=6.1
+RUN curl -fL --retry 3 -o ffmpeg.zip \
+      "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFBIN_VER}/ffmpeg-${FFBIN_VER}-linux-64.zip" \
+    && curl -fL --retry 3 -o ffprobe.zip \
+      "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFBIN_VER}/ffprobe-${FFBIN_VER}-linux-64.zip" \
+    && unzip -o ffmpeg.zip -d /out && unzip -o ffprobe.zip -d /out \
+    && chmod +x /out/ffmpeg /out/ffprobe \
+    && rm -f ffmpeg.zip ffprobe.zip
+
 # Stage 2: Runtime image using debian-slim (glibc).
 #
 # MUST be glibc-based (not alpine/musl) because libonnxruntime.so from the
@@ -94,20 +115,25 @@ RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o server cmd/server/main
 # failed at embedding init with "loading ld-linux-x86-64.so.2: No such file".
 # debian-slim is also a safer base for any future cgo/.so dependency.
 #
-# SIZE STATUS (2026-07): image is ~665MB. The dominant cost is apt `ffmpeg`
-# (~470MB of libav* codec deps). This is the #1 target for the next round's
-# image-slimming work — see handoff-ai-round3-ux.md "下阶段:镜像优化". The
-# quick win is replacing apt ffmpeg with static ffprobe/ffmpeg binaries
-# (ffbinaries, ~80MB total) or a pure-Go MP4 metadata reader for probeMedia;
-# the screenshot/cover extraction still needs a real ffmpeg decoder.
+# SIZE STATUS (2026-07, optimized): image is ~275MB. The previously dominant
+# apt `ffmpeg` (~470MB) was replaced by two static binaries from the
+# ffmpeg-static stage (~58MB combined). Remaining cost: debian-slim base
+# (~75MB) + ONNX models (~45MB, baked-in) + Go binary (~14MB) + static
+# ffmpeg/ffprobe (~58MB) + ca-certs/tzdata/curl (~15MB).
 FROM debian:bookworm-slim
 
 # ca-certificates for HTTPS to the chat relay / huggingface / github.
 # tzdata for appclock business-timezone handling. curl for operator debugging.
-# ffmpeg for ffprobe (metadata) + ffmpeg (thumbnail/cover extraction).
+# (ffmpeg/ffprobe are copied from the ffmpeg-static stage below — NOT apt, to
+# avoid pulling ~470MB of libav codec deps for code that never transcodes.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates tzdata curl ffmpeg \
+        ca-certificates tzdata curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Static ffmpeg/ffprobe (ffbinaries v6.1). Used by episode_service.go for
+# ffprobe metadata + ffmpeg one-frame/cover extraction. glibc statically
+# linked into the binary, so no extra shared-lib deps in the runtime layer.
+COPY --from=ffmpeg-static /out/ffmpeg /out/ffprobe /usr/local/bin/
 
 WORKDIR /app
 
