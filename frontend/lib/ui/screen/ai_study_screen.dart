@@ -6,10 +6,11 @@ import '../../service/api_service.dart';
 import '../../service/quiz_draft_store.dart';
 import 'player_screen.dart';
 
-// AiStudyScreen — the Phase C AI learning page. Two sections:
-//   1. AI summary (headline / key points / concepts / takeaway) — read from
-//      /ai-summary. The LLM's agent_feedback (study advice) shows here too.
-//   2. Practice tab — fetch the quiz (lazily generated, polls while generating),
+// AiStudyScreen — the Phase C AI learning page. Three sections:
+//   1. AI summary (headline / sections / concepts / takeaway) — read from /ai-summary.
+//   2. 学习建议 (advice) — read from /ai-advice (advice agent, lazily generated +
+//      polled while generating). The sole source for study advice; no fallback.
+//   3. Practice tab — fetch the quiz (lazily generated, polls while generating),
 //      then the Phase B "统一提交" flow:
 //        a) answering(作答中):所有题展示,选择/填空可改,底部"提交全部"。不立即判分。
 //           草稿(未提交的选择/填空)按 (uid, eid) 缓存到本地,防止切后台丢失。
@@ -43,6 +44,13 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   bool _quizLoading = true;
   Timer? _pollTimer;
 
+  // Advice(学习建议,agent 驱动)状态。和 quiz 同一套 lazy 生成 + 轮询模式:
+  // 首次访问触发后端入队 advice job,返回 generating;ready 时带 advice 文本。
+  // advice 是学习建议的唯一来源(不做降级)——unavailable/空时卡片直接隐藏。
+  StudyAdvice? _advice;
+  AdviceStatus? _adviceStatus;
+  Timer? _adviceTimer;
+
   // 本地已交卷标志。quiz.submitted(来自后端)或本地 _submitted=true 都表示"已交卷"。
   // 本地标志的存在是为了:用户点完"提交全部"、submit-all 成功后立即切到 submitted 态,
   // 不用等下次 fetch。
@@ -70,11 +78,13 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     _loadSummary();
     _loadQuiz();
     _loadHistory();
+    _loadAdvice();
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _adviceTimer?.cancel();
     _disposeFillControllers();
     super.dispose();
   }
@@ -206,6 +216,46 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     }
   }
 
+  // _loadAdvice 拉取 episode 级学习建议(agent 驱动,跨知识点分析)。和 _loadQuiz 同构:
+  // 首次访问后端 lazy 入队 advice job,返回 generating;ready 时带 advice 文本。
+  // generating → 轮询直到 ready。best-effort:失败不阻断页面,建议卡片保持隐藏。
+  Future<void> _loadAdvice() async {
+    try {
+      final resp = await ApiService.fetchEpisodeAdvice(widget.activeUserId, widget.episode.id);
+      if (!mounted) return;
+      setState(() {
+        _adviceStatus = resp.status;
+        _advice = resp.advice;
+      });
+      if (resp.status == AdviceStatus.generating) {
+        _startAdvicePolling();
+      }
+    } catch (_) {
+      // best-effort:失败保持建议隐藏,不阻断页面。
+    }
+  }
+
+  // _startAdvicePolling:generating 时每 3s 拉一次,直到 ready(advice agent 跨知识点
+  // 分析可能比出题慢一些)。和 quiz 的 _startPolling 同模式。
+  void _startAdvicePolling() {
+    _adviceTimer?.cancel();
+    _adviceTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      try {
+        final resp = await ApiService.fetchEpisodeAdvice(widget.activeUserId, widget.episode.id);
+        if (!mounted) return;
+        if (resp.status == AdviceStatus.ready) {
+          _adviceTimer?.cancel();
+          setState(() {
+            _adviceStatus = resp.status;
+            _advice = resp.advice;
+          });
+        }
+      } catch (_) {
+        // 瞬时错误继续轮询
+      }
+    });
+  }
+
   // _submitAll 是 Phase B 的统一交卷:把整张卷子的选择/填空一次性提交给后端判分。
   // 后端返回的 results 列表与 _quiz.questions 顺序一一对应(位置映射,不是 id),
   // 这里把 results[i] 填到 _results[questions[i].id]。成功后:本地 _submitted=true
@@ -265,6 +315,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       });
       // 交卷成功,草稿作废。
       QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
+      // 交卷成功后后端链式 enqueue 了 episode 级 advice job(学生刚交完卷 memory 最新,
+      // 这时跑 advice 最准)。重新拉 advice 触发轮询,让学生交卷后能很快看到复习建议。
+      _loadAdvice();
     } catch (e) {
       if (mounted) {
         setState(() => _submittingAll = false);
@@ -348,7 +401,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         children: [
           _buildSummarySection(),
           const SizedBox(height: 16),
-          _buildAgentFeedbackCard(),
+          _buildAdviceCard(),
           const SizedBox(height: 16),
           _buildQuizSection(),
           const SizedBox(height: 16),
@@ -513,10 +566,30 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     );
   }
 
-  // --- Agent feedback (study advice) ---
-  Widget _buildAgentFeedbackCard() {
-    final feedback = _quiz?.agentFeedback ?? '';
-    if (feedback.isEmpty) return const SizedBox.shrink();
+  // --- 学习建议区(advice agent 驱动) ---
+  //
+  // 唯一来源是 advice agent(跨知识点读 mastery 后的综合分析)。advice 不可用或为空
+  // 时直接隐藏卡片——不做任何降级(quiz 的 agent_feedback 副产品不再在这里展示,
+  // 避免和 advice 语义重复)。
+  Widget _buildAdviceCard() {
+    // generating 态:advice 正在生成,展示占位卡片(比直接隐藏更连贯)。
+    if (_adviceStatus == AdviceStatus.generating) {
+      return const _Card(
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Row(children: [
+            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            SizedBox(width: 10),
+            Text('正在分析你的学习情况…', style: TextStyle(fontSize: 13, color: Color(0xFF64748B))),
+          ]),
+        ),
+      );
+    }
+    // advice ready 且非空才展示;unavailable 或空 → 隐藏(AI 未配置 / 尚无 mastery 时正常)。
+    final advice = (_adviceStatus == AdviceStatus.ready && _advice != null && !_advice!.isEmpty)
+        ? _advice!.adviceText
+        : '';
+    if (advice.isEmpty) return const SizedBox.shrink();
     return _Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Row(children: [
@@ -525,7 +598,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
         ]),
         const SizedBox(height: 8),
-        Text(feedback, style: const TextStyle(fontSize: 13, color: Color(0xFF334155), height: 1.5)),
+        Text(advice, style: const TextStyle(fontSize: 13, color: Color(0xFF334155), height: 1.5)),
       ]),
     );
   }
@@ -845,6 +918,14 @@ class _QuestionCard extends StatelessWidget {
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: r.correct ? const Color(0xFF059669) : const Color(0xFFDC2626)),
           ),
         ]),
+        // 填空题回放学生当时填的原文(优先后端回填的 user_answer_text,回退 controller 里的
+        // 当前文本——刚交卷时后端回填还没 fetch 回来,controller 仍持有输入值)。答对了也展示,
+        // 让学生确认自己填对了什么;漏答(空串)不展示这行。
+        if (question.isFill) ...[
+          const SizedBox(height: 4),
+          Text('你填的: ${question.userAnswerText.isNotEmpty ? question.userAnswerText : (fillController?.text ?? '')}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+        ],
         if (!r.correct && r.correctText.isNotEmpty) ...[
           const SizedBox(height: 4),
           Text('正确答案: ${r.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155))),
@@ -1021,15 +1102,33 @@ class _HistoryQuestionTile extends StatelessWidget {
   }
 
   Widget _buildFillAnswer() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-      decoration: BoxDecoration(
-        color: const Color(0xFFECFDF5),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: const Color(0xFF10B981)),
+    // 填空题历史回放:展示学生当时填的原文(q.userText,后端 Answer.UserAnswerText 回填)
+    // + 正确答案。漏答(userText 空)只显示正确答案,不显示空行。
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      if (q.userText.isNotEmpty) ...[
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+          decoration: BoxDecoration(
+            color: q.wrong ? const Color(0xFFFEF2F2) : const Color(0xFFECFDF5),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: q.wrong ? const Color(0xFFFECACA) : const Color(0xFFBBF7D0)),
+          ),
+          child: Text('你填的: ${q.userText}',
+              style: TextStyle(fontSize: 12, color: q.wrong ? const Color(0xFFB91C1C) : const Color(0xFF15803D))),
+        ),
+        const SizedBox(height: 4),
+      ],
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFFECFDF5),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: const Color(0xFF10B981)),
+        ),
+        child: Text('正确答案: ${q.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669))),
       ),
-      child: Text('正确答案: ${q.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669))),
-    );
+    ]);
   }
 }

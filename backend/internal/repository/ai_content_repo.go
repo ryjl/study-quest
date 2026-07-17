@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"studyquest/backend/internal/model"
 )
@@ -68,6 +69,14 @@ type AIContentRepository interface {
 	// ErrJobNotProcessing (non-fatal) if the job isn't currently processing, so
 	// the handler can surface "nothing to reset" instead of a silent no-op.
 	ResetJob(jobID uint) error
+	// RetryJob resets ONE failed job back to 'queued' on admin demand, so it can
+	// be re-run after the underlying problem (e.g. embedding was unavailable) is
+	// fixed. Unlike ResetJob (which targets stuck-but-alive processing jobs),
+	// RetryJob targets terminal 'failed' jobs — the only way to revive them,
+	// since failJob marks them failed without auto-retry (AI calls cost money,
+	// so we don't loop on a bad config). Returns ErrJobNotFailed if the job isn't
+	// currently failed (e.g. it already succeeded or was retried).
+	RetryJob(jobID uint) error
 
 	// ── ai_runs ──
 	CreateRun(run *model.AIRun) error
@@ -168,6 +177,12 @@ type AIContentRepository interface {
 // 'processing' state. The handler treats this as a non-fatal "nothing to do"
 // (the admin reset a job that already finished or was reaped) rather than 500.
 var ErrJobNotProcessing = errors.New("job is not in processing state")
+
+// ErrJobNotFailed is returned by RetryJob when the targeted job isn't in
+// 'failed' state. Non-fatal: the handler surfaces "nothing to retry" rather than
+// a silent no-op (which would hide a double-retry or a job that already
+// succeeded on a prior retry).
+var ErrJobNotFailed = errors.New("job is not in failed state")
 
 type aiContentRepo struct {
 	db *gorm.DB
@@ -385,6 +400,24 @@ func (r *aiContentRepo) ResetJob(jobID uint) error {
 	}
 	if res.RowsAffected == 0 {
 		return ErrJobNotProcessing
+	}
+	return nil
+}
+
+// RetryJob 把一条 failed 的 job 复位回 queued,让 worker 重新跑。和 ResetJob 的
+// 区别:ResetJob 针对 processing(卡住但 worker 还活着),RetryJob 针对 failed(终态,
+// 唯一复活途径——failJob 不自动重试)。WHERE status='failed' 防止误重置其他状态;
+// 非 failed 返回 ErrJobNotFailed,handler 据此返回 409 而非静默成功。
+// 不重置 attempt(让它累加,便于观察"这条重试过几次");清 claimed_at + error。
+func (r *aiContentRepo) RetryJob(jobID uint) error {
+	res := r.db.Exec(`UPDATE ai_jobs
+		SET status = 'queued', claimed_at = NULL, error = '', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status = 'failed'`, jobID)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrJobNotFailed
 	}
 	return nil
 }
@@ -679,19 +712,20 @@ func (r *aiContentRepo) GetAdvice(userID uint, scope string, scopeID uint) (*mod
 	return &a, nil
 }
 
-// UpsertAdvice 替换同一 (user, scope, scope_id) 上的旧 advice。Save 在主键冲突时
-// UPDATE,但我们靠 uniqueIndex(user_id, scope, scope_id) 保证只有一条——所以先删除
-// 旧的再插入,语义上更清晰(也避免 GORM Save 在没有主键时的行为歧义)。重新生成
-// 完全覆盖旧快照,符合 advice 的"当前建议"语义(不像 quiz 要保留历史)。
+// UpsertAdvice 替换同一 (user, scope, scope_id) 上的旧 advice。用 GORM
+// clause.OnConflict 走 INSERT ... ON CONFLICT DO UPDATE(和 UpsertMemoryOnAnswer 同
+// 语义),而不是之前的 delete-then-insert:功能等价(重新生成完全覆盖旧快照,符合 advice
+// 的"当前建议"语义——不像 quiz 要保留历史),且无 delete+insert 之间的并发窗口。
+// 冲突目标 = uniqueIndex(user_id, scope, scope_id);更新所有可变业务列。
 func (r *aiContentRepo) UpsertAdvice(a *model.StudyAdvice) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		// 清掉同 key 的旧行(若有)。WHERE 命中 unique index 上的三列,精确。
-		if err := tx.Where("user_id = ? AND scope = ? AND scope_id = ?", a.UserID, a.Scope, a.ScopeID).
-			Delete(&model.StudyAdvice{}).Error; err != nil {
-			return err
-		}
-		return tx.Create(a).Error
-	})
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "user_id"}, {Name: "scope"}, {Name: "scope_id"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"advice_text", "mastery_snapshot_json", "model_used", "generated_at", "updated_at",
+		}),
+	}).Create(a).Error
 }
 
 // --- ai_course_summaries (Phase D: course-unique 课程级总结) ---
@@ -710,17 +744,14 @@ func (r *aiContentRepo) GetCourseSummary(courseID uint) (*model.AICourseSummary,
 	return &s, nil
 }
 
-// UpsertCourseSummary 替换同一 course_id 上的旧课程总结。先删后插(同 UpsertAdvice 语义),
-// 语义上更清晰:重新生成完全覆盖旧总结,符合课程总结的"当前导览"语义(course-unique,所有
-// 学生共享,不需要历史)。unique index on course_id 是 DB 级守卫。
+// UpsertCourseSummary 替换同一 course_id 上的旧课程总结(ON CONFLICT,同 UpsertAdvice 语义):
+// 重新生成完全覆盖旧总结,符合课程总结的"当前导览"语义(course-unique,所有学生共享,不需要
+// 历史)。冲突目标 = uniqueIndex(course_id);更新所有可变业务列。
 func (r *aiContentRepo) UpsertCourseSummary(s *model.AICourseSummary) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("course_id = ?", s.CourseID).
-			Delete(&model.AICourseSummary{}).Error; err != nil {
-			return err
-		}
-		return tx.Create(s).Error
-	})
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "course_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"summary_text", "model_used", "generated_at", "updated_at"}),
+	}).Create(s).Error
 }
 
 // --- user_study_reports (Phase E: admin 跨课程学习报告) ---
@@ -738,15 +769,12 @@ func (r *aiContentRepo) GetUserStudyReport(userID uint) (*model.UserStudyReport,
 	return &rep, nil
 }
 
-// UpsertUserStudyReport 替换该用户的旧报告——delete-then-insert,和 UpsertAdvice 同
-// 语义(unique index on user_id 是 DB 守卫)。重新生成完全覆盖旧报告,符合"当前最新
-// 画像"的语义。事务内 delete+create,避免并发生成时出现两条(user_id unique 会拦,
-// 但事务更稳)。
+// UpsertUserStudyReport 替换该用户的旧报告(ON CONFLICT,同 UpsertAdvice 语义):
+// 重新生成完全覆盖旧报告,符合"当前最新画像"的语义。冲突目标 = uniqueIndex(user_id);
+// 更新所有可变业务列。无 delete+insert 并发窗口。
 func (r *aiContentRepo) UpsertUserStudyReport(rep *model.UserStudyReport) error {
-	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("user_id = ?", rep.UserID).Delete(&model.UserStudyReport{}).Error; err != nil {
-			return err
-		}
-		return tx.Create(rep).Error
-	})
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "user_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"report_text", "model_used", "generated_at", "updated_at"}),
+	}).Create(rep).Error
 }

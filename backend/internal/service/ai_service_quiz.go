@@ -59,7 +59,9 @@ type QuizViewQuestion struct {
 	// 未交卷时为零值/omitempty,不暴露正确答案。交卷后从这里就能 review 当时的结果,
 	// 不必再调 submit(交卷后不能再提交)。
 	UserAnswerIndex *int   `json:"user_answer_index,omitempty"` // choice: 学生当时选的索引
-	UserAnswerText  string `json:"user_answer_text,omitempty"`  // fill: 学生当时填的
+	// UserAnswerText 是填空题学生当时填的原文(交卷后回填,用于"你填的 X"回放)。
+	// 之前因 Answer 表只有 int 列存不下,现在补上 Answer.UserAnswerText 后可回放。
+	UserAnswerText string `json:"user_answer_text,omitempty"` // fill: 学生当时填的
 	Correct         bool   `json:"correct,omitempty"`           // 这题对不对(交卷后才有意义)
 	CorrectIndex    *int   `json:"correct_index,omitempty"`     // choice: 正确选项索引
 	CorrectText     string `json:"correct_text,omitempty"`      // fill: 标准答案
@@ -126,12 +128,13 @@ type QuizDetailQuestion struct {
 
 // QuizDetailAnswer is one student-answer row (append-only history).
 type QuizDetailAnswer struct {
-	ID         int      `json:"id"`
-	QuestionID uint     `json:"question_id"`
-	UserID     uint     `json:"user_id"`
-	UserAnswer int      `json:"user_answer"`
-	Correct    bool     `json:"correct"`
-	AnsweredAt string   `json:"answered_at"`
+	ID             int    `json:"id"`
+	QuestionID     uint   `json:"question_id"`
+	UserID         uint   `json:"user_id"`
+	UserAnswer     int    `json:"user_answer"`       // choice: 0-based index; fill: -1
+	UserAnswerText string `json:"user_answer_text"`  // fill: 学生原文(choice 题为空)
+	Correct        bool   `json:"correct"`
+	AnsweredAt     string `json:"answered_at"`
 }
 
 // QuizDetailMastery is one per-chunk memory row.
@@ -324,11 +327,12 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	memory := agent.NewMemoryStore(s.contentRepo) // contentRepo implements agent.MemoryRepo
 	toolbox := agent.NewQuizToolbox(deps, memory, emb, job.EpisodeID, userID, job.CourseID)
 	// MaxTokens is generous on the generation turn: the final answer is a
-	// multi-question quiz JSON with per-question explanations, which runs
-	// 1500-2500 tokens. Without an explicit cap the relay/model default can be
-	// small (we saw ~1197-token truncation), cutting the JSON mid-generation and
-	// breaking parsing. 4000 leaves comfortable headroom.
-	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 6, MaxTokens: 4000})
+	// multi-question quiz JSON with per-question explanations. Round 3 raised the
+	// question count to 8-12 and demands stronger distractors + reasoning-based
+	// stems, which pushes output to ~3000-5000 tokens. Without an explicit cap the
+	// relay/model default can be small (we saw ~1197-token truncation), cutting the
+	// JSON mid-generation and breaking parsing. 6000 leaves comfortable headroom.
+	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 6, MaxTokens: 6000})
 	checkAgent := agent.NewAgent(llm, modelName, nil, agent.AgentOpts{MaxSteps: 1, MaxTokens: 800}) // self-check: short verdict
 	quizzer := agent.NewQuizzer(genAgent, checkAgent, memory, deps, llm, modelName)
 
@@ -601,6 +605,9 @@ func (s *aiService) GetQuizForClient(userID, episodeID uint) (*QuizView, error) 
 				if q.Type == "choice" {
 					idx := a.UserAnswer
 					qv.UserAnswerIndex = &idx
+				} else {
+					// 填空题回放学生原文(Answer.UserAnswerText 已持久化)。
+					qv.UserAnswerText = a.UserAnswerText
 				}
 				qv.Correct = a.Correct
 			}
@@ -649,14 +656,16 @@ func (s *aiService) SubmitQuizAnswer(userID, questionID uint, answerIndex *int, 
 
 	// Record the answer (append-only). QuizID is snapshotted so the answer
 	// survives a future regenerate (换题 deletes the question but the answer's
-	// QuizID + the memory state persist).
+	// QuizID + the memory state persist). UserAnswerText 持久化填空题原文,
+	// 让交卷后 / 历史 review 能回放"你当时填的什么"(choice 题留空)。
 	s.contentRepo.CreateAnswer(&model.Answer{
-		QuestionID: questionID,
-		QuizID:     quiz.ID,
-		UserID:     userID,
-		UserAnswer: idx,
-		Correct:    correct,
-		AnsweredAt: time.Now(),
+		QuestionID:     questionID,
+		QuizID:         quiz.ID,
+		UserID:         userID,
+		UserAnswer:     idx,
+		UserAnswerText: txt,
+		Correct:        correct,
+		AnsweredAt:     time.Now(),
 	})
 
 	// Update memory (feedback loop). No-op for synthetic questions (chunkID=0).
@@ -773,12 +782,13 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 		if answered {
 			correct = agent.GradeAnswer(q, idx, txt)
 			s.contentRepo.CreateAnswer(&model.Answer{
-				QuestionID: q.ID,
-				QuizID:     quiz.ID,
-				UserID:     userID,
-				UserAnswer: idx,
-				Correct:    correct,
-				AnsweredAt: now,
+				QuestionID:     q.ID,
+				QuizID:         quiz.ID,
+				UserID:         userID,
+				UserAnswer:     idx,
+				UserAnswerText: txt,
+				Correct:        correct,
+				AnsweredAt:     now,
 			})
 			// 更新 memory(feedback loop)。合成题(chunkID=0)是 no-op。
 			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, correct); err != nil {
@@ -977,12 +987,13 @@ func (s *aiService) GetQuizDetail(quizID uint) (*QuizDetail, error) {
 	detailAnswers := make([]QuizDetailAnswer, 0, len(rawAnswers))
 	for _, a := range rawAnswers {
 		detailAnswers = append(detailAnswers, QuizDetailAnswer{
-			ID:         int(a.ID),
-			QuestionID: a.QuestionID,
-			UserID:     a.UserID,
-			UserAnswer: a.UserAnswer,
-			Correct:    a.Correct,
-			AnsweredAt: a.AnsweredAt.Format("2006-01-02 15:04:05"),
+			ID:             int(a.ID),
+			QuestionID:     a.QuestionID,
+			UserID:         a.UserID,
+			UserAnswer:     a.UserAnswer,
+			UserAnswerText: a.UserAnswerText,
+			Correct:        a.Correct,
+			AnsweredAt:     a.AnsweredAt.Format("2006-01-02 15:04:05"),
 		})
 	}
 	rawMasteries, _ := s.contentRepo.GetMasteries(quiz.UserID, quiz.EpisodeID)
@@ -1127,14 +1138,11 @@ func (s *aiService) buildQuizHistoryView(quiz *model.Quiz) (*QuizHistoryView, er
 			i := q.Answer
 			hq.CorrectIndex = &i
 		}
-		// 回放学生当时的作答:选择题给索引,填空题给原文。未作答的题两字段都为零值
-		// (UserIndex=nil,UserText=""),前端据此显示"未作答"。
+		// 回放学生当时的作答:选择题给索引,填空题给原文(Answer.UserAnswerText)。
+		// 未作答的题两字段都为零值(UserIndex=nil,UserText=""),前端据此显示"未作答"。
 		if ans, ok := latestByQ[q.ID]; ok {
 			if q.Type == agent.QuestionFill {
-				// Answer.UserAnswer 对填空题没有意义(填空判分是文本归一化匹配,
-				// 我们没把原文存进 answer 行)。所以历史里填空题只展示对错和正确答案,
-				// 不回放学生原文——这是既有存储的限制,不在 Phase B 范围内补。
-				hq.UserText = ""
+				hq.UserText = ans.UserAnswerText
 			} else if ans.UserAnswer >= 0 {
 				idx := ans.UserAnswer
 				hq.UserIndex = &idx

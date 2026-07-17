@@ -118,6 +118,8 @@ class QuizQuestion {
   // ── 仅在 quiz 已交卷(submitted)时由后端回填 ──
   // 未交卷时为零值(后端 omitempty 不下发),不泄露答案。交卷后重进页面能 review。
   final int? userAnswerIndex; // choice: 学生当时选的索引
+  // 填空题学生当时填的原文(交卷后回填,用于"你填的 X"回放)。后端 Answer.UserAnswerText。
+  final String userAnswerText; // fill: 学生当时填的
   final bool correct; // 这题对不对(交卷后才有意义)
   final int? correctIndex; // choice: 正确选项索引
   final String correctText; // fill: 标准答案
@@ -132,6 +134,7 @@ class QuizQuestion {
     required this.answered,
     this.hasJump = false,
     this.userAnswerIndex,
+    this.userAnswerText = '',
     this.correct = false,
     this.correctIndex,
     this.correctText = '',
@@ -149,6 +152,7 @@ class QuizQuestion {
         answered: (j['answered'] ?? false) as bool,
         hasJump: (j['has_jump'] ?? false) as bool,
         userAnswerIndex: j['user_answer_index'] == null ? null : (j['user_answer_index'] as num).toInt(),
+        userAnswerText: (j['user_answer_text'] ?? '').toString(),
         correct: (j['correct'] ?? false) as bool,
         correctIndex: j['correct_index'] == null ? null : (j['correct_index'] as num).toInt(),
         correctText: (j['correct_text'] ?? '').toString(),
@@ -347,6 +351,66 @@ class ArchivedQuizView {
       wrongCount: (j['wrong_count'] as num?)?.toInt() ?? 0,
       agentFeedback: (j['agent_feedback'] ?? '').toString(),
       questions: qs,
+    );
+  }
+}
+
+// --- Phase C advice (agent 驱动的学习建议) ---
+//
+// 镜像后端 adviceResponse(GET /episodes|courses|subjects/:id/ai-advice)。
+// 和 quiz 同一套 lazy 生成 + 轮询模式:首次访问触发后端入队 advice job,返回
+// generating;ready 时带 advice 对象(advice agent 的自然语言 FinalText)。
+// 区别于 quiz 的"单次出题"——advice 是跨知识点/跨课程读 mastery 后的综合分析。
+
+/// advice 端点的状态,和 QuizStatus 同构。
+enum AdviceStatus { ready, generating, unavailable }
+
+/// 一条学习建议(后端 model.StudyAdvice 的客户端镜像)。advice_text 是 agent 的
+/// 自然语言输出(可能跨多个知识点),generated_at 是生成时间。
+class StudyAdvice {
+  final String scope; // episode | course | subject
+  final int scopeId;
+  final String adviceText;
+  final String modelUsed;
+  final String generatedAt; // ISO 时间串,展示时按需格式化
+
+  const StudyAdvice({
+    required this.scope,
+    required this.scopeId,
+    required this.adviceText,
+    this.modelUsed = '',
+    this.generatedAt = '',
+  });
+
+  factory StudyAdvice.fromJson(Map<String, dynamic> j) => StudyAdvice(
+        scope: (j['scope'] ?? 'episode').toString(),
+        scopeId: (j['scope_id'] as num?)?.toInt() ?? 0,
+        adviceText: (j['advice_text'] ?? '').toString(),
+        modelUsed: (j['model_used'] ?? '').toString(),
+        generatedAt: (j['generated_at'] ?? '').toString(),
+      );
+
+  bool get isEmpty => adviceText.isEmpty;
+}
+
+/// GET /ai-advice 的响应:status + (ready 时)advice。和 QuizResponse 同构。
+class AdviceResponse {
+  final AdviceStatus status;
+  final StudyAdvice? advice;
+
+  const AdviceResponse({required this.status, this.advice});
+
+  factory AdviceResponse.fromJson(Map<String, dynamic> j) {
+    final s = (j['status'] ?? 'unavailable').toString();
+    final status = {
+          'ready': AdviceStatus.ready,
+          'generating': AdviceStatus.generating,
+        }[s] ??
+        AdviceStatus.unavailable;
+    final a = j['advice'];
+    return AdviceResponse(
+      status: status,
+      advice: a is Map<String, dynamic> ? StudyAdvice.fromJson(a) : null,
     );
   }
 }

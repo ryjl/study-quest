@@ -941,7 +941,7 @@ type AIProvider struct {
 // done|failed|skipped.
 type AIJob struct {
 	ID          uint       `gorm:"primaryKey;autoIncrement"`
-	JobType     string     `gorm:"size:20;not null;index"` // segment | summary | quiz | advice
+	JobType     string     `gorm:"size:20;not null;index"` // segment | summary | quiz | advice | course_summary | user_report
 	EpisodeID   uint       `gorm:"index;not null"`
 	CourseID    uint       `gorm:"index;not null"`
 	UserID      *uint      `gorm:"index"` // nullable: segment/summary leave it NULL; quiz jobs bind to a specific user (per-user adaptive generation)
@@ -1084,8 +1084,6 @@ type Question struct {
 
 // Answer records one user answer to one Question (append-only). Written on
 // submit, then used to update KnowledgeMemory (the feedback loop).
-// Answer records one user answer to one Question (append-only). Written on
-// submit, then used to update KnowledgeMemory (the feedback loop).
 //
 // QuizID is a DENORMALIZED snapshot of the question's quiz at answer time. It
 // lets us list a user's answer history for an episode WITHOUT joining questions
@@ -1095,14 +1093,26 @@ type Question struct {
 // per (user, episode) at a time, but the quiz row gets a new ID on each regen;
 // the old QuizID values on historical answers point to deleted quiz rows, which
 // is fine — we group by the current quiz's episode instead.)
+//
+// Two answer shapes coexist by question type:
+//   - choice: UserAnswer holds the 0-based option index; UserAnswerText is "".
+//   - fill:   UserAnswerText holds the student's free-text answer verbatim
+//     (previously discarded after grading — the answer could only be shown as
+//     correct/wrong, never "你当时填的 X"). UserAnswer is -1 (meaningless for
+//     fill). Grading still uses NormalizeText matching against
+//     Question.AnswerText; this column is purely for回放 in submitted review +
+//     history, so the student can see what they typed.
 type Answer struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement"`
 	QuestionID uint      `gorm:"index;not null"`
 	QuizID     uint      `gorm:"index"` // snapshot of the question's quiz at answer time; survives question deletion on regen
 	UserID     uint      `gorm:"index;not null"`
-	UserAnswer int       // 0-based index the user picked
-	Correct    bool
-	AnsweredAt time.Time
+	UserAnswer int       // choice: 0-based index the user picked; fill: -1 (meaningless)
+	// UserAnswerText 是填空题学生的原文(choice 题为空)。交卷后 / 历史 review 里回放
+	// "你当时填的什么"用这个字段;判分仍走 Question.AnswerText 的归一化匹配,不依赖它。
+	UserAnswerText string `gorm:"type:text"`
+	Correct        bool
+	AnsweredAt     time.Time
 }
 
 // AIRun records ONE LLM call's decision trace — input snapshot, the raw model

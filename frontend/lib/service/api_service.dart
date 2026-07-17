@@ -302,6 +302,24 @@ class ApiService {
     _fail(response.statusCode, '获取历史练习失败: ${response.statusCode}');
   }
 
+  /// Phase C 学习建议(agent 驱动)。GET /episodes/:id/ai-advice。
+  /// 和 fetchEpisodeQuiz 同一套 lazy 生成 + 轮询:200/202 → parse adviceResponse;
+  /// 404 → unavailable(AI 未配置 / 无 mastery)。首次访问触发后端入队 advice job,
+  /// 返回 generating,调用方轮询直到 ready。
+  static Future<AdviceResponse> fetchEpisodeAdvice(int activeUserId, int episodeId) async {
+    final response = await _httpClient.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-advice'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200 || response.statusCode == 202) {
+      return AdviceResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 404) {
+      return const AdviceResponse(status: AdviceStatus.unavailable);
+    }
+    _fail(response.statusCode, '获取学习建议失败: ${response.statusCode}');
+  }
+
   // 6. Fetch play info (resolves direct streaming URL and custom HTTP headers for netdisk bypass)
   static Future<PlayInfo> fetchPlayInfo(int activeUserId, int episodeId) async {
     final response = await _httpClient.get(
