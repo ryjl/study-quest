@@ -1,29 +1,41 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"studyquest/backend/internal/model"
 )
 
-// storageSourceDTO is the JSON shape for a StorageSource row. Mirrors the model
-// field-for-field; IsDefault lets the SPA mark the default row in the list.
+// storageSourceDTO is the JSON shape for a StorageSource row. Password and
+// Token are write-only secrets: they are NEVER echoed back on read (see
+// toStorageSourceDTO, which returns them empty) and on update an empty value
+// means "keep the existing secret" (see UpdateStorageSource). This mirrors the
+// AIProvider api_key handling in admin_ai.go and the admin-password convention
+// ("leave blank = don't modify"). At-rest encryption is a separate PR.
 type storageSourceDTO struct {
 	ID        uint   `json:"id"`
 	Name      string `json:"name"`
 	Type      string `json:"type"` // "alist" | "webdav"
 	URL       string `json:"url"`
 	Username  string `json:"username"`
-	Password  string `json:"password"` // returned as-is (plaintext; encryption is a separate PR)
-	Token     string `json:"token"`
+	Password  string `json:"password"` // write-only: never echoed back on read
+	Token     string `json:"token"`     // write-only: never echoed back on read
 	IsDefault bool   `json:"is_default"`
 }
 
+// toStorageSourceDTO converts a model row to its DTO, STRIPPING Password and
+// Token. These are secrets; the admin UI shows masked "leave blank to keep"
+// fields rather than the real values, so the list/detail endpoints must never
+// return them. (Same posture as toAIProviderDTO; plaintext-at-rest encryption
+// is tracked as a separate cross-cutting task.)
 func toStorageSourceDTO(s model.StorageSource) storageSourceDTO {
 	return storageSourceDTO{
 		ID: s.ID, Name: s.Name, Type: s.Type, URL: s.URL,
-		Username: s.Username, Password: s.Password, Token: s.Token,
+		Username:  s.Username,
+		Password:  "", // never echo back
+		Token:     "", // never echo back
 		IsDefault: s.IsDefault,
 	}
 }
@@ -119,8 +131,16 @@ func (h *adminHandler) UpdateStorageSource(c *gin.Context) {
 	src.Type = req.Type
 	src.URL = req.URL
 	src.Username = req.Username
-	src.Password = req.Password
-	src.Token = req.Token
+	// "blank = keep" convention (same as AIProvider.api_key): the admin UI can't
+	// see the secret (GET strips it), so it sends an empty string for Password
+	// and Token when the operator didn't retype them. An empty incoming value
+	// means "don't modify" — only overwrite when a non-empty value arrives.
+	if req.Password != "" {
+		src.Password = req.Password
+	}
+	if req.Token != "" {
+		src.Token = req.Token
+	}
 	if req.IsDefault && !src.IsDefault {
 		if err := h.storageSourceRepo.ClearDefault(); err != nil {
 			respondError(c, err)
@@ -138,7 +158,11 @@ func (h *adminHandler) UpdateStorageSource(c *gin.Context) {
 	c.JSON(http.StatusOK, toStorageSourceDTO(*src))
 }
 
-// DeleteStorageSource deletes a storage source by id.
+// DeleteStorageSource deletes a storage source by id. It REFUSES (409) if any
+// episode or reading book still references the source — deleting a source in
+// use would orphan those rows (source_id has no FK, so nothing cascades) and
+// silently break their playback + disaster-recovery lookup. The 409 body names
+// the counts so the admin knows what to migrate/delete first.
 // DELETE /admin/api/storage-sources/:id
 func (h *adminHandler) DeleteStorageSource(c *gin.Context) {
 	if h.storageSourceRepo == nil {
@@ -148,6 +172,19 @@ func (h *adminHandler) DeleteStorageSource(c *gin.Context) {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid source ID"})
+		return
+	}
+	episodes, books, err := h.storageSourceRepo.CountReferences(id)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if episodes > 0 || books > 0 {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":    fmt.Sprintf("该存储源被 %d 个课时、%d 本书引用，请先迁移或删除这些内容", episodes, books),
+			"episodes": episodes,
+			"books":    books,
+		})
 		return
 	}
 	if err := h.storageSourceRepo.Delete(id); err != nil {

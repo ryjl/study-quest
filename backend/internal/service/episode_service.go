@@ -15,6 +15,8 @@ import (
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
+
+	"gorm.io/gorm"
 )
 
 // EpisodeService manages business operations for Course Episodes.
@@ -30,6 +32,13 @@ type EpisodeService interface {
 	UpdateEpisodeAdmin(id uint, chapterID *uint, title, videoPath string, sortOrder int) (*model.Episode, error)
 	DeleteEpisode(id uint) error
 	ReorderEpisodes(episodeIDs []uint) error
+	// BulkMoveEpisodes reassigns the given episodes to a different chapter
+	// (chapterID == 0 → uncategorized). It validates that every episode belongs
+	// to the SAME course as the target chapter (refuses cross-course moves),
+	// resets each moved episode's sort_order so it appends to the end of the
+	// destination chapter's existing ordering, and applies all writes in one
+	// transaction. Returns ErrEpisodeMoveCrossCourse on a membership mismatch.
+	BulkMoveEpisodes(episodeIDs []uint, chapterID uint) error
 
 	// Subtitles
 	GetSubtitle(episodeID uint) (*model.Subtitle, error)
@@ -53,17 +62,46 @@ type EpisodeService interface {
 	Probe(episodeID uint) (*model.MediaMeta, error)
 }
 
+// ErrEpisodeMoveCrossCourse is returned by BulkMoveEpisodes when one or more
+// episodes don't belong to the same course as the target chapter. Episodes are
+// strictly scoped to their owning course, so a cross-course move would orphan
+// them in the wrong tree; the handler surfaces this as 400.
+var ErrEpisodeMoveCrossCourse = errors.New("episodes must belong to the target chapter's course")
+
+// ErrEpisodesDifferentCourses is returned by ReorderEpisodes when the supplied
+// episode IDs don't all belong to the same course. Sorting is a per-course
+// concern (sort_order is only meaningful within a course), so mixing courses
+// would produce a nonsense ordering; the handler surfaces this as 400.
+var ErrEpisodesDifferentCourses = errors.New("batch-reordered episodes must belong to the same course")
+
 type episodeService struct {
+	db          *gorm.DB
 	episodeRepo repository.EpisodeRepository
+	chapterRepo repository.ChapterRepository
 	resolver    *StorageProviderResolver
 }
 
 // NewEpisodeService creates an instance of EpisodeService. The resolver
 // replaces the old settingsRepo-backed getActiveProvider: episodes resolve
-// their provider via ep.SourceID (nil → global settings fallback).
+// their provider via ep.SourceID (nil → global settings fallback). db and
+// chapterRepo back the transactional bulk operations (BulkMoveEpisodes,
+// ReorderEpisodes); nil db is tolerated by the non-transactional paths.
 func NewEpisodeService(er repository.EpisodeRepository, resolver *StorageProviderResolver) EpisodeService {
 	return &episodeService{
 		episodeRepo: er,
+		resolver:    resolver,
+	}
+}
+
+// NewEpisodeServiceWithDB is the transactional variant of NewEpisodeService,
+// wiring the *gorm.DB and ChapterRepository needed by BulkMoveEpisodes and
+// ReorderEpisodes. Prefer this at the top-level wiring (main.go); tests that
+// only exercise non-transactional paths can keep using NewEpisodeService.
+func NewEpisodeServiceWithDB(db *gorm.DB, er repository.EpisodeRepository, cr repository.ChapterRepository, resolver *StorageProviderResolver) EpisodeService {
+	return &episodeService{
+		db:          db,
+		episodeRepo: er,
+		chapterRepo: cr,
 		resolver:    resolver,
 	}
 }
@@ -142,20 +180,160 @@ func (s *episodeService) DeleteEpisode(id uint) error {
 	return s.episodeRepo.Delete(id)
 }
 
+// ReorderEpisodes rewrites sort_order for the given episode IDs (in array
+// order: first id gets sort_order 1, next 2, ...). All writes run in ONE
+// transaction so a failure partway through can't leave the course with a
+// half-applied, gappy ordering. It also validates that every id belongs to the
+// SAME course — sort_order is only meaningful within a course, so reordering a
+// mixed set would silently corrupt two courses at once. Returns
+// ErrEpisodesDifferentCourses on a mismatch.
 func (s *episodeService) ReorderEpisodes(episodeIDs []uint) error {
-	for i, id := range episodeIDs {
+	if len(episodeIDs) == 0 {
+		return nil
+	}
+	// Pre-load once for the same-course check; the loaded rows are reused
+	// inside the tx so we don't re-fetch.
+	loaded := make(map[uint]*model.Episode, len(episodeIDs))
+	refCourseID := uint(0)
+	haveRef := false
+	for _, id := range episodeIDs {
 		ep, err := s.episodeRepo.FindByID(id)
 		if err != nil {
 			return err
 		}
-		if ep != nil {
-			ep.SortOrder = i + 1
-			if err := s.episodeRepo.Update(ep); err != nil {
-				return err
-			}
+		if ep == nil {
+			// Missing id: skip silently (matches prior behavior — a deleted id
+			// in the client's snapshot shouldn't abort the whole reorder).
+			continue
+		}
+		loaded[id] = ep
+		if !haveRef {
+			// First LOADED episode sets the reference course (not the first id
+			// in the array — leading missing ids must not skew the compare).
+			refCourseID = ep.CourseID
+			haveRef = true
+		} else if ep.CourseID != refCourseID {
+			return ErrEpisodesDifferentCourses
+		}
+	}
+	if s.db == nil {
+		// No transactional wiring (test path): fall back to the per-episode loop.
+		return s.reorderEpisodesLoop(episodeIDs, loaded)
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		repo := s.episodeRepo.WithTx(tx)
+		return s.reorderEpisodesLoop(episodeIDs, loaded, repo)
+	})
+}
+
+// reorderEpisodesLoop applies the sort_order rewrite. It accepts an optional
+// tx-scoped repo so the same body serves both the transactional and
+// non-transactional (nil-db) paths.
+func (s *episodeService) reorderEpisodesLoop(episodeIDs []uint, loaded map[uint]*model.Episode, repo ...repository.EpisodeRepository) error {
+	r := s.episodeRepo
+	if len(repo) > 0 && repo[0] != nil {
+		r = repo[0]
+	}
+	for i, id := range episodeIDs {
+		ep, ok := loaded[id]
+		if !ok {
+			continue
+		}
+		ep.SortOrder = i + 1
+		if err := r.Update(ep); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+// BulkMoveEpisodes reassigns episodes to a target chapter (0 = uncategorized).
+// It refuses cross-course moves: when chapterID > 0, the target chapter's
+// CourseID must match every episode's CourseID. Moved episodes are appended to
+// the END of the destination's existing ordering (sort_order = max+1, max+2,
+// ... in array order) so a move never collapses two episodes onto the same
+// sort_order. All writes run in one transaction.
+func (s *episodeService) BulkMoveEpisodes(episodeIDs []uint, chapterID uint) error {
+	if len(episodeIDs) == 0 {
+		return nil
+	}
+	if s.db == nil {
+		return errors.New("BulkMoveEpisodes requires a transactional DB wiring")
+	}
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		episodeRepo := s.episodeRepo.WithTx(tx)
+		var chapterRepo repository.ChapterRepository
+		if s.chapterRepo != nil {
+			chapterRepo = s.chapterRepo.WithTx(tx)
+		}
+
+		// Validate course membership when moving INTO a chapter. Moving to
+		// "uncategorized" (chapterID == 0) is always allowed — the episode
+		// keeps its CourseID, it just leaves its chapter.
+		if chapterID != 0 && chapterRepo != nil {
+			ch, err := chapterRepo.FindByID(chapterID)
+			if err != nil {
+				return err
+			}
+			if ch == nil {
+				return fmt.Errorf("目标章节 %d 不存在", chapterID)
+			}
+			for _, id := range episodeIDs {
+				ep, err := episodeRepo.FindByID(id)
+				if err != nil {
+					return err
+				}
+				if ep == nil {
+					continue
+				}
+				if ep.CourseID != ch.CourseID {
+					return fmt.Errorf("课时「%s」不属于章节「%s」所在的课程%w",
+						ep.Title, ch.Title, ErrEpisodeMoveCrossCourse)
+				}
+			}
+		}
+
+		// Append moved episodes to the END of the destination's ordering so
+		// they don't collide with existing sort_order values in that chapter.
+		// max(sort_order) across episodes already in the destination scope
+		// (chapter_id = chapterID, or NULL when uncategorized) is the base.
+		var maxSort int
+		if chapterID == 0 {
+			if err := tx.Model(&model.Episode{}).
+				Where("chapter_id IS NULL").
+				Select("COALESCE(MAX(sort_order), 0)").
+				Scan(&maxSort).Error; err != nil {
+				return err
+			}
+		} else {
+			if err := tx.Model(&model.Episode{}).
+				Where("chapter_id = ?", chapterID).
+				Select("COALESCE(MAX(sort_order), 0)").
+				Scan(&maxSort).Error; err != nil {
+				return err
+			}
+		}
+
+		var chapterIDPtr *uint
+		if chapterID > 0 {
+			chapterIDPtr = &chapterID
+		}
+		for offset, id := range episodeIDs {
+			ep, err := episodeRepo.FindByID(id)
+			if err != nil {
+				return err
+			}
+			if ep == nil {
+				continue
+			}
+			ep.ChapterID = chapterIDPtr
+			ep.SortOrder = maxSort + offset + 1
+			if err := episodeRepo.Update(ep); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *episodeService) GetSubtitle(episodeID uint) (*model.Subtitle, error) {
@@ -317,25 +495,43 @@ func (s *episodeService) Probe(episodeID uint) (*model.MediaMeta, error) {
 		localFileName := fmt.Sprintf("episode_%d_cover.jpg", episodeID)
 		localFullPath := filepath.Join(uploadDir, localFileName)
 
+		// coverFileNonEmpty reports whether the output file exists and has at
+		// least one byte. ffmpeg can exit 0 after writing a 0-byte JPEG (e.g.
+		// when the embedded "cover" is a stub or the source has no real video
+		// stream at the seek point), so we must verify the output before
+		// trusting it — otherwise the client gets a broken image URL.
+		coverFileNonEmpty := func() bool {
+			info, statErr := os.Stat(localFullPath)
+			return statErr == nil && info.Size() > 0
+		}
+
 		// 1. Try to extract embedded cover art first
 		log.Printf("[probe] attempting to extract embedded cover for episode %d...", episodeID)
 		err = extractEmbeddedCover(link.URL, localFullPath)
-		if err == nil {
+		if err == nil && coverFileNonEmpty() {
 			ep.CoverURL = "/uploads/" + localFileName
 			log.Printf("[probe] successfully extracted embedded cover for episode %d", episodeID)
 		} else {
-			log.Printf("[probe] no embedded cover found or extraction failed for episode %d: %v. falling back to screenshot extraction...", episodeID, err)
+			if err == nil {
+				log.Printf("[probe] embedded cover extracted but output empty for episode %d, falling back to screenshot extraction...", episodeID)
+			} else {
+				log.Printf("[probe] no embedded cover found or extraction failed for episode %d: %v. falling back to screenshot extraction...", episodeID, err)
+			}
 			// 2. Fallback to extracting screenshot at 5s (or duration/2)
 			durSecs := 0
 			if ep.DurationSeconds != nil {
 				durSecs = *ep.DurationSeconds
 			}
 			err = extractScreenshot(link.URL, localFullPath, durSecs)
-			if err == nil {
+			if err == nil && coverFileNonEmpty() {
 				ep.CoverURL = "/uploads/" + localFileName
 				log.Printf("[probe] successfully extracted screenshot cover for episode %d", episodeID)
 			} else {
-				log.Printf("[probe] failed to extract screenshot cover for episode %d: %v", episodeID, err)
+				if err == nil {
+					log.Printf("[probe] screenshot extracted but output empty for episode %d, leaving CoverURL unset", episodeID)
+				} else {
+					log.Printf("[probe] failed to extract screenshot cover for episode %d: %v", episodeID, err)
+				}
 			}
 		}
 	}

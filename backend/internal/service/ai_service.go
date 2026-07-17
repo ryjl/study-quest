@@ -338,6 +338,16 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	if !course.AISummaryEnabled && !course.AIQuizEnabled {
 		return // AI off for this course — leave it as a plain subtitled video.
 	}
+	// Dedup: if a segment job is already queued/processing for this episode,
+	// don't stack another. The same episode can complete twice in quick
+	// succession (e.g. a reaper race resets a stale job that then also
+	// completes), and the segment result is idempotent anyway
+	// (ReplaceChunksForEpisode is DELETE+INSERT), so a duplicate only wastes
+	// LLM/embedding budget. Mirrors the guard already present in
+	// EnqueueSegmentForCourse and the segment→summary chain.
+	if s.hasPendingJob("segment", episodeID) {
+		return
+	}
 	job := &model.AIJob{
 		JobType:   "segment",
 		EpisodeID: episodeID,

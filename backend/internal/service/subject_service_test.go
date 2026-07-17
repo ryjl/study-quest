@@ -174,3 +174,67 @@ func TestSubjectServiceRenameKeyCascadesBadge(t *testing.T) {
 		t.Errorf("badge rule_target = %s, want mathematics", got.RuleTarget)
 	}
 }
+
+// TestSubjectServiceDeleteRefusesHandAuthoredBadgeRules: deleting a subject
+// whose key is the rule_target of a HAND-AUTHORED badge must be refused with
+// ErrSubjectHasBadges. rule_target has no FK to subjects, so without this
+// guard the rule would silently survive as an un-matchable orphan.
+func TestSubjectServiceDeleteRefusesHandAuthoredBadgeRules(t *testing.T) {
+	db, svc := newSubjectSvc(t)
+	subjects := testutil.SeedSubjects(t, db)
+	badgeRepo := repository.NewBadgeRepository(db)
+
+	// A hand-authored badge targeting "math" (NOT the auto-generated
+	// subject_math badge that SeedSubjectBadge would create).
+	handAuthored := &model.Badge{
+		Code: "math_whiz", Title: "数学之星", IconName: "badge_math",
+		RuleType: "subject_count", RuleTarget: "math", Threshold: 10,
+	}
+	if err := badgeRepo.Create(handAuthored); err != nil {
+		t.Fatalf("create hand-authored badge: %v", err)
+	}
+
+	err := svc.Delete(subjects["math"].ID)
+	if !errors.Is(err, ErrSubjectHasBadges) {
+		t.Fatalf("expected ErrSubjectHasBadges, got %v", err)
+	}
+
+	// Neither the subject nor the hand-authored badge should have been deleted.
+	if got, _ := badgeRepo.FindByCode("math_whiz"); got == nil {
+		t.Error("hand-authored badge was deleted despite the refusal")
+	}
+	var subj model.Subject
+	if err := db.First(&subj, subjects["math"].ID).Error; err != nil {
+		t.Errorf("subject was deleted despite the refusal: %v", err)
+	}
+}
+
+// TestSubjectServiceDeleteAutoBadgeDoesNotBlockDelete: the subject's OWN
+// auto-generated subject_<key> badge must NOT trip the ErrSubjectHasBadges
+// guard — it's excluded from the count and removed by the delete path itself.
+func TestSubjectServiceDeleteAutoBadgeDoesNotBlockDelete(t *testing.T) {
+	db, svc := newSubjectSvc(t)
+	subjects := testutil.SeedSubjects(t, db)
+
+	// Seed the auto-generated subject_math badge (this is what
+	// SeedSubjectBadge would create on subject creation).
+	mathSubjectID := subjects["math"].ID
+	autoBadge := &model.Badge{
+		Code: "subject_math", Title: "数学达人", IconName: "badge_math",
+		RuleType: "subject_count", RuleTarget: "math",
+		SubjectID: &mathSubjectID,
+	}
+	if err := db.Create(autoBadge).Error; err != nil {
+		t.Fatalf("create auto subject badge: %v", err)
+	}
+
+	// No hand-authored rules reference "math" → delete should succeed.
+	if err := svc.Delete(subjects["math"].ID); err != nil {
+		t.Fatalf("delete subject with only its auto-badge: %v", err)
+	}
+	// The auto-badge should be cleaned up by the delete path.
+	br := repository.NewBadgeRepository(db)
+	if b, _ := br.FindByCode("subject_math"); b != nil {
+		t.Error("auto-generated subject badge should be removed on subject delete")
+	}
+}

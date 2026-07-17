@@ -47,6 +47,14 @@ type BadgeRepository interface {
 	// DeleteByCode removes a badge (and its user_badges) by Code — used to
 	// clean up subject badges when a subject is deleted. No-op if not found.
 	DeleteByCode(code string) error
+	// CountByRuleTargetExcludingCode counts badges whose rule_target equals
+	// the given subject key, ignoring the badge whose code matches excludeCode.
+	// Used by subject delete to REFUSE deletion of a subject that is still
+	// referenced by HAND-AUTHORED badge rules — deleting the subject would
+	// leave those rules permanently un-matchable. The subject's own
+	// auto-generated badge (code = subject_<key>) is passed as excludeCode so
+	// it doesn't trip the guard; the delete path cleans it up itself.
+	CountByRuleTargetExcludingCode(target, excludeCode string) (int64, error)
 
 	ListUserBadges(userID uint) ([]model.Badge, error)
 	HasUnlocked(userID, badgeID uint) (bool, error)
@@ -222,6 +230,22 @@ func (r *badgeRepo) DeleteByCode(code string) error {
 		return err
 	}
 	return r.Delete(b.ID)
+}
+
+// CountByRuleTargetExcludingCode counts badges whose rule_target equals the
+// given subject key, skipping the one badge whose code == excludeCode. The
+// exclude path lets the subject delete flow ignore the subject's own
+// auto-generated badge (which it removes via DeleteByCode anyway). rule_target
+// has no FK to subjects, so this count is the only guard against orphaning
+// hand-authored rules.
+func (r *badgeRepo) CountByRuleTargetExcludingCode(target, excludeCode string) (int64, error) {
+	var count int64
+	q := r.db.Model(&model.Badge{}).Where("rule_target = ?", target)
+	if excludeCode != "" {
+		q = q.Where("code <> ?", excludeCode)
+	}
+	err := q.Count(&count).Error
+	return count, err
 }
 
 func (r *badgeRepo) GetTotalWatchDurationMinutes(userID uint) (int, error) {

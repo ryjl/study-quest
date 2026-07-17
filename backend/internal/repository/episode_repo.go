@@ -155,8 +155,29 @@ func (r *episodeRepo) Update(episode *model.Episode) error {
 
 func (r *episodeRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Clean up child rows that reference this episode.
+		//
+		// subtitle / user_progress / entertainment_progress have GORM-declared
+		// OnDelete:CASCADE and would be removed automatically now that the DSN
+		// carries _foreign_keys=on, but the explicit deletes are kept as
+		// defense-in-depth and to cover rows written before that fix landed.
+		//
+		// The AI / observability tables below carry a bare episode_id column
+		// with NO GORM foreignKey relation, so the DB cascade never reaches
+		// them — they MUST be removed by hand or they'd orphan (and block
+		// queries that join on episode_id, like the admin watch timeline).
 		tx.Delete(&model.Subtitle{}, "episode_id = ?", id)
 		tx.Delete(&model.UserProgress{}, "episode_id = ?", id)
+		tx.Delete(&model.EntertainmentProgress{}, "episode_id = ?", id)
+		tx.Delete(&model.WatchEvent{}, "episode_id = ?", id)
+		tx.Delete(&model.AIJob{}, "episode_id = ?", id)
+		tx.Delete(&model.AISummary{}, "episode_id = ?", id)
+		tx.Delete(&model.ContentChunk{}, "episode_id = ?", id)
+		tx.Delete(&model.KnowledgeMemory{}, "episode_id = ?", id)
+		tx.Delete(&model.Quiz{}, "episode_id = ?", id)
+		// StudyAdvice.scope_id is polymorphic (episode | course | subject) and
+		// carries no FK at all, so scope-qualify the delete.
+		tx.Delete(&model.StudyAdvice{}, "scope = ? AND scope_id = ?", "episode", id)
 		return tx.Delete(&model.Episode{}, id).Error
 	})
 }

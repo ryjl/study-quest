@@ -212,13 +212,18 @@ func (r *subtitleJobRepo) MarkSkipped(jobID uint) error {
 
 // MarkQueued flips a job back to queued (used by Retry and ReapStale). It clears
 // claimed_at/claimed_by so the row looks freshly enqueued and is immediately
-// claimable by any worker.
+// claimable by any worker. It also clears error and progress so a retried job
+// doesn't show the previous attempt's failure message or stale percentage while
+// sitting in the queue — matching MarkDone's terminal cleanup and the AI job
+// RetryJob path (which clears error too).
 func (r *subtitleJobRepo) MarkQueued(jobID uint) error {
 	return r.db.Model(&model.SubtitleJob{}).Where("id = ?", jobID).
 		Updates(map[string]interface{}{
 			"status":      model.SubtitleJobQueued,
 			"claimed_at":  nil,
 			"claimed_by":  "",
+			"error":       "",
+			"progress":    nil,
 			"updated_at":  time.Now(),
 		}).Error
 }

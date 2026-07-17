@@ -36,16 +36,22 @@ func main() {
 	}
 
 	// 3. Connect to SQLite database
-	// busy_timeout is set in the DSN (not just a PRAGMA Exec) so every pooled
-	// connection honors it — a PRAGMA Exec only sets it on the one connection it
-	// ran on, and GORM hands writes to arbitrary pooled connections. Without it,
-	// a concurrent writer (e.g. subtitle-queue claim vs a progress report)
-	// fails with "database is locked" instead of queueing for the writer lock.
+	// busy_timeout AND foreign_keys are set in the DSN (not via PRAGMA Exec) so
+	// every pooled connection honors them — SQLite PRAGMAs are per-connection,
+	// and GORM hands queries to arbitrary pooled connections. A PRAGMA Exec
+	// only configures the one connection it ran on, leaving every other conn
+	// at the default. Without _busy_timeout in the DSN, a concurrent writer
+	// (subtitle-queue claim vs a progress report) fails with "database is
+	// locked" instead of queueing. Without _foreign_keys, the OnDelete:CASCADE
+	// / RESTRICT constraints declared on ~20 GORM relations silently do nothing
+	// on every pooled connection except the one that ran the PRAGMA — which in
+	// practice means none of them fire, and the manual cascade deletes in the
+	// repos become the only line of defense (a known historical footgun).
 	dsn := cfg.DBPath
 	if strings.Contains(dsn, "?") {
-		dsn += "&_busy_timeout=5000"
+		dsn += "&_busy_timeout=5000&_foreign_keys=on"
 	} else {
-		dsn += "?_busy_timeout=5000"
+		dsn += "?_busy_timeout=5000&_foreign_keys=on"
 	}
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.New(
@@ -61,13 +67,14 @@ func main() {
 		log.Fatalf("Failed to connect to SQLite database: %v", err)
 	}
 
-	// 4. Configure SQLite optimization params. busy_timeout is set in the DSN
-	// (per-connection), so here we only set the two that aren't connection-
-	// sticky the same way: WAL journal mode and FK enforcement.
+	// 4. Configure SQLite WAL journal mode. Unlike busy_timeout/foreign_keys,
+	// journal_mode is DATABASE-level (not per-connection): once set it persists
+	// in the database file header, so a single PRAGMA Exec on any connection
+	// suffices. busy_timeout and foreign_keys are per-connection and were
+	// already baked into the DSN above.
 	sqlDB, err := db.DB()
 	if err == nil {
 		_, _ = sqlDB.Exec("PRAGMA journal_mode=WAL;")
-		_, _ = sqlDB.Exec("PRAGMA foreign_keys=ON;")
 	}
 
 	// 5. Run Database Auto-Migrations
@@ -116,6 +123,12 @@ func main() {
 	probeWorker := service.NewProbeWorker(episodeService, episodeRepo)
 	importService := service.NewImportService(db, episodeRepo, courseRepo, storageResolver, chapterRepo, subjectRepo, probeWorker.Enqueue)
 	chapterService := service.NewChapterService(chapterRepo)
+	// episodeServiceTx is the transactional variant of episodeService — it
+	// wires *gorm.DB + chapterRepo so BulkMoveEpisodes / ReorderEpisodes can
+	// run as a single tx with a course-membership guard. The non-tx
+	// episodeService above stays in scope because probeWorker/importService
+	// captured it before chapterRepo existed; both point at the same repo.
+	episodeServiceTx := service.NewEpisodeServiceWithDB(db, episodeRepo, chapterRepo, storageResolver)
 	unlockService := service.NewUnlockService(unlockRepo, episodeRepo)
 	readingSeriesService := service.NewReadingSeriesService(readingSeriesRepo, readingBookRepo, readingArticleRepo)
 	readingBookService := service.NewReadingBookService(readingBookRepo, storageResolver, readingSeriesRepo)
@@ -175,7 +188,7 @@ func main() {
 		WithUserService(userService).
 		WithCourseService(courseService).
 		WithImportService(importService).
-		WithEpisodeService(episodeService).
+		WithEpisodeService(episodeServiceTx).
 		WithChapterService(chapterService).
 		WithBadgeService(badgeService).
 		WithReadingSeriesService(readingSeriesService).

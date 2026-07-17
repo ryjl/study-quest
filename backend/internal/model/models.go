@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -934,6 +935,16 @@ type AIProvider struct {
 	UpdatedAt    time.Time
 }
 
+// TableName pins the table name to `ai_providers`. Without this, GORM's default
+// snake-casing turns `AIProvider` into `a_i_providers` (each uppercase letter
+// gets a preceding underscore, then leading/trailing underscores are trimmed →
+// `a_iproviders`), which is how the original misnamed table was born. Old
+// deployments have data under `a_iproviders`; migrateAIProvidersTableName
+// (called from AutoMigrate) renames it in place on first boot after upgrade.
+// Pinning the name explicitly also future-proofs against any GORM
+// naming-convention change.
+func (AIProvider) TableName() string { return "ai_providers" }
+
 // AIJob is one asynchronous AI generation task (segment/summary/quiz), modeled
 // on SubtitleJob's queue/claim/complete pattern. Generated offline so the
 // client reads already-produced content with zero latency (the user never waits
@@ -1222,6 +1233,18 @@ type UserStudyReport struct {
 }
 
 func AutoMigrate(db *gorm.DB) error {
+	// Rename the legacy `a_iproviders` table to `ai_providers` BEFORE running
+	// AutoMigrate. AIProvider.TableName() now pins the name to `ai_providers`;
+	// without this rename, AutoMigrate would see the model wants `ai_providers`,
+	// find no such table, and create an EMPTY one — leaving the real provider
+	// config stranded under the old misnamed `a_iproviders` (GORM's default
+	// snake-casing of `AIProvider` → `a_i_providers` → trimmed `a_iproviders`).
+	// Renaming first preserves all rows + the capability index. Idempotent:
+	// no-op once the new name is in place. Must run pre-AutoMigrate so the
+	// struct-driven create/alter pass sees the correctly-named table.
+	if err := migrateAIProvidersTableName(db); err != nil {
+		return err
+	}
 	err := db.AutoMigrate(
 		&Setting{},
 		&User{},
@@ -1288,6 +1311,70 @@ func AutoMigrate(db *gorm.DB) error {
 		return err
 	}
 	return migrateQuizActiveUniqueIndex(db)
+}
+
+// migrateAIProvidersTableName renames the legacy misnamed `a_iproviders` table
+// to `ai_providers` (the name AIProvider.TableName() now pins).
+//
+// Background: GORM's default snake-casing splits `AIProvider` on every
+// uppercase letter → `A_I_Provider` → leading/trailing underscore trim →
+// `a_iproviders`. This is how the original table was created. The struct now
+// overrides TableName() to the intended `ai_providers`. Without this migration,
+// AutoMigrate would create an EMPTY `ai_providers` and leave the real config
+// rows orphaned under `a_iproviders` (admin would see no configured provider).
+//
+// SQLite's `ALTER TABLE ... RENAME TO` is a constant-time metadata op that
+// preserves all rows, columns, and indexes (the capability index becomes
+// `idx_ai_providers_capability` automatically via SQLite's index-rename-on-
+// table-rename). Zero data movement, zero risk.
+//
+// Idempotent (runs every boot):
+//   - If neither table exists: fresh install → AutoMigrate creates `ai_providers`
+//     normally. No-op here.
+//   - If only `a_iproviders` exists: legacy install → RENAME. The one case that
+//     does work.
+//   - If only `ai_providers` exists: already migrated → no-op.
+//   - If BOTH exist (shouldn't happen, but defensive): skip the rename and log
+//     a warning so the operator can reconcile manually — never silently drop
+//     data. AutoMigrate will then use `ai_providers`.
+func migrateAIProvidersTableName(db *gorm.DB) error {
+	const oldName = "a_iproviders"
+	const newName = "ai_providers"
+
+	oldExists, err := tableExists(db, oldName)
+	if err != nil {
+		return fmt.Errorf("check legacy %s: %w", oldName, err)
+	}
+	if !oldExists {
+		return nil // fresh install or already migrated past the legacy name
+	}
+	newExists, err := tableExists(db, newName)
+	if err != nil {
+		return fmt.Errorf("check target %s: %w", newName, err)
+	}
+	if newExists {
+		// Both tables present — refuse to guess. Log loudly; operator must
+		// reconcile (e.g. copy rows from old into new, then drop old).
+		log.Printf("[migrate] WARNING: both %s and %s exist; skipping rename. "+
+			"Manual reconciliation required (the app will use %s).", oldName, newName, newName)
+		return nil
+	}
+	if err := db.Exec(fmt.Sprintf("ALTER TABLE `%s` RENAME TO `%s`", oldName, newName)).Error; err != nil {
+		return fmt.Errorf("rename %s → %s: %w", oldName, newName, err)
+	}
+	log.Printf("[migrate] renamed legacy table %s → %s (provider config preserved)", oldName, newName)
+	return nil
+}
+
+// tableExists reports whether a table with the given name exists in the
+// database. Uses sqlite_master so it works regardless of GORM's naming helpers.
+func tableExists(db *gorm.DB, name string) (bool, error) {
+	var count int64
+	err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // migrateQuizActiveUniqueIndex swaps the quizzes table's uniqueness guarantee

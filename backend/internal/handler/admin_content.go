@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"studyquest/backend/internal/model"
+	"studyquest/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
@@ -368,23 +370,15 @@ func (h *adminHandler) BulkMoveEpisodes(c *gin.Context) {
 		return
 	}
 
-	for _, id := range req.IDs {
-		ep, err := h.episodeRepo.FindByID(id)
-		if err != nil {
-			respondError(c, err)
+	if err := h.episodeService.BulkMoveEpisodes(req.IDs, req.ChapterID); err != nil {
+		// Cross-course / not-found are bad-request class; surface the
+		// explanatory message so the admin knows which episode/chapter clashed.
+		if errors.Is(err, service.ErrEpisodeMoveCrossCourse) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if ep != nil {
-			var chapterIDPtr *uint
-			if req.ChapterID > 0 {
-				chapterIDPtr = &req.ChapterID
-			}
-			ep.ChapterID = chapterIDPtr
-			if err := h.episodeRepo.Update(ep); err != nil {
-				respondError(c, err)
-				return
-			}
-		}
+		respondError(c, err)
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "moved"})

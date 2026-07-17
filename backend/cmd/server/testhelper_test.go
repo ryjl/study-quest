@@ -97,7 +97,7 @@ func newTestEnv(t *testing.T) *testEnv {
 	sessionService := service.NewSessionService(sessionRepo, 24*time.Hour)
 	courseService := service.NewCourseService(courseRepo, userRepo)
 	storageResolver := service.NewStorageProviderResolver(storageSourceRepo)
-	episodeService := service.NewEpisodeService(episodeRepo, storageResolver)
+	episodeService := service.NewEpisodeServiceWithDB(db, episodeRepo, chapterRepo, storageResolver)
 	badgeService := service.NewBadgeService(db, badgeRepo, progressRepo)
 	progressService := service.NewProgressService(db, progressRepo, episodeRepo, badgeService, courseRepo, entertainmentRepo, watchEventRepo, 60*time.Second)
 	subjectService := service.NewSubjectService(db, subjectRepo, badgeRepo, badgeService)

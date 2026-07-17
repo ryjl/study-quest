@@ -120,10 +120,14 @@ func (s *subjectService) Update(subj *model.Subject, oldKey string) error {
 	})
 }
 
-// Delete refuses system-seeded subjects first (IsSystem check), then falls
-// through to the DB-level FK RESTRICT guard (ErrSubjectInUse) when a course
-// still references the subject. On success it also removes the subject's
-// auto-generated badge (and its user_badges).
+// Delete refuses system-seeded subjects first (IsSystem check), then refuses
+// when HAND-AUTHORED badge rules still reference the subject's key
+// (ErrSubjectHasBadges — rule_target has no FK, so this service-level count is
+// the only guard against orphaning those rules). It then falls through to the
+// DB-level FK RESTRICT guard (ErrSubjectInUse) when a course still references
+// the subject. On success it also removes the subject's auto-generated badge
+// (and its user_badges). The auto-badge does NOT trigger ErrSubjectHasBadges
+// (it's excluded by code from the rule_target count, and cleaned up here).
 func (s *subjectService) Delete(id uint) error {
 	subj, err := s.repo.FindByID(id)
 	if err != nil {
@@ -134,6 +138,16 @@ func (s *subjectService) Delete(id uint) error {
 	}
 	if subj.IsSystem {
 		return ErrSystemProtected
+	}
+	// Refuse if any HAND-AUTHORED badge still targets this subject's key.
+	// Pass the auto-badge's code as the exclude so the subject's own generated
+	// badge (which we delete below) doesn't trip the guard.
+	handAuthored, err := s.badgeRepo.CountByRuleTargetExcludingCode(subj.Key, SubjectBadgeCode(subj.Key))
+	if err != nil {
+		return err
+	}
+	if handAuthored > 0 {
+		return ErrSubjectHasBadges
 	}
 	err = s.repo.Delete(id)
 	if err != nil {

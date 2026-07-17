@@ -14,4 +14,9 @@ func init() {
 	// FK ON DELETE RESTRICT: a subject still referenced by courses cannot be
 	// removed until those courses are migrated/deleted.
 	registerAppError(service.ErrSubjectInUse, 409, "该资源仍被引用，无法删除；请先迁移或删除引用项后再试")
+
+	// rule_target has no FK to subjects, so hand-authored badge rules survive a
+	// subject delete as silent orphans. Refuse with a 409 and tell the admin how
+	// many rules block the delete so they can re-target or remove them first.
+	registerAppError(service.ErrSubjectHasBadges, 409, "该科目被徽章规则引用，请先处理相关徽章后再删除")
 }

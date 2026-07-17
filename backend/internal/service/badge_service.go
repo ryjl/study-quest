@@ -153,7 +153,18 @@ func (s *badgeService) EvaluateRules(userID uint) ([]model.Badge, error) {
 			if tierIdx <= currentTier {
 				continue // already at or past this tier
 			}
-			reward := tiers[tierIdx].R
+			// Sum the rewards for ALL tiers crossed in this jump
+			// (currentTier+1 .. tierIdx, inclusive). A multi-tier jump — e.g.
+			// the first evaluation after a long absence, or a badge created
+			// after the user already has enough progress to clear several tiers
+			// at once — must credit each intermediate tier's reward, otherwise
+			// the skipped tiers' rewards are silently lost. The single-tier
+			// case (currentTier+1 == tierIdx) reduces to tiers[tierIdx].R, so
+			// incremental progression is unchanged.
+			reward := 0
+			for i := currentTier + 1; i <= tierIdx; i++ {
+				reward += tiers[i].R
+			}
 			desc := fmt.Sprintf("解锁荣誉「%s」第 %d/%d 层 (%s)", badge.Title, tierIdx+1, len(tiers), badge.Description)
 			ledger := &model.PointsLedger{
 				UserID:       userID,

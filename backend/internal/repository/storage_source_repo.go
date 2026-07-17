@@ -33,6 +33,11 @@ type StorageSourceRepository interface {
 	// ClearDefault unsets IsDefault on every row (used before setting a new
 	// default so at most one row carries the flag).
 	ClearDefault() error
+	// CountReferences counts episodes and reading books whose SourceID points
+	// at this source. Used by the delete handler to REFUSE deletion of a source
+	// that is still in use (otherwise those rows would silently lose their
+	// provider and playback/import would break). Two COUNT(*) queries.
+	CountReferences(sourceID uint) (episodes int64, books int64, err error)
 	// WithTx returns a copy bound to an in-progress transaction.
 	WithTx(tx *gorm.DB) StorageSourceRepository
 
@@ -112,6 +117,24 @@ func (r *storageSourceRepo) GetDefault() (*model.StorageSource, error) {
 func (r *storageSourceRepo) ClearDefault() error {
 	return r.db.Model(&model.StorageSource{}).Where("is_default = ?", true).
 		Update("is_default", false).Error
+}
+
+// CountReferences counts episodes and reading books bound to this source via
+// their SourceID column. Neither has a FK to storage_sources (source_id is a
+// loose indexed column with no constraint), so there is no DB-level guard
+// preventing a delete from orphaning them. The admin delete handler uses these
+// counts to refuse the operation with a 409 instead of leaving dangling rows
+// that would silently break playback / re-import disaster recovery.
+func (r *storageSourceRepo) CountReferences(sourceID uint) (int64, int64, error) {
+	var episodes int64
+	if err := r.db.Model(&model.Episode{}).Where("source_id = ?", sourceID).Count(&episodes).Error; err != nil {
+		return 0, 0, err
+	}
+	var books int64
+	if err := r.db.Model(&model.ReadingBook{}).Where("source_id = ?", sourceID).Count(&books).Error; err != nil {
+		return 0, 0, err
+	}
+	return episodes, books, nil
 }
 
 // ── User whitelist ──
