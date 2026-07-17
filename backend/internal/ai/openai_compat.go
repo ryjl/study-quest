@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -115,6 +116,83 @@ func (p *OpenAICompatProvider) Ping(ctx context.Context) error {
 // the HTTP client). Used as the default when a ChatRequest leaves Model empty
 // (e.g. the Ping self-test).
 func (p *OpenAICompatProvider) SetModel(model string) { p.model = model }
+
+// ListModels fetches the available model ids from the relay's /v1/models
+// endpoint (OpenAI-compatible). Used by the admin UI so the operator picks a
+// model from a dropdown instead of typing a possibly-wrong model id. It hits
+// the relay directly with the provider's base_url + api_key — no DB row needed,
+// which lets the admin probe a relay's model catalog BEFORE saving a config.
+//
+// Returns the sorted, deduplicated list of model ids. A non-nil error means the
+// relay is unreachable, the key is bad, or the response isn't OpenAI-shaped.
+func (p *OpenAICompatProvider) ListModels(ctx context.Context) ([]string, error) {
+	url := p.baseURL + "/v1/models"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build models request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return nil, fmt.Errorf("models request cancelled/timed out: %w", err)
+		}
+		return nil, fmt.Errorf("models request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read models response: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Try to surface the relay's structured error; fall back to the raw body.
+		var errBody modelsListResponse
+		if json.Unmarshal(raw, &errBody) == nil && errBody.Error != nil && errBody.Error.Message != "" {
+			return nil, fmt.Errorf("models API error (HTTP %d): %s", resp.StatusCode, errBody.Error.Message)
+		}
+		snippet := string(raw)
+		if len(snippet) > 200 {
+			snippet = snippet[:200] + "..."
+		}
+		return nil, fmt.Errorf("models API error (HTTP %d): %s", resp.StatusCode, snippet)
+	}
+
+	var body modelsListResponse
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("decode models response: %w", err)
+	}
+	seen := make(map[string]struct{}, len(body.Data))
+	out := make([]string, 0, len(body.Data))
+	for _, m := range body.Data {
+		id := strings.TrimSpace(m.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// modelsListResponse is the OpenAI-compatible /v1/models response shape. Only
+// the fields we use (data[].id, top-level error) are mapped.
+type modelsListResponse struct {
+	Data []struct {
+		ID      string `json:"id"`
+		OwnedBy string `json:"owned_by,omitempty"`
+	} `json:"data"`
+	Error *struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+		Code    string `json:"code"`
+	} `json:"error,omitempty"`
+}
 
 // --- response decoding ---
 

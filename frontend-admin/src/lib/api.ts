@@ -33,6 +33,7 @@ import type {
   ReadingTargetType,
   AiProvider,
   AiProviderTestResult,
+  AiModelsResult,
   AiJob,
   AiJobsResponse,
   AiJobEnqueueResult,
@@ -523,6 +524,15 @@ export const api = {
   async testAiProvider(id: number): Promise<AiProviderTestResult> {
     return request(`/admin/api/ai/providers/${id}/test`, { method: 'POST' });
   },
+  // Fetch the available model ids from an OpenAI-compatible relay using the
+  // provided base_url + api_key (NOT a saved row). Lets the admin pick a model
+  // from a dropdown before saving. Returns {ok, models?, message?}.
+  async fetchAiModels(baseUrl: string, apiKey: string): Promise<AiModelsResult> {
+    return request('/admin/api/ai/providers/models', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+    });
+  },
 
   // AI workflow jobs (slice/summarize/etc). The list endpoint rolls up status
   // counts alongside the jobs, so the page gets both in one round-trip.
@@ -541,6 +551,14 @@ export const api = {
   // that as a benign "nothing to reset" toast.
   async resetAiJob(id: number): Promise<{ ok: boolean }> {
     return request(`/admin/api/ai/jobs/${id}/reset`, { method: 'POST' });
+  },
+  // Retry one 'failed' job: revive it back to 'queued' so the worker re-runs it.
+  // Use case: the job failed (e.g. provider was misconfigured), the admin fixed
+  // the underlying problem, now they want to re-run. Throws on a 409 when the
+  // job isn't currently failed (already succeeded / was retried) — caller surfaces
+  // that as a benign "nothing to retry" toast.
+  async retryAiJob(id: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/jobs/${id}/retry`, { method: 'POST' });
   },
   // Decision-trace runs: the recorded model invocations an agent made. limit
   // caps the window (the page shows the most recent N).

@@ -140,6 +140,13 @@ type AIService interface {
 	// (clearing claimed_at + error). Returns repository.ErrJobNotProcessing if
 	// the job isn't currently processing (so the handler can 409 cleanly).
 	ResetJob(jobID uint) error
+	// RetryJob is the admin-triggered way to revive a terminal 'failed' job back
+	// to 'queued' so the worker re-runs it — the only such path, since failJob
+	// marks jobs failed without auto-retry. Use case: a job failed because the
+	// embedding/chat provider was misconfigured, the admin fixed the config, now
+	// they want to re-run. Returns repository.ErrJobNotFailed if the job isn't
+	// currently failed (so the handler can 409 cleanly).
+	RetryJob(jobID uint) error
 }
 
 type aiService struct {
@@ -622,6 +629,12 @@ func (s *aiService) ReapStaleJobs() (int64, error) {
 // 必须处于 processing,否则返回 ErrJobNotProcessing(非致命,handler 转 409)。
 func (s *aiService) ResetJob(jobID uint) error {
 	return s.contentRepo.ResetJob(jobID)
+}
+
+// RetryJob 委托给 repo:把单条 failed 任务复位回 queued,让 worker 重跑。repo 校验
+// 当前必须处于 failed,否则返回 ErrJobNotFailed(非致命,handler 转 409)。
+func (s *aiService) RetryJob(jobID uint) error {
+	return s.contentRepo.RetryJob(jobID)
 }
 
 // jobNameCache holds batch-resolved id→title maps for a set of jobs, so the list

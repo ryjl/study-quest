@@ -130,12 +130,14 @@ type AdminHandler interface {
 	UpdateAIProvider(c *gin.Context)
 	DeleteAIProvider(c *gin.Context)
 	TestAIProvider(c *gin.Context)
+	ListAIProviderModels(c *gin.Context)
 	GetAIStatus(c *gin.Context)
 	// AI module — generation jobs + observability.
 	EnqueueAIJobs(c *gin.Context)
 	ListAIJobs(c *gin.Context)
 	GetAIJob(c *gin.Context)
 	ResetAIJob(c *gin.Context)
+	RetryAIJob(c *gin.Context)
 	ListAIRuns(c *gin.Context)
 	GetAIRun(c *gin.Context)
 	// Phase C — quiz observability (per-user drill-down + summary content).

@@ -353,6 +353,14 @@ export interface AiProviderTestResult {
   latency_ms?: number;
 }
 
+// Result of POST /admin/api/ai/providers/models (probe a relay's model catalog
+// before saving). ok=false carries a message; ok=true carries the model id list.
+export interface AiModelsResult {
+  ok: boolean;
+  models?: string[];
+  message?: string;
+}
+
 // AppRelease is one published APK build. (version_code, abi) is the identity —
 // the same pair the OTA client contract keys on. is_active=false means the
 // build is withdrawn (hidden from clients, not downloadable) but kept for history.

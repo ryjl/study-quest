@@ -240,12 +240,14 @@ func RegisterRoutes(
 		adm.PUT("/api/ai/providers/:id", admin.UpdateAIProvider)
 		adm.DELETE("/api/ai/providers/:id", admin.DeleteAIProvider)
 		adm.POST("/api/ai/providers/:id/test", admin.TestAIProvider)
+		adm.POST("/api/ai/providers/models", admin.ListAIProviderModels)
 		adm.GET("/api/ai/status", admin.GetAIStatus)
 		// AI module — generation jobs + observability.
 		adm.POST("/api/ai/jobs", admin.EnqueueAIJobs)
 		adm.GET("/api/ai/jobs", admin.ListAIJobs)
 		adm.GET("/api/ai/jobs/:id", admin.GetAIJob)
 		adm.POST("/api/ai/jobs/:id/reset", admin.ResetAIJob)
+		adm.POST("/api/ai/jobs/:id/retry", admin.RetryAIJob)
 		adm.GET("/api/ai/runs", admin.ListAIRuns)
 		adm.GET("/api/ai/runs/:id", admin.GetAIRun)
 		// Phase C — quiz observability (per-user drill-down + summary content).

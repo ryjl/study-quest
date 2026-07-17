@@ -181,6 +181,19 @@ function JobRow({ job }: { job: AiJob }) {
     onError: (e) => toast.error((e as Error).message),
   });
 
+  // Retry a 'failed' job: revive it to 'queued' so the worker re-runs it. Use
+  // case: the job failed (e.g. embedding was misconfigured), the admin fixed the
+  // problem, now they want to re-run. Distinct from resetMut (which targets
+  // stuck-but-alive 'processing' jobs). 409 (not failed) → benign toast.
+  const retryMut = useMutation({
+    mutationFn: () => api.retryAiJob(job.id),
+    onSuccess: () => {
+      toast.success('已重新排队,worker 将重试');
+      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
   return (
     <tr className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
       <td className="px-4 py-3">
@@ -225,6 +238,16 @@ function JobRow({ job }: { job: AiJob }) {
             title="重置回排队(worker 可能卡住时手动触发)"
           >
             重置
+          </button>
+        )}
+        {job.status === 'failed' && (
+          <button
+            className="btn-ghost btn-sm"
+            disabled={retryMut.isPending}
+            onClick={() => retryMut.mutate()}
+            title="重新排队重试(修复了失败原因后用这个)"
+          >
+            {retryMut.isPending ? '重试中…' : '重试'}
           </button>
         )}
       </td>

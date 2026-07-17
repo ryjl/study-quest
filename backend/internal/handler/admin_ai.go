@@ -249,6 +249,38 @@ func (h *adminHandler) TestAIProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "连接成功", "latency_ms": latency})
 }
 
+// ListAIProviderModels fetches the model catalog from an OpenAI-compatible
+// relay using the provided base_url + api_key (NOT a saved row). This lets the
+// admin UI populate a model dropdown BEFORE saving a config — the "填完 base_url
+// + key 即拉取" flow. The probe is anonymous-by-design: it only reads /v1/models,
+// never sends chat content.
+// POST /admin/api/ai/providers/models  body: {base_url, api_key}
+func (h *adminHandler) ListAIProviderModels(c *gin.Context) {
+	var req struct {
+		BaseURL string `json:"base_url"`
+		APIKey  string `json:"api_key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
+		return
+	}
+	if req.BaseURL == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "base_url 为必填"})
+		return
+	}
+	// Bounded timeout: /v1/models is fast, but a misconfigured/relay behind a
+	// slow proxy shouldn't hang the admin UI.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+	prov := ai.NewOpenAICompatProvider(req.BaseURL, req.APIKey)
+	models, err := prov.ListModels(ctx)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": false, "message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "models": models})
+}
+
 // GetAIStatus reports which capabilities have an enabled provider configured.
 // Read-only (no building/pinging), so it's cheap and safe to call on every
 // Settings page load. Used by the admin UI to show "chat: ready / embedding: 未配置".
@@ -519,6 +551,38 @@ func (h *adminHandler) ResetAIJob(c *gin.Context) {
 		// silently pretending success (which would hide a double-reset).
 		if err == repository.ErrJobNotProcessing {
 			c.JSON(http.StatusConflict, gin.H{"error": "任务不在处理中(可能已完成或已被重置)"})
+			return
+		}
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// RetryAIJob revives one 'failed' AI job back to 'queued' so the worker re-runs
+// it. Use case: a job failed (e.g. embedding/chat provider was misconfigured),
+// the admin fixed the underlying problem, now they want to re-run instead of
+// leaving it failed forever. This is the ONLY way to revive a failed job —
+// failJob marks jobs failed without auto-retry (AI calls cost money, so we don't
+// loop on a bad config). Clears error + claimed_at; the next worker poll
+// (3s) re-claims it.
+// POST /admin/api/ai/jobs/:id/retry
+func (h *adminHandler) RetryAIJob(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 id"})
+		return
+	}
+	if err := h.aiService.RetryJob(id); err != nil {
+		// ErrJobNotFailed is non-fatal: the job isn't failed (it succeeded, is
+		// queued/processing, or was already retried). Surface 409 so the UI can
+		// say "nothing to retry" rather than silently pretending success.
+		if err == repository.ErrJobNotFailed {
+			c.JSON(http.StatusConflict, gin.H{"error": "任务不是失败状态(可能已成功或已被重试)"})
 			return
 		}
 		respondError(c, err)

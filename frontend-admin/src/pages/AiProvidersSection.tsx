@@ -1,215 +1,212 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { Modal } from '../components/ui';
 import { useToast } from '../lib/toast';
-import { useDeleteConfirm } from '../lib/useDeleteConfirm';
 import { useAiProviders, useInvalidateAiProviders } from '../lib/useAiProviders';
-import type { AiProvider, AiProviderTestResult } from '../lib/types';
+import type { AiProvider, AiModelsResult } from '../lib/types';
 
 // AiProvidersSection is the AI-provider management card on the Settings page.
-// Renders the list of configured providers with edit/delete/test-connection
-// actions, plus an "add provider" button that opens a modal form. Structure
-// mirrors StorageSourcesSection 1:1.
 //
-// A provider row carries: name, capability (chat/embedding/rerank),
-// provider_type (openai_compat/onnx_local), base_url, api_key (sensitive),
-// model_name, is_enabled. The modal form is shared between create and edit.
+// Round-3 redesign: the embedding model is bundled in the docker image and
+// auto-seeded on boot (ai.SeedLocalEmbedding), so it is NOT configurable here —
+// the admin only configures the single chat provider. There is exactly one chat
+// config (not a list), so this is a single fixed form:
+//   - no chat row yet → "初次配置" (creates one);
+//   - chat row exists → "编辑" (updates it).
+// No add/delete — chat is a singleton config. base_url + api_key are entered,
+// then "拉取可用模型" probes the relay's /v1/models so the operator picks the
+// model from a dropdown instead of typing a possibly-wrong id.
 export function AiProvidersSection() {
   const providersQ = useAiProviders();
   const invalidate = useInvalidateAiProviders();
-  const toast = useToast();
-  const [editing, setEditing] = useState<AiProvider | null>(null);
-  const [open, setOpen] = useState(false);
 
-  const del = useDeleteConfirm({ mutationFn: api.deleteAiProvider, noun: 'AI Provider', onDeleted: invalidate });
+  // The embedding row is auto-seeded; we only surface chat to the admin.
+  const chatProvider = providersQ.data?.find((p) => p.capability === 'chat') ?? null;
 
-  const createMut = useMutation({
-    mutationFn: (body: AiProvider) => api.createAiProvider(body),
-    onSuccess: () => { toast.success('已创建'); invalidate(); setOpen(false); },
-    onError: (e) => toast.error((e as Error).message),
-  });
-  const updateMut = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: AiProvider }) => api.updateAiProvider(id, body),
-    onSuccess: () => { toast.success('已保存'); invalidate(); setOpen(false); },
-    onError: (e) => toast.error((e as Error).message),
-  });
-
-  const openCreate = () => { setEditing(null); setOpen(true); };
-  const openEdit = (p: AiProvider) => { setEditing(p); setOpen(true); };
+  if (providersQ.isLoading) {
+    return (
+      <div className="card">
+        <h2 className="text-base font-bold text-txt">AI Provider 配置</h2>
+        <p className="mt-2 text-sm text-muted">加载中…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="card">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-bold text-txt">AI Provider 配置</h2>
-          <p className="mt-0.5 text-xs text-muted">配置聊天 / 向量 / 重排模型。openai_compat 走 HTTP，onnx_local 走本地推理。</p>
-        </div>
-        <button className="btn-primary btn-sm" onClick={openCreate}>+ 新增 Provider</button>
+      <div className="mb-4">
+        <h2 className="text-base font-bold text-txt">AI Provider 配置</h2>
+        <p className="mt-0.5 text-xs text-muted">
+          配置聊天模型(OpenAI 兼容端点)。向量模型已内置,无需配置。
+        </p>
       </div>
-
-      {providersQ.isLoading ? (
-        <p className="text-sm text-muted">加载中…</p>
-      ) : providersQ.data && providersQ.data.length > 0 ? (
-        <div className="space-y-2">
-          {providersQ.data.map((p) => (
-            <ProviderRow key={p.id} provider={p} onEdit={() => openEdit(p)} onDelete={() => del.confirmAndDelete(p.id!, `确认删除 AI Provider「${p.name}」？`)} />
-          ))}
-        </div>
-      ) : (
-        <p className="text-sm text-muted">尚未配置 AI Provider。新增后相关能力即可调用。</p>
-      )}
-
-      {open && (
-        <ProviderModal
-          provider={editing}
-          pending={createMut.isPending || updateMut.isPending}
-          onCancel={() => setOpen(false)}
-          onSubmit={(body) => {
-            if (editing?.id) updateMut.mutate({ id: editing.id, body });
-            else createMut.mutate(body);
-          }}
-        />
-      )}
+      <ChatProviderForm provider={chatProvider} onSaved={invalidate} />
     </div>
   );
 }
 
-function ProviderRow({ provider, onEdit, onDelete }: { provider: AiProvider; onEdit: () => void; onDelete: () => void }) {
+function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; onSaved: () => void }) {
   const toast = useToast();
-  const [result, setResult] = useState<AiProviderTestResult | null>(null);
-  const testMut = useMutation({
-    mutationFn: () => api.testAiProvider(provider.id!),
-    onSuccess: (d) => {
-      setResult(d);
-      if (d.ok) toast.success(d.message || '连接成功');
-      else toast.error(d.message || '连接失败');
-    },
-    onError: (e) => {
-      setResult(null);
-      toast.error((e as Error).message);
-    },
-  });
-  return (
-    <div className="rounded-lg border border-border bg-card-2 px-3 py-2">
-      <div className="flex items-center gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-txt">{provider.name}</span>
-            {!provider.is_enabled && <span className="rounded bg-border px-1.5 py-0.5 text-[10px] text-muted">已停用</span>}
-            <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary uppercase">{provider.capability}</span>
-            <span className="rounded bg-border px-1.5 py-0.5 text-[10px] text-muted font-mono">{provider.provider_type}</span>
-          </div>
-          <div className="truncate text-xs text-muted font-mono">
-            {provider.base_url ? `${provider.base_url} · ` : ''}{provider.model_name}
-          </div>
-        </div>
-        <button className="btn-secondary btn-sm" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
-          {testMut.isPending ? '测试中…' : '🔌 测试'}
-        </button>
-        <button className="btn-ghost btn-sm" onClick={onEdit}>编辑</button>
-        <button className="btn-danger btn-sm" onClick={onDelete}>删除</button>
-      </div>
-      {result && (
-        <div className={`mt-2 text-xs ${result.ok ? 'text-primary' : 'text-muted'}`}>
-          {result.ok ? '✓' : '✗'} {result.message}{typeof result.latency_ms === 'number' ? ` · ${result.latency_ms}ms` : ''}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProviderModal({ provider, pending, onCancel, onSubmit }: {
-  provider: AiProvider | null;
-  pending: boolean;
-  onCancel: () => void;
-  onSubmit: (body: AiProvider) => void;
-}) {
   const isEdit = !!provider;
-  const [name, setName] = useState(provider?.name ?? '');
-  const [capability, setCapability] = useState<AiProvider['capability']>(provider?.capability ?? 'chat');
-  const [providerType, setProviderType] = useState(provider?.provider_type ?? 'openai_compat');
+
+  const [name, setName] = useState(provider?.name ?? '主聊天模型');
   const [baseUrl, setBaseUrl] = useState(provider?.base_url ?? '');
-  // api_key is sensitive: the server does NOT echo it back on GET, so we never
-  // pre-fill it. In edit mode, leaving it blank = "don't change" (we omit the
-  // field). Mirrors Settings.tsx admin-password "留空则不修改" convention.
+  // api_key is sensitive: the server never echoes it back on GET. In edit mode
+  // leaving it blank = "don't change" (we omit the field on submit).
   const [apiKey, setApiKey] = useState('');
   const [modelName, setModelName] = useState(provider?.model_name ?? '');
   const [isEnabled, setIsEnabled] = useState(provider?.is_enabled ?? true);
 
-  const isOpenAi = providerType === 'openai_compat';
+  // Model dropdown state: fetched from the relay's /v1/models after base_url +
+  // api_key are entered. Empty = not yet fetched (the input falls back to a
+  // plain text field so a relay without /v1/models can still be configured).
+  const [models, setModels] = useState<string[]>([]);
+  const [modelsFetched, setModelsFetched] = useState(false);
+
+  const fetchModelsMut = useMutation({
+    // The models probe hits the relay directly with the entered key (the saved
+    // key is never echoed back, so we can't reuse it here). In edit mode the
+    // operator must re-enter the key to pull models — acceptable since this is
+    // an occasional diagnostic action, not the save path.
+    mutationFn: () => api.fetchAiModels(baseUrl.trim(), apiKey.trim()),
+    onSuccess: (d: AiModelsResult) => {
+      if (d.ok && d.models) {
+        setModels(d.models);
+        setModelsFetched(true);
+        toast.success(`拉取到 ${d.models.length} 个可用模型`);
+      } else {
+        setModels([]);
+        setModelsFetched(false);
+        toast.error(d.message || '拉取模型失败');
+      }
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const saveMut = useMutation({
+    mutationFn: (body: AiProvider) =>
+      isEdit && provider?.id ? api.updateAiProvider(provider.id, body) : api.createAiProvider(body),
+    onSuccess: () => {
+      toast.success(isEdit ? '已保存' : '已配置');
+      onSaved();
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
 
   const submit = () => {
-    if (!name.trim() || !modelName.trim()) return;
+    if (!name.trim() || !baseUrl.trim() || !modelName.trim()) return;
+    // On create, api_key is required (can't call the relay without it). On edit,
+    // blank api_key = keep existing.
+    if (!isEdit && !apiKey.trim()) return;
     const body: AiProvider = {
-      capability,
+      capability: 'chat',
       name: name.trim(),
-      provider_type: providerType,
-      base_url: isOpenAi ? baseUrl.trim() : '',
-      // Edit mode + blank key = don't change: send empty string and let the
-      // backend decide. (Backend treats "" as no-op on update.)
-      api_key: !isOpenAi ? '' : apiKey,
+      provider_type: 'openai_compat',
+      base_url: baseUrl.trim(),
+      // Edit + blank key = don't change: send empty string (backend treats "" as
+      // no-op on update). Mirrors the admin-password "留空则不修改" convention.
+      api_key: apiKey,
       model_name: modelName.trim(),
       is_enabled: isEnabled,
     };
-    onSubmit(body);
+    saveMut.mutate(body);
   };
 
+  const canFetchModels = baseUrl.trim() !== '' && apiKey.trim() !== '';
+  const canSubmit = name.trim() !== '' && baseUrl.trim() !== '' && modelName.trim() !== '' && (isEdit || apiKey.trim() !== '');
+
   return (
-    <Modal open={true} onClose={onCancel} title={isEdit ? '编辑 AI Provider' : '新增 AI Provider'} size="md">
-      <div className="space-y-3">
-        <div>
-          <label className="mb-1 block text-xs text-muted">名称</label>
-          <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="如：主聊天模型" />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="mb-1 block text-xs text-muted">能力</label>
-            <select className="input" value={capability} onChange={(e) => setCapability(e.target.value as AiProvider['capability'])}>
-              <option value="chat">chat（对话）</option>
-              <option value="embedding">embedding（向量）</option>
-              <option value="rerank">rerank（重排）</option>
-            </select>
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-muted">Provider 类型</label>
-            <select className="input" value={providerType} onChange={(e) => setProviderType(e.target.value)}>
-              <option value="openai_compat">openai_compat</option>
-              <option value="onnx_local">onnx_local</option>
-            </select>
-          </div>
-        </div>
-        {isOpenAi && (
-          <div>
-            <label className="mb-1 block text-xs text-muted">Base URL</label>
-            <input className="input font-mono" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://www.hi-code.cc" />
-          </div>
-        )}
-        {isOpenAi && (
-          <div>
-            <label className="mb-1 block text-xs text-muted">
-              API Key{isEdit ? '（留空则不修改）' : ''}
-            </label>
-            <input type="password" className="input font-mono" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={isEdit ? '••••••（不修改请留空）' : 'sk-...'} />
-          </div>
-        )}
-        <div>
-          <label className="mb-1 block text-xs text-muted">模型名 / 模型路径</label>
-          <input className="input font-mono" value={modelName} onChange={(e) => setModelName(e.target.value)} placeholder={isOpenAi ? 'gpt-5.4-mini' : '/models/bge-small.onnx'} />
-        </div>
-        <div>
-          <label className="flex h-[38px] items-center gap-2 text-sm text-txt">
-            <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} className="h-4 w-4 accent-primary" />
-            <span className="text-xs text-muted">启用此 Provider</span>
-          </label>
-        </div>
-        <div className="flex justify-end gap-2 pt-2">
-          <button className="btn-secondary" onClick={onCancel}>取消</button>
-          <button className="btn-primary" onClick={submit} disabled={pending || !name.trim() || !modelName.trim()}>
-            {pending ? '保存中…' : '保存'}
+    <div className="space-y-3">
+      <div>
+        <label className="mb-1 block text-xs text-muted">名称</label>
+        <input className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="如：主聊天模型" />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-muted">Base URL</label>
+        <input
+          className="input font-mono"
+          value={baseUrl}
+          onChange={(e) => setBaseUrl(e.target.value)}
+          placeholder="https://www.hi-code.cc"
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-muted">API Key{isEdit ? '（留空则不修改）' : ''}</label>
+        <input
+          type="password"
+          className="input font-mono"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={isEdit ? '••••••（不修改请留空）' : 'sk-...'}
+        />
+      </div>
+      <div>
+        <div className="mb-1 flex items-center justify-between">
+          <label className="block text-xs text-muted">模型</label>
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => fetchModelsMut.mutate()}
+            disabled={!canFetchModels || fetchModelsMut.isPending}
+          >
+            {fetchModelsMut.isPending ? '拉取中…' : '🔄 拉取可用模型'}
           </button>
         </div>
+        {modelsFetched && models.length > 0 ? (
+          <select className="input font-mono" value={modelName} onChange={(e) => setModelName(e.target.value)}>
+            <option value="" disabled>
+              选择模型…
+            </option>
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            className="input font-mono"
+            value={modelName}
+            onChange={(e) => setModelName(e.target.value)}
+            placeholder={modelsFetched && models.length === 0 ? '未拉取到模型,请手动填写' : 'gpt-5.4-mini（填好 URL+Key 后可点上方拉取）'}
+          />
+        )}
+        {modelsFetched && models.length === 0 && (
+          <p className="mt-1 text-[11px] text-muted">该端点未返回模型列表,可直接手动输入模型名。</p>
+        )}
       </div>
-    </Modal>
+      <div>
+        <label className="flex h-[38px] items-center gap-2 text-sm text-txt">
+          <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} className="h-4 w-4 accent-primary" />
+          <span className="text-xs text-muted">启用此 Provider</span>
+        </label>
+      </div>
+      <div className="flex items-center justify-end gap-2 pt-1">
+        {isEdit && <ConnectionTestButton id={provider!.id!} />}
+        <button className="btn-primary" onClick={submit} disabled={saveMut.isPending || !canSubmit}>
+          {saveMut.isPending ? '保存中…' : isEdit ? '保存' : '配置'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ConnectionTestButton reuses the existing per-row test endpoint. Kept as a
+// small component so the form stays readable; after save the row may have a new
+// id, but for the singleton chat config the id is stable within a session.
+function ConnectionTestButton({ id }: { id: number }) {
+  const toast = useToast();
+  const testMut = useMutation({
+    mutationFn: () => api.testAiProvider(id),
+    onSuccess: (d) => {
+      if (d.ok) toast.success(d.message || '连接成功');
+      else toast.error(d.message || '连接失败');
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  return (
+    <button className="btn-secondary" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+      {testMut.isPending ? '测试中…' : '🔌 测试连接'}
+    </button>
   );
 }
