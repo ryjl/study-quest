@@ -153,13 +153,13 @@ function SourceModal({ source, pending, onCancel, onSubmit }: {
           </div>
           <div>
             <label className="mb-1 block text-xs text-muted">密码</label>
-            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input type="password" className="input" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={source ? '留空保持原密码不变' : ''} />
           </div>
         </div>
         {type === 'alist' && (
           <div>
             <label className="mb-1 block text-xs text-muted">AList Token</label>
-            <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder="AList 授权令牌" />
+            <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder={source ? '留空保持原 Token 不变' : 'AList 授权令牌'} />
           </div>
         )}
         <div className="flex justify-end gap-2 pt-2">

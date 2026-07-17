@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import type { AppRelease } from '../lib/types';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
 import { useToast, useConfirm } from '../lib/toast';
+import { PageHeader } from '../components/PageHeader';
 
 // The closed set of ABIs the backend accepts. Mirrors SupportedABIs in
 // release_handler.go — changing one without the other breaks upload.
@@ -55,15 +56,16 @@ export function Releases() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-txt">版本发布</h1>
-          <p className="mt-1 text-sm text-muted">
-            上传 APK 向客户端分发应用更新。勾选「强制更新」时，低版本客户端必须升级后才能使用。
-          </p>
-        </div>
-        <button className="btn-primary" onClick={() => setUploading(true)}>+ 上传新版本</button>
-      </div>
+      <PageHeader
+        title="版本发布"
+        breadcrumb={[{ label: '系统配置' }]}
+        description="管理 App 版本与更新日志。"
+        actions={
+          <button className="btn-primary" onClick={() => setUploading(true)}>
+            + 上传新版本
+          </button>
+        }
+      />
 
       {releases.length === 0 ? (
         <EmptyState icon="📦" title="还没有发布版本" hint="构建 APK 后（make build-apk），在此上传以开启客户端自动更新。" />

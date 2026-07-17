@@ -7,6 +7,7 @@ import type { AdminBadge } from '../lib/types';
 import { useSubjects } from '../lib/useSubjects';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
 import { useToast } from '../lib/toast';
+import { PageHeader } from '../components/PageHeader';
 
 const ICONS = [
   { key: 'badge_first_blood', emoji: '✨', label: '首战告捷' },
@@ -104,12 +105,16 @@ export function Badges() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between border-b border-border pb-4">
-        <h1 className="text-2xl font-bold text-txt">荣誉徽章</h1>
-        <button className="btn-primary" onClick={() => setCreating(true)}>
-          + 新增勋章
-        </button>
-      </div>
+      <PageHeader
+        title="荣誉徽章"
+        breadcrumb={[{ label: '系统配置' }]}
+        description="管理成就徽章与解锁规则。"
+        actions={
+          <button className="btn-primary" onClick={() => setCreating(true)}>
+            + 新增勋章
+          </button>
+        }
+      />
 
       <div className="grid grid-cols-3 gap-5">
         <div className="col-span-2">

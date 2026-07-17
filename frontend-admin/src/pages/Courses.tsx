@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { CoursesContent } from './courses/CoursesContent';
 import { CreateEditCourseModal } from './courses/CourseModal';
+import { PageHeader } from '../components/PageHeader';
 import type { Course } from '../lib/types';
 
 export function Courses() {
@@ -9,12 +10,15 @@ export function Courses() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between border-b border-border pb-4">
-        <h1 className="text-2xl font-bold text-txt">课程库管理</h1>
-        <button className="btn-primary" onClick={() => setEditing({ open: true })}>
-          + 新增课程库
-        </button>
-      </div>
+      <PageHeader
+        title="课程库管理"
+        description="管理所有课程、章节与课时。点击卡片展开课时树。"
+        actions={
+          <button className="btn-primary" onClick={() => setEditing({ open: true })}>
+            + 新增课程库
+          </button>
+        }
+      />
 
       <CoursesContent key={refreshKey} onEdit={(c) => setEditing({ course: c, open: true })} onChanged={() => setRefreshKey((k) => k + 1)} />
 

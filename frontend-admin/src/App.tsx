@@ -9,8 +9,7 @@ import { Users } from './pages/Users';
 import { Badges } from './pages/Badges';
 import { Import } from './pages/Import';
 import { Settings } from './pages/Settings';
-import { Subjects } from './pages/Subjects';
-import { Tags } from './pages/Tags';
+import { Classification } from './pages/Classification';
 import { Releases } from './pages/Releases';
 import { ReadingRoom } from './pages/ReadingRoom';
 import { WatchHistory } from './pages/WatchHistory';
@@ -56,8 +55,7 @@ export default function App() {
         <Route path="ai-workflow" element={<AIWorkflow />} />
         <Route path="ai-user" element={<AIUserView />} />
         <Route path="reading-room" element={<ReadingRoom />} />
-        <Route path="subjects" element={<Subjects />} />
-        <Route path="tags" element={<Tags />} />
+        <Route path="classification" element={<Classification />} />
         <Route path="import" element={<Import />} />
         <Route path="badges" element={<Badges />} />
         <Route path="releases" element={<Releases />} />

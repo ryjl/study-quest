@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import type { SubtitleJob, SubtitleJobStatus } from '../lib/types';
+import { PageHeader } from '../components/PageHeader';
 
 // Human labels + Tailwind color classes per status. Kept inline since only
 // this page renders status badges.
@@ -73,12 +74,11 @@ export function SubtitleQueue() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">字幕队列</h1>
-        <p className="mt-1 text-sm text-muted">
-          勾选课时加入队列后，台式机上的 whisper worker 会认领并转录。转录完成的字幕会自动进库，播放器立即可用。
-        </p>
-      </div>
+      <PageHeader
+        title="字幕队列"
+        breadcrumb={[{ label: '内容运营' }]}
+        description="管理 Whisper 字幕生成任务。失败任务可重试，卡住的可复位。"
+      />
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">

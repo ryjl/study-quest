@@ -10,6 +10,7 @@ import { GradePicker, ImageUpload } from '../components/inputs';
 import { TagInput } from '../components/TagInput';
 import { useToast } from '../lib/toast';
 import { formatFileSize } from '../lib/format';
+import { PageHeader } from '../components/PageHeader';
 
 type ImportMode = 'existing' | 'new';
 
@@ -100,10 +101,11 @@ export function Import() {
 
   return (
     <div>
-      <div className="mb-6 border-b border-border pb-4">
-        <h1 className="text-2xl font-bold text-txt">智能导入向导</h1>
-        <p className="mt-1 text-sm text-muted">扫描网盘目录 → 预览映射 → 一键导入。系统会自动识别 课程/章节/课时 结构。</p>
-      </div>
+      <PageHeader
+        title="文件导入"
+        breadcrumb={[{ label: '内容运营' }]}
+        description="从存储源批量导入视频为课程与课时。"
+      />
 
       {/* Step 1: Path */}
       <div className="card mb-5">

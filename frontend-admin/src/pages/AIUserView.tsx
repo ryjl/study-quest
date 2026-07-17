@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { AiQuizDetail, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 
 // AIUserView — the per-student observability page. Pick a user (from a
 // searchable dropdown of all users), see their generated quizzes, drill into
@@ -36,13 +37,11 @@ export function AIUserView() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">AI 用户视图</h1>
-        <p className="mt-1 text-sm text-muted">
-          按学生查看 AI 学习情况:生成的题库、答题记录、掌握度(memory)、以及 agent 对这个学生的评价与出题思考过程。
-          这是观察反馈循环的地方——答题更新 memory,下次出题自适应。
-        </p>
-      </div>
+      <PageHeader
+        title="AI 用户视图"
+        breadcrumb={[{ label: 'AI 运营' }]}
+        description="按用户查看 AI 题库、答题历史与 agent 决策回放。"
+      />
 
       {/* User picker — a searchable combobox over api.listUsers(). An <input>
           filters by nickname; a native <datalist> offers matches. Picking one

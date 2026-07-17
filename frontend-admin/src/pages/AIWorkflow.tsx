@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import type { AiJob, AiJobStatus, AiRun, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 
 // Status badge palette. Kept inline since only this page renders these badges.
 // Follows the SubtitleQueue pattern: tailwind palette swatches per status,
@@ -85,12 +86,11 @@ export function AIWorkflow() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">AI Workflow 观测</h1>
-        <p className="mt-1 text-sm text-muted">
-          AI 任务的执行状态与决策回放：切片 / 总结 / 出题 等任务的进度，以及每次模型调用的输入、输出与自检结果。
-        </p>
-      </div>
+      <PageHeader
+        title="AI Workflow"
+        breadcrumb={[{ label: 'AI 运营' }]}
+        description="观测 AI 任务队列与 agent 决策痕迹。失败任务可重试。"
+      />
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">

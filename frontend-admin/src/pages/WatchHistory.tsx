@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import type { User } from '../lib/types';
 import { LoadingState, EmptyState } from '../components/ui';
 import { formatDurationShort, formatDuration } from '../lib/format';
+import { PageHeader } from '../components/PageHeader';
 
 // localStorage key for the last-selected user, so re-entry doesn't reset.
 const LS_USER_KEY = 'watch-history-user';
@@ -71,27 +72,26 @@ export function WatchHistory() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold text-txt">观看历史</h1>
-          <p className="mt-1 text-sm text-muted">
-            按日查看学习与娱乐的观看记录。热力图颜色深浅 = 当日学习时长，点击某天看明细。
-          </p>
-        </div>
-        <select
-          className="input"
-          value={userId ?? ''}
-          onChange={(e) => pickUser(Number(e.target.value))}
-          disabled={users.length === 0}
-        >
-          {users.length === 0 && <option value="">（暂无用户）</option>}
-          {users.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.nickname}（{roleLabel(u.role)}）
-            </option>
-          ))}
-        </select>
-      </div>
+      <PageHeader
+        title="观看历史"
+        breadcrumb={[{ label: '用户与授权' }]}
+        description="查看用户观看记录与进度。"
+        actions={
+          <select
+            className="input"
+            value={userId ?? ''}
+            onChange={(e) => pickUser(Number(e.target.value))}
+            disabled={users.length === 0}
+          >
+            {users.length === 0 && <option value="">（暂无用户）</option>}
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.nickname}（{roleLabel(u.role)}）
+              </option>
+            ))}
+          </select>
+        }
+      />
 
       {userId !== null && (
         <>

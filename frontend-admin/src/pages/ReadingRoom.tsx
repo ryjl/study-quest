@@ -9,6 +9,7 @@ import { TagInput } from '../components/TagInput';
 import { PathBrowser } from '../components/PathBrowser';
 import { subjectMeta, gradeDisplay } from '../lib/types';
 import type { ReadingSeries, ReadingBook, ReadingArticle } from '../lib/types';
+import { PageHeader } from '../components/PageHeader';
 
 // Parse the stored whitelist_domains (JSON array string or comma-separated)
 // into a clean comma-separated string for the text input.
@@ -94,20 +95,19 @@ export function ReadingRoom() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-txt">阅读室</h1>
-          <p className="mt-1 text-sm text-muted">
-            管理 PDF 绘本/试卷与网页文章。系列用于组织同主题的多篇内容。
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button className="btn-secondary" onClick={() => setImporting(true)}>📥 从文件夹导入</button>
-          <button className="btn-secondary" onClick={() => setCreatingBook(true)}>+ 添加书籍</button>
-          <button className="btn-secondary" onClick={() => setCreatingArticle(true)}>+ 添加文章</button>
-          <button className="btn-primary" onClick={() => setCreatingSeries(true)}>+ 新建系列</button>
-        </div>
-      </div>
+      <PageHeader
+        title="阅读室"
+        breadcrumb={[{ label: '内容运营' }]}
+        description="管理阅读系列、PDF 书籍与文章。"
+        actions={
+          <div className="flex gap-2">
+            <button className="btn-secondary" onClick={() => setImporting(true)}>📥 从文件夹导入</button>
+            <button className="btn-secondary" onClick={() => setCreatingBook(true)}>+ 添加书籍</button>
+            <button className="btn-secondary" onClick={() => setCreatingArticle(true)}>+ 添加文章</button>
+            <button className="btn-primary" onClick={() => setCreatingSeries(true)}>+ 新建系列</button>
+          </div>
+        }
+      />
 
       {/* Filter bar */}
       <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3">

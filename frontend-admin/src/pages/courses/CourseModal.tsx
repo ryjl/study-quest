@@ -36,10 +36,24 @@ export function CreateEditCourseModal({
   const [aiSummaryEnabled, setAiSummaryEnabled] = useState(true);
   const [aiQuizEnabled, setAiQuizEnabled] = useState(true);
 
+  // Resync ALL form fields only when the modal (re)opens or switches to a
+  // different course. We intentionally do NOT depend on `subjects` here: the
+  // subject catalog loads asynchronously, and a mid-edit catalog arrival used
+  // to reset a subject the admin had just picked (the effect re-ran on every
+  // subjects change, re-seeding subject from subjects[0]). Instead, the
+  // subject fallback to subjects[0] is applied ONCE at open via the inline
+  // read of the current `subjects` prop; later catalog updates don't disturb
+  // the form. The <select> below reads `subjects` reactively for its options,
+  // so newly-arrived subjects still appear in the dropdown.
   useEffect(() => {
     if (open) {
       setTitle(course?.title ?? '');
-      setGrade(course?.grade ?? '');
+      // Backend DTO sends `grades` (plural, see admin_dto.go); the legacy
+      // `grade` singular alias may still appear on older rows. Fall back so
+      // editing an existing course preserves its grade selection instead of
+      // silently clearing it (the prior bug: reading only `grade` always got
+      // "" because the backend stopped sending that field).
+      setGrade(course?.grades ?? course?.grade ?? '');
       const ct = (course?.content_type === 'entertainment' ? 'entertainment' : 'learning') as 'learning' | 'entertainment';
       setContentType(ct);
       // Entertainment courses are pinned to the "entertainment" subject.
@@ -53,7 +67,8 @@ export function CreateEditCourseModal({
       setAiSummaryEnabled(course?.ai_summary_enabled ?? false);
       setAiQuizEnabled(course?.ai_quiz_enabled ?? false);
     }
-  }, [open, course, subjects]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, course]);
 
   const isEntertainment = contentType === 'entertainment';
 
@@ -64,6 +79,10 @@ export function CreateEditCourseModal({
       if (grades.length === 0) throw new Error('请至少选择一个适用年级');
       const body = {
         title: title.trim(),
+        // Send BOTH the new `grades` field (what the backend reads — see
+        // admin_content.go parseGrades) and the legacy `grade` alias for
+        // backward compatibility with any older middleware path.
+        grades: grade,
         grade,
         subject: isEntertainment ? 'entertainment' : subject,
         content_type: contentType,

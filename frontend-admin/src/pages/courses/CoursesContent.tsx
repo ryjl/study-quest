@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import { GRADES, subjectMeta, type Course } from '../../lib/types';
 import { useSubjects } from '../../lib/useSubjects';
 import { useUnlockTemplate, strategyLabel } from '../../lib/useUnlock';
-import { EmptyState, LoadingState, SubjectBadge, Tag } from '../../components/ui';
+import { DropdownMenu, EmptyState, LoadingState, SubjectBadge, Tag } from '../../components/ui';
 import { CourseUnlockTemplateModal } from '../../components/CourseUnlockTemplateModal';
 import { formatDurationShort, relativeTime } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
@@ -164,10 +164,28 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
             const cover = c.cover_url || c.cover_fallback_url || '';
             return (
               <div key={c.id} className="card !p-0 overflow-hidden">
-                {/* Card header */}
-                <div className="flex items-center gap-4 p-5">
-                  {/* Cover thumbnail */}
-                  <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl border border-border bg-card-2">
+                {/* Card header — the whole row is the expand affordance. The
+                    right-side ⋯ menu lives in a stopPropagation wrapper so its
+                    clicks don't bubble up and toggle the card. */}
+                <div
+                  className="group flex items-center gap-3 p-4 cursor-pointer transition-colors hover:bg-card-2/40"
+                  onClick={() => toggleExpand(c.id)}
+                >
+                  {/* Primary expand chevron — large, text-primary, rotates open */}
+                  <button
+                    type="button"
+                    aria-label={isOpen ? '折叠课时' : '展开课时'}
+                    className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-2xl leading-none text-primary transition-colors hover:bg-card-2"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleExpand(c.id);
+                    }}
+                  >
+                    <span className={`inline-block transition-transform duration-200 ${isOpen ? 'rotate-90' : ''}`}>▶</span>
+                  </button>
+
+                  {/* Cover thumbnail — bumped to h-20 w-20 for presence */}
+                  <div className="h-20 w-20 flex-shrink-0 overflow-hidden rounded-xl border border-border bg-card-2">
                     {cover ? (
                       <img src={cover} alt="" className="h-full w-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
                     ) : (
@@ -175,7 +193,7 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
                         className="flex h-full w-full flex-col items-center justify-center"
                         style={{ background: `linear-gradient(135deg, ${meta.color}40, ${meta.color}10)` }}
                       >
-                        <span className="text-xl leading-none opacity-80">{meta.emoji}</span>
+                        <span className="text-2xl leading-none opacity-80">{meta.emoji}</span>
                         <span className="mt-0.5 max-w-full truncate text-[10px] font-bold" style={{ color: meta.color }}>
                           {(c.title || '').slice(0, 1)}
                         </span>
@@ -184,7 +202,7 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    <h3 className="truncate text-lg font-bold text-txt">{c.title}</h3>
+                    <h3 className="truncate text-xl font-bold text-txt">{c.title}</h3>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
                       <SubjectBadge subject={c.subject} />
                       <CourseUnlockBadge courseId={c.id} />
@@ -215,22 +233,23 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
                     )}
                   </div>
 
-                  <div className="flex flex-shrink-0 gap-2">
-                    <button className="btn-secondary btn-sm" onClick={() => toggleExpand(c.id)} title={isOpen ? '折叠' : '展开'}>
-                      {isOpen ? '▲ 收起' : '▼ 展开'}
-                    </button>
-                    <button className="btn-secondary btn-sm" onClick={() => setUnlockForCourse(c)} title="设置视频按需解锁节奏">
-                      ⏱ 解锁节奏
-                    </button>
-                    <button className="btn-secondary btn-sm" onClick={() => onEdit(c)}>
-                      ✏ 编辑
-                    </button>
-                    <button className="btn-danger btn-sm" onClick={() => onDeleteCourse(c)}>
-                      删除
-                    </button>
+                  {/* Action menu — wrapper stops propagation so opening the
+                      menu (or picking an item) never toggles the card expand. */}
+                  <div className="flex flex-shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
+                    <DropdownMenu
+                      align="right"
+                      items={[
+                        { label: isOpen ? '折叠课时' : '展开课时', icon: isOpen ? '▲' : '▼', onClick: () => toggleExpand(c.id) },
+                        { label: '解锁节奏', icon: '⏱', onClick: () => setUnlockForCourse(c) },
+                        { label: '编辑课程', icon: '✏️', onClick: () => onEdit(c) },
+                        { label: '删除课程', icon: '🗑', danger: true, onClick: () => onDeleteCourse(c) },
+                      ]}
+                    />
                   </div>
                 </div>
 
+                {/* CourseTree brings its own border-t + bg-card + p-4, so render
+                    it directly under the header with no extra wrapper/separator. */}
                 {isOpen && <CourseTree course={c} onChanged={onChanged} />}
               </div>
             );

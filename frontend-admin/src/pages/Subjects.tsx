@@ -16,7 +16,12 @@ const COLOR_CHOICES = [
 
 const EMOJI_CHOICES = ['📚', '📐', '🔠', '🧪', '🌎', '💻', '🎨', '🎵', '⚽', '🧩', '📖', '🌍'];
 
-export function Subjects() {
+// Reusable table + create/edit modal for subjects. Rendered standalone by the
+// legacy /admin/subjects route (kept for safety) and embedded in the
+// Classification page's "科目" tab. The page-level title/description is owned
+// by the host (Subjects page or Classification), so this component only
+// renders the "+ 新增科目" action (right-aligned above the table) and the modal.
+export function SubjectsTable() {
   const subjectsQ = useSubjects();
   const invalidate = useInvalidateSubjects();
 
@@ -37,13 +42,7 @@ export function Subjects() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-txt">科目管理</h1>
-          <p className="mt-1 text-sm text-muted">
-            管理课程分类科目。删除有课程绑定的科目会被拒绝；重命名 Key 会自动级联到相关徽章规则。
-          </p>
-        </div>
+      <div className="mb-4 flex justify-end">
         <button className="btn-primary" onClick={() => setCreating(true)}>+ 新增科目</button>
       </div>
 
@@ -117,6 +116,12 @@ export function Subjects() {
       )}
     </div>
   );
+}
+
+// Legacy default export. The route is removed in App.tsx but kept here so any
+// stray reference still resolves; it simply renders the shared table.
+export function Subjects() {
+  return <SubjectsTable />;
 }
 
 function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClose: () => void }) {
