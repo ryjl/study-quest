@@ -5,3 +5,13 @@ always matches at least one file, even on a fresh clone before any
 
 It is never served to clients — router.go only serves index.html and assets/.
 vite.config.ts sets emptyOutDir: false so this file survives every build.
+
+NOTE: do NOT let stale hashed bundles accumulate in this dir across local
+`make run` / `make build-admin` runs. They are harmless for local dev (the new
+index.html only references the latest), but historically they caused a subtle
+docker build bug: the Dockerfile's builder stage `COPY backend/ ./` would drag
+the stale local dist into the image, and when the spa stage's fresh build
+failed to land at the expected path (a WORKDIR bug, now fixed), go:embed
+silently picked up the STALE local dist — serving an old admin SPA after
+deploy. The Dockerfile now sets the spa stage WORKDIR correctly so the fresh
+build always wins, but keeping this dir clean is still good hygiene.

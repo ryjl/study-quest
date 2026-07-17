@@ -145,6 +145,7 @@ deploy: docker-build
 		docker run -d --name studyquest-backend --restart unless-stopped \
 			-p 6001:8080 \
 			--user \`id -u\`:\`id -g\` \
+			-e AI_MODELS_DIR=/app/ai-models \
 			-v ~/data/studyquest-data:/app/data \
 			studyquest-backend:latest"
 	@echo "==> Deployment complete!"
