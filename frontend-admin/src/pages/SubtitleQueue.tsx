@@ -87,7 +87,7 @@ export function SubtitleQueue() {
         <Stat label="已完成" value={stats?.done} tone="emerald" />
         <Stat label="失败" value={stats?.failed} tone="bad" />
         <Stat label="已跳过" value={stats?.skipped} tone="muted" />
-        <div className="rounded-xl border border-border bg-card p-3">
+        <div className="rounded-lg border border-border/60 bg-card p-3">
           <div className="text-[11px] text-muted">当前任务</div>
           <div className="mt-0.5 truncate text-sm font-medium">{stats?.current_title || '—'}</div>
         </div>
@@ -99,8 +99,8 @@ export function SubtitleQueue() {
           <button
             key={f}
             onClick={() => setFilter(f)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-              filter === f ? 'bg-primary text-white' : 'bg-card-2 text-muted hover:text-txt'
+            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              filter === f ? 'bg-txt text-bg' : 'text-muted hover:bg-card-2 hover:text-txt'
             }`}
           >
             {f === 'all' ? '全部' : STATUS_META[f].label}
@@ -109,18 +109,18 @@ export function SubtitleQueue() {
       </div>
 
       {/* Jobs table */}
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b border-border bg-card-2 text-xs text-muted">
+          <thead className="border-b border-border bg-card-2 text-xs uppercase tracking-wide text-muted">
             <tr>
-              <th className="px-4 py-3 text-left font-medium">课时</th>
-              <th className="px-4 py-3 text-left font-medium">状态</th>
-              <th className="px-4 py-3 text-left font-medium">Worker</th>
-              <th className="px-4 py-3 text-left font-medium">优先级</th>
-              <th className="px-4 py-3 text-left font-medium">尝试</th>
-              <th className="px-4 py-3 text-left font-medium">更新时间</th>
-              <th className="px-4 py-3 text-left font-medium">错误</th>
-              <th className="px-4 py-3 text-right font-medium">操作</th>
+              <th className="px-4 py-2.5 text-left font-medium">课时</th>
+              <th className="px-4 py-2.5 text-left font-medium">状态</th>
+              <th className="px-4 py-2.5 text-left font-medium">Worker</th>
+              <th className="px-4 py-2.5 text-left font-medium">优先级</th>
+              <th className="px-4 py-2.5 text-left font-medium">尝试</th>
+              <th className="px-4 py-2.5 text-left font-medium">更新时间</th>
+              <th className="px-4 py-2.5 text-left font-medium">错误</th>
+              <th className="px-4 py-2.5 text-right font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -201,9 +201,9 @@ function Stat({ label, value, tone }: { label: string; value?: number; tone: 'bl
     muted: 'text-muted',
   }[tone];
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
+    <div className="rounded-lg border border-border/60 bg-card p-3">
       <div className="text-[11px] text-muted">{label}</div>
-      <div className={`mt-0.5 text-2xl font-bold ${toneCls}`}>{value ?? 0}</div>
+      <div className={`mt-0.5 text-xl font-semibold tabular-nums ${toneCls}`}>{value ?? 0}</div>
     </div>
   );
 }

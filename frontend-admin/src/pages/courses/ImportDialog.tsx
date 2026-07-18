@@ -1,20 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../lib/api';
-import type { ImportPreviewNode } from '../lib/types';
-import { EmptyState, Tag } from '../components/ui';
-import { PathBrowser } from '../components/PathBrowser';
-import { useSubjects } from '../lib/useSubjects';
-import { useStorageSources } from '../lib/useStorageSources';
-import { GradePicker, ImageUpload } from '../components/inputs';
-import { TagInput } from '../components/TagInput';
-import { useToast } from '../lib/toast';
-import { formatFileSize } from '../lib/format';
-import { PageHeader } from '../components/PageHeader';
+import { Folder, FolderInput, Film, Check } from 'lucide-react';
+import { api } from '../../lib/api';
+import type { ImportPreviewNode } from '../../lib/types';
+import { EmptyState, Modal, Tag } from '../../components/ui';
+import { PathBrowser } from '../../components/PathBrowser';
+import { useSubjects } from '../../lib/useSubjects';
+import { useStorageSources } from '../../lib/useStorageSources';
+import { GradePicker, ImageUpload } from '../../components/inputs';
+import { TagInput } from '../../components/TagInput';
+import { useToast } from '../../lib/toast';
+import { formatFileSize } from '../../lib/format';
 
 type ImportMode = 'existing' | 'new';
 
-export function Import() {
+// Originally a standalone page (src/pages/Import.tsx); migrated into a dialog
+// triggered from the Courses page header. The 3-step wizard logic (source/dir
+// select → preview tree → config + execute) is unchanged — only the shell moved
+// from a PageHeader page into a Modal(size=xl).
+export function ImportDialog({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported: () => void }) {
   const toast = useToast();
   const qc = useQueryClient();
   const subjectsQ = useSubjects();
@@ -35,6 +39,25 @@ export function Import() {
   const [newSubject, setNewSubject] = useState('');
   const [newCover, setNewCover] = useState('');
   const [newTagIDs, setNewTagIDs] = useState<number[]>([]);
+
+  // Reset all wizard state when the dialog closes so the next open starts fresh.
+  // (Keeps business logic intact — only augments the dialog shell behavior.)
+  const prevOpen = useRef(open);
+  useEffect(() => {
+    if (prevOpen.current && !open) {
+      setPath('/');
+      setBrowsing(false);
+      setMode('new');
+      setTargetCourseId(0);
+      setNewTitle('');
+      setNewGrade('');
+      setNewSubject('');
+      setNewCover('');
+      setNewTagIDs([]);
+      setTree(null);
+    }
+    prevOpen.current = open;
+  }, [open]);
 
   // Default the subject select once the catalog loads.
   useEffect(() => {
@@ -95,18 +118,15 @@ export function Import() {
       setTree(null);
       setNewTitle('');
       setNewGrade('');
+      // Notify parent (Courses page) to refresh, then close the dialog.
+      onImported();
+      onClose();
     },
     onError: (e) => toast.error('导入失败: ' + (e as Error).message),
   });
 
   return (
-    <div>
-      <PageHeader
-        title="文件导入"
-        breadcrumb={[{ label: '内容运营' }]}
-        description="从存储源批量导入视频为课程与课时。"
-      />
-
+    <Modal open={open} onClose={onClose} title="文件导入" size="xl">
       {/* Step 1: Path */}
       <div className="card mb-5">
         <div className="mb-3 flex items-center gap-2">
@@ -143,8 +163,8 @@ export function Import() {
             }}
             placeholder="/Physics"
           />
-          <button className="btn-primary whitespace-nowrap" onClick={() => setBrowsing(true)} title="浏览目录并扫描" disabled={previewMut.isPending}>
-            {previewMut.isPending ? '扫描中...' : '📁 浏览目录'}
+          <button className="btn-primary inline-flex items-center gap-1.5 whitespace-nowrap" onClick={() => setBrowsing(true)} title="浏览目录并扫描" disabled={previewMut.isPending}>
+            {previewMut.isPending ? '扫描中...' : <><Folder size={14} /> 浏览目录</>}
           </button>
         </div>
       </div>
@@ -206,7 +226,7 @@ export function Import() {
                 <select className="input" value={newSubject} onChange={(e) => setNewSubject(e.target.value)}>
                   {subjects.map((s) => (
                     <option key={s.key} value={s.key}>
-                      {s.emoji} {s.label}
+                      {s.label}
                     </option>
                   ))}
                 </select>
@@ -233,8 +253,8 @@ export function Import() {
               <button className="btn-danger btn-sm" onClick={() => setTree(null)}>
                 取消
               </button>
-              <button className="btn-primary btn-sm" onClick={() => executeMut.mutate()} disabled={executeMut.isPending}>
-                {executeMut.isPending ? '导入中...' : '✓ 确认导入'}
+              <button className="btn-primary btn-sm inline-flex items-center gap-1.5" onClick={() => executeMut.mutate()} disabled={executeMut.isPending}>
+                {executeMut.isPending ? '导入中...' : <><Check size={14} /> 确认导入</>}
               </button>
             </div>
           </div>
@@ -242,13 +262,13 @@ export function Import() {
         </div>
       )}
 
-      {!tree && !previewMut.isPending && <EmptyState icon="📥" title="未扫描" hint="点击「浏览目录」选择网盘文件夹后自动扫描" />}
-    </div>
+      {!tree && !previewMut.isPending && <EmptyState icon={<FolderInput size={28} />} title="未扫描" hint="点击「浏览目录」选择网盘文件夹后自动扫描" />}
+    </Modal>
   );
 }
 
 const TYPE_COLORS: Record<string, string> = {
-  course: '#a78bfa',
+  course: '#6366f1',
   chapter: '#60a5fa',
   episode: '#34d399',
   'pass-through': '#9ca3af',
@@ -280,7 +300,7 @@ function PreviewTree({ node, onChange, depth = 0 }: { node: ImportPreviewNode; o
         className="mb-1 flex items-center gap-2 rounded-lg border border-border bg-card-2 px-3 py-2"
         style={{ borderLeftColor: TYPE_COLORS[node.type], borderLeftWidth: 3 }}
       >
-        <span>{isDir ? '📁' : '🎬'}</span>
+        <span className="text-muted">{isDir ? <Folder size={14} /> : <Film size={14} />}</span>
         {node.type === 'course' ? (
           <span className="font-bold text-txt flex-1 py-1 text-sm px-2 select-none" title="课程库名称以步骤 2 中填写的为准">{node.name}</span>
         ) : (

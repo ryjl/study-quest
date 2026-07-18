@@ -397,7 +397,7 @@ func (s *episodeService) GetStreamURL(episodeID uint, userAgent string) (*storag
 	if ep.FileSize != nil && ep.OriginalRelativePath != "" {
 		basename := filepath.Base(ep.OriginalRelativePath)
 		// Scope the lookup to ep's own source so a file in source A never
-		// self-heals onto source B's path. nil SourceID → legacy unscoped.
+		// self-heals onto source B's path. A nil SourceID yields no match.
 		if resolved, rErr := s.episodeRepo.FindByBasenameAndSizeScoped(basename, *ep.FileSize, ep.SourceID); rErr == nil && resolved != nil && resolved.VideoRelativePath != ep.VideoRelativePath {
 			// Found another row with the same file at a different path — borrow it.
 			ep.VideoRelativePath = resolved.VideoRelativePath

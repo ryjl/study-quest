@@ -13,7 +13,6 @@ class Badge {
   final String code;
   final String title;
   final String description;
-  final String iconName;
   final String ruleType;
   final String ruleTarget;
   final int threshold;
@@ -26,7 +25,6 @@ class Badge {
     required this.code,
     required this.title,
     required this.description,
-    required this.iconName,
     required this.ruleType,
     this.ruleTarget = '',
     required this.threshold,
@@ -39,7 +37,6 @@ class Badge {
       code: json['Code'] ?? json['code'] ?? '',
       title: json['Title'] ?? json['title'] ?? '',
       description: json['Description'] ?? json['description'] ?? '',
-      iconName: json['IconName'] ?? json['icon_name'] ?? '',
       ruleType: json['RuleType'] ?? json['rule_type'] ?? '',
       ruleTarget: json['RuleTarget'] ?? json['rule_target'] ?? '',
       threshold: json['Threshold'] ?? json['threshold'] ?? 0,

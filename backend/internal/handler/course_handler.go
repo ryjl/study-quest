@@ -147,9 +147,8 @@ func (h *courseHandler) toClientDTO(c model.Course) clientCourseDTO {
 		Subject:        subjectKey,
 		ContentType:    string(c.ContentType),
 		CoverURL:       c.CoverURL,
-		Tags:           c.TagsJoined(),  // comma-joined labels (legacy Flutter contract)
-		TagsList:       c.TagsList(),    // []string labels
-		TagIDs:         tagIDsOf(c.Tags), // []uint tag ids (ID-based filtering)
+		TagsList:       tagLabelsOf(c.Tags), // []string labels
+		TagIDs:         tagIDsOf(c.Tags),    // []uint tag ids (ID-based filtering)
 		GradeDisplay:   c.GradeDisplay(),
 		AttachmentJSON: c.AttachmentJSON,
 		CreatedAt:      formatTime(c.CreatedAt),

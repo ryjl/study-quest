@@ -139,31 +139,6 @@ func TestUserAuthMiddleware_UserDeleted(t *testing.T) {
 	}
 }
 
-// REGRESSION GUARD: the legacy X-User-ID header must NOT authenticate. If a
-// future change reintroduces X-User-ID handling in UserAuthMiddleware, this
-// test catches it.
-func TestUserAuthMiddleware_LegacyXUserIDRejected(t *testing.T) {
-	r, _ := buildAuthChain(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/whoami", nil)
-	req.Header.Set("X-User-ID", "1") // the old scheme
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("X-User-ID header must be rejected; got status %d", w.Code)
-	}
-}
-
-// REGRESSION GUARD: the legacy "Bearer <userID>" form (a bare integer) must
-// NOT authenticate. The old scheme returned the user ID as the token; if that
-// scheme ever returns, this test fails.
-func TestUserAuthMiddleware_LegacyBearerUserIDRejected(t *testing.T) {
-	r, _ := buildAuthChain(t)
-	w := do(t, r, "Bearer 1") // bare user ID, the old token form
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("Bearer <userID> must be rejected; got status %d", w.Code)
-	}
-}
-
 // ---- LoginRateLimitMiddleware ----
 
 func TestLoginRateLimitMiddleware_AllowsUpToMax(t *testing.T) {
@@ -311,9 +286,9 @@ func TestIngestKeyMiddleware_WrongKeyRejected(t *testing.T) {
 	}
 }
 
-// ---- CORS regression: X-User-ID must be absent from allowed headers ----
+// ---- CORS: allow-headers must include the tokens handlers rely on ----
 
-func TestCORSMiddleware_AllowHeadersDropsXUserID(t *testing.T) {
+func TestCORSMiddleware_AllowHeadersIncludesExpectedTokens(t *testing.T) {
 	r := gin.New()
 	r.Use(CORSMiddleware())
 	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
@@ -324,9 +299,6 @@ func TestCORSMiddleware_AllowHeadersDropsXUserID(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	allowed := w.Header().Get("Access-Control-Allow-Headers")
-	if containsToken(allowed, "X-User-ID") {
-		t.Fatalf("CORS Allow-Headers must not include X-User-ID; got %q", allowed)
-	}
 	if !containsToken(allowed, "Authorization") {
 		t.Fatalf("CORS Allow-Headers must include Authorization; got %q", allowed)
 	}

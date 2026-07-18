@@ -15,11 +15,11 @@ func TestBadgeDeleteRefusesSystem(t *testing.T) {
 	progressRepo := repository.NewProgressRepository(db)
 	svc := NewBadgeService(db, repo, progressRepo)
 
-	system := &model.Badge{Code: "sys_one", Title: "系统", IconName: "x", RuleType: "watch_duration", Threshold: 1, IsSystem: true}
+	system := &model.Badge{Code: "sys_one", Title: "系统", RuleType: "watch_duration", Threshold: 1, IsSystem: true}
 	if err := repo.Create(system); err != nil {
 		t.Fatalf("create system badge: %v", err)
 	}
-	custom := &model.Badge{Code: "usr_one", Title: "自建", IconName: "x", RuleType: "watch_duration", Threshold: 1, IsSystem: false}
+	custom := &model.Badge{Code: "usr_one", Title: "自建", RuleType: "watch_duration", Threshold: 1, IsSystem: false}
 	if err := repo.Create(custom); err != nil {
 		t.Fatalf("create custom badge: %v", err)
 	}

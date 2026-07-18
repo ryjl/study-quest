@@ -228,27 +228,6 @@ class ApiService {
     _fail(response.statusCode, '获取练习失败: ${response.statusCode}');
   }
 
-  static Future<QuizAnswerResult> submitQuizAnswer({
-    required int activeUserId,
-    required int episodeId,
-    required int questionId,
-    int? answerIndex,
-    String? answerText,
-  }) async {
-    final body = <String, dynamic>{'question_id': questionId};
-    if (answerIndex != null) body['answer_index'] = answerIndex;
-    if (answerText != null && answerText.isNotEmpty) body['answer_text'] = answerText;
-    final response = await _httpClient.post(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/submit'),
-      headers: _headers(activeUserId),
-      body: jsonEncode(body),
-    );
-    if (response.statusCode == 200) {
-      return QuizAnswerResult.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
-    }
-    _fail(response.statusCode, '提交答案失败: ${response.statusCode}');
-  }
-
   /// Phase B 统一交卷:一次提交全部题,后端逐题判分 + 锁定 quiz。
   /// answers 为一整张卷子的作答;选择题给 answerIndex,填空题给 answerText。
   /// 返回每题结果(顺序与后端 quiz 题序一致)。已交卷(409)时抛异常。

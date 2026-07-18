@@ -95,7 +95,7 @@ export function WatchHistory() {
 
       {userId !== null && (
         <>
-          <section className="rounded-xl border border-border bg-card p-4">
+          <section className="rounded-lg border border-border bg-card p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-medium text-txt">{label}</h2>
               <div className="flex gap-2">
@@ -128,7 +128,7 @@ export function WatchHistory() {
             </div>
           </section>
 
-          <section className="rounded-xl border border-border bg-card p-4">
+          <section className="rounded-lg border border-border bg-card p-4">
             <h2 className="mb-3 text-lg font-medium text-txt">
               {selectedDay ? `${selectedDay} 当日明细` : '点击上方某天查看当日明细'}
             </h2>
@@ -179,7 +179,10 @@ function Heatmap({
   }
 
   return (
-    <div>
+    // Cap the grid width so cells stay a comfortable size on wide screens —
+    // without this the 7 aspect-square cells stretch to fill the whole main
+    // area and each day becomes a huge tile. max-w-2xl keeps cells ~80px.
+    <div className="max-w-2xl">
       <div className="mb-1 grid grid-cols-7 gap-1 text-center text-[11px] text-muted">
         {['日', '一', '二', '三', '四', '五', '六'].map((w) => (
           <div key={w}>{w}</div>

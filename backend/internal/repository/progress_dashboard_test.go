@@ -32,14 +32,10 @@ func at(s string) time.Time {
 // aggregate fixtures (watch_seconds, is_completed, updated_at).
 func seedProgressRow(t *testing.T, db *gorm.DB, uid, eid uint, watchSec int, completed bool, updated time.Time) {
 	t.Helper()
-	c := 0
-	if completed {
-		c = 1
-	}
 	p := model.UserProgress{
 		UserID: uid, EpisodeID: eid,
 		WatchSeconds: watchSec, LastPositionSeconds: watchSec,
-		IsCompleted: c, UpdatedAt: updated,
+		IsCompleted: completed, UpdatedAt: updated,
 	}
 	if err := db.Create(&p).Error; err != nil {
 		t.Fatalf("seed progress: %v", err)

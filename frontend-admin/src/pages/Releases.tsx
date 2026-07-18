@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Package } from 'lucide-react';
 import { api } from '../lib/api';
 import type { AppRelease } from '../lib/types';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
@@ -68,7 +69,7 @@ export function Releases() {
       />
 
       {releases.length === 0 ? (
-        <EmptyState icon="📦" title="还没有发布版本" hint="构建 APK 后（make build-apk），在此上传以开启客户端自动更新。" />
+        <EmptyState icon={<Package size={28} />} title="还没有发布版本" hint="构建 APK 后（make build-apk），在此上传以开启客户端自动更新。" />
       ) : (
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">

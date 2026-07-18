@@ -88,6 +88,13 @@ class AppTheme {
     return value == null ? null : Color(value);
   }
 
+  /// Parses a hex color string (e.g. "#f59e0b") into a [Color]. Falls back to
+  /// [primaryColor] when the string is empty/invalid. Used for tinting subject
+  /// icons on gradient covers where the cover already uses the subject color.
+  static Color colorFromHex(String hexColor) {
+    return _parseHex(hexColor) ?? primaryColor;
+  }
+
   static ThemeData get lightTheme {
     return ThemeData(
       brightness: Brightness.light,

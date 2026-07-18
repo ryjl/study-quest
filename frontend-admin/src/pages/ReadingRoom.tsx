@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { FolderInput, Plus, Search, Library, FileText, Globe, BookOpen, BookMarked, Check, Folder, FolderOpen, CheckCircle2, XCircle } from 'lucide-react';
 import { api } from '../lib/api';
 import { useSubjects } from '../lib/useSubjects';
 import { useToast, useConfirm } from '../lib/toast';
-import { Modal, LoadingState, EmptyState } from '../components/ui';
+import { Modal, LoadingState, EmptyState, SubjectIcon } from '../components/ui';
 import { ImageUpload, GradePicker } from '../components/inputs';
 import { TagInput } from '../components/TagInput';
 import { PathBrowser } from '../components/PathBrowser';
@@ -101,16 +103,16 @@ export function ReadingRoom() {
         description="管理阅读系列、PDF 书籍与文章。"
         actions={
           <div className="flex gap-2">
-            <button className="btn-secondary" onClick={() => setImporting(true)}>📥 从文件夹导入</button>
-            <button className="btn-secondary" onClick={() => setCreatingBook(true)}>+ 添加书籍</button>
-            <button className="btn-secondary" onClick={() => setCreatingArticle(true)}>+ 添加文章</button>
-            <button className="btn-primary" onClick={() => setCreatingSeries(true)}>+ 新建系列</button>
+            <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => setImporting(true)}><FolderInput size={14} /> 从文件夹导入</button>
+            <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => setCreatingBook(true)}><Plus size={14} /> 添加书籍</button>
+            <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => setCreatingArticle(true)}><Plus size={14} /> 添加文章</button>
+            <button className="btn-primary inline-flex items-center gap-1.5" onClick={() => setCreatingSeries(true)}><Plus size={14} /> 新建系列</button>
           </div>
         }
       />
 
       {/* Filter bar */}
-      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3">
+      <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-card p-3">
         <input
           className="input max-w-xs"
           placeholder="搜索标题..."
@@ -120,7 +122,7 @@ export function ReadingRoom() {
         <select className="input max-w-[180px]" value={subjectFilter} onChange={(e) => setSubjectFilter(e.target.value)}>
           <option value="">全部科目</option>
           {(subjectsQ.data ?? []).map((s) => (
-            <option key={s.key} value={s.key}>{s.emoji} {s.label}</option>
+            <option key={s.key} value={s.key}>{s.label}</option>
           ))}
         </select>
         <span className="text-sm text-muted">
@@ -130,7 +132,7 @@ export function ReadingRoom() {
 
       {series.length === 0 && standaloneBooks.length === 0 && standaloneArticles.length === 0 && (
         <EmptyState
-          icon="📖"
+          icon={<BookOpen size={28} />}
           title="阅读室还是空的"
           hint="添加 PDF 绘本/试卷或网页文章，或新建一个系列来组织同主题内容。"
         />
@@ -139,7 +141,7 @@ export function ReadingRoom() {
       {/* Series section */}
       {filteredSeries.length > 0 && (
         <div className="mb-6">
-          <h2 className="mb-3 text-sm font-semibold text-muted">📚 系列</h2>
+          <h2 className="mb-3 inline-flex items-center gap-1.5 text-sm font-semibold text-muted"><Library size={14} /> 系列</h2>
           <div className="space-y-3">
             {filteredSeries.map((s) => {
               const isOpen = expandedSeries.has(s.id);
@@ -150,12 +152,17 @@ export function ReadingRoom() {
                     {s.cover_url ? (
                       <img src={s.cover_url} alt="" className="h-14 w-14 rounded-lg object-cover" />
                     ) : (
-                      <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-card-2 text-2xl">{subj.emoji}</div>
+                      <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-card-2" style={{ color: subj.color }}>
+                        <SubjectIcon subject={s.subject} size={22} />
+                      </div>
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-txt">{s.title}</span>
-                        <span className="rounded-md px-1.5 py-0.5 text-xs font-medium" style={{ backgroundColor: `${subj.color}20`, color: subj.color }}>{subj.emoji} {subj.label}</span>
+                        <span className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium" style={{ backgroundColor: `${subj.color}20`, color: subj.color }}>
+                          <SubjectIcon subject={s.subject} size={12} />
+                          {subj.label}
+                        </span>
                         <span className="text-xs text-muted">{gradeDisplay(s.grade)}</span>
                       </div>
                       <p className="mt-0.5 truncate text-xs text-muted">
@@ -197,18 +204,18 @@ export function ReadingRoom() {
       {/* Standalone books */}
       {filteredBooks.length > 0 && (
         <div className="mb-6">
-          <h2 className="mb-3 text-sm font-semibold text-muted">📄 散本（PDF）</h2>
+          <h2 className="mb-3 inline-flex items-center gap-1.5 text-sm font-semibold text-muted"><FileText size={14} /> 散本（PDF）</h2>
           <div className="space-y-2">
             {filteredBooks.map((b) => {
               const subj = subjectMeta(b.subject);
               return (
                 <ReadingItemRow
                   key={b.id}
-                  icon="📕"
+                  icon={<BookMarked size={16} />}
                   title={b.title}
                   subtitle={`${gradeDisplay(b.grade)} · ${b.page_count ?? '?'}页 · ${b.file_relative_path}`}
                   subjectColor={subj.color}
-                  subjectLabel={`${subj.emoji} ${subj.label}`}
+                  subjectLabel={subj.label}
                   onEdit={() => setEditingBook(b)}
                   onDelete={async () => {
                     if (await confirm({ message: `删除书籍「${b.title}」？`, detail: '将同时删除该用户的阅读进度记录。', danger: true })) delBookMut.mutate(b.id);
@@ -223,18 +230,18 @@ export function ReadingRoom() {
       {/* Standalone articles */}
       {filteredArticles.length > 0 && (
         <div className="mb-6">
-          <h2 className="mb-3 text-sm font-semibold text-muted">🌐 散文（网页）</h2>
+          <h2 className="mb-3 inline-flex items-center gap-1.5 text-sm font-semibold text-muted"><Globe size={14} /> 散文（网页）</h2>
           <div className="space-y-2">
             {filteredArticles.map((a) => {
               const subj = subjectMeta(a.subject);
               return (
                 <ReadingItemRow
                   key={a.id}
-                  icon="🌐"
+                  icon={<Globe size={16} />}
                   title={a.title}
                   subtitle={`${gradeDisplay(a.grade)} · ${a.source_url}`}
                   subjectColor={subj.color}
-                  subjectLabel={`${subj.emoji} ${subj.label}`}
+                  subjectLabel={subj.label}
                   onEdit={() => setEditingArticle(a)}
                   onDelete={async () => {
                     if (await confirm({ message: `删除文章「${a.title}」？`, danger: true })) delArticleMut.mutate(a.id);
@@ -292,7 +299,7 @@ function SeriesChildren({
       {books.map((b) => (
         <ReadingItemRow
           key={b.id}
-          icon="📕"
+          icon={<BookMarked size={16} />}
           title={b.title}
           subtitle={`${b.page_count ?? '?'}页 · ${b.file_relative_path}`}
           compact
@@ -303,7 +310,7 @@ function SeriesChildren({
       {articles.map((a) => (
         <ReadingItemRow
           key={a.id}
-          icon="🌐"
+          icon={<Globe size={16} />}
           title={a.title}
           subtitle={a.source_url}
           compact
@@ -320,7 +327,7 @@ function SeriesChildren({
 function ReadingItemRow({
   icon, title, subtitle, subjectColor, subjectLabel, compact, onEdit, onDelete,
 }: {
-  icon: string;
+  icon: ReactNode;
   title: string;
   subtitle: string;
   subjectColor?: string;
@@ -331,7 +338,7 @@ function ReadingItemRow({
 }) {
   return (
     <div className={`group flex items-center gap-2.5 rounded-lg border border-border bg-card-2 ${compact ? 'px-3 py-1.5' : 'px-3 py-2'}`}>
-      <span className="text-lg">{icon}</span>
+      <span className="text-muted">{icon}</span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span className="truncate text-sm font-medium text-txt">{title}</span>
@@ -359,7 +366,7 @@ function SubjectSelect({ value, onChange }: { value: string; onChange: (v: strin
       <select className="input" value={value} onChange={(e) => onChange(e.target.value)} required>
         <option value="">请选择科目</option>
         {(subjectsQ.data ?? []).map((s) => (
-          <option key={s.key} value={s.key}>{s.emoji} {s.label}</option>
+          <option key={s.key} value={s.key}>{s.label}</option>
         ))}
       </select>
     </div>
@@ -674,11 +681,11 @@ function ArticleModal({ article, series, onClose }: { article: ReadingArticle | 
             <input className="input" placeholder="https://mp.weixin.qq.com/..." value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)} required spellCheck={false} />
             <button
               type="button"
-              className="btn-secondary whitespace-nowrap"
+              className="btn-secondary inline-flex items-center gap-1.5 whitespace-nowrap"
               onClick={() => suggestMut.mutate(sourceUrl.trim())}
               disabled={suggestMut.isPending || !sourceUrl.trim()}
             >
-              {suggestMut.isPending ? '分析中...' : '🔍 推荐白名单'}
+              {suggestMut.isPending ? '分析中...' : <><Search size={14} /> 推荐白名单</>}
             </button>
           </div>
           <p className="mt-1 text-xs text-muted">支持公众号文章、H5 互动页等。客户端会用 WebView 打开并拦截白名单外的跳转。填写 URL 后可点击「推荐白名单」自动分析。</p>
@@ -819,7 +826,7 @@ function ReadingImportModal({ onClose, onDone }: { onClose: () => void; onDone: 
                 <label className="mb-1 block text-xs text-muted">科目</label>
                 <select className="input" value={newSubject} onChange={(e) => setNewSubject(e.target.value)}>
                   {(subjectsQ.data ?? []).map((s) => (
-                    <option key={s.key} value={s.key}>{s.emoji} {s.label}</option>
+                    <option key={s.key} value={s.key}>{s.label}</option>
                   ))}
                 </select>
               </div>
@@ -840,8 +847,8 @@ function ReadingImportModal({ onClose, onDone }: { onClose: () => void; onDone: 
               </div>
             </div>
 
-            <button className="btn-primary w-full" onClick={() => executeMut.mutate()} disabled={executeMut.isPending}>
-              {executeMut.isPending ? '导入中...' : `✓ 确认导入 ${countBooks(tree)} 本书`}
+            <button className="btn-primary inline-flex w-full items-center justify-center gap-1.5" onClick={() => executeMut.mutate()} disabled={executeMut.isPending}>
+              {executeMut.isPending ? '导入中...' : <><Check size={14} /> 确认导入 {countBooks(tree)} 本书</>}
             </button>
           </>
         )}
@@ -873,12 +880,12 @@ function ReadingImportTree({ node, onToggle, depth = 0 }: { node: ReadingImportN
         onClick={() => onToggle(node)}
         className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm transition hover:bg-card ${excluded ? 'opacity-40' : ''}`}
       >
-        <span>{node.is_dir ? (depth === 0 ? '📁' : '📂') : '📕'}</span>
+        <span className="text-muted">{node.is_dir ? (depth === 0 ? <Folder size={14} /> : <FolderOpen size={14} />) : <BookMarked size={14} />}</span>
         <span className="flex-1 truncate" style={{ textDecoration: excluded ? 'line-through' : 'none' }}>{node.name}</span>
         {!node.is_dir && node.size > 0 && (
           <span className="text-xs text-muted">{(node.size / 1024 / 1024).toFixed(1)} MB</span>
         )}
-        <span className={`text-xs ${excluded ? 'text-bad' : 'text-good'}`}>{excluded ? '✗' : '✓'}</span>
+        <span className={`${excluded ? 'text-bad' : 'text-good'}`}>{excluded ? <XCircle size={14} /> : <CheckCircle2 size={14} />}</span>
       </button>
       {node.children && node.children.length > 0 && (
         <div>

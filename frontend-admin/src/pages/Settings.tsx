@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Wrench, Radio } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import { StorageSourcesSection } from './StorageSourcesSection';
@@ -44,7 +45,7 @@ export function Settings() {
         <AiProvidersSection />
       </div>
 
-      <Section title="运维" icon="🛠️">
+      <Section title="运维" icon={<Wrench size={14} />}>
         <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div className="card">
             <h2 className="mb-4 text-base font-bold text-txt">管理员密码</h2>
@@ -58,8 +59,8 @@ export function Settings() {
           <div className="card">
             <h2 className="mb-2 text-base font-bold text-txt">视频时长探测</h2>
             <p className="mb-3 text-xs text-muted">使用 ffprobe 探测缺准时长的课时，串行限速约每集 4 秒。</p>
-            <button className="btn-secondary" onClick={() => probeMut.mutate()} disabled={probeMut.isPending}>
-              {probeMut.isPending ? '排队中...' : '📡 扫描缺失时长'}
+            <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => probeMut.mutate()} disabled={probeMut.isPending}>
+              {probeMut.isPending ? '排队中...' : <><Radio size={14} /> 扫描缺失时长</>}
             </button>
           </div>
         </div>

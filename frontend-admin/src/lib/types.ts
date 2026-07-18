@@ -5,7 +5,6 @@ export interface SubjectMeta {
   id?: number;
   key: string;
   label: string;
-  emoji: string;
   color: string;
   sort_order?: number;
   is_system?: boolean; // true = seeded default, protected from deletion (still editable)
@@ -27,7 +26,6 @@ export function subjectMeta(key: string): SubjectMeta {
     subjectCache.find((s) => s.key === key) ?? {
       key,
       label: key,
-      emoji: '📦',
       color: '#9ca3af',
     }
   );
@@ -135,7 +133,6 @@ export interface Course {
   content_type?: string; // "learning" | "entertainment"
   cover_url: string;
   cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
-  tags: string;
   attachment_json: string;
   /** Admin-authored hint fed to the subtitle worker's Whisper prompt (and the
    * future quiz agent): terminology, accent notes, the key topic to catch.
@@ -181,7 +178,6 @@ export interface User {
   // Per-user learning stats (populated by the batch-aggregated ListUsers).
   completed_episodes?: number;
   accessible_episodes?: number;
-  watch_minutes?: number;
   watch_seconds?: number; // raw accumulated seconds (for sub-minute precision display)
   unlocked_badges?: number;
   total_badges?: number;
@@ -238,16 +234,15 @@ export interface Badge {
 }
 
 // The admin /admin/api/badges endpoints return the raw Go model, which
-// serializes with PascalCase field names (ID, Code, IconName, RuleType,
-// RuleTarget, Threshold). AdminBadge mirrors that shape so the Badges page
-// can read what the API actually sends. (The snake_case Badge type above is
-// retained for the client-facing /users/:id/badges DTO.)
+// serializes with PascalCase field names (ID, Code, RuleType, RuleTarget,
+// Threshold). AdminBadge mirrors that shape so the Badges page can read what
+// the API actually sends. (The snake_case Badge type below is retained for the
+// client-facing /users/:id/badges DTO.)
 export interface AdminBadge {
   ID: number;
   Code: string;
   Title: string;
   Description: string;
-  IconName: string;
   RuleType: string;
   RuleTarget: string;
   Threshold: number;
@@ -448,7 +443,6 @@ export interface ReadingSeries {
   subject: string; // subject key
   subject_id: number;
   cover_url: string;
-  tags: string;
   tags_list: string[];
   tag_ids: number[];
   grade_display: string;
@@ -472,7 +466,6 @@ export interface ReadingBook {
   grade: string;
   subject: string;
   subject_id: number;
-  tags: string;
   tags_list: string[];
   tag_ids: number[];
   grade_display: string;
@@ -495,7 +488,6 @@ export interface ReadingArticle {
   grade: string;
   subject: string;
   subject_id: number;
-  tags: string;
   tags_list: string[];
   tag_ids: number[];
   grade_display: string;
@@ -617,6 +609,11 @@ export interface AiRun {
   prompt_tokens: number;
   completion_tokens: number;
   model_used: string;
+  // Resolved display names for the episode/course the run's job targeted
+  // (populated by the admin runs-list endpoint so the dashboard/workflow can
+  // show what each run was about without a client-side join).
+  episode_title?: string;
+  course_title?: string;
   response_text: string;
   // trace_json carries the ReAct step-by-step reasoning for quiz runs: an array
   // of {step, thought, action:{tool,args}, observation, is_final}. Empty for

@@ -182,7 +182,7 @@ func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*stora
 
 	// Disaster recovery: basename + size fallback (mirrors episode service).
 	// Scoped to book's own source so a file in source A never self-heals onto
-	// source B's path; nil SourceID → legacy unscoped.
+	// source B's path; a nil SourceID yields no match.
 	if book.FileSize != nil && book.FileRelativePath != "" {
 		basename := filepath.Base(book.FileRelativePath)
 		if resolved, rErr := s.bookRepo.FindByBasenameAndSizeScoped(basename, *book.FileSize, book.SourceID); rErr == nil && resolved != nil && resolved.FileRelativePath != book.FileRelativePath {

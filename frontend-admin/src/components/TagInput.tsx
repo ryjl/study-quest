@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { useTags } from '../lib/useTags';
 import type { TagMeta } from '../lib/types';
 
@@ -41,7 +42,7 @@ export function TagInput({
                 className="opacity-60 hover:opacity-100"
                 aria-label={`移除 ${t.label}`}
               >
-                ×
+                <X size={12} />
               </button>
             </span>
           ))}

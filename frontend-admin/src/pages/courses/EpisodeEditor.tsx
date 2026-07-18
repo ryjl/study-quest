@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Folder } from 'lucide-react';
 import { api } from '../../lib/api';
 import type { Chapter, Episode } from '../../lib/types';
 import { Modal } from '../../components/ui';
@@ -91,11 +92,11 @@ export function EpisodeEditor({
             <input className="input font-mono" value={path} onChange={(e) => setPath(e.target.value)} required placeholder="/Physics/01.mp4" />
             <button
               type="button"
-              className="btn-secondary whitespace-nowrap"
+              className="btn-secondary inline-flex items-center gap-1.5 whitespace-nowrap"
               onClick={() => setBrowsing(true)}
               title="从网盘浏览选择视频文件"
             >
-              📁 浏览
+              <Folder size={14} /> 浏览
             </button>
           </div>
         </div>

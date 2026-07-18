@@ -711,7 +711,7 @@ class _MainNavigationState extends State<MainNavigation> {
               ),
               const SizedBox(height: 6),
               Text(
-                '看看你取得了多少成就！🏅',
+                '看看你取得了多少成就！',
                 style: TextStyle(
                   fontSize: 14,
                   color: AppTheme.textMuted,
@@ -1077,8 +1077,15 @@ class _MainNavigationState extends State<MainNavigation> {
             onPressed: () {},
             padding: const EdgeInsets.symmetric(vertical: 14),
             child: Center(
-              child: Text('⭐ $unlockedStars / $totalStars',
-                  style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.star_rounded, size: 18, color: Color(0xFFF59E0B)),
+                  const SizedBox(width: 6),
+                  Text('$unlockedStars / $totalStars',
+                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                ],
+              ),
             ),
           ),
         ],
@@ -1090,7 +1097,7 @@ class _MainNavigationState extends State<MainNavigation> {
   /// progress bar toward the next tier; single-tier badges show lock/unlock.
   Widget _buildBadgeItem(BadgeStatus st) {
     final unlocked = st.unlocked;
-    final icon = _badgeIcon(st.badge.iconName, st.badge.ruleType);
+    final icon = _badgeIcon(st.badge.code, st.badge.ruleType);
     final color = _badgeColor(st.badge.ruleType);
     final bgColor = _badgeBgColor(st.badge.ruleType);
     final multiTier = st.badge.isMultiTier;
@@ -1133,7 +1140,7 @@ class _MainNavigationState extends State<MainNavigation> {
                       ),
                       if (multiTier && unlocked && st.tier >= st.tierCount - 1) ...[
                         const SizedBox(width: 6),
-                        const Text('👑', style: TextStyle(fontSize: 14)),
+                        const Icon(Icons.workspace_premium_rounded, size: 16, color: Color(0xFFF59E0B)),
                       ],
                     ],
                   ),
@@ -1230,24 +1237,43 @@ class _MainNavigationState extends State<MainNavigation> {
     );
   }
 
-  // --- Badge visual helpers: map backend rule_type/icon_name to UI tokens ---
+  // --- Badge visual helpers: map backend rule_type/code to UI tokens ---
+  //
+  // The DB no longer stores a badge icon field; both clients (admin lucide,
+  // Flutter Material) derive the icon from the badge's code/ruleType at render
+  // time. We first match well-known seeded codes (first_blood, streak,
+  // episode_master, time_master, explorer, points_hero, course_master,
+  // weekly_dedication, subject_<key>) by substring, then fall back to ruleType
+  // semantics, then a generic trophy.
 
-  IconData _badgeIcon(String iconName, String ruleType) {
-    // Prefer explicit icon name hints, fall back to rule type semantics.
-    final name = iconName.toLowerCase();
-    if (name.contains('streak') || ruleType == 'consecutive_days') {
+  IconData _badgeIcon(String code, String ruleType) {
+    final c = code.toLowerCase();
+    if (c.contains('streak') || ruleType == 'consecutive_days') {
       return Icons.local_fire_department_rounded;
     }
-    if (name.contains('math')) return Icons.architecture_rounded;
-    if (name.contains('english')) return Icons.translate_rounded;
-    if (name.contains('first') || ruleType == 'watch_duration') {
+    if (c.contains('first')) return Icons.flag_rounded;
+    if (c.contains('time') || ruleType == 'watch_duration') {
       return Icons.timer_rounded;
     }
-    if (ruleType == 'episode_completed_count') return Icons.check_circle_outline_rounded;
-    if (ruleType == 'points_earned') return Icons.stars_rounded;
-    if (ruleType == 'course_completion') return Icons.emoji_events_rounded;
-    if (ruleType == 'weekly_all_present') return Icons.calendar_month_rounded;
-    if (ruleType == 'distinct_subject_count') return Icons.explore_rounded;
+    if (c.contains('episode') || ruleType == 'episode_completed_count') {
+      return Icons.check_circle_outline_rounded;
+    }
+    if (c.contains('course') || ruleType == 'course_completion') {
+      return Icons.emoji_events_rounded;
+    }
+    if (c.contains('point') || ruleType == 'points_earned') {
+      return Icons.stars_rounded;
+    }
+    if (c.contains('explorer') || ruleType == 'distinct_subject_count') {
+      return Icons.explore_rounded;
+    }
+    if (c.contains('weekly') || ruleType == 'weekly_all_present') {
+      return Icons.calendar_month_rounded;
+    }
+    if (c.contains('math')) return Icons.architecture_rounded;
+    if (c.contains('english')) return Icons.translate_rounded;
+    if (c.contains('chinese')) return Icons.edit_note_rounded;
+    if (c.contains('physics')) return Icons.science_rounded;
     return Icons.military_tech_rounded;
   }
 
@@ -1305,10 +1331,6 @@ class _MainNavigationState extends State<MainNavigation> {
         return Icons.play_circle_rounded;
       case 'badge_unlocked':
         return Icons.emoji_events_rounded;
-      case 'parent_grant':
-        return Icons.card_giftcard_rounded;
-      case 'redeem_gift':
-        return Icons.redeem_rounded;
       default:
         return Icons.history_rounded;
     }
@@ -1320,10 +1342,6 @@ class _MainNavigationState extends State<MainNavigation> {
         return '完成了一次视频学习';
       case 'badge_unlocked':
         return '解锁了一个新成就';
-      case 'parent_grant':
-        return '家长奖励';
-      case 'redeem_gift':
-        return '兑换了礼物';
       default:
         return '积分变动';
     }

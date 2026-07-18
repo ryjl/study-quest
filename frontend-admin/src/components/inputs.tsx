@@ -79,7 +79,7 @@ export function GradePicker({
   };
 
   return (
-    <div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-card-2 p-3">
+    <div className="grid grid-cols-2 gap-2 rounded-lg border border-border bg-card-2 p-3">
       {GRADES.map((g) => (
         <label key={g.key} className="flex items-center gap-2 text-sm" style={{ gridColumn: g.key === 'universal' ? 'span 2' : undefined }}>
           <input type="checkbox" checked={selected.includes(g.key)} onChange={() => toggle(g.key)} className="h-4 w-4 accent-primary" />

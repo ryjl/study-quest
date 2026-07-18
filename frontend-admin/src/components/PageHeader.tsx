@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
+import { ChevronRight } from 'lucide-react';
 
 // Unified page header replacing the ad-hoc <h1 className="text-2xl font-bold">
-// scattered across every page. Keeps the border-b + pb-4 + mb-6 rhythm that
-// Settings/Courses already used, but adds optional breadcrumb + actions slots
-// so new pages don't reinvent the header each time.
+// scattered across every page. Linear-influenced: smaller title (the sidebar
+// already tells you where you are), muted breadcrumbs with a chevron divider,
+// and a sticky + backdrop-blur top bar so actions stay reachable while the
+// page scrolls.
 
 export interface Breadcrumb {
   label: string;
@@ -22,7 +24,7 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-6 border-b border-border pb-4">
+    <div className="sticky top-0 z-20 -mx-8 mb-6 border-b border-border/60 bg-bg/80 px-8 pb-4 pt-2 backdrop-blur">
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           {breadcrumb && breadcrumb.length > 0 && (
@@ -34,13 +36,13 @@ export function PageHeader({
                 return (
                   <span key={i} className="flex items-center">
                     <span className={last ? 'font-medium text-txt' : undefined}>{c.label}</span>
-                    {!last && <span className="mx-1.5 text-muted">›</span>}
+                    {!last && <ChevronRight size={12} className="mx-1 text-muted" />}
                   </span>
                 );
               })}
             </div>
           )}
-          <h1 className="text-2xl font-bold text-txt">{title}</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-txt">{title}</h1>
           {description && <p className="mt-1 text-sm text-muted">{description}</p>}
         </div>
         {actions && <div className="flex flex-shrink-0 items-center gap-2">{actions}</div>}

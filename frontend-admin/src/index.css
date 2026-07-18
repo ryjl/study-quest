@@ -6,26 +6,33 @@
  * Color variables hold space-separated R G B triples so Tailwind can apply
  * the `<alpha-value>` opacity channel on top (see tailwind.config.ts).
  * The `.dark` class on <html> swaps every token at once.
+ *
+ * Direction (Linear/Notion-influenced):
+ *  - primary is a NEAR-BLACK in light mode (slate-900) and WHITE in dark —
+ *    buttons are solid fills, not violet gradients.
+ *  - dark-mode border is darker than card-2 so containers have actual depth
+ *    (the old theme had them identical, cards "floated" with no edge).
+ *  - backgrounds are neutral greys (no blue/violet tint).
  */
 :root {
   --color-bg: 248 250 252; /* slate-50  #F8FAFC */
   --color-card: 255 255 255; /* white */
   --color-card-2: 241 245 249; /* slate-100 #F1F5F9 */
-  --color-border: 226 232 240; /* slate-200 #E2E8F0 */
-  --color-primary: 139 92 246; /* violet-500 #8B5CF6 */
-  --color-txt: 30 41 59; /* slate-800 #1E293B */
+  --color-border: 228 231 235; /* #E4E7EB — slightly cooler/neutral than slate-200 */
+  --color-primary: 17 24 39; /* slate-900 #111827 — near-black primary */
+  --color-txt: 17 24 39; /* slate-900 — primary text matches primary for contrast */
   --color-muted: 100 116 139; /* slate-500 #64748B */
   color-scheme: light;
 }
 
 .dark {
-  --color-bg: 11 15 25; /* #0B0F19 */
-  --color-card: 17 24 39; /* #111827 */
-  --color-card-2: 31 41 55; /* #1f2937 */
-  --color-border: 31 41 55; /* #1F2937 */
-  --color-primary: 139 92 246; /* #8B5CF6 */
-  --color-txt: 241 245 249; /* #F1F5F9 */
-  --color-muted: 156 163 175; /* #9CA3AF */
+  --color-bg: 10 10 11; /* #0A0A0B — near-black, neutral (no blue tint) */
+  --color-card: 23 23 25; /* #171719 — one step up from bg */
+  --color-card-2: 32 32 35; /* #202023 — secondary surface */
+  --color-border: 45 45 48; /* #2D2D30 — darker than card-2 → real edges */
+  --color-primary: 255 255 255; /* white primary on dark — Linear dark pattern */
+  --color-txt: 245 245 247; /* #F5F5F7 */
+  --color-muted: 139 139 148; /* #8B8B94 */
   color-scheme: dark;
 }
 
@@ -37,6 +44,9 @@ body,
 
 body {
   @apply bg-bg text-txt font-sans antialiased;
+  /* Inter tabular numerals + disambiguated digits (cv05: slashed zero etc.)
+   * so table/stat numbers line up column-wise. */
+  font-feature-settings: 'cv05', 'tnum';
 }
 
 /* Custom scrollbar — uses theme tokens so it adapts to light/dark. */
@@ -57,19 +67,21 @@ body {
 
 @layer components {
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-xl px-4 py-2 text-sm font-semibold transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed;
   }
+  /* Solid primary — flat fill, no gradient/glow/lift. Hover darkens slightly. */
   .btn-primary {
     @apply btn text-white;
-    background: linear-gradient(135deg, rgb(var(--color-primary)) 0%, #7c3aed 100%);
-    box-shadow: 0 2px 4px rgb(var(--color-primary) / 0.2);
+    background: rgb(var(--color-primary));
   }
-  .btn-primary:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgb(var(--color-primary) / 0.4);
+  :root:not(.dark) .btn-primary:hover:not(:disabled) {
+    background: rgb(30 41 59); /* slate-800 — slightly lighter than -900 for hover */
+  }
+  .dark .btn-primary:hover:not(:disabled) {
+    background: rgb(229 229 234); /* slightly off-white hover on dark */
   }
   .btn-secondary {
-    @apply btn bg-card-2 text-txt hover:bg-muted;
+    @apply btn bg-card-2 text-txt hover:bg-muted/30;
   }
   .btn-danger {
     @apply btn bg-bad text-white hover:brightness-110;
@@ -80,14 +92,17 @@ body {
   .btn-sm {
     @apply px-2.5 py-1 text-xs;
   }
+  /* Card: border-defined (no shadow) so containers read as surfaces, not as
+   * floating paper. Tighter padding for higher information density. */
   .card {
-    @apply rounded-2xl border border-border bg-card p-5 shadow-sm;
+    @apply rounded-xl border border-border/60 bg-card p-4;
   }
   .input {
-    @apply w-full rounded-xl border border-border bg-card-2 px-3 py-2.5 text-txt outline-none transition-colors placeholder:text-muted;
+    @apply w-full rounded-lg border border-border bg-card-2 px-3 py-2 text-sm text-txt outline-none transition-colors placeholder:text-muted;
   }
   .input:focus {
     @apply border-primary;
+    box-shadow: theme('boxShadow.focus');
   }
   .badge {
     @apply inline-block rounded-md px-2 py-0.5 text-xs font-semibold uppercase;

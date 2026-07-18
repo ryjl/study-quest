@@ -182,7 +182,7 @@ question.chunk_id → content_chunk.start_time 实现题目跳转视频时间点
 
 第二轮新增/变化的字段：
 - **`quizzes.status` / `archived_at`** — quiz 历史保留。`regenerate`（换题）不再删旧 quiz，而是把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 `active` 行。旧卷子只读保留，学生可在历史面板 review。单 active 不变量靠**部分唯一索引**强制（`WHERE status='active'`，GORM 表达不了 partial index，AutoMigrate 后用 raw SQL 建，见 `migrateQuizActiveUniqueIndex`）。
-- **`quizzes.submitted_at`** — 统一交卷标记。第二轮做题流程改成"全部做完一次提交 = 一次考试"，点"提交全部"后填这个时间戳，quiz 锁定不可再改。用专门字段（而不是"是否存在 answer 行"）判断交卷状态，因为兼容保留的单题 submit 端点也会产生 answer 行，不能误判为已交卷。
+- **`quizzes.submitted_at`** — 统一交卷标记。第二轮做题流程改成"全部做完一次提交 = 一次考试"，点"提交全部"后填这个时间戳，quiz 锁定不可再改。用专门字段（而不是"是否存在 answer 行"）判断交卷状态（历史上单题 submit 端点也产生 answer 行会干扰判断，该端点已在第四轮数据清零重整中删除，见 §18）。
 - **`questions.has_jump`** — agent 出题时判断每题是否对应明确视频片段。能锚定到具体 chunk 的题 `has_jump=true`（答错可跳视频复习）；贯穿全文/综合性的题 `has_jump=false`（无单一跳转锚点，不出跳转按钮）。默认 false 兼容老数据。前端据此决定渲染不渲染跳转按钮。
 - **`answers.quiz_id`** — denormalized snapshot，让历史答题列表在 regen 删旧 question 后仍能展示（详见 §14）。
 
@@ -494,33 +494,52 @@ provider 构造结果缓存在内存（chat/embedder 各一个 slot）。admin �
 admin 后台左侧导航从"扁平 14 项功能清单"重构为**按运营者任务分组的 5 组可折叠导航**（不再像程序员的模块清单）：
 
 ```
-概览          📊 控制台（三段式：待办/异常 + 数据概览 + 最近活动流）
-内容运营      📚 课程库管理 · 💬 字幕队列 · 📥 文件导入 · 📖 阅读室
-用户与授权    👥 用户与授权 · 📅 观看历史
-AI 运营       🤖 AI Workflow · 🧠 AI 用户视图
-系统配置      🏷️ 分类与标签（科目+标签合并页）· 🏅 荣誉徽章 · 📦 版本发布 · ⚙️ 系统设置
+概览          控制台（三段式：待办/异常 + 数据概览 + 最近活动流）
+内容运营      课程库管理 · 字幕队列 · 阅读室
+用户与授权    用户与授权 · 观看历史
+AI 运营       AI Workflow · AI 用户视图
+系统配置      分类与标签（科目+标签合并页）· 荣誉徽章 · 版本发布 · 系统设置
 ```
 
 每组带组标题（小字 muted）+ 可折叠（当前组有 active 项自动展开）。科目管理 + 标签管理合并为「分类与标签」单页双 Tab（`Classification.tsx`，URL `?tab=` 保深链），后端两套表不动。
 
+> **第 4 轮（视觉 + 交互重做）变更**：
+> - 导航/功能图标全站从 emoji 换成 **lucide-react 线性 SVG**（`LayoutGrid`/`Library`/`Captions`/`Users`/`Bot`/`Tags`/`Medal`/`Package`/`Settings`…），科目/勋章 emoji 同步下线（见下文「图标系统」）。
+> - **「文件导入」导航项删除**——它本质是给课程库批量加课时的工具，迁进课程库 PageHeader 的「从文件夹导入」按钮 + Dialog（`courses/ImportDialog.tsx`，复用原 3 步向导逻辑）。
+> - 视觉语言整体重做为 **Linear/Notion 风**：中性灰 + 近黑强调（light primary = slate-900、dark primary = 白）、Inter 字体（tabular numerals）、小圆角（10/12px）、border-defined 卡片（去 shadow）、扁平无渐变按钮。详见 §13 末尾「第 4 轮视觉重做」。
+
 ### 设计系统（全量重设计的地基）
 
-为消除"程序员感"，建立了一套产品化 UI 原语（`components/PageHeader.tsx` + `components/ui.tsx` 扩展）：
+为消除"程序员感"，建立了一套产品化 UI 原语（`components/PageHeader.tsx` + `components/ui.tsx`）：
 
-- **`PageHeader`** — 统一页头（标题 + 描述 + 面包屑组名 + 右对齐主操作），所有页面顶部统一使用，替代各页散落的 `<h1>`。
-- **`Section`** — 可折叠内容区块（标题 + icon + 计数 badge + 右侧操作 + 折叠箭头），把长页面/抽屉分段。
-- **`StatusCard`** — 状态色卡片（ok 绿/warn 琥珀/danger 红/info 主色），控制台待办/异常区用。
-- **`TodoItem`** — 可点跳转的待办条目（icon + 标题 + 数字 + →）。
-- **`ActivityFeed`** — 时间线（最近动态流，新用户/AI 任务/新增课时合并排序）。
-- **`Tabs`** — 下划线 Tab 切换（分类页用）。
-- **`DropdownMenu`** — 轻量 ⋯ 下拉（课程卡片操作收进这里），点击外部/Esc 关闭。
+- **`PageHeader`** — 粘性顶栏（sticky + backdrop-blur，Linear 标志性交互），标题 + 描述 + 面包屑组名 + 右对齐主操作。所有页面顶部统一使用，替代各页散落的 `<h1>`。
+- **`Section`** — 可折叠内容区块（标题 + icon + 计数 badge + 右侧操作 + ChevronRight 折叠箭头），把长页面/抽屉分段。
+- **`StatusCard`** — 状态色卡片（ok 绿/warn 琥珀/danger 红/info 中性），控制台待办/异常区用。
+- **`TodoItem`** — 可点跳转的待办条目（lucide icon + 标题 + tabular-nums 数字 + chevron）。
+- **`ActivityFeed`** — 时间线（最近动态流，新用户/AI 任务/新增课时合并排序，AI 任务带 episode/course 标题）。
+- **`Tabs`** — 下划线 Tab 切换（active 用文字色下划线而非彩色）。
+- **`DropdownMenu`** — 轻量 ⋯ 下拉（lucide MoreHorizontal 触发），点击外部/Esc 关闭。
+- **`SubjectIcon`** — 科目图标组件（见下文「图标系统」）。
+
+> 第 4 轮起，所有原语的 `icon` prop 类型从 `string`（emoji）改为 `ReactNode`（接受 `<LucideIcon size={14}/>`）。视觉皮整体换 Linear/Notion 风：去紫、去渐变、去 glow、圆角调小、信息密度收紧。
+
+### 图标系统（科目/勋章图标，第 4 轮建立）
+
+科目和勋章的图标**不再存 DB**——两端各自维护「标识符 → 图标」映射，渲染时查表，跨平台一致：
+
+- **科目**：前端用 subject **key**（`math`/`english`/`physics`…）映射。admin 端 `lib/subjectIcon.tsx`（`resolveSubjectIcon(key) → lucide 组件`，math→Calculator、english→Languages、physics→Atom…，自定义/未识别 key → `BookOpen` fallback）；Flutter 端 `lib/ui/widget/subject_icon.dart`（`subjectIconData(key) → IconData`，math→`calculate_rounded`…，fallback `book_rounded`）。科目编辑器（`Subjects.tsx`）有「图标预览」实时显示当前 key 对应的图标，颜色取表单里的 color。
+- **勋章**：前端用 badge **code**（`first_blood`/`streak`/`subject_math`…）映射。admin 端 `lib/badgeIcon.tsx`（所有勋章共享一个 lucide `Award` 图标，靠 `badgeColor(code)` 算出的颜色环区分类型）；Flutter 端 `main_navigation.dart` 的 `_badgeIcon(code, ruleType)` 映射到 Material IconData。
+- **DB 字段已删**：`Subject.Emoji`、`Badge.IconName` 在数据清零重整中删除（见 §18）。科目/勋章的视觉表达完全在前端映射表里，DB 不存显示用元数据。
 
 ### 关键交互改造
 
-- **课程库卡片**：封面左侧大号展开箭头 + 整卡头部可点展开（hover 反馈）+ 操作按钮（编辑/解锁节奏/删除）收进右上 ⋯ 菜单，卡片更大气。
-- **用户授权抽屉**（去程序员感核心）：顶加用户概要卡；课程授权**按科目分组**（每组全选/清空 + 搜索）；**解锁节奏/积分徽章默认折叠**；**staged 保存**（本地暂存 diff，顶部 sticky「有 N 项未保存」+ 保存/放弃，保存时并行发 per-item grant/revoke，后端无批量端点用 Promise.allSettled + 部分失败提示）。
-- **控制台**：三段式（待办/异常置顶 → 数据概览降级 → 最近活动流），全正常时显示绿色「✅ 一切正常」。
-- **课程编辑年级 bug 修复**：`CourseModal` 读 `course.grades`（复数，后端 DTO 字段）而非 `course.grade`，保存时发两份字段兼容。
+- **课程库卡片**：整卡头部可点展开（hover 反馈）+ 操作按钮（编辑/解锁节奏/删除）收进右上 ⋯ 菜单。封面占位用科目图标（lucide/Material Icon，按 subject key 映射）。卡片头信息分主-辅两层（标题 + 点分隔的元信息行）。
+- **课程库课时树**（`CourseTree`）：+章节/+课时 为常驻高频按钮，探测缺失时长等低频维护操作收进 ⋯ 菜单。EpisodeRow 的操作按钮 hover 才出现（`opacity-0 group-hover:opacity-100`），行间视觉更安静。批量工具栏选中态出现。
+- **文件导入**：原独立页迁进课程库 PageHeader 的「从文件夹导入」按钮 + Dialog（`courses/ImportDialog.tsx`），3 步向导逻辑不变。
+- **用户授权抽屉**（去程序员感核心）：顶加用户概要卡；课程授权**按科目分组**（每组用科目图标 + 全选/清空 + 搜索）；**解锁节奏/积分徽章默认折叠**；**staged 保存**（本地暂存 diff，顶部 sticky「有 N 项未保存」+ 保存/放弃，保存时并行发 per-item grant/revoke，后端无批量端点用 Promise.allSettled + 部分失败提示）。
+- **控制台**：三段式（待办/异常置顶 → 数据概览降级 → 最近活动流），全正常时显示绿色「一切正常」。活动流的 AI 任务条目带 episode/course 标题（不只是 model_used）。
+- **观看历史**：月历热力图加 max-w 约束，单元格不再撑满全屏。
+- **Modal/Drawer 点外关闭**：智能区分「点击遮罩」和「拖拽选区」——只有 mousedown 起点在遮罩层才触发关闭。拖选文字滑出框外不会误关（Linear/Notion 同款行为）。实现见 `ui.tsx` 的 `clickOutsideOnly`（Radix/Headless UI 模式）。
 
 ### 框架约定
 React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + 全局 class `.card`/`.input`/`.btn-primary` + 上述设计系统原语）。**每个 mutation 必须 invalidate**（CLAUDE.md 硬规则）。颜色走 tailwind config token，不硬编码。
@@ -593,7 +612,7 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - **讨论 tab（chat）**仍留未来；advice/course_summary/user_report 已部分占用原 Phase D 的 agent 版图
 - **streaming + memory 衰减曲线**仍留未来
 - 旧 in-player quiz overlay（post_review_json mock）已清理（死代码清理，第二轮）
-- 第二轮做题流程从"单题即时判分"改为"统一提交（一次考试）"，详见 §17。单题 submit 端点兼容保留（也写 answer 行 + 更新 memory），但客户端主流程走 submit-all
+- 第二轮做题流程从"单题即时判分"改为"统一提交（一次考试）"，详见 §17。客户端主流程走 submit-all；单题 submit 端点曾在第二轮兼容保留，第四轮数据清零重整时作为死代码删除（见 §18）
 
 ### Phase C 验收路径
 1. admin 在某课程勾选 AIQuizEnabled，该课程 episode 有切片+总结（Phase A/B）
@@ -758,9 +777,45 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 - 客户端：`frontend/lib/ui/screen/ai_study_screen.dart`（AI 学习页重构：统一提交流 + 状态机 + 草稿恢复 + 跳转 push）、`frontend/lib/service/quiz_draft_store.dart`（草稿持久化）、`frontend/lib/ui/screen/player_screen.dart`（`disableAiTab`/`initialPosition`/helper panel 常驻 AI 卡片 + 探索任务）、`frontend/lib/ui/screen/course_detail_screen.dart`（课前 modal 移除）。
 - 后端：`handler/ai_handler.go`（`SubmitAllQuizAnswers` / `GetEpisodeQuizHistory`）、`service/ai_service_quiz.go`（`SubmitAllQuizAnswers` 统一交卷 + `ListQuizHistory` + quiz 拉题时回填逐题结果）、model 层 `Quiz.SubmittedAt` / `Question.HasJump` / quiz active/archived 状态。
 
-## 18. 数据库定档声明（第三轮：schema freeze）
+## 18. 数据库定档声明（第三轮 schema freeze ／ 第四轮数据清零重整）
+
+> **⚠️ 第四轮（数据清零重整）后，第三轮的「定档」约束已解除。** 用户决定清空线上 DB 重新开始（fresh start），这意味着「不能改列类型/删列/改唯一索引」的约束不再适用——可以直接用全新干净的 schema，不用写 forward-safe 迁移脚本。第四轮借这次机会清理了第三轮累积的 forward-compat 包袱（删列、改列类型、删契约、删死迁移代码）。下文先记录第四轮的重整内容，再保留第三轮定档声明作为历史背景。
+
+### 第四轮重整内容（fresh start，2026-07）
+
+趁线上数据清零，一次性清理了以下 schema 和契约债务。**这些变更假定 DB 是空的**——不写迁移脚本、不做 forward-compat、AutoMigrate 直接生成全新 schema。
+
+**删列**（图标改由前端按 key/code 映射，不存 DB）：
+- `Subject.Emoji` —— 科目图标改由前端 `subjectIcon.tsx`（admin）/ `subject_icon.dart`（Flutter）按 subject key 映射，详见 §13「图标系统」
+- `Badge.IconName` —— 与 `Badge.Code` 重复且 seed 里大部分是假值；勋章图标改由前端按 code/ruleType 映射
+
+**改列类型**：
+- `UserProgress.IsCompleted`：`int`（0/1）→ `bool`。Go 侧 GORM 存 SQLite 仍是 INTEGER 0/1，但 JSON 序列化从 `1`/`0` 变成 `true`/`false`，Flutter `progress.dart` 加 `_parseBool` 兼容三种形态（bool/int/string）
+
+**删契约**（forward-compat 包袱）：
+- **单题 `/ai-quiz/submit` 端点**：Flutter 实际只用 `submit-all`，单题 submit 是死代码。删路由 + handler，service 层 `SubmitQuizAnswer` 方法保留（接口惯性，`gradeOneAnswer` helper 被 submit-all 复用）
+- **`tags` 逗号字符串契约**：`TagsList()`/`TagsJoined()` 模型方法删除，DTO 改为只发 `tags_list`（数组）+ `tag_ids`。Flutter `course.dart` 的 `tags` 字段从 `String` 改成 `tagsList: List<String>`
+- **`watch_minutes` DTO**：`admin_dto.go` 删 `WatchMinutes`（= watch_seconds/60 的兼容字段），admin 改用 `WatchSeconds`
+- **`X-User-ID` / `Bearer<integer>` 遗留鉴权拒绝逻辑**：全新安装从未用过这些方案，删 middleware 拒绝代码 + 回归测试
+- **`nil SourceID` 全局 fallback 路径**：导入现在必填源，删 episode/reading repo 的 nil-source 查询分支 + import 的 nil-source 分支
+
+**删死代码/死迁移**：
+- `migrateAIProvidersTableName`（a_iproviders→ai_providers 重命名）+ `tableExists` helper + `migrate_table_rename_test.go` 整个文件——fresh install 直接生成 `ai_providers`，无需重命名
+- `migrateQuizActiveUniqueIndex` 的「DROP legacy idx_quiz_user_ep」步骤（保留 CREATE partial unique index）
+- `RemoveDeprecatedDefaults` 空存根
+- `ReasonParentGrant` 未实现常量 + Flutter 对应 case
+- `Rule*`/`Reason*` 常量在 service 里真正用上（替换硬编码 `"watch_duration"` 等字符串）
+
+**理顺**：
+- `PointsLedger.Description`：`size:1024` → `size:255`（实际值都是短句）
+
+> **定档约束恢复时机**：第四轮重整后，新 schema 再次进入「定档」状态——未来除非再次清零数据，否则恢复「只能加列/加表/加枚举值」的约束。第四轮删掉的那些 forward-compat 包袱（TagsJoined、单题 submit、nil SourceID 等）不要再以兼容名义重新引入。
+
+### 历史背景：第三轮定档声明（已被第四轮取代，保留作记录）
 
 > **第三轮把 AI 模块的全部表结构定档。** 之后除非出现无法用"加列/加表/加枚举值"覆盖的需求，不再动现有表的列定义、列类型、唯一索引。目的是让线上升级永远走 GORM `AutoMigrate` 的零风险路径（SQLite 加列不丢数据、不停机），避免"改列类型/删列/改唯一索引"这类需要停机 + 迁移脚本的升级困难。
+>
+> **注**：第四轮数据清零后，上述约束一度解除并做了列删除/类型变更（见上文「第四轮重整内容」）。下面的 forward-safe 分析是第三轮定档时的判断，作为历史背景保留。
 
 ### 当前 schema 已 forward-safe
 

@@ -58,7 +58,7 @@ func TestMultiTierJumpCreditsSum(t *testing.T) {
 	// clears tier 0 (3) and tier 1 (10) but NOT tier 2 (30), so this is a
 	// 2-tier jump from currentTier -1 → tier 1.
 	badge := &model.Badge{
-		Code: "jump_sum", Title: "跳级求和", IconName: "x",
+		Code: "jump_sum", Title: "跳级求和",
 		RuleType: "episode_completed_count",
 		Tiers:    tiers(3, 10, 10, 20, 30, 30),
 		IsSystem: false,

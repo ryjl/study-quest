@@ -154,7 +154,7 @@ func TestSubjectServiceRenameKeyCascadesBadge(t *testing.T) {
 
 	// Badge whose rule_target matches the subject's current key.
 	badge := &model.Badge{
-		Code: "math_pro", Title: "数学高手", IconName: "badge_math",
+		Code: "math_pro", Title: "数学高手",
 		RuleType: "subject_count", RuleTarget: "math", Threshold: 3,
 	}
 	if err := badgeRepo.Create(badge); err != nil {
@@ -187,7 +187,7 @@ func TestSubjectServiceDeleteRefusesHandAuthoredBadgeRules(t *testing.T) {
 	// A hand-authored badge targeting "math" (NOT the auto-generated
 	// subject_math badge that SeedSubjectBadge would create).
 	handAuthored := &model.Badge{
-		Code: "math_whiz", Title: "数学之星", IconName: "badge_math",
+		Code: "math_whiz", Title: "数学之星",
 		RuleType: "subject_count", RuleTarget: "math", Threshold: 10,
 	}
 	if err := badgeRepo.Create(handAuthored); err != nil {
@@ -220,7 +220,7 @@ func TestSubjectServiceDeleteAutoBadgeDoesNotBlockDelete(t *testing.T) {
 	// SeedSubjectBadge would create on subject creation).
 	mathSubjectID := subjects["math"].ID
 	autoBadge := &model.Badge{
-		Code: "subject_math", Title: "数学达人", IconName: "badge_math",
+		Code: "subject_math", Title: "数学达人",
 		RuleType: "subject_count", RuleTarget: "math",
 		SubjectID: &mathSubjectID,
 	}

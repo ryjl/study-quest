@@ -25,8 +25,9 @@ type ExecuteTreeImportRequest struct {
 	TargetCourseID uint               `json:"target_course_id"`
 	NewCourse      *NewCourseRequest  `json:"new_course"`
 	Tree           *ImportPreviewNode `json:"tree"`
-	// SourceID stamps every imported episode with its storage source. Nil =
-	// legacy (resolved via the global settings fallback at play time).
+	// SourceID stamps every imported episode with its storage source. Required:
+	// there is no longer a global-settings fallback at play time, so a nil
+	// SourceID would leave the row un-streamable.
 	SourceID *uint `json:"source_id"`
 }
 
@@ -40,7 +41,7 @@ type NewCourseRequest struct {
 
 // ImportService coordinates scanning AList/WebDAV and registering episodes.
 // Scan/preview/ping methods take a sourceID to select which storage source to
-// operate on; a nil sourceID selects the global settings fallback (legacy).
+// operate on; a nil sourceID is rejected by the resolver (no global fallback).
 type ImportService interface {
 	ScanPath(path string, sourceID *uint) ([]storage.FileInfo, error)
 	PreviewDeepScan(path string, sourceID *uint) (*ImportPreviewNode, error)
@@ -208,6 +209,12 @@ func pruneEmptyNodes(node *ImportPreviewNode) bool {
 func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 	if req.Tree == nil {
 		return errors.New("empty tree payload")
+	}
+	// Every imported episode must be bound to a storage source. There is no
+	// longer a global-settings fallback at play time, so a nil SourceID would
+	// leave the row un-streamable.
+	if req.SourceID == nil {
+		return errors.New("source_id is required (no global storage fallback)")
 	}
 
 	// Collect episode IDs to probe after commit (only if the tx succeeds).

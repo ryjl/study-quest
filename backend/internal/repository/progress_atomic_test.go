@@ -104,7 +104,7 @@ func TestUpsertAndAccumulateWatchInsertsAndAccumulates(t *testing.T) {
 	if prog.WatchSeconds != 30 || prog.LastPositionSeconds != 100 {
 		t.Fatalf("first upsert: watch=%d pos=%d, want 30/100", prog.WatchSeconds, prog.LastPositionSeconds)
 	}
-	if prog.IsCompleted != 0 {
+	if prog.IsCompleted != false {
 		t.Fatal("first upsert must not mark complete (completion gating is the service's job)")
 	}
 

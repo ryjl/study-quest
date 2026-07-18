@@ -3,16 +3,34 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { Course, SubjectMeta, User, UserSession } from '../lib/types';
 import { subjectMeta } from '../lib/types';
-import { Modal, LoadingState, EmptyState, Drawer, Tag, Section } from '../components/ui';
+import { Modal, LoadingState, EmptyState, Drawer, Tag, Section, DropdownMenu, SubjectIcon } from '../components/ui';
+import { PageHeader } from '../components/PageHeader';
 import { ImageUpload } from '../components/inputs';
 import { UserCourseUnlockRow } from '../components/UserCourseUnlockRow';
 import { relativeTime } from '../lib/format';
 import { useSubjects } from '../lib/useSubjects';
+import {
+  Plus,
+  KeyRound,
+  Pencil,
+  Trash2,
+  Smartphone,
+  Star,
+  AlertTriangle,
+  Users as UsersIcon,
+  BookOpen,
+  Library,
+  Folder,
+  BookMarked,
+  Globe,
+  Database,
+  Lock,
+  Award,
+} from 'lucide-react';
 
-// Compact watch-time formatter. Prefers raw seconds (sub-minute precision) so
-// a user who watched e.g. 40 seconds doesn't show a misleading "0 分". Falls
-// back to whole minutes only when seconds aren't available.
-function formatWatchTime(seconds?: number, minutes?: number): string {
+// Compact watch-time formatter. Uses raw seconds for sub-minute precision so
+// a user who watched e.g. 40 seconds doesn't show a misleading "0 分".
+function formatWatchTime(seconds?: number): string {
   if (seconds !== undefined && seconds > 0) {
     const s = Math.floor(seconds);
     const h = Math.floor(s / 3600);
@@ -22,11 +40,7 @@ function formatWatchTime(seconds?: number, minutes?: number): string {
     if (m > 0) return rem === 0 ? `${m} 分` : `${m} 分 ${rem} 秒`;
     return `${rem} 秒`;
   }
-  const m = Math.max(0, Math.floor(minutes ?? 0));
-  if (m < 60) return `${m} 分`;
-  const h = Math.floor(m / 60);
-  const rem = m % 60;
-  return rem === 0 ? `${h} 时` : `${h} 时 ${rem} 分`;
+  return '0 分';
 }
 import { useToast, useConfirm } from '../lib/toast';
 import { useStorageSources } from '../lib/useStorageSources';
@@ -35,7 +49,7 @@ const ROLES = [
   { key: 'student', label: '学生', color: '#60a5fa' },
   { key: 'teen', label: '青少年', color: '#fbbf24' },
   { key: 'parent', label: '家长', color: '#34d399' },
-  { key: 'admin', label: '管理员', color: '#a78bfa' },
+  { key: 'admin', label: '管理员', color: '#6366f1' },
 ];
 
 function roleMeta(role: string) {
@@ -75,30 +89,32 @@ export function Users() {
 
   return (
     <div>
-      <div className="mb-6 flex items-center justify-between border-b border-border pb-4">
-        <h1 className="text-2xl font-bold text-txt">用户与授权</h1>
-        <button className="btn-primary" onClick={() => setCreating(true)}>
-          + 新增用户
-        </button>
-      </div>
+      <PageHeader
+        title="用户与授权"
+        actions={
+          <button className="btn-primary" onClick={() => setCreating(true)}>
+            <Plus size={14} /> 新增用户
+          </button>
+        }
+      />
 
       {usersQ.isLoading ? (
         <LoadingState />
       ) : users.length === 0 ? (
-        <EmptyState icon="👥" title="暂无用户" hint="创建第一个学生账号开始使用" />
+        <EmptyState icon={<UsersIcon size={32} />} title="暂无用户" hint="创建第一个学生账号开始使用" />
       ) : (
-        <div className="card !p-0 overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-border text-left text-xs text-muted">
-                <th className="p-3">用户</th>
-                <th className="p-3">角色</th>
-                <th className="p-3">授权 / 完课</th>
-                <th className="p-3">学习时长</th>
-                <th className="p-3">积分</th>
-                <th className="p-3">徽章</th>
-                <th className="p-3">最后活跃</th>
-                <th className="p-3 text-right">操作</th>
+              <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">
+                <th className="px-4 py-2.5 font-medium">用户</th>
+                <th className="px-4 py-2.5 font-medium">角色</th>
+                <th className="px-4 py-2.5 font-medium">授权 / 完课</th>
+                <th className="px-4 py-2.5 font-medium">学习时长</th>
+                <th className="px-4 py-2.5 font-medium">积分</th>
+                <th className="px-4 py-2.5 font-medium">徽章</th>
+                <th className="px-4 py-2.5 font-medium">最后活跃</th>
+                <th className="px-4 py-2.5 text-right font-medium">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -106,27 +122,27 @@ export function Users() {
                 const rm = roleMeta(u.role);
                 const access = u.course_access ?? [];
                 return (
-                  <tr key={u.id} className="border-b border-border/50 text-sm hover:bg-card-2/40">
-                    <td className="p-3">
+                  <tr key={u.id} className="border-b border-border/50 text-sm last:border-0 hover:bg-card-2/50">
+                    <td className="px-4 py-2.5">
                       <div className="flex items-center gap-2.5">
                         {u.avatar_url ? (
-                          <img src={u.avatar_url} alt="" className="h-9 w-9 rounded-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
+                          <img src={u.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.opacity = '0.3')} />
                         ) : (
-                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-card-2 text-sm">{u.nickname.slice(0, 1)}</div>
+                          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-card-2 text-xs font-medium">{u.nickname.slice(0, 1)}</div>
                         )}
                         <span className="font-medium text-txt">{u.nickname}</span>
                       </div>
                     </td>
-                    <td className="p-3">
-                      <span className="rounded px-2 py-0.5 text-xs font-semibold" style={{ backgroundColor: `${rm.color}20`, color: rm.color }}>
+                    <td className="px-4 py-2.5">
+                      <span className="rounded px-2 py-0.5 text-xs font-medium" style={{ backgroundColor: `${rm.color}1a`, color: rm.color }}>
                         {rm.label}
                       </span>
                     </td>
-                    <td className="p-3">
-                      <div className="text-txt">
+                    <td className="px-4 py-2.5">
+                      <div className="tabular-nums text-txt">
                         {access.length} <span className="text-muted">门</span>
                       </div>
-                      <div className="text-xs text-muted" title="已完成课时 / 可访问总课时">
+                      <div className="text-xs tabular-nums text-muted" title="已完成课时 / 可访问总课时">
                         {u.completed_episodes ?? 0} / {u.accessible_episodes ?? 0} 课时
                       </div>
                       {access.length > 0 && (
@@ -141,41 +157,46 @@ export function Users() {
                             </span>
                           ))}
                           {access.length > 3 && (
-                            <span className="text-[10px] text-muted">等 {access.length} 门</span>
+                            <span className="text-[10px] tabular-nums text-muted">等 {access.length} 门</span>
                           )}
                         </div>
                       )}
                     </td>
-                    <td className="p-3 text-muted">{formatWatchTime(u.watch_seconds, u.watch_minutes)}</td>
-                    <td className="p-3">
-                      <span className="text-warn">⭐ {u.current_points ?? 0}</span>
+                    <td className="px-4 py-2.5 tabular-nums text-muted">{formatWatchTime(u.watch_seconds)}</td>
+                    <td className="px-4 py-2.5">
+                      <span className="inline-flex items-center gap-1 tabular-nums text-warn">
+                        <Star size={12} /> {u.current_points ?? 0}
+                      </span>
                     </td>
-                    <td className="p-3">
-                      <span className="text-txt">{u.unlocked_badges ?? 0}</span>
-                      <span className="text-muted"> / {u.total_badges ?? 0}</span>
+                    <td className="px-4 py-2.5">
+                      <span className="tabular-nums text-txt">{u.unlocked_badges ?? 0}</span>
+                      <span className="tabular-nums text-muted"> / {u.total_badges ?? 0}</span>
                     </td>
-                    <td className="p-3 text-muted" title={u.last_active_at ? new Date(u.last_active_at).toLocaleString() : '从未学习'}>
+                    <td className="px-4 py-2.5 tabular-nums text-muted" title={u.last_active_at ? new Date(u.last_active_at).toLocaleString() : '从未学习'}>
                       {u.last_active_at ? relativeTime(u.last_active_at) : '—'}
                     </td>
-                    <td className="p-3">
-                      <div className="flex justify-end gap-1.5">
-                        <button className="btn-ghost btn-sm" onClick={() => setDetailForId(u.id)}>
-                          授权
+                    <td className="px-4 py-2.5">
+                      {/* Primary action (授权) stays inline; the rest collapse into ⋯. */}
+                      <div className="flex items-center justify-end gap-1">
+                        <button className="btn-ghost btn-sm" onClick={() => setDetailForId(u.id)} title="管理授权">
+                          <KeyRound size={14} />
                         </button>
-                        <button className="btn-ghost btn-sm" onClick={() => setSessionsForId(u.id)} title="查看/管理该用户登录的设备">
-                          设备
-                        </button>
-                        <button className="btn-ghost btn-sm" onClick={() => setEditing(u)}>
-                          编辑
-                        </button>
-                        <button
-                          className="btn-danger btn-sm"
-                          onClick={async () => {
-                            if (await confirm({ message: `删除用户「${u.nickname}」？`, detail: '将一并删除其学习进度、积分与徽章记录。', danger: true })) delMut.mutate(u.id);
-                          }}
-                        >
-                          删除
-                        </button>
+                        <DropdownMenu
+                          align="right"
+                          items={[
+                            { label: '管理授权', icon: <KeyRound size={14} />, onClick: () => setDetailForId(u.id) },
+                            { label: '设备管理', icon: <Smartphone size={14} />, onClick: () => setSessionsForId(u.id) },
+                            { label: '编辑用户', icon: <Pencil size={14} />, onClick: () => setEditing(u) },
+                            {
+                              label: '删除用户',
+                              icon: <Trash2 size={14} />,
+                              danger: true,
+                              onClick: async () => {
+                                if (await confirm({ message: `删除用户「${u.nickname}」？`, detail: '将一并删除其学习进度、积分与徽章记录。', danger: true })) delMut.mutate(u.id);
+                              },
+                            },
+                          ]}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -454,7 +475,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
   return (
     <Drawer open onClose={onClose} title={`用户授权 · ${user.nickname}`} width="lg">
       {/* ---- User summary card (always at top) ---- */}
-      <div className="mb-4 flex items-center gap-4 rounded-2xl border border-border bg-card-2/60 p-4">
+      <div className="mb-4 flex items-center gap-4 rounded-lg border border-border bg-card-2/60 p-3.5">
         {user.avatar_url ? (
           <img
             src={user.avatar_url}
@@ -480,8 +501,8 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
             <span><span className="text-txt">{grantedCount}</span> 课程</span>
             <span><span className="text-txt">{origSeries.size + origBooks.size + origArticles.size}</span> 阅读项</span>
-            <span>学习时长 <span className="text-txt">{formatWatchTime(user.watch_seconds, user.watch_minutes)}</span></span>
-            <span>⭐ <span className="text-txt">{user.unlocked_badges ?? 0}</span> 徽章</span>
+            <span>学习时长 <span className="text-txt">{formatWatchTime(user.watch_seconds)}</span></span>
+            <span><Award size={12} className="inline text-warn" /> <span className="text-txt">{user.unlocked_badges ?? 0}</span> 徽章</span>
             <span>活跃 {user.last_active_at ? relativeTime(user.last_active_at) : '—'}</span>
           </div>
         </div>
@@ -489,8 +510,8 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
 
       {/* ---- Sticky commit bar (only when dirty) ---- */}
       {dirty && (
-        <div className="sticky top-0 z-10 mb-4 flex items-center gap-3 rounded-2xl border border-warn/40 bg-warn/10 px-4 py-2.5 shadow-sm">
-          <span className="text-sm">⚠️</span>
+        <div className="sticky top-0 z-10 mb-4 flex items-center gap-3 rounded-lg border border-warn/40 bg-warn/10 px-3.5 py-2.5">
+          <AlertTriangle size={15} className="flex-shrink-0 text-warn" />
           <span className="flex-1 text-sm font-medium text-txt">有 {diff} 项授权更改未保存</span>
           <button className="btn-ghost btn-sm" onClick={resetDrafts} disabled={saving}>
             放弃
@@ -505,7 +526,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
         {/* ---- 课程授权 ---- */}
         <Section
           title="课程授权"
-          icon="📚"
+          icon={<Library size={14} />}
           defaultOpen
           badge={`${draftCourse.size}/${courses.length}`}
           right={
@@ -544,7 +565,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
         {/* ---- 阅读室授权 ---- */}
         <Section
           title="阅读室授权"
-          icon="📖"
+          icon={<BookOpen size={14} />}
           defaultOpen
           badge={`${draftSeries.size + draftBooks.size + draftArticles.size}/${readingSeries.length + readingBooks.length + readingArticles.length}`}
         >
@@ -555,7 +576,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
               {readingSeries.length > 0 && (
                 <ReadingSubGroup
                   label="系列"
-                  icon="📁"
+                  icon={<Folder size={14} />}
                   items={readingSeries.map((s) => ({ id: s.id, title: s.title, suffix: `${s.book_count + s.article_count} 项` }))}
                   draft={draftSeries}
                   onToggle={toggleSeries}
@@ -565,7 +586,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
               {readingBooks.length > 0 && (
                 <ReadingSubGroup
                   label="书籍 PDF"
-                  icon="📕"
+                  icon={<BookMarked size={14} />}
                   items={readingBooks.map((b) => ({ id: b.id, title: b.title }))}
                   draft={draftBooks}
                   onToggle={toggleBook}
@@ -575,7 +596,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
               {readingArticles.length > 0 && (
                 <ReadingSubGroup
                   label="文章"
-                  icon="🌐"
+                  icon={<Globe size={14} />}
                   items={readingArticles.map((a) => ({ id: a.id, title: a.title }))}
                   draft={draftArticles}
                   onToggle={toggleArticle}
@@ -587,14 +608,14 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
         </Section>
 
         {/* ---- 存储源白名单 (keeps its own staged save internally) ---- */}
-        <Section title="存储源白名单" icon="🗄️" defaultOpen description="空列表 = 一个都不允许（播放前必须勾选至少一个源）">
+        <Section title="存储源白名单" icon={<Database size={14} />} defaultOpen description="空列表 = 一个都不允许（播放前必须勾选至少一个源）">
           <StorageWhitelistSection userId={user.id} current={user.storage_source_access ?? []} />
         </Section>
 
         {/* ---- 解锁节奏 (collapsed by default — the big space-eater) ---- */}
         <Section
           title="解锁节奏"
-          icon="🔓"
+          icon={<Lock size={14} />}
           defaultOpen={false}
           description={grantedCount > 0 ? `已为 ${grantedCount} 门课程设置解锁节奏` : '暂无已授权课程'}
         >
@@ -620,7 +641,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
         {/* ---- 积分与徽章 (secondary, collapsed by default) ---- */}
         <Section
           title="积分与徽章"
-          icon="⭐"
+          icon={<Award size={14} />}
           defaultOpen={false}
           description={`积分 ${user.current_points ?? 0} · 已解锁 ${unlocked.length} 个徽章 · 流水近 ${ledger.length} 条`}
         >
@@ -631,9 +652,9 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
             ) : (
               <div className="space-y-1">
                 {ledger.map((l) => (
-                  <div key={l.id} className="flex items-center justify-between rounded-lg bg-card-2 px-3 py-1.5 text-sm">
+                  <div key={l.id} className="flex items-center justify-between rounded-md bg-card-2 px-3 py-1.5 text-sm">
                     <span className="text-txt">{l.description || l.reason_type}</span>
-                    <span className={l.change_amount >= 0 ? 'text-good' : 'text-bad'}>
+                    <span className={`tabular-nums ${l.change_amount >= 0 ? 'text-good' : 'text-bad'}`}>
                       {l.change_amount >= 0 ? '+' : ''}
                       {l.change_amount}
                     </span>
@@ -650,7 +671,7 @@ function UserDetailDrawer({ user, onClose }: { user: User; onClose: () => void }
               <div className="flex flex-wrap gap-1.5">
                 {unlocked.map((b) => (
                   <Tag key={b.id} color="#fbbf24">
-                    🏅 {b.title}
+                    {b.title}
                   </Tag>
                 ))}
               </div>
@@ -684,12 +705,12 @@ function CourseSubjectGroup({
     for (const c of courses) onToggle(c.id, on);
   };
   return (
-    <div className="rounded-xl border border-border bg-card-2/40">
+    <div className="rounded-md border border-border bg-card-2/40">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <div className="flex items-center gap-2 text-sm">
-          <span>{meta.emoji}</span>
+          <SubjectIcon subject={meta.key} size={14} />
           <span className="font-medium text-txt">{meta.label}</span>
-          <span className="text-xs text-muted">{selected}/{courses.length}</span>
+          <span className="text-xs tabular-nums text-muted">{selected}/{courses.length}</span>
         </div>
         <div className="flex gap-1">
           <button className="btn-ghost btn-sm" onClick={() => setGroup(true)} disabled={disabled || allSelected}>
@@ -708,7 +729,7 @@ function CourseSubjectGroup({
         {courses.map((c) => (
           <label
             key={c.id}
-            className="flex items-center gap-2 rounded-lg border border-border/60 bg-card px-3 py-1.5 text-sm hover:bg-card-2"
+            className="flex items-center gap-2 rounded-md border border-border/60 bg-card px-3 py-1.5 text-sm hover:bg-card-2"
           >
             <input
               type="checkbox"
@@ -736,7 +757,7 @@ function ReadingSubGroup({
   disabled,
 }: {
   label: string;
-  icon: string;
+  icon: React.ReactNode;
   items: { id: number; title: string; suffix?: string }[];
   draft: Set<number>;
   onToggle: (id: number, on: boolean) => void;
@@ -747,12 +768,12 @@ function ReadingSubGroup({
     for (const i of items) onToggle(i.id, on);
   };
   return (
-    <div className="rounded-xl border border-border bg-card-2/40">
+    <div className="rounded-md border border-border bg-card-2/40">
       <div className="flex items-center justify-between gap-2 px-3 py-2">
         <div className="flex items-center gap-2 text-sm">
-          <span>{icon}</span>
+          <span className="text-muted">{icon}</span>
           <span className="font-medium text-txt">{label}</span>
-          <span className="text-xs text-muted">{selected}/{items.length}</span>
+          <span className="text-xs tabular-nums text-muted">{selected}/{items.length}</span>
         </div>
         <div className="flex gap-1">
           <button className="btn-ghost btn-sm" onClick={() => setAll(true)} disabled={disabled}>全选</button>
@@ -763,7 +784,7 @@ function ReadingSubGroup({
         {items.map((i) => (
           <label
             key={i.id}
-            className="flex items-center gap-2 rounded-lg border border-border/60 bg-card px-3 py-1.5 text-sm hover:bg-card-2"
+            className="flex items-center gap-2 rounded-md border border-border/60 bg-card px-3 py-1.5 text-sm hover:bg-card-2"
           >
             <input
               type="checkbox"
@@ -986,8 +1007,9 @@ function StorageWhitelistSection({ userId, current }: { userId: number; current:
   return (
     <section className="mb-6">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-txt">
-          💾 允许的存储源 ({selected.size}/{sources.length})
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-txt">
+          <Database size={14} className="text-muted" />
+          允许的存储源 ({selected.size}/{sources.length})
         </h3>
         {selected.size > 0 && (
           <button className="btn-danger btn-sm" onClick={() => mut.mutate([])} disabled={mut.isPending}>

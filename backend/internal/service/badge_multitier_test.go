@@ -30,7 +30,7 @@ func TestMultiTierSkipUp(t *testing.T) {
 
 	// Create a custom badge with tiers 3/10/30 (episode_completed_count).
 	badge := &model.Badge{
-		Code: "test_skip", Title: "跳级测试", IconName: "x",
+		Code: "test_skip", Title: "跳级测试",
 		RuleType: "episode_completed_count",
 		Tiers:    tiers(3, 10, 10, 20, 30, 30),
 		IsSystem: false,
@@ -87,7 +87,7 @@ func TestUnlockBadgeTierAtomicNoDowngrade(t *testing.T) {
 	repo := repository.NewBadgeRepository(db)
 
 	// Create a badge + user, then manually insert a tier-2 UserBadge.
-	badge := &model.Badge{Code: "nd", Title: "x", IconName: "x", RuleType: "watch_duration", Threshold: 1}
+	badge := &model.Badge{Code: "nd", Title: "x", RuleType: "watch_duration", Threshold: 1}
 	repo.Create(badge)
 	ub := &model.UserBadge{UserID: 1, BadgeID: badge.ID, Tier: 2}
 	db.Create(ub)
@@ -203,7 +203,7 @@ func TestSubjectCreateGeneratesBadge(t *testing.T) {
 	db, svc := newSubjectSvc(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 
-	subj, err := svc.Create("coding", "编程", "💻", "#000", 99)
+	subj, err := svc.Create("coding", "编程", "#000", 99)
 	if err != nil {
 		t.Fatalf("create subject: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSubjectDeleteCleansBadge(t *testing.T) {
 	db, svc := newSubjectSvc(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 
-	subj, _ := svc.Create("typing", "打字", "⌨️", "#000", 99)
+	subj, _ := svc.Create("typing", "打字", "#000", 99)
 	code := SubjectBadgeCode(subj.Key)
 	if b, _ := badgeRepo.FindByCode(code); b == nil {
 		t.Fatal("badge should exist after create")
@@ -258,7 +258,7 @@ func TestUserBadgeStatusesFields(t *testing.T) {
 
 	// Custom multi-tier badge: thresholds 3/10/30.
 	badge := &model.Badge{
-		Code: "status_test", Title: "状态测试", IconName: "x",
+		Code: "status_test", Title: "状态测试",
 		RuleType: "episode_completed_count",
 		Tiers:    tiers(3, 10, 10, 20, 30, 30),
 	}
@@ -340,7 +340,7 @@ func TestEvalMultiTierSortsUnsorted(t *testing.T) {
 	// Badge with DELIBERATELY unsorted tiers: 30, 3, 10.
 	unsorted, _ := json.Marshal([]model.TierDef{{T: 30, R: 30}, {T: 3, R: 10}, {T: 10, R: 20}})
 	badge := &model.Badge{
-		Code: "unsorted", Title: "乱序", IconName: "x",
+		Code: "unsorted", Title: "乱序",
 		RuleType: "episode_completed_count",
 		Tiers:    string(unsorted),
 	}

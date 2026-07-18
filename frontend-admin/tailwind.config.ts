@@ -1,7 +1,8 @@
 import type { Config } from 'tailwindcss';
 
-// Design tokens mirror design.md §3 and the Flutter client's theme.dart so
-// the admin panel feels like part of the same product family.
+// Design tokens for the admin panel. Linear/Notion-influenced: neutral grays,
+// a near-black primary (slate-900 in light, white in dark), small radii, and
+// minimal shadows — the panel reads as a tool, not a brand showcase.
 //
 // Colors resolve to CSS variables (R G B triples) defined in index.css, so a
 // single `dark` class on <html> swaps the whole palette. We keep the
@@ -17,26 +18,27 @@ const config: Config = {
         card: 'rgb(var(--color-card) / <alpha-value>)',
         'card-2': 'rgb(var(--color-card-2) / <alpha-value>)',
         border: 'rgb(var(--color-border) / <alpha-value>)',
-        primary: {
-          DEFAULT: 'rgb(var(--color-primary) / <alpha-value>)',
-          dark: '#7c3aed',
-        },
+        primary: 'rgb(var(--color-primary) / <alpha-value>)',
         good: '#10B981',
         warn: '#F59E0B',
         bad: '#EF4444',
         txt: 'rgb(var(--color-txt) / <alpha-value>)',
         muted: 'rgb(var(--color-muted) / <alpha-value>)',
       },
+      // Smaller radii than the previous 16/18px — feels more precise / less
+      // toy-like, matches Linear/Notion cards & inputs.
       borderRadius: {
-        xl: '16px',
-        '2xl': '18px',
+        xl: '10px',
+        '2xl': '12px',
       },
       fontFamily: {
-        sans: ['Outfit', 'system-ui', 'sans-serif'],
+        // Inter for high information density + tabular numerals; system-ui
+        // stack as fallback so it feels native on every platform.
+        sans: ['Inter', 'system-ui', '-apple-system', 'ui-sans-serif', 'sans-serif'],
       },
       boxShadow: {
-        focus: '0 0 0 3px rgb(var(--color-primary) / 0.4)',
-        'primary-glow': '0 4px 12px rgb(var(--color-primary) / 0.4)',
+        // Restrained focus ring (was 3px @ 40% alpha — too loud).
+        focus: '0 0 0 2px rgb(var(--color-primary) / 0.35)',
       },
     },
   },

@@ -22,9 +22,10 @@ type ReadingBookRepository interface {
 	FindByID(id uint) (*model.ReadingBook, error)
 	FindByBasenameAndSize(basename string, size int64) (*model.ReadingBook, error)
 	// FindByBasenameAndSizeScoped is the multi-source-aware disaster-recovery
-	// lookup. A nil sourceID applies NO source filter (identical to the legacy
-	// unscoped lookup); a non-nil sourceID restricts to rows in that source so
-	// a file in source A never self-heals onto source B's path.
+	// lookup. The match is restricted to rows in the given source so a file in
+	// source A never self-heals onto source B's path. sourceID is REQUIRED: a
+	// nil sourceID yields no match (every content row must carry a non-nil
+	// SourceID post-import).
 	FindByBasenameAndSizeScoped(basename string, size int64, sourceID *uint) (*model.ReadingBook, error)
 	Create(book *model.ReadingBook) error
 	Update(book *model.ReadingBook) error
@@ -120,11 +121,11 @@ func (r *readingBookRepo) FindByBasenameAndSize(basename string, size int64) (*m
 }
 
 // FindByBasenameAndSizeScoped adds a source_id filter on top of
-// FindByBasenameAndSize. A nil sourceID applies NO source filter (identical to
-// the legacy unscoped lookup).
+// FindByBasenameAndSize. sourceID is required: a nil sourceID yields no match
+// (every content row must carry a non-nil SourceID post-import).
 func (r *readingBookRepo) FindByBasenameAndSizeScoped(basename string, size int64, sourceID *uint) (*model.ReadingBook, error) {
 	if sourceID == nil {
-		return r.FindByBasenameAndSize(basename, size)
+		return nil, nil
 	}
 	var book model.ReadingBook
 	basenameLike := "%/" + basename

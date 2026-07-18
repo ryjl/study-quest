@@ -1,21 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Plus, X, Lock, Award } from 'lucide-react';
 import { api } from '../lib/api';
 import { useBadges, useInvalidateBadges } from '../lib/useBadges';
 import { useDeleteConfirm } from '../lib/useDeleteConfirm';
+import { BadgeIcon, badgeColor } from '../lib/badgeIcon';
 import type { AdminBadge } from '../lib/types';
 import { useSubjects } from '../lib/useSubjects';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
 import { useToast } from '../lib/toast';
 import { PageHeader } from '../components/PageHeader';
-
-const ICONS = [
-  { key: 'badge_first_blood', emoji: '✨', label: '首战告捷' },
-  { key: 'badge_streak_7', emoji: '🔥', label: '七日先锋' },
-  { key: 'badge_math', emoji: '🧮', label: '数学达人' },
-  { key: 'badge_english', emoji: '🗣️', label: '英语之星' },
-  { key: 'badge_gold', emoji: '🏆', label: '黄金大满贯' },
-];
 
 const RULE_TYPES = [
   { key: 'watch_duration', label: '累计学习时长（分钟）' },
@@ -46,11 +40,6 @@ interface RuleNode {
   type?: string;
   target?: string;
   threshold?: number;
-}
-
-function emojiFor(iconName: string | undefined) {
-  if (!iconName) return '🏅';
-  return ICONS.find((i) => iconName.includes(i.key.split('_')[1]))?.emoji ?? '🏅';
 }
 
 // ruleLabel maps a rule type key to a short Chinese label for display.
@@ -110,8 +99,8 @@ export function Badges() {
         breadcrumb={[{ label: '系统配置' }]}
         description="管理成就徽章与解锁规则。"
         actions={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            + 新增勋章
+          <button className="btn-primary inline-flex items-center gap-1.5" onClick={() => setCreating(true)}>
+            <Plus size={14} /> 新增勋章
           </button>
         }
       />
@@ -121,15 +110,23 @@ export function Badges() {
           {badgesQ.isLoading ? (
             <LoadingState />
           ) : badges.length === 0 ? (
-            <EmptyState icon="🏅" title="暂无徽章" />
+            <EmptyState icon={<Award size={28} />} title="暂无徽章" />
           ) : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {badges.map((b) => (
+              {badges.map((b) => {
+                const color = badgeColor(b.Code);
+                return (
                 <div key={b.ID} className="card flex flex-col items-center text-center">
-                  <div className="mb-2 flex items-center gap-1.5 text-4xl">
-                    {emojiFor(b.IconName)}
+                  <div className="mb-2 flex items-center gap-1.5">
+                    <span
+                      className="flex h-11 w-11 items-center justify-center rounded-full"
+                      style={{ backgroundColor: `${color}1a`, border: `1.5px solid ${color}55`, color }}
+                      title={b.Code}
+                    >
+                      <BadgeIcon size={22} />
+                    </span>
                     {b.IsSystem && (
-                      <span className="text-xs" title="系统默认勋章，不可删除（可在编辑里修改）">🔒</span>
+                      <span className="text-muted" title="系统默认勋章，不可删除（可在编辑里修改）"><Lock size={12} className="inline" /></span>
                     )}
                   </div>
                   <strong className="text-txt">{b.Title}</strong>
@@ -160,7 +157,8 @@ export function Badges() {
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -207,7 +205,6 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
   const [code, setCode] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [iconName, setIconName] = useState('badge_first_blood');
   // Single-rule fields.
   const [ruleType, setRuleType] = useState('watch_duration');
   const [ruleTarget, setRuleTarget] = useState('');
@@ -231,7 +228,6 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
       setCode(badge.Code);
       setTitle(badge.Title);
       setDescription(badge.Description);
-      setIconName(badge.IconName);
       if (badge.RuleType === 'composite' && badge.RuleJSON) {
         setMode('composite');
         try {
@@ -280,7 +276,7 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
           if (RULE_TYPES_WITH_SUBJECT.has(lf.type) && !lf.target) throw new Error('subject_count 条件需要选择科目');
         }
         const body = {
-          code, title, description, icon_name: iconName,
+          code, title, description,
           rule_type: 'composite', rule_target: '', threshold: 0,
           rule_json: JSON.stringify(tree),
         };
@@ -291,7 +287,7 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
         const valid = tierRows.filter((r) => r.t > 0);
         if (valid.length === 0) throw new Error('多层级至少需要一行有效阈值（>0）');
         const body = {
-          code, title, description, icon_name: iconName,
+          code, title, description,
           rule_type: ruleType, rule_target: ruleTarget,
           threshold: 0,
           tiers: JSON.stringify(valid),
@@ -299,7 +295,7 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
         if (isEdit && badge) return api.updateBadge(badge.ID, body);
         return api.createBadge(body);
       }
-      const body = { code, title, description, icon_name: iconName, rule_type: ruleType, rule_target: ruleTarget, threshold, tiers: '' };
+      const body = { code, title, description, rule_type: ruleType, rule_target: ruleTarget, threshold, tiers: '' };
       if (isEdit && badge) return api.updateBadge(badge.ID, body);
       return api.createBadge(body);
     },
@@ -333,17 +329,7 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
           <label className="mb-1 block text-xs text-muted">描述</label>
           <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="累计学完5个数学课时" />
         </div>
-        <div>
-          <label className="mb-1 block text-xs text-muted">图标</label>
-          <select className="input" value={iconName} onChange={(e) => setIconName(e.target.value)}>
-            {ICONS.map((i) => (
-              <option key={i.key} value={i.key}>
-                {i.emoji} {i.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="rounded-xl border border-border bg-card-2 p-3">
+        <div className="rounded-lg border border-border bg-card-2 p-3">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-xs font-semibold text-txt">规则引擎</span>
             <div className="flex gap-1 rounded-lg bg-card p-0.5 text-xs">
@@ -375,7 +361,7 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
                     <option value="">— 选择科目 —</option>
                     {subjects.map((s) => (
                       <option key={s.key} value={s.key}>
-                        {s.emoji} {s.label} ({s.key})
+                        {s.label} ({s.key})
                       </option>
                     ))}
                   </select>
@@ -402,10 +388,10 @@ function BadgeModal({ badge, onClose, onSaved }: { badge: AdminBadge | null; onC
                       <div key={idx} className="grid grid-cols-[1fr_1fr_auto] gap-2">
                         <input type="number" className="input" value={row.t} onChange={(e) => setTierRows(tierRows.map((r, i) => i === idx ? { ...r, t: Number(e.target.value) } : r))} min={1} />
                         <input type="number" className="input" value={row.r} onChange={(e) => setTierRows(tierRows.map((r, i) => i === idx ? { ...r, r: Number(e.target.value) } : r))} min={0} />
-                        <button type="button" className="btn-ghost px-2" onClick={() => setTierRows(tierRows.filter((_, i) => i !== idx))} disabled={tierRows.length <= 1}>✕</button>
+                        <button type="button" className="btn-ghost px-2" onClick={() => setTierRows(tierRows.filter((_, i) => i !== idx))} disabled={tierRows.length <= 1}><X size={12} /></button>
                       </div>
                     ))}
-                    <button type="button" className="btn-ghost w-full text-xs" onClick={() => setTierRows([...tierRows, { t: 0, r: 0 }])}>+ 添加层级</button>
+                    <button type="button" className="btn-ghost w-full text-xs inline-flex items-center justify-center gap-1" onClick={() => setTierRows([...tierRows, { t: 0, r: 0 }])}><Plus size={14} /> 添加层级</button>
                     <p className="text-xs text-muted">阈值需递增；每层解锁时发放对应奖励积分。层级可随时追加（已有进度不受影响）。</p>
                   </div>
                 )}
@@ -435,7 +421,7 @@ function collectLeaves(node: RuleNode): LeafRule[] {
 // users add/remove leaf conditions and toggle the join logic. Nested groups
 // are supported (a rule may itself be a group) but the common case is a flat
 // list of leaves under one logic.
-function CompositeEditor({ tree, onChange, subjects }: { tree: RuleNode; onChange: (t: RuleNode) => void; subjects: { key: string; label: string; emoji: string }[] }) {
+function CompositeEditor({ tree, onChange, subjects }: { tree: RuleNode; onChange: (t: RuleNode) => void; subjects: { key: string; label: string }[] }) {
   const update = (next: RuleNode) => onChange({ ...next });
   const rules = tree.rules ?? [];
 
@@ -473,7 +459,7 @@ function CompositeEditor({ tree, onChange, subjects }: { tree: RuleNode; onChang
                 <option value="">选科目</option>
                 {subjects.map((s) => (
                   <option key={s.key} value={s.key}>
-                    {s.emoji} {s.label}
+                    {s.label}
                   </option>
                 ))}
               </select>
@@ -487,13 +473,13 @@ function CompositeEditor({ tree, onChange, subjects }: { tree: RuleNode; onChang
               min={1}
             />
             <button type="button" className="btn-ghost btn-sm text-bad" onClick={() => removeAt(i)} title="移除该条件">
-              ✕
+              <X size={12} />
             </button>
           </div>
         ))}
       </div>
-      <button type="button" className="btn-secondary btn-sm" onClick={addLeaf}>
-        + 添加条件
+      <button type="button" className="btn-secondary btn-sm inline-flex items-center gap-1" onClick={addLeaf}>
+        <Plus size={14} /> 添加条件
       </button>
       <p className="text-[11px] text-muted">
         例：连续7天 且 累计学习60分钟 → 满足方式选「全部满足」，加两个条件（consecutive_days≥7、watch_duration≥60）。

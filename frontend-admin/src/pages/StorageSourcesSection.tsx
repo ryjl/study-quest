@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Plus, Plug } from 'lucide-react';
 import { api } from '../lib/api';
 import { Modal } from '../components/ui';
 import { useToast } from '../lib/toast';
@@ -44,7 +45,7 @@ export function StorageSourcesSection() {
           <h2 className="text-base font-bold text-txt">存储源管理</h2>
           <p className="mt-0.5 text-xs text-muted">多存储源：内容跟源走，用户白名单防呆。空 = 不限制。</p>
         </div>
-        <button className="btn-primary btn-sm" onClick={openCreate}>+ 新增存储源</button>
+        <button className="btn-primary btn-sm inline-flex items-center gap-1.5" onClick={openCreate}><Plus size={14} /> 新增存储源</button>
       </div>
 
       {sourcesQ.isLoading ? (
@@ -91,8 +92,8 @@ function SourceRow({ source, onEdit, onDelete }: { source: StorageSource; onEdit
         </div>
         <div className="truncate text-xs text-muted font-mono">{source.url}</div>
       </div>
-      <button className="btn-secondary btn-sm" onClick={() => pingMut.mutate()} disabled={pingMut.isPending}>
-        {pingMut.isPending ? '测试中…' : '🔌 测试'}
+      <button className="btn-secondary btn-sm inline-flex items-center gap-1.5" onClick={() => pingMut.mutate()} disabled={pingMut.isPending}>
+        {pingMut.isPending ? '测试中…' : <><Plug size={14} /> 测试</>}
       </button>
       <button className="btn-ghost btn-sm" onClick={onEdit}>编辑</button>
       <button className="btn-danger btn-sm" onClick={onDelete}>删除</button>

@@ -30,6 +30,7 @@ func TestImportAtomicity(t *testing.T) {
 
 	tree := map[string]any{
 		"new_course": map[string]any{"title": "回滚验证课", "grade": "3", "subject": "math"},
+		"source_id":  env.defaultSourceID,
 		"tree": map[string]any{
 			"name": "Root", "is_dir": true, "type": "course",
 			"children": []map[string]any{

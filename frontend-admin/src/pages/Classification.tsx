@@ -1,4 +1,5 @@
 import { useSearchParams } from 'react-router-dom';
+import { Tags as TagsIcon, Bookmark } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { Tabs, type TabItem } from '../components/ui';
 import { SubjectsTable } from './Subjects';
@@ -10,8 +11,8 @@ import { TagsTable } from './Tags';
 // survive refresh and can be shared; updates use `replace` so we don't push a
 // new history entry per click.
 const TABS: TabItem[] = [
-  { key: 'subjects', label: '科目', icon: '📐' },
-  { key: 'tags', label: '标签', icon: '🔖' },
+  { key: 'subjects', label: '科目', icon: <TagsIcon size={14} /> },
+  { key: 'tags', label: '标签', icon: <Bookmark size={14} /> },
 ];
 
 const VALID_TABS = new Set(TABS.map((t) => t.key));

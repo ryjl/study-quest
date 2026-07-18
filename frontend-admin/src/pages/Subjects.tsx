@@ -1,20 +1,20 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Plus, Lock, AlertTriangle, Tags } from 'lucide-react';
 import { api } from '../lib/api';
 import { useSubjects, useInvalidateSubjects } from '../lib/useSubjects';
 import { useDeleteConfirm } from '../lib/useDeleteConfirm';
 import type { SubjectMeta } from '../lib/types';
-import { Modal, LoadingState, EmptyState } from '../components/ui';
+import { Modal, LoadingState, EmptyState, SubjectIcon } from '../components/ui';
+import { resolveSubjectIcon } from '../lib/subjectIcon';
 import { useToast } from '../lib/toast';
 
 // Color swatch palette offered for new/custom subjects. The admin can also
 // paste any hex value in the dedicated field.
 const COLOR_CHOICES = [
-  '#60a5fa', '#f59e0b', '#34d399', '#a78bfa', '#f43f5e',
+  '#60a5fa', '#f59e0b', '#34d399', '#6366f1', '#f43f5e',
   '#06b6d4', '#ec4899', '#84cc16', '#eab308', '#64748b',
 ];
-
-const EMOJI_CHOICES = ['📚', '📐', '🔠', '🧪', '🌎', '💻', '🎨', '🎵', '⚽', '🧩', '📖', '🌍'];
 
 // Reusable table + create/edit modal for subjects. Rendered standalone by the
 // legacy /admin/subjects route (kept for safety) and embedded in the
@@ -43,11 +43,11 @@ export function SubjectsTable() {
   return (
     <div>
       <div className="mb-4 flex justify-end">
-        <button className="btn-primary" onClick={() => setCreating(true)}>+ 新增科目</button>
+        <button className="btn-primary inline-flex items-center gap-1.5" onClick={() => setCreating(true)}><Plus size={14} /> 新增科目</button>
       </div>
 
       {subjects.length === 0 ? (
-        <EmptyState icon="🏷️" title="还没有科目" hint="新增第一个科目以开始分类课程。" />
+        <EmptyState icon={<Tags size={28} />} title="还没有科目" hint="新增第一个科目以开始分类课程。" />
       ) : (
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">
@@ -65,10 +65,10 @@ export function SubjectsTable() {
                 <tr key={s.id ?? s.key} className="border-b border-border last:border-0 hover:bg-card-2/50">
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-2 font-medium text-txt">
-                      <span className="text-base">{s.emoji}</span>
+                      <SubjectIcon subject={s.key} size={16} />
                       {s.label}
                       {s.is_system && (
-                        <span title="系统默认科目，不可删除（可在编辑里改名/改色）" className="text-xs">🔒</span>
+                        <span title="系统默认科目，不可删除（可在编辑里改名/改色）" className="text-muted"><Lock size={12} /></span>
                       )}
                     </span>
                   </td>
@@ -131,7 +131,6 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
 
   const [key, setKey] = useState('');
   const [label, setLabel] = useState('');
-  const [emoji, setEmoji] = useState('📦');
   const [color, setColor] = useState(COLOR_CHOICES[0]);
   const [sortOrder, setSortOrder] = useState(0);
 
@@ -139,13 +138,11 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
     if (subject) {
       setKey(subject.key);
       setLabel(subject.label);
-      setEmoji(subject.emoji || '📦');
       setColor(subject.color || COLOR_CHOICES[0]);
       setSortOrder(subject.sort_order ?? 0);
     } else {
       setKey('');
       setLabel('');
-      setEmoji('📦');
       setColor(COLOR_CHOICES[0]);
       setSortOrder(0);
     }
@@ -156,7 +153,6 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
       const body = {
         key: key.trim().toLowerCase(),
         label: label.trim(),
-        emoji,
         color,
         sort_order: sortOrder,
       };
@@ -199,26 +195,34 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
             spellCheck={false}
           />
           {isEdit && (
-            <p className="mt-1 text-xs text-warn">
-              ⚠️ 修改 Key 会同步更新使用它的徽章规则目标（subject_count）。
+            <p className="mt-1 inline-flex items-center gap-1 text-xs text-warn">
+              <AlertTriangle size={14} /> 修改 Key 会同步更新使用它的徽章规则目标（subject_count）。
             </p>
           )}
         </div>
+        {/* 图标预览：图标由 Key 自动映射（math→计算器、english→语言 等），
+            不是手选。这里实时预览当前 Key 对应的 lucide 图标，让 admin 看到
+            选对 Key 后图标长什么样。自定义/未识别 Key 回退到通用书本图标。
+            参见 lib/subjectIcon.tsx 的完整映射表。 */}
         <div>
-          <label className="mb-1 block text-xs text-muted">图标</label>
-          <div className="flex flex-wrap gap-1.5">
-            {EMOJI_CHOICES.map((em) => (
-              <button
-                type="button"
-                key={em}
-                onClick={() => setEmoji(em)}
-                className={`flex h-9 w-9 items-center justify-center rounded-lg border text-lg transition ${
-                  emoji === em ? 'border-primary bg-primary/10' : 'border-border hover:bg-card-2'
-                }`}
-              >
-                {em}
-              </button>
-            ))}
+          <label className="mb-1 block text-xs text-muted">图标预览（由 Key 自动决定）</label>
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-card-2 px-3 py-2.5">
+            <span
+              className="flex h-10 w-10 items-center justify-center rounded-md"
+              style={{ backgroundColor: `${color}1a`, color }}
+            >
+              {(() => {
+                const PreviewIcon = resolveSubjectIcon(key.trim().toLowerCase());
+                return <PreviewIcon size={20} />;
+              })()}
+            </span>
+            <span className="text-xs text-muted">
+              {key.trim() ? (
+                <>Key「<code className="rounded bg-card px-1 py-0.5 text-txt">{key.trim().toLowerCase()}</code>」对应的图标。已知科目（math/english/physics 等）有专用图标，其他回退到通用书本。</>
+              ) : (
+                <>先填写 Key，图标会在这里预览。</>
+              )}
+            </span>
           </div>
         </div>
         <div>

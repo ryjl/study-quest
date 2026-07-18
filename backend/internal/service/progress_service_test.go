@@ -138,8 +138,8 @@ func TestProgressCompletionAtomicity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReportProgress: %v", err)
 	}
-	if prog.IsCompleted != 1 {
-		t.Fatalf("IsCompleted = %d, want 1", prog.IsCompleted)
+	if prog.IsCompleted != true {
+		t.Fatalf("IsCompleted = %v, want true", prog.IsCompleted)
 	}
 
 	// Points must be recorded too — proving both writes committed together.

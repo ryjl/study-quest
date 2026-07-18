@@ -68,7 +68,7 @@ Widget emptyStateBox({
 }
 
 /// resolveSubject looks up a subject by key in the catalog, falling back to a
-/// placeholder Subject (📦 / grey) when the key is missing or the catalog hasn't
+/// placeholder Subject (grey) when the key is missing or the catalog hasn't
 /// loaded. Extracted from the per-screen `_subjectMeta` copies which had the
 /// same lookup loop but divergent fallback construction (one used copyWith, one
 /// built a fresh literal — both produced the same values).
@@ -76,6 +76,7 @@ Subject resolveSubject(String key, List<Subject> catalog) {
   for (final s in catalog) {
     if (s.key == key) return s;
   }
-  // Subject's defaults (emoji '📦', color '#9ca3af') match the old fallbacks.
+  // Subject's default color '#9ca3af' matches the old fallback; the visual
+  // icon is now derived from the key via subjectIconData().
   return Subject(key: key, label: key.isEmpty ? '科目' : key);
 }

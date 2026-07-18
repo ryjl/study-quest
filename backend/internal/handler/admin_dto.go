@@ -26,7 +26,6 @@ type courseDTO struct {
 	// show a real frame instead of an emoji placeholder before an admin picks
 	// a dedicated cover. Not persisted — computed per-listing.
 	CoverFallbackURL    string   `json:"cover_fallback_url"`
-	Tags                string   `json:"tags"`        // comma-joined labels (back-compat for old clients)
 	TagsList            []string `json:"tags_list"`   // tag labels in sort order
 	TagIDs              []uint   `json:"tag_ids"`     // tag ids (for admin edit forms)
 	GradeDisplay        string   `json:"grade_display"`
@@ -82,9 +81,8 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		ContentType:          string(c.ContentType),
 		CoverURL:             c.CoverURL,
 		CoverFallbackURL:     coverFallback,
-		Tags:                 c.TagsJoined(),   // comma-joined labels (legacy)
-		TagsList:             c.TagsList(),     // []string labels
-		TagIDs:               tagIDsOf(c.Tags), // []uint tag ids
+		TagsList:             tagLabelsOf(c.Tags), // []string labels
+		TagIDs:               tagIDsOf(c.Tags),    // []uint tag ids
 		GradeDisplay:         c.GradeDisplay(),
 		AttachmentJSON:       c.AttachmentJSON,
 		AIHint:               c.AIHint,
@@ -198,7 +196,6 @@ type userDTO struct {
 	CompletedEpisodes   int    `json:"completed_episodes"`   // 完成课时数
 	AccessibleEpisodes  int    `json:"accessible_episodes"`  // 已授权课程总课时数
 	WatchSeconds        int64  `json:"watch_seconds"`        // 累计学习秒（前端按此显示，避免 <60s 误显示 0）
-	WatchMinutes        int    `json:"watch_minutes"`        // 累计学习分钟（= watch_seconds/60，保留兼容）
 	UnlockedBadges      int    `json:"unlocked_badges"`      // 已解锁徽章
 	TotalBadges         int    `json:"total_badges"`         // 全局徽章总数
 	LastActiveAt        string `json:"last_active_at"`       // 最近一次上报进度（空=从未学习）
@@ -274,7 +271,6 @@ func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
 		CompletedEpisodes:  int(prog.CompletedEpisodes),
 		AccessibleEpisodes: int(b.accessible[u.ID]),
 		WatchSeconds:       prog.TotalWatchSeconds,
-		WatchMinutes:       int(prog.TotalWatchSeconds / 60),
 		UnlockedBadges:     int(b.badges[u.ID]),
 		TotalBadges:        int(b.totalBadges),
 		LastActiveAt:       lastActive,
@@ -288,7 +284,6 @@ type badgeDTO struct {
 	Code        string `json:"code"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
-	IconName    string `json:"icon_name"`
 	RuleType    string `json:"rule_type"`
 	RuleTarget  string `json:"rule_target"`
 	Threshold   int    `json:"threshold"`
@@ -304,7 +299,6 @@ func toBadgeDTO(b model.Badge, unlocked bool, unlockedAt string) badgeDTO {
 		Code:        b.Code,
 		Title:       b.Title,
 		Description: b.Description,
-		IconName:    b.IconName,
 		RuleType:    b.RuleType,
 		RuleTarget:  b.RuleTarget,
 		Threshold:   b.Threshold,
@@ -319,7 +313,6 @@ type subjectDTO struct {
 	ID        uint   `json:"id"`
 	Key       string `json:"key"`
 	Label     string `json:"label"`
-	Emoji     string `json:"emoji"`
 	Color     string `json:"color"`
 	SortOrder int    `json:"sort_order"`
 	IsSystem  bool   `json:"is_system"` // true = seeded default, protected from deletion
@@ -330,7 +323,6 @@ func toSubjectDTO(s model.Subject) subjectDTO {
 		ID:        s.ID,
 		Key:       s.Key,
 		Label:     s.Label,
-		Emoji:     s.Emoji,
 		Color:     s.Color,
 		SortOrder: s.SortOrder,
 		IsSystem:  s.IsSystem,
@@ -381,6 +373,20 @@ func tagIDsOf(tags []model.Tag) []uint {
 	return out
 }
 
+// tagLabelsOf extracts the display labels from a loaded Tags relation, in tag
+// sort order. Used to populate the TagsList DTO field (the []string the admin
+// SPA renders) now that the model's TagsList()/TagsJoined() helpers are gone.
+func tagLabelsOf(tags []model.Tag) []string {
+	if len(tags) == 0 {
+		return []string{}
+	}
+	out := make([]string, len(tags))
+	for i, t := range tags {
+		out[i] = t.Label
+	}
+	return out
+}
+
 // ── Reading Room admin DTOs (snake_case, matching the SPA contract) ──
 
 type readingSeriesDTO struct {
@@ -391,7 +397,6 @@ type readingSeriesDTO struct {
 	Subject      string   `json:"subject"`
 	SubjectID    uint     `json:"subject_id"`
 	CoverURL     string   `json:"cover_url"`
-	Tags         string   `json:"tags"`
 	TagsList     []string `json:"tags_list"`
 	TagIDs       []uint   `json:"tag_ids"`
 	GradeDisplay string   `json:"grade_display"`
@@ -414,7 +419,6 @@ type readingBookDTO struct {
 	Grades           string `json:"grades"`
 	Subject          string `json:"subject"`
 	SubjectID        uint   `json:"subject_id"`
-	Tags             string `json:"tags"`
 	TagsList         []string `json:"tags_list"`
 	TagIDs           []uint   `json:"tag_ids"`
 	GradeDisplay     string   `json:"grade_display"`
@@ -435,7 +439,6 @@ type readingArticleDTO struct {
 	Grades           string `json:"grades"`
 	Subject          string `json:"subject"`
 	SubjectID        uint   `json:"subject_id"`
-	Tags             string `json:"tags"`
 	TagsList         []string `json:"tags_list"`
 	TagIDs           []uint   `json:"tag_ids"`
 	GradeDisplay     string   `json:"grade_display"`
@@ -472,8 +475,7 @@ func (h *adminHandler) toReadingSeriesDTO(s model.ReadingSeries) readingSeriesDT
 		Subject:      subjectKey,
 		SubjectID:    s.SubjectID,
 		CoverURL:     s.CoverURL,
-		Tags:         s.TagsJoined(),
-		TagsList:     s.TagsList(),
+		TagsList:     tagLabelsOf(s.Tags),
 		TagIDs:       tagIDsOf(s.Tags),
 		GradeDisplay: s.GradeDisplay(),
 		SortOrder:    s.SortOrder,
@@ -509,8 +511,7 @@ func (h *adminHandler) toReadingBookDTO(b model.ReadingBook) readingBookDTO {
 		Grades:           strings.Join(parts, ","),
 		Subject:          subjectKey,
 		SubjectID:        b.SubjectID,
-		Tags:             b.TagsJoined(),
-		TagsList:         b.TagsList(),
+		TagsList:         tagLabelsOf(b.Tags),
 		TagIDs:           tagIDsOf(b.Tags),
 		GradeDisplay:     b.GradeDisplay(),
 		CreatedAt:        formatTime(b.CreatedAt),
@@ -544,8 +545,7 @@ func (h *adminHandler) toReadingArticleDTO(a model.ReadingArticle) readingArticl
 		Grades:           strings.Join(parts, ","),
 		Subject:          subjectKey,
 		SubjectID:        a.SubjectID,
-		Tags:             a.TagsJoined(),
-		TagsList:         a.TagsList(),
+		TagsList:         tagLabelsOf(a.Tags),
 		TagIDs:           tagIDsOf(a.Tags),
 		GradeDisplay:     a.GradeDisplay(),
 		CreatedAt:        formatTime(a.CreatedAt),

@@ -5,6 +5,7 @@ import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/state_widgets.dart';
+import '../widget/subject_icon.dart';
 import 'pdf_reader_screen.dart';
 import 'article_reader_screen.dart';
 import 'reading_series_detail_screen.dart';
@@ -214,7 +215,8 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
             // Cover with 3D tilt + shadow
             _buildCoverTile(
               coverUrl: series.coverUrl,
-              fallbackEmoji: subj.emoji,
+              subjectKey: series.subject,
+              subjectColor: subj.color,
               gradient: gradient,
               badgeIcon: Icons.collections_bookmark_rounded,
               title: series.title,
@@ -269,7 +271,8 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
     final gradient = AppTheme.getSubjectGradientFromColor(subj.color);
     return _buildCoverTile(
       coverUrl: book.coverUrl,
-      fallbackEmoji: subj.emoji,
+      subjectKey: book.subject,
+      subjectColor: subj.color,
       gradient: gradient,
       badgeIcon: Icons.picture_as_pdf_rounded,
       title: book.title,
@@ -294,7 +297,8 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
     final gradient = AppTheme.getSubjectGradientFromColor(subj.color);
     return _buildCoverTile(
       coverUrl: article.coverUrl,
-      fallbackEmoji: subj.emoji,
+      subjectKey: article.subject,
+      subjectColor: subj.color,
       gradient: gradient,
       badgeIcon: Icons.language_rounded,
       title: article.title,
@@ -317,7 +321,8 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
   /// slight 3D tilt and drop shadow for the "standing on the shelf" look.
   Widget _buildCoverTile({
     required String coverUrl,
-    required String fallbackEmoji,
+    required String subjectKey,
+    required String subjectColor,
     required Gradient gradient,
     required IconData badgeIcon,
     required String title,
@@ -360,9 +365,9 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
                           ApiService.absoluteUrl(coverUrl),
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => _gradientCover(
-                            gradient, fallbackEmoji, coverWidth, coverHeight),
+                            gradient, subjectKey, subjectColor, coverWidth, coverHeight),
                         )
-                      : _gradientCover(gradient, fallbackEmoji, coverWidth, coverHeight),
+                      : _gradientCover(gradient, subjectKey, subjectColor, coverWidth, coverHeight),
                 ),
               ),
               // Book "spine" — a thin dark strip at the bottom
@@ -422,13 +427,17 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
   }
 
   /// Gradient fallback cover when no cover image is set.
-  Widget _gradientCover(Gradient gradient, String emoji, double w, double h) {
+  Widget _gradientCover(Gradient gradient, String subjectKey, String subjectColor, double w, double h) {
     return Container(
       width: w,
       height: h,
       decoration: BoxDecoration(gradient: gradient),
       child: Center(
-        child: Text(emoji, style: const TextStyle(fontSize: 48)),
+        child: Icon(
+          subjectIconData(subjectKey),
+          size: 48,
+          color: AppTheme.colorFromHex(subjectColor),
+        ),
       ),
     );
   }

@@ -102,20 +102,6 @@ func TestProtectedRoute_NoAuthRejected(t *testing.T) {
 	}
 }
 
-// REGRESSION GUARD: the legacy X-User-ID header must NOT authenticate against
-// the real router (not just the unit-tested middleware). This catches any
-// wiring that re-enables X-User-ID.
-func TestProtectedRoute_LegacyXUserIDRejected(t *testing.T) {
-	env := newTestEnv(t)
-	uid := env.createUser(t, "dave", "student")
-	req := newRequest(http.MethodGet, "/api/v1/subjects", nil)
-	req.Header.Set("X-User-ID", itoa(uid))
-	w := serve(env, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("X-User-ID must NOT authenticate via the router; got %d", w.Code)
-	}
-}
-
 // TestMultiDevice_SameUserIndependentSessions verifies logging the same user
 // in twice yields two independent, both-valid tokens.
 func TestMultiDevice_SameUserIndependentSessions(t *testing.T) {

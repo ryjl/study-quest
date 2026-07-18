@@ -14,7 +14,7 @@ import (
 type SubjectService interface {
 	List() ([]model.Subject, error)
 	FindByID(id uint) (*model.Subject, error)
-	Create(key, label, emoji, color string, sortOrder int) (*model.Subject, error)
+	Create(key, label, color string, sortOrder int) (*model.Subject, error)
 	// Update applies the (already-loaded) subject's new fields. If the Key
 	// changed, badges.rule_target is cascaded in the same transaction.
 	Update(s *model.Subject, oldKey string) error
@@ -44,7 +44,7 @@ func (s *subjectService) FindByID(id uint) (*model.Subject, error) {
 	return s.repo.FindByID(id)
 }
 
-func (s *subjectService) Create(key, label, emoji, color string, sortOrder int) (*model.Subject, error) {
+func (s *subjectService) Create(key, label, color string, sortOrder int) (*model.Subject, error) {
 	key = strings.TrimSpace(strings.ToLower(key))
 	if key == "" {
 		return nil, errors.New("subject key is required")
@@ -55,7 +55,6 @@ func (s *subjectService) Create(key, label, emoji, color string, sortOrder int) 
 	subj := &model.Subject{
 		Key:       key,
 		Label:     label,
-		Emoji:     emoji,
 		Color:     color,
 		SortOrder: sortOrder,
 	}
@@ -179,21 +178,21 @@ func (s *subjectService) Delete(id uint) error {
 // it already has, and a fresh install gets the full set.
 func (s *subjectService) SeedDefaultSubjects() error {
 	defaults := []model.Subject{
-		{Key: "chinese", Label: "语文", Emoji: "📚", Color: "#60a5fa", SortOrder: 1, IsSystem: true},
-		{Key: "math", Label: "数学", Emoji: "📐", Color: "#f59e0b", SortOrder: 2, IsSystem: true},
-		{Key: "english", Label: "英语", Emoji: "🔠", Color: "#34d399", SortOrder: 3, IsSystem: true},
-		{Key: "physics", Label: "物理/科学", Emoji: "🧪", Color: "#a78bfa", SortOrder: 4, IsSystem: true},
+		{Key: "chinese", Label: "语文", Color: "#60a5fa", SortOrder: 1, IsSystem: true},
+		{Key: "math", Label: "数学", Color: "#f59e0b", SortOrder: 2, IsSystem: true},
+		{Key: "english", Label: "英语", Color: "#34d399", SortOrder: 3, IsSystem: true},
+		{Key: "physics", Label: "物理/科学", Color: "#a78bfa", SortOrder: 4, IsSystem: true},
 		// 初中分科（对齐全学段学校课程）
-		{Key: "chemistry", Label: "化学", Emoji: "⚗️", Color: "#22d3ee", SortOrder: 5, IsSystem: true},
-		{Key: "biology", Label: "生物", Emoji: "🌱", Color: "#84cc16", SortOrder: 6, IsSystem: true},
-		{Key: "history", Label: "历史", Emoji: "📜", Color: "#d97706", SortOrder: 7, IsSystem: true},
-		{Key: "geography", Label: "地理", Emoji: "🗺️", Color: "#0ea5e9", SortOrder: 8, IsSystem: true},
-		{Key: "politics", Label: "道德与法治", Emoji: "⚖️", Color: "#ef4444", SortOrder: 9, IsSystem: true},
-		{Key: "extra", Label: "课外百科", Emoji: "🌎", Color: "#f43f5e", SortOrder: 10, IsSystem: true},
+		{Key: "chemistry", Label: "化学", Color: "#22d3ee", SortOrder: 5, IsSystem: true},
+		{Key: "biology", Label: "生物", Color: "#84cc16", SortOrder: 6, IsSystem: true},
+		{Key: "history", Label: "历史", Color: "#d97706", SortOrder: 7, IsSystem: true},
+		{Key: "geography", Label: "地理", Color: "#0ea5e9", SortOrder: 8, IsSystem: true},
+		{Key: "politics", Label: "道德与法治", Color: "#ef4444", SortOrder: 9, IsSystem: true},
+		{Key: "extra", Label: "课外百科", Color: "#f43f5e", SortOrder: 10, IsSystem: true},
 		// Entertainment: the implicit subject for fun videos (no learning stats,
 		// no badge). Entertainment courses point SubjectID here to satisfy the
 		// NOT NULL constraint. SortOrder 99 keeps it at the end of any list.
-		{Key: "entertainment", Label: "娱乐", Emoji: "🎬", Color: "#8b5cf6", SortOrder: 99, IsSystem: true},
+		{Key: "entertainment", Label: "娱乐", Color: "#8b5cf6", SortOrder: 99, IsSystem: true},
 	}
 
 	for i := range defaults {

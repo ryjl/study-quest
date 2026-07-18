@@ -8,6 +8,7 @@ import { GradePicker } from '../../components/inputs';
 import { TagInput } from '../../components/TagInput';
 import { ImageUpload } from '../../components/inputs';
 import { useToast } from '../../lib/toast';
+import { BookOpen, Film } from 'lucide-react';
 
 export function CreateEditCourseModal({
   open,
@@ -128,16 +129,16 @@ export function CreateEditCourseModal({
             <button
               type="button"
               onClick={() => { setContentType('learning'); setSubject(course?.subject ?? subjects[0]?.key ?? ''); }}
-              className={`flex-1 rounded-lg border px-3 py-2 text-sm ${!isEntertainment ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-600'}`}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${!isEntertainment ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
             >
-              📚 学习
+              <BookOpen size={14} /> 学习
             </button>
             <button
               type="button"
               onClick={() => { setContentType('entertainment'); setSubject('entertainment'); }}
-              className={`flex-1 rounded-lg border px-3 py-2 text-sm ${isEntertainment ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-600'}`}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${isEntertainment ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
             >
-              🎬 娱乐
+              <Film size={14} /> 娱乐
             </button>
           </div>
         </div>
@@ -148,7 +149,7 @@ export function CreateEditCourseModal({
             <select className="input" value={subject} onChange={(e) => setSubject(e.target.value)}>
               {subjects.filter((s) => s.key !== 'entertainment').map((s) => (
                 <option key={s.key} value={s.key}>
-                  {s.emoji} {s.label} ({s.key})
+                  {s.label} ({s.key})
                 </option>
               ))}
             </select>

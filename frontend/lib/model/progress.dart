@@ -22,9 +22,20 @@ class UserProgress {
       episodeId: json['EpisodeID'] ?? json['episode_id'] ?? 0,
       lastPositionSeconds: json['LastPositionSeconds'] ?? json['last_position_seconds'] ?? 0,
       watchSeconds: json['WatchSeconds'] ?? json['watch_seconds'] ?? 0,
-      isCompleted: (json['IsCompleted'] ?? json['is_completed'] ?? 0) == 1,
+      // is_completed arrives as a JSON bool (the backend column is bool) but
+      // historically was an int 0/1. Accept both so this stays robust.
+      isCompleted: _parseBool(json['IsCompleted'] ?? json['is_completed']),
     );
   }
+}
+
+// _parseBool accepts a JSON value that may be a bool (current backend) or an
+// int 0/1 / String "1" (historical). Used for is_completed which changed type.
+bool _parseBool(dynamic v) {
+  if (v is bool) return v;
+  if (v is int) return v != 0;
+  if (v is String) return v == '1' || v == 'true';
+  return false;
 }
 
 class UserPoint {

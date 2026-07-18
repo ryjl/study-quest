@@ -51,10 +51,10 @@ func TestGetDistinctSubjectCompletedCount(t *testing.T) {
 	// episode is watched but NOT completed → must not count.
 	const uid uint = 42
 	completed := func(eid uint) *model.UserProgress {
-		return &model.UserProgress{UserID: uid, EpisodeID: eid, IsCompleted: 1, WatchSeconds: 10}
+		return &model.UserProgress{UserID: uid, EpisodeID: eid, IsCompleted: true, WatchSeconds: 10}
 	}
 	incomplete := func(eid uint) *model.UserProgress {
-		return &model.UserProgress{UserID: uid, EpisodeID: eid, IsCompleted: 0, WatchSeconds: 5}
+		return &model.UserProgress{UserID: uid, EpisodeID: eid, IsCompleted: false, WatchSeconds: 5}
 	}
 	for _, p := range []*model.UserProgress{completed(mathEp), completed(engEp), incomplete(chiEp)} {
 		if err := db.Create(p).Error; err != nil {

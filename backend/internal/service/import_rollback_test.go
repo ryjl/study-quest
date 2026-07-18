@@ -29,6 +29,13 @@ func TestImportTreeRollbackOnMidFailure(t *testing.T) {
 	svc := NewImportService(db, episodeRepo, courseRepo, resolver, chapterRepo, subjectRepo, nil).
 		(*importService)
 
+	// SourceID is now required (no global storage fallback). Seed one and
+	// stamp it onto the import request so episodes are streamable.
+	src := model.StorageSource{Name: "test-default", Type: "alist", URL: "http://test:5244", IsDefault: true}
+	if err := db.Create(&src).Error; err != nil {
+		t.Fatalf("seed storage source: %v", err)
+	}
+
 	// Force the 2ND episode create to fail. The tree below has 2 episodes under
 	// one chapter: ep1 should succeed, ep2 should fail → the whole import
 	// (course + chapter + ep1) must roll back.
@@ -46,6 +53,7 @@ func TestImportTreeRollbackOnMidFailure(t *testing.T) {
 	req := &ExecuteTreeImportRequest{
 		NewCourse: &NewCourseRequest{Title: "回滚测试课", Grade: "3", Subject: subjects["math"].Key},
 		Tree:      tree,
+		SourceID:  &src.ID,
 	}
 
 	err := svc.ExecuteTreeImport(req)
@@ -82,6 +90,13 @@ func TestImportWithMultiGrades(t *testing.T) {
 
 	svc := NewImportService(db, episodeRepo, courseRepo, resolver, chapterRepo, subjectRepo, nil)
 
+	// SourceID is now required (no global storage fallback). Seed one and
+	// stamp it onto the import request so episodes are streamable.
+	src := model.StorageSource{Name: "test-default", Type: "alist", URL: "http://test:5244", IsDefault: true}
+	if err := db.Create(&src).Error; err != nil {
+		t.Fatalf("seed storage source: %v", err)
+	}
+
 	tree := &ImportPreviewNode{
 		Name: "Root", IsDir: true, Type: "course",
 		Children: []*ImportPreviewNode{
@@ -93,6 +108,7 @@ func TestImportWithMultiGrades(t *testing.T) {
 	req := &ExecuteTreeImportRequest{
 		NewCourse: &NewCourseRequest{Title: "多年级测试课", Grade: "3,4,5", Subject: subjects["math"].Key},
 		Tree:      tree,
+		SourceID:  &src.ID,
 	}
 
 	err := svc.ExecuteTreeImport(req)

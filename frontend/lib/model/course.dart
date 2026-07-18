@@ -6,7 +6,10 @@ class Course {
   final String grade;
   final String subject;
   final String coverUrl;
-  final String tags;
+  // Display tags for the course card. Backend serves this as the `TagsList`
+  // string array (see client_dto.go) alongside `tag_ids`; the old comma-joined
+  // `Tags` string contract was dropped.
+  final List<String> tagsList;
   final List<int> tagIds;
   // Drip-unlock summary shown on the course card (student roles only). Populated
   // by GetCourses; empty/zero values mean "no drip cadence" → card hides the badge.
@@ -22,7 +25,7 @@ class Course {
     required this.grade,
     required this.subject,
     required this.coverUrl,
-    this.tags = '',
+    this.tagsList = const [],
     this.tagIds = const [],
     this.unlockStrategy = '',
     this.unlockStrategyLabel = '',
@@ -33,13 +36,16 @@ class Course {
 
   factory Course.fromJson(Map<String, dynamic> json) {
     final rawTagIds = json['TagIDs'] ?? json['tag_ids'];
+    final rawTagsList = json['TagsList'] ?? json['tags_list'];
     return Course(
       id: json['ID'] ?? json['id'] ?? 0,
       title: json['Title'] ?? json['title'] ?? '',
       grade: json['Grade'] ?? json['grade'] ?? 'universal',
       subject: json['Subject'] ?? json['subject'] ?? '',
       coverUrl: json['CoverURL'] ?? json['cover_url'] ?? '',
-      tags: json['Tags'] ?? json['tags'] ?? '',
+      tagsList: rawTagsList is List
+          ? rawTagsList.map((e) => e.toString()).toList()
+          : const [],
       tagIds: rawTagIds is List
           ? rawTagIds.map((e) => (e as num).toInt()).toList()
           : const [],
@@ -54,15 +60,6 @@ class Course {
   /// Whether this course runs under a drip-unlock schedule (vs all-open). Drives
   /// the badge visibility on the course card.
   bool get hasUnlockSchedule => unlockStrategy.isNotEmpty && unlockStrategy != 'all_open';
-
-  List<String> get tagsList {
-    if (tags.isEmpty) return const [];
-    return tags
-        .split(',')
-        .map((t) => t.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
-  }
 }
 
 /// A chapter/module within a course (mirrors backend model.Chapter).

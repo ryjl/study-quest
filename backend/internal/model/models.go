@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -102,11 +101,10 @@ type Session struct {
 
 // PointsLedger reason-type constants. Stored as strings on
 // PointsLedger.ReasonType; these consts keep the ledger values in sync with
-// the code that writes them (previously drifted between docs and code).
+// the code that writes them.
 const (
-	ReasonSystemWatch   = "system_watch"    // completed a learning episode
-	ReasonBadgeUnlocked = "badge_unlocked"  // badge tier cleared
-	ReasonParentGrant   = "parent_grant"    // parent-awarded bonus (future)
+	ReasonSystemWatch   = "system_watch"   // completed a learning episode
+	ReasonBadgeUnlocked = "badge_unlocked" // badge tier cleared
 )
 
 // Badge rule-type constants. Stored as strings on Badge.RuleType.
@@ -175,8 +173,12 @@ func (c ContentType) Valid() bool {
 
 // Subject represents a user-editable course subject (科目), e.g. 语文/数学/英语.
 // Stored as its own table so it can be renamed or deleted independently of
-// courses. `Key` is the stable identifier referenced by badge rules; Label /
-// Emoji / Color carry the display metadata the frontend needs.
+// courses. `Key` is the stable identifier referenced by badge rules AND the
+// lookup key the frontend uses to resolve a display icon (admin: key→lucide;
+// Flutter: key→Material IconData — see subjectIcon.tsx / subject_icon.dart).
+// Label / Color carry the remaining display metadata. The icon is NOT stored
+// here: both clients map the key to a line icon at render time, which keeps
+// the visual language consistent and cross-platform.
 //
 // IsSystem marks rows seeded by SeedDefaultSubjects: they can be renamed or
 // recolored but never deleted (so the catalog always retains the canonical
@@ -184,9 +186,8 @@ func (c ContentType) Valid() bool {
 // deletable (subject to the course-FK guard).
 type Subject struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement"`
-	Key       string    `gorm:"size:100;uniqueIndex;not null"` // stable identifier, e.g. "math"
+	Key       string    `gorm:"size:100;uniqueIndex;not null"` // stable identifier + icon lookup key, e.g. "math"
 	Label     string    `gorm:"size:100;not null"`             // display name, e.g. "数学"
-	Emoji     string    `gorm:"size:32"`                       // e.g. "📐"
 	Color     string    `gorm:"size:32"`                       // hex e.g. "#f59e0b"
 	SortOrder int       `gorm:"default:0"`
 	IsSystem  bool      `gorm:"default:false"` // true = seeded default, protected from deletion
@@ -248,23 +249,6 @@ type Course struct {
 type CourseGrade struct {
 	CourseID uint  `gorm:"primaryKey"`
 	Grade    Grade `gorm:"primaryKey;type:varchar(20);not null"`
-}
-
-// TagsList returns the display labels of the course's tags, in tag sort order.
-// Kept for DTO back-compat (the /api/v1 contract emits a string array) and
-// for any caller that still wants the legacy "comma string" via TagsJoined().
-func (c Course) TagsList() []string {
-	out := make([]string, 0, len(c.Tags))
-	for _, t := range c.Tags {
-		out = append(out, t.Label)
-	}
-	return out
-}
-
-// TagsJoined returns the comma-joined tag labels, matching the legacy
-// Course.Tags string field shape that older Flutter clients still parse.
-func (c Course) TagsJoined() string {
-	return strings.Join(c.TagsList(), ",")
 }
 
 // GradeKeys returns the course's applicable grades as a string slice (loaded
@@ -445,8 +429,8 @@ type PointsLedger struct {
 	UserID       uint      `gorm:"index;not null"`
 	User         User      `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 	ChangeAmount int       `gorm:"not null"`
-	ReasonType   string    `gorm:"size:50;not null"` // see Reason* consts above (system_watch, badge_unlocked, parent_grant)
-	Description  string    `gorm:"size:1024"`
+	ReasonType   string    `gorm:"size:50;not null"` // see Reason* consts above
+	Description  string    `gorm:"size:255"`
 	CreatedAt    time.Time `gorm:"default:CURRENT_TIMESTAMP"`
 }
 
@@ -459,7 +443,7 @@ type UserProgress struct {
 	Episode             Episode   `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
 	LastPositionSeconds int       `gorm:"default:0"`
 	WatchSeconds        int       `gorm:"default:0"` // Accumulated playback seconds
-	IsCompleted         int       `gorm:"default:0"` // 0 = false, 1 = true (when watch_seconds > 80% duration)
+	IsCompleted         bool      `gorm:"default:false"` // true when watch_seconds > 80% duration
 	UnlockedAt          *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
@@ -468,36 +452,35 @@ type UserProgress struct {
 // Badge represents an achievement badge that can be earned by a student.
 //
 // Two evaluation modes:
-//   - Single rule (legacy + simple badges): RuleType + RuleTarget + Threshold.
+//   - Single rule: RuleType + RuleTarget + Threshold.
 //   - Composite rule: RuleJSON holds a serialized CompositeRule tree, and the
 //     top-level RuleType/Threshold are kept only for display/back-compat
 //     (set to "composite" when RuleJSON is populated).
 //
 // SubjectID links a subject-scoped badge (e.g. "数学达人") to its subject via
-// FK, replacing the old string-convention coupling (Code "subject_<key>"). A
-// badge with SubjectID=nil is a global badge (streak, points, etc.).
+// FK. A badge with SubjectID=nil is a global badge (streak, points, etc.).
 //
-// IsSystem marks seeded defaults (protected from deletion, still editable).
+// The display icon is NOT stored on the badge: both clients derive it from
+// Code/RuleType (admin: badgeIcon.tsx maps code substrings to a color ring
+// around a shared Award icon; Flutter: _badgeIcon maps ruleType to a Material
+// IconData). IsSystem marks seeded defaults (protected from deletion).
 type Badge struct {
 	ID          uint      `gorm:"primaryKey;autoIncrement"`
 	Code        string    `gorm:"size:100;uniqueIndex;not null"`
 	Title       string    `gorm:"size:255;not null"`
 	Description string    `gorm:"type:text"`
-	IconName    string    `gorm:"size:255;not null"`
-	RuleType    string    `gorm:"size:50;not null"` // watch_duration, consecutive_days, subject_count, episode_completed_count, points_earned, distinct_subject_count, course_completion, weekly_all_present, composite
-	RuleTarget  string    `gorm:"size:100"`         // target e.g. "math" or empty
-	Threshold   int       `gorm:"not null"`         // threshold to reach e.g. 100, 7, 5 (single-tier only)
-	RuleJSON    string    `gorm:"type:text"`        // composite rule tree (empty = single rule)
-	SubjectID   *uint     `gorm:"index"`            // FK → subjects.id (nullable; SET NULL on subject delete)
+	RuleType    string    `gorm:"size:50;not null"` // see Rule* consts below
+	RuleTarget  string    `gorm:"size:100"`        // target e.g. "math" or empty
+	Threshold   int       `gorm:"not null"`        // threshold to reach e.g. 100, 7, 5 (single-tier only)
+	RuleJSON    string    `gorm:"type:text"`       // composite rule tree (empty = single rule)
+	SubjectID   *uint     `gorm:"index"`           // FK → subjects.id (nullable; SET NULL on subject delete)
 	// Tiers holds a multi-tier progression as JSON (see TierDef). Empty =
 	// single-tier badge using Threshold. Non-empty = the badge is evaluated as
 	// a progression: the user advances through each tier as their stat crosses
 	// each tier's threshold, earning that tier's reward points. Adding a new
 	// tier later is just appending to this array — no migration needed.
-	// Subject badges are linked to their subject via SubjectID (FK); the Code
-	// "subject_<key>" convention is kept for human-readability only.
-	Tiers    string `gorm:"type:text"`
-	IsSystem bool   `gorm:"default:false"` // true = seeded default, protected from deletion
+	Tiers    string   `gorm:"type:text"`
+	IsSystem bool     `gorm:"default:false"` // true = seeded default, protected from deletion
 	Subject  *Subject `gorm:"foreignKey:SubjectID;constraint:OnDelete:SET NULL"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -710,34 +693,10 @@ func readingArticleGrades(gs []ReadingArticleGrade) []Grade {
 	return out
 }
 
-func (s ReadingSeries) TagsList() []string {
-	out := make([]string, 0, len(s.Tags))
-	for _, t := range s.Tags {
-		out = append(out, t.Label)
-	}
-	return out
-}
-func (s ReadingSeries) TagsJoined() string  { return strings.Join(s.TagsList(), ",") }
 func (s ReadingSeries) GradeDisplay() string { return readingGradeDisplay(readingSeriesGrades(s.Grades)) }
 
-func (b ReadingBook) TagsList() []string {
-	out := make([]string, 0, len(b.Tags))
-	for _, t := range b.Tags {
-		out = append(out, t.Label)
-	}
-	return out
-}
-func (b ReadingBook) TagsJoined() string  { return strings.Join(b.TagsList(), ",") }
 func (b ReadingBook) GradeDisplay() string { return readingGradeDisplay(readingBookGrades(b.Grades)) }
 
-func (a ReadingArticle) TagsList() []string {
-	out := make([]string, 0, len(a.Tags))
-	for _, t := range a.Tags {
-		out = append(out, t.Label)
-	}
-	return out
-}
-func (a ReadingArticle) TagsJoined() string  { return strings.Join(a.TagsList(), ",") }
 func (a ReadingArticle) GradeDisplay() string { return readingGradeDisplay(readingArticleGrades(a.Grades)) }
 
 // ReadingBook is a PDF document in the reading room. Mirrors the Episode role:
@@ -1233,18 +1192,6 @@ type UserStudyReport struct {
 }
 
 func AutoMigrate(db *gorm.DB) error {
-	// Rename the legacy `a_iproviders` table to `ai_providers` BEFORE running
-	// AutoMigrate. AIProvider.TableName() now pins the name to `ai_providers`;
-	// without this rename, AutoMigrate would see the model wants `ai_providers`,
-	// find no such table, and create an EMPTY one — leaving the real provider
-	// config stranded under the old misnamed `a_iproviders` (GORM's default
-	// snake-casing of `AIProvider` → `a_i_providers` → trimmed `a_iproviders`).
-	// Renaming first preserves all rows + the capability index. Idempotent:
-	// no-op once the new name is in place. Must run pre-AutoMigrate so the
-	// struct-driven create/alter pass sees the correctly-named table.
-	if err := migrateAIProvidersTableName(db); err != nil {
-		return err
-	}
 	err := db.AutoMigrate(
 		&Setting{},
 		&User{},
@@ -1313,102 +1260,16 @@ func AutoMigrate(db *gorm.DB) error {
 	return migrateQuizActiveUniqueIndex(db)
 }
 
-// migrateAIProvidersTableName renames the legacy misnamed `a_iproviders` table
-// to `ai_providers` (the name AIProvider.TableName() now pins).
+// migrateQuizActiveUniqueIndex creates the partial unique index that enforces
+// the "one ACTIVE quiz per (user, episode)" invariant. Archived rows (regen
+// superseds the current quiz) may coexist freely for history; only active
+// rows participate in the uniqueness constraint.
 //
-// Background: GORM's default snake-casing splits `AIProvider` on every
-// uppercase letter → `A_I_Provider` → leading/trailing underscore trim →
-// `a_iproviders`. This is how the original table was created. The struct now
-// overrides TableName() to the intended `ai_providers`. Without this migration,
-// AutoMigrate would create an EMPTY `ai_providers` and leave the real config
-// rows orphaned under `a_iproviders` (admin would see no configured provider).
-//
-// SQLite's `ALTER TABLE ... RENAME TO` is a constant-time metadata op that
-// preserves all rows, columns, and indexes (the capability index becomes
-// `idx_ai_providers_capability` automatically via SQLite's index-rename-on-
-// table-rename). Zero data movement, zero risk.
-//
-// Idempotent (runs every boot):
-//   - If neither table exists: fresh install → AutoMigrate creates `ai_providers`
-//     normally. No-op here.
-//   - If only `a_iproviders` exists: legacy install → RENAME. The one case that
-//     does work.
-//   - If only `ai_providers` exists: already migrated → no-op.
-//   - If BOTH exist (shouldn't happen, but defensive): skip the rename and log
-//     a warning so the operator can reconcile manually — never silently drop
-//     data. AutoMigrate will then use `ai_providers`.
-func migrateAIProvidersTableName(db *gorm.DB) error {
-	const oldName = "a_iproviders"
-	const newName = "ai_providers"
-
-	oldExists, err := tableExists(db, oldName)
-	if err != nil {
-		return fmt.Errorf("check legacy %s: %w", oldName, err)
-	}
-	if !oldExists {
-		return nil // fresh install or already migrated past the legacy name
-	}
-	newExists, err := tableExists(db, newName)
-	if err != nil {
-		return fmt.Errorf("check target %s: %w", newName, err)
-	}
-	if newExists {
-		// Both tables present — refuse to guess. Log loudly; operator must
-		// reconcile (e.g. copy rows from old into new, then drop old).
-		log.Printf("[migrate] WARNING: both %s and %s exist; skipping rename. "+
-			"Manual reconciliation required (the app will use %s).", oldName, newName, newName)
-		return nil
-	}
-	if err := db.Exec(fmt.Sprintf("ALTER TABLE `%s` RENAME TO `%s`", oldName, newName)).Error; err != nil {
-		return fmt.Errorf("rename %s → %s: %w", oldName, newName, err)
-	}
-	log.Printf("[migrate] renamed legacy table %s → %s (provider config preserved)", oldName, newName)
-	return nil
-}
-
-// tableExists reports whether a table with the given name exists in the
-// database. Uses sqlite_master so it works regardless of GORM's naming helpers.
-func tableExists(db *gorm.DB, name string) (bool, error) {
-	var count int64
-	err := db.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?", name).Scan(&count).Error
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
-// migrateQuizActiveUniqueIndex swaps the quizzes table's uniqueness guarantee
-// from "one row per (user, episode)" to "one ACTIVE row per (user, episode)".
-//
-// Background: Quiz historically carried a GORM uniqueIndex tag producing a
-// plain UNIQUE(user_id, episode_id). Phase 3 keeps old quizzes on regen by
-// archiving them (Status active→archived) instead of deleting, so N archived
-// rows may now coexist with 1 active row for the same pair. A plain unique
-// index would reject that, so the tag was removed from the struct and the
-// invariant moves to a partial unique index (SQLite + Postgres support the
-// WHERE clause form). The plain GORM tag can't express a WHERE, hence the raw
-// SQL here.
-//
-// Steps (idempotent, runs every boot):
-//  1. Drop the legacy non-partial unique index if it still exists (installs
-//     that predate Phase 3 have it; AutoMigrate alone won't drop a tag-removed
-//     index). IF EXISTS keeps this a no-op on fresh DBs.
-//  2. CREATE the partial unique index IF NOT EXISTS so the active-row
-//     invariant is still enforced at the DB layer (defense in depth on top of
-//     CreateQuiz's archive-then-insert transaction).
-//
-// MySQL has no partial-index syntax; if a future port targets MySQL, this needs
-// to fall back to app-layer-only enforcement (CreateQuiz already guarantees it
-// within its transaction). Today the only supported DB is SQLite.
+// GORM's struct tags can't express a WHERE clause, so the partial index is
+// created in raw SQL after AutoMigrate. Idempotent (CREATE ... IF NOT EXISTS).
+// CreateQuiz's archive-then-insert transaction is the primary guarantee; this
+// index is defense-in-depth at the DB layer.
 func migrateQuizActiveUniqueIndex(db *gorm.DB) error {
-	// Drop the legacy full-unique index left over from the pre-Phase-3 schema.
-	// IF EXISTS makes this safe on fresh installs (no-op) and on boots after the
-	// first migration (the index is already gone).
-	if err := db.Exec(`DROP INDEX IF EXISTS idx_quiz_user_ep`).Error; err != nil {
-		return fmt.Errorf("drop legacy idx_quiz_user_ep: %w", err)
-	}
-	// Create the partial unique index. Only active rows participate, so an
-	// arbitrary number of archived rows may coexist for the same pair.
 	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_quiz_user_ep_active ON quizzes(user_id, episode_id) WHERE status = 'active'`).Error; err != nil {
 		return fmt.Errorf("create partial unique idx_quiz_user_ep_active: %w", err)
 	}

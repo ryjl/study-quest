@@ -2,13 +2,30 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import type { Chapter, Course, Episode } from '../../lib/types';
-import { LoadingState, EmptyState } from '../../components/ui';
+import { LoadingState, EmptyState, DropdownMenu } from '../../components/ui';
 import { codecLabel, formatDuration, formatFileSize, resolutionLabel } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
 import { sortBy, timeValue, type SortDir, type SortOption } from '../../lib/sort';
 import { EpisodeEditor } from './EpisodeEditor';
 import { ChapterEditor } from './ChapterEditor';
 import { SubtitleDrawer } from './SubtitleDrawer';
+import {
+  ChevronRight,
+  ChevronUp,
+  ChevronDown,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Plus,
+  Pencil,
+  Trash2,
+  Captions,
+  Radio,
+  ArrowUp,
+  ArrowDown,
+  Film,
+  Clock,
+} from 'lucide-react';
 
 // Display-sort options for episodes WITHIN a chapter (or the uncategorized
 // bucket). "Apply as order" persists the displayed sequence via the existing
@@ -245,13 +262,14 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
   if (epsQ.isLoading || chsQ.isLoading) return <LoadingState />;
 
   return (
-    <div className="border-t border-border bg-card p-4">
-      {/* Bulk toolbar */}
+    <div className="border-t border-border/60 bg-card px-4 py-3">
+      {/* Bulk toolbar — appears only when episodes are selected. Neutral
+          palette (was violet-tinted); reads as "active state" via bg alone. */}
       {selectedIds.length > 0 && (
-        <div className="mb-3 flex items-center justify-between gap-2 rounded-xl border border-primary/30 bg-primary/10 p-2.5">
-          <span className="text-sm text-primary">已选中 {selectedIds.length} 个课时</span>
-          <div className="flex flex-shrink-0 items-center gap-2">
-            <select className="input !py-1 !text-xs max-w-[180px]" defaultValue="" onChange={(e) => e.target.value && onBulkMove(Number(e.target.value))}>
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-border bg-card-2 px-3 py-2">
+          <span className="text-sm font-medium text-txt">已选中 {selectedIds.length} 个课时</span>
+          <div className="ml-auto flex flex-shrink-0 flex-wrap items-center gap-2">
+            <select className="input !w-auto !py-1 !text-xs" defaultValue="" onChange={(e) => e.target.value && onBulkMove(Number(e.target.value))}>
               <option value="">移到章节...</option>
               <option value="0">默认/未分类</option>
               {chapters.map((c) => (
@@ -264,7 +282,7 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
                 Priority is chosen inline (higher = the worker picks it first); the
                 default 0 is fine for most batches. */}
             <select
-              className="input !py-1 !text-xs max-w-[160px]"
+              className="input !w-auto !py-1 !text-xs"
               defaultValue=""
               onChange={(e) => {
                 const v = e.target.value;
@@ -290,26 +308,23 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
         </div>
       )}
 
-      {/* Tree header. The right-side control cluster (sort dropdown + arrow +
-          apply + probe + add chapter/episode) must stay on ONE line when there's
-          room; whitespace-nowrap + flex-nowrap on the group keeps it from
-          wrapping, and overflow-x-auto on the header lets it scroll instead of
-          folding when the viewport is genuinely too narrow. */}
-      <div className="mb-3 flex items-center justify-between gap-3 overflow-x-auto">
-        <div className="flex flex-shrink-0 items-center gap-3 whitespace-nowrap">
+      {/* Tree header — streamlined to high-frequency controls only:
+          select-all + counts on the left, sort on the right. Low-frequency
+          add/probe actions moved into the ⋯ menu below. */}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-shrink-0 items-center gap-3">
           <label className="flex items-center gap-1.5 text-xs text-muted">
             <input type="checkbox" className="h-3.5 w-3.5 accent-primary" checked={selected.size > 0 && selected.size === episodes.length} onChange={selectAllInCourse} />
             全选
           </label>
-          <span className="text-xs text-muted">
+          <span className="text-xs tabular-nums text-muted">
             {chapters.length} 章节 · {episodes.length} 课时
           </span>
         </div>
-        <div className="flex flex-shrink-0 items-center gap-2 whitespace-nowrap">
-          {/* Episode display-sort. "Apply" persists the shown order to sort_order. */}
-          <span className="text-xs text-muted">课时排序</span>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <span className="text-xs text-muted">排序</span>
           <select
-            className="input !py-1 !text-xs max-w-[130px]"
+            className="input !w-auto !py-1 !text-xs"
             value={epSortKey}
             onChange={(e) => setEpSortKey(e.target.value)}
           >
@@ -324,7 +339,7 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
             onClick={() => setEpSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
             title={epSortDir === 'asc' ? '当前：正序' : '当前：倒序'}
           >
-            {epSortDir === 'asc' ? '↑' : '↓'}
+            {epSortDir === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />}
           </button>
           {epSortKey !== 'manual' && (
             <button className="btn-secondary btn-sm" onClick={applyDisplaySortAsOrder} title="把当前显示顺序保存为课时顺序">
@@ -332,50 +347,55 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
             </button>
           )}
           <div className="mx-1 h-4 w-px bg-border" />
-          <button className="btn-secondary btn-sm" onClick={() => probeMissingMut.mutate()} title="探测缺失时长/封面的课时">
-            📡 探测缺失时长
+          {/* Add chapter/episode stay as persistent buttons (high-frequency);
+              probe-missing collapses into the ⋯ menu (low-frequency maintenance). */}
+          <button className="btn-secondary btn-sm" onClick={() => setAddingChapter(true)} title="添加章节">
+            <FolderPlus size={14} /> 章节
           </button>
-          <button className="btn-secondary btn-sm" onClick={() => setAddingChapter(true)}>
-            + 章节
+          <button className="btn-secondary btn-sm" onClick={() => setAddingEpisode({ chapterId: 0 })} title="添加课时到默认分类">
+            <Plus size={14} /> 课时
           </button>
-          <button className="btn-secondary btn-sm" onClick={() => setAddingEpisode({ chapterId: 0 })}>
-            + 课时
-          </button>
+          <DropdownMenu
+            align="right"
+            items={[
+              { label: '探测缺失时长', icon: <Radio size={14} />, onClick: () => probeMissingMut.mutate() },
+            ]}
+          />
         </div>
       </div>
 
       {episodes.length === 0 && chapters.length === 0 ? (
-        <EmptyState icon="🎬" title="暂无章节与课时" hint="先添加章节，或直接添加课时到默认分类。" />
+        <EmptyState icon={<Film size={28} />} title="暂无章节与课时" hint="使用上方「章节」「课时」按钮添加，或直接添加课时到默认分类。" />
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-2">
           {/* Render chapters with their episodes */}
           {chapters.map((ch) => {
             const chEps = grouped.get(ch.id) ?? [];
             const collapsed = collapsedChapters.has(ch.id);
             return (
-              <div key={ch.id} className="rounded-xl border border-primary/20 bg-primary/[0.06] p-3">
-                <div className="flex items-center justify-between">
-                  <button className="flex items-center gap-2 text-left" onClick={() => toggleChapterCollapse(ch.id)}>
-                    <span className="text-xs text-muted">{collapsed ? '▶' : '▼'}</span>
-                    <span>📁</span>
-                    <strong className="text-primary">{ch.title}</strong>
-                    {ch.description && <span className="text-xs text-muted">— {ch.description}</span>}
-                    <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] text-primary">{chEps.length} 课时</span>
+              <div key={ch.id} className="rounded-md border border-border bg-card-2/40 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => toggleChapterCollapse(ch.id)}>
+                    <ChevronRight size={12} className={`flex-shrink-0 text-muted transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+                    <Folder size={14} className="flex-shrink-0 text-muted" />
+                    <strong className="truncate text-sm font-medium text-txt">{ch.title}</strong>
+                    {ch.description && <span className="truncate text-xs text-muted">— {ch.description}</span>}
+                    <span className="flex-shrink-0 rounded bg-card-2 px-1.5 py-0.5 text-[10px] tabular-nums text-muted">{chEps.length}</span>
                   </button>
-                  <div className="flex gap-1.5">
-                    <button className="btn-ghost btn-sm" onClick={() => setAddingEpisode({ chapterId: ch.id })} title="在此章节添加课时">
-                      + 课时
+                  <div className="flex flex-shrink-0 gap-0.5">
+                    <button className="btn-ghost btn-sm !px-1.5" onClick={() => setAddingEpisode({ chapterId: ch.id })} title="在此章节添加课时">
+                      <Plus size={14} />
                     </button>
-                    <button className="btn-ghost btn-sm" onClick={() => setEditingChapter(ch)}>
-                      编辑
+                    <button className="btn-ghost btn-sm !px-1.5" onClick={() => setEditingChapter(ch)} title="编辑章节">
+                      <Pencil size={14} />
                     </button>
-                    <button className="btn-danger btn-sm" onClick={() => onDeleteChapter(ch)}>
-                      删除
+                    <button className="btn-ghost btn-sm !px-1.5 text-bad hover:text-bad" onClick={() => onDeleteChapter(ch)} title="删除章节">
+                      <Trash2 size={14} />
                     </button>
                   </div>
                 </div>
                 {!collapsed && (
-                  <div className="mt-2 space-y-1.5 border-l border-dashed border-border pl-3">
+                  <div className="mt-1.5 space-y-1 border-l border-border pl-2.5" style={{ marginLeft: '0.875rem' }}>
                     {chEps.length === 0 ? (
                       <div className="py-2 text-xs italic text-muted">(该章节下暂无课时)</div>
                     ) : (
@@ -404,13 +424,13 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
             const unc = grouped.get(0) ?? [];
             if (unc.length === 0) return null;
             return (
-              <div className="rounded-xl border border-muted/20 bg-muted/[0.06] p-3">
-                <div className="mb-2 flex items-center gap-2">
-                  <span>📂</span>
-                  <strong className="text-muted">默认/未分类</strong>
-                  <span className="rounded bg-muted/20 px-1.5 py-0.5 text-[10px] text-muted">{unc.length} 课时</span>
+              <div className="rounded-md border border-dashed border-border bg-card-2/20 p-2.5">
+                <div className="mb-1.5 flex items-center gap-2">
+                  <FolderOpen size={14} className="text-muted" />
+                  <strong className="text-sm text-muted">默认/未分类</strong>
+                  <span className="rounded bg-card-2 px-1.5 py-0.5 text-[10px] tabular-nums text-muted">{unc.length}</span>
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-1">
                   {unc.map((ep, i) => (
                     <EpisodeRow
                       key={ep.id}
@@ -466,9 +486,7 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
         />
       )}
 
-      {subtitleFor && (
-        <SubtitleDrawer episode={subtitleFor} onClose={() => setSubtitleFor(null)} />
-      )}
+      {subtitleFor && <SubtitleDrawer episode={subtitleFor} onClose={() => setSubtitleFor(null)} />}
     </div>
   );
 }
@@ -493,28 +511,35 @@ function EpisodeRow({
   onMoveDown?: () => void;
 }) {
   const meta = ep.media_meta_json ? JSON.parse(ep.media_meta_json) : null;
+  const hasDuration = ep.duration_seconds != null && ep.duration_seconds > 0;
+  const resLabel = meta ? resolutionLabel(meta.width, meta.height) : '';
+  const codec = meta?.video_codec ? codecLabel(meta.video_codec) : '';
   return (
-    <div className="group flex items-center gap-2.5 rounded-lg border border-border bg-card-2 px-3 py-2 text-sm transition hover:border-primary/40">
+    // group enables the hover-revealed action bar; actions are invisible
+    // until hover so a dense episode list reads cleanly row over row.
+    <div className="group flex items-center gap-2.5 rounded-md border border-border/60 bg-card px-2.5 py-1.5 text-sm transition-colors hover:border-border hover:bg-card-2/30">
       <input type="checkbox" checked={selected} onChange={onToggle} className="h-3.5 w-3.5 flex-shrink-0 accent-primary" />
 
-      {/* Sort controls */}
-      <div className="flex flex-shrink-0 flex-col text-[9px] leading-none">
-        <button onClick={onMoveUp} disabled={!onMoveUp} className="text-primary disabled:opacity-30 hover:opacity-100">
-          ▲
+      {/* Sort controls — muted, hover to full opacity. */}
+      <div className="flex flex-shrink-0 flex-col opacity-40 transition-opacity group-hover:opacity-100">
+        <button onClick={onMoveUp} disabled={!onMoveUp} className="text-muted hover:text-txt disabled:opacity-20" title="上移">
+          <ChevronUp size={12} />
         </button>
-        <button onClick={onMoveDown} disabled={!onMoveDown} className="text-primary disabled:opacity-30 hover:opacity-100">
-          ▼
+        <button onClick={onMoveDown} disabled={!onMoveDown} className="text-muted hover:text-txt disabled:opacity-20" title="下移">
+          <ChevronDown size={12} />
         </button>
       </div>
 
-      <span className="w-9 flex-shrink-0 font-bold text-primary">P{ep.sort_order}</span>
+      <span className="w-7 flex-shrink-0 text-xs tabular-nums text-muted">P{ep.sort_order}</span>
 
       {/* Cover thumbnail */}
-      <div className="h-10 w-14 flex-shrink-0 overflow-hidden rounded bg-black/30">
+      <div className="h-9 w-12 flex-shrink-0 overflow-hidden rounded bg-card-2">
         {ep.cover_url ? (
           <img src={ep.cover_url} alt="" className="h-full w-full object-cover" onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')} />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-xs opacity-30">🎬</div>
+          <div className="flex h-full w-full items-center justify-center text-muted opacity-40">
+            <Film size={14} />
+          </div>
         )}
       </div>
 
@@ -531,37 +556,38 @@ function EpisodeRow({
         </div>
       </div>
 
-      {/* Metadata badges — fixed-width column so duration/codec/size line up
-          row over row regardless of how long the title above is. */}
+      {/* Metadata — neutral tags, only "no duration" reads as a warning. */}
       <div className="hidden w-[200px] flex-shrink-0 items-center justify-end gap-1.5 md:flex">
-        {ep.duration_seconds ? (
-          <span className="rounded bg-warn/10 px-1.5 py-0.5 text-[11px] text-warn" title="视频时长">
-            ⏱ {formatDuration(ep.duration_seconds)}
+        {hasDuration ? (
+          <span className="inline-flex items-center gap-1 rounded bg-card-2 px-1.5 py-0.5 text-[11px] tabular-nums text-muted" title="视频时长">
+            <Clock size={10} />
+            {formatDuration(ep.duration_seconds!)}
           </span>
         ) : (
           <span className="rounded bg-bad/10 px-1.5 py-0.5 text-[11px] text-bad" title="尚未探测时长">
             无时长
           </span>
         )}
-        {meta && (resolutionLabel(meta.width, meta.height) || codecLabel(meta.video_codec)) && (
-          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">
-            {resolutionLabel(meta.width, meta.height)}
-            {meta.video_codec ? `·${codecLabel(meta.video_codec)}` : ''}
+        {(resLabel || codec) && (
+          <span className="rounded bg-card-2 px-1.5 py-0.5 text-[11px] text-muted">
+            {resLabel}
+            {codec ? `·${codec}` : ''}
           </span>
         )}
-        {ep.file_size && <span className="text-[11px] text-muted">{formatFileSize(ep.file_size)}</span>}
+        {ep.file_size && <span className="text-[11px] tabular-nums text-muted">{formatFileSize(ep.file_size)}</span>}
       </div>
 
-      {/* Actions — fixed-width column so 编辑/删除 buttons align across rows. */}
-      <div className="flex w-[120px] flex-shrink-0 justify-end gap-1">
-        <button className="btn-ghost btn-sm" onClick={onSubtitles} title="字幕管理">
-          💬
+      {/* Actions — hover-revealed ghost icon buttons; subtitles is the
+          least-frequent so it's last. Keeps each row visually quiet at rest. */}
+      <div className="flex w-[96px] flex-shrink-0 justify-end gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+        <button className="btn-ghost btn-sm !px-1.5" onClick={onSubtitles} title="字幕管理">
+          <Captions size={14} />
         </button>
-        <button className="btn-ghost btn-sm" onClick={onEdit}>
-          编辑
+        <button className="btn-ghost btn-sm !px-1.5" onClick={onEdit} title="编辑">
+          <Pencil size={14} />
         </button>
-        <button className="btn-danger btn-sm" onClick={onDelete}>
-          删除
+        <button className="btn-ghost btn-sm !px-1.5 text-bad hover:text-bad" onClick={onDelete} title="删除">
+          <Trash2 size={14} />
         </button>
       </div>
     </div>

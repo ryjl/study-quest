@@ -9,6 +9,7 @@ import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/button_3d.dart';
 import '../widget/state_widgets.dart';
+import '../widget/subject_icon.dart';
 import 'course_detail_screen.dart';
 
 // Backend stores grade as a stable key ("1".."9", "universal"); the UI shows
@@ -46,7 +47,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
   String _searchQuery = '';
 
   // Subject catalog fetched from /api/v1/subjects. Drives the filter chips and
-  // the key→label/emoji/color lookups on each card. Empty until loaded; the
+  // the key→label/color lookups on each card. Empty until loaded; the
   // fallback in resolveSubject() keeps the UI working pre-load / on fetch failure.
   List<Subject> _subjectsCatalog = const [];
 
@@ -449,45 +450,13 @@ class _CourseListScreenState extends State<CourseListScreen> {
   }
 
   Widget _buildSubjectWatermark(String subject) {
-    IconData iconData;
-    switch (subject.toLowerCase()) {
-      case 'chinese':
-      case '语文':
-        iconData = Icons.menu_book_rounded;
-        break;
-      case 'math':
-      case '数学':
-        iconData = Icons.calculate_rounded;
-        break;
-      case 'english':
-      case '英语':
-        iconData = Icons.translate_rounded;
-        break;
-      case 'physics':
-      case '科学':
-        iconData = Icons.science_rounded;
-        break;
-      case 'extra':
-      case '百科':
-        iconData = Icons.public_rounded;
-        break;
-      case '兴趣':
-        iconData = Icons.extension_rounded;
-        break;
-      case '综合':
-        iconData = Icons.map_rounded;
-        break;
-      default:
-        iconData = Icons.school_rounded;
-    }
-
     return Positioned(
       right: -24,
       bottom: -24,
       child: Transform.rotate(
         angle: -15 * pi / 180,
         child: Icon(
-          iconData,
+          subjectIconData(subject),
           size: 130,
           color: Colors.white.withOpacity(0.15),
         ),
@@ -712,8 +681,9 @@ class _CourseListScreenState extends State<CourseListScreen> {
   }
 
   String _getSubjectName(String key) {
-    final meta = resolveSubject(key, _subjectsCatalog);
-    return '${meta.label} ${meta.emoji}'.trim();
+    // Subject emoji was removed from the model; the chip is label-only now.
+    // (The watermark icon elsewhere renders the subject's Material icon.)
+    return resolveSubject(key, _subjectsCatalog).label;
   }
 
   void _showFilterBottomSheet() {

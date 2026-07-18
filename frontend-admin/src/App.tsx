@@ -7,7 +7,6 @@ import { Dashboard } from './pages/Dashboard';
 import { Courses } from './pages/Courses';
 import { Users } from './pages/Users';
 import { Badges } from './pages/Badges';
-import { Import } from './pages/Import';
 import { Settings } from './pages/Settings';
 import { Classification } from './pages/Classification';
 import { Releases } from './pages/Releases';
@@ -56,7 +55,6 @@ export default function App() {
         <Route path="ai-user" element={<AIUserView />} />
         <Route path="reading-room" element={<ReadingRoom />} />
         <Route path="classification" element={<Classification />} />
-        <Route path="import" element={<Import />} />
         <Route path="badges" element={<Badges />} />
         <Route path="releases" element={<Releases />} />
         <Route path="settings" element={<Settings />} />

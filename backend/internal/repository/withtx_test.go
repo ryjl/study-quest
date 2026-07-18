@@ -39,8 +39,8 @@ func TestWithTxWriteGoesThroughTx(t *testing.T) {
 	// BEFORE commit: the original repo should NOT see is_completed=1 yet (the
 	// write is uncommitted). We read via a fresh query on db (not tx).
 	pre, _ := repo.GetProgress(1, 10)
-	if pre.IsCompleted != 0 {
-		t.Errorf("before commit: is_completed = %d, want 0 (tx not committed)", pre.IsCompleted)
+	if pre.IsCompleted != false {
+		t.Errorf("before commit: is_completed = %v, want false (tx not committed)", pre.IsCompleted)
 	}
 
 	if err := tx.Commit().Error; err != nil {
@@ -49,8 +49,8 @@ func TestWithTxWriteGoesThroughTx(t *testing.T) {
 
 	// AFTER commit: the original repo sees the committed write.
 	post, _ := repo.GetProgress(1, 10)
-	if post.IsCompleted != 1 {
-		t.Errorf("after commit: is_completed = %d, want 1", post.IsCompleted)
+	if post.IsCompleted != true {
+		t.Errorf("after commit: is_completed = %v, want true", post.IsCompleted)
 	}
 }
 

@@ -62,7 +62,6 @@ func (h *subjectHandler) AdminCreateSubject(c *gin.Context) {
 	var req struct {
 		Key       string `json:"key" binding:"required"`
 		Label     string `json:"label" binding:"required"`
-		Emoji     string `json:"emoji"`
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
@@ -71,7 +70,7 @@ func (h *subjectHandler) AdminCreateSubject(c *gin.Context) {
 		return
 	}
 
-	subj, err := h.svc.Create(req.Key, req.Label, req.Emoji, req.Color, req.SortOrder)
+	subj, err := h.svc.Create(req.Key, req.Label, req.Color, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -92,7 +91,6 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 	var req struct {
 		Key       string `json:"key" binding:"required"`
 		Label     string `json:"label" binding:"required"`
-		Emoji     string `json:"emoji"`
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
@@ -114,7 +112,6 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 	oldKey := subj.Key
 	subj.Key = req.Key
 	subj.Label = req.Label
-	subj.Emoji = req.Emoji
 	subj.Color = req.Color
 	subj.SortOrder = req.SortOrder
 

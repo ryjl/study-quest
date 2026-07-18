@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { RefreshCw, Plug } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import { useAiProviders, useInvalidateAiProviders } from '../lib/useAiProviders';
@@ -145,11 +146,11 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
           <label className="block text-xs text-muted">模型</label>
           <button
             type="button"
-            className="btn-secondary btn-sm"
+            className="btn-secondary btn-sm inline-flex items-center gap-1.5"
             onClick={() => fetchModelsMut.mutate()}
             disabled={!canFetchModels || fetchModelsMut.isPending}
           >
-            {fetchModelsMut.isPending ? '拉取中…' : '🔄 拉取可用模型'}
+            {fetchModelsMut.isPending ? '拉取中…' : <><RefreshCw size={14} /> 拉取可用模型</>}
           </button>
         </div>
         {modelsFetched && models.length > 0 ? (
@@ -205,8 +206,8 @@ function ConnectionTestButton({ id }: { id: number }) {
     onError: (e) => toast.error((e as Error).message),
   });
   return (
-    <button className="btn-secondary" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
-      {testMut.isPending ? '测试中…' : '🔌 测试连接'}
+    <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
+      {testMut.isPending ? '测试中…' : <><Plug size={14} /> 测试连接</>}
     </button>
   );
 }

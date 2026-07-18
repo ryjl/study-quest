@@ -99,7 +99,7 @@ func (s *progressService) GetProgress(userID, episodeID uint) (*model.UserProgre
 			EpisodeID:           ep.EpisodeID,
 			LastPositionSeconds: ep.LastPositionSeconds,
 			WatchSeconds:        ep.WatchSeconds,
-			IsCompleted:         0,
+			IsCompleted:         false,
 		}, nil
 	}
 	return s.progressRepo.GetProgress(userID, episodeID)
@@ -176,7 +176,7 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 			EpisodeID:           entProg.EpisodeID,
 			LastPositionSeconds: entProg.LastPositionSeconds,
 			WatchSeconds:        entProg.WatchSeconds,
-			IsCompleted:         0,
+			IsCompleted:         false,
 		}, nil
 	}
 
@@ -204,7 +204,7 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 	//    could leave an episode "completed" with no points recorded — and the
 	//    next heartbeat wouldn't re-award them (IsCompleted==1 skips this
 	//    block). Wrapping both in a tx guarantees they're all-or-nothing.
-	if prog.IsCompleted == 0 && ep.DurationSeconds != nil && *ep.DurationSeconds > 0 {
+	if !prog.IsCompleted && ep.DurationSeconds != nil && *ep.DurationSeconds > 0 {
 		duration := *ep.DurationSeconds
 		threshold := int(float64(duration) * 0.9)
 		if prog.LastPositionSeconds >= threshold {
@@ -237,7 +237,7 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 			pointsLedger := &model.PointsLedger{
 				UserID:       userID,
 				ChangeAmount: watchPoints + firstBonus,
-				ReasonType:   "system_watch",
+				ReasonType:   model.ReasonSystemWatch,
 				Description:  desc,
 			}
 			// Run the completion flag + points award atomically. On any error
@@ -251,7 +251,7 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 			}); err != nil {
 				return nil, err
 			}
-			prog.IsCompleted = 1
+			prog.IsCompleted = true
 		}
 	}
 

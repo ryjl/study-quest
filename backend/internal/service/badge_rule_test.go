@@ -59,7 +59,7 @@ func mustMarshalTree(t *testing.T, tree model.CompositeRule) string {
 // makeCompositeBadge inserts a badge evaluated purely via RuleJSON.
 func makeCompositeBadge(t *testing.T, repo repository.BadgeRepository, code, ruleJSON string) model.Badge {
 	t.Helper()
-	b := &model.Badge{Code: code, Title: code, IconName: "x", RuleType: "composite", RuleJSON: ruleJSON, Threshold: 0}
+	b := &model.Badge{Code: code, Title: code, RuleType: "composite", RuleJSON: ruleJSON, Threshold: 0}
 	if err := repo.Create(b); err != nil {
 		t.Fatalf("create badge %s: %v", code, err)
 	}

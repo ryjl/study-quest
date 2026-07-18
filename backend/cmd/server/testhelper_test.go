@@ -337,10 +337,10 @@ func serve(e *testEnv, req *http.Request) *httptest.ResponseRecorder {
 
 // createSubject POSTs a custom (non-system) subject and returns its id. Used
 // by tests that need a deletable subject — seeded subjects are IsSystem=true.
-func (e *testEnv) createSubject(t *testing.T, key, label, emoji, color string) uint {
+func (e *testEnv) createSubject(t *testing.T, key, label, color string) uint {
 	t.Helper()
 	resp := e.do(t, http.MethodPost, "/admin/api/subjects", map[string]any{
-		"key": key, "label": label, "emoji": emoji, "color": color,
+		"key": key, "label": label, "color": color,
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("create subject %q: expected 200, got %d (body: %s)", key, resp.Code, resp.Body.String())

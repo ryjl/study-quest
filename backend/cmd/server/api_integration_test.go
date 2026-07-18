@@ -48,7 +48,7 @@ func TestSubjectDeleteWithCourse(t *testing.T) {
 	// FK-RESTRICT guard. The seeded "math" is now IsSystem=true and would be
 	// refused with 403 before the RESTRICT check runs (covered separately by
 	// TestSystemSubjectNotDeletable).
-	customID := env.createSubject(t, "custom", "自建科目", "🧩", "#abc123")
+	customID := env.createSubject(t, "custom", "自建科目", "#abc123")
 
 	// Create a course bound to the custom subject. Its subject_id FK now RESTRICTs deletion.
 	env.createCourse(t, "自建科目课", "custom", nil)
@@ -94,7 +94,6 @@ func TestSubjectRenameKeyCascadesBadge(t *testing.T) {
 	resp := env.do(t, http.MethodPut, "/admin/api/subjects/"+itoa(mathID), map[string]any{
 		"key":    "mathematics",
 		"label":  "数学",
-		"emoji":  "📐",
 		"color":  "#f59e0b",
 	})
 	if resp.Code != http.StatusOK {
@@ -349,7 +348,7 @@ func TestUserListBatchAggregates(t *testing.T) {
 	epID := env.createEpisode(t, cid, "第1集")
 	env.setEpisodeDuration(t, epID, 100) // position>=90 completes
 
-	// delta 120s → watch_minutes=2; position 95>=90 → completed; first_blood
+	// delta 120s → position 95>=90 → completed; first_blood
 	// (watch_duration>=1min) unlocks synchronously inside ReportProgress.
 	env.reportProgress(t, uid, epID, 95, 120)
 
@@ -361,7 +360,6 @@ func TestUserListBatchAggregates(t *testing.T) {
 		ID                uint   `json:"id"`
 		Nickname          string `json:"nickname"`
 		CompletedEpisodes int    `json:"completed_episodes"`
-		WatchMinutes      int    `json:"watch_minutes"`
 		UnlockedBadges    int    `json:"unlocked_badges"`
 		LastActiveAt      string `json:"last_active_at"`
 	}
@@ -376,9 +374,6 @@ func TestUserListBatchAggregates(t *testing.T) {
 		match = true
 		if u.CompletedEpisodes != 1 {
 			t.Errorf("completed_episodes: got %d, want 1", u.CompletedEpisodes)
-		}
-		if u.WatchMinutes != 2 {
-			t.Errorf("watch_minutes: got %d, want 2", u.WatchMinutes)
 		}
 		if u.UnlockedBadges != 4 {
 			// 1 completed math episode (the course's only episode → full
@@ -412,6 +407,7 @@ func TestImportEmptyGradeFallsBackToUniversal(t *testing.T) {
 			"grade":   "", // ← the whole point: empty triggers universal fallback
 			"subject": "math",
 		},
+		"source_id": env.defaultSourceID,
 		"tree": map[string]any{
 			"name":     "Root",
 			"is_dir":   true,

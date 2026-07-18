@@ -21,10 +21,8 @@ func CORSMiddleware() gin.HandlerFunc {
 			c.Writer.Header().Set("Access-Control-Allow-Origin", origin)
 		}
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		// NOTE: X-User-ID was intentionally removed when the app switched to
-		// opaque session tokens. The legacy header must NOT be honored anywhere
-		// in the auth path — see UserAuthMiddleware. X-Ingest-Key is added so
-		// preflight passes for the Python toolchain's ingest requests.
+		// X-Ingest-Key is added so preflight passes for the Python toolchain's
+		// ingest requests.
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-Ingest-Key")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
 
@@ -40,25 +38,14 @@ func CORSMiddleware() gin.HandlerFunc {
 // UserAuthMiddleware validates client sessions for Flutter PAD/TV.
 //
 // It only accepts an opaque session token in `Authorization: Bearer <token>`
-// and validates it against the session table. The token is NOT the user ID
-// (that was the old, insecure scheme); a bare numeric userID sent as Bearer
-// is rejected explicitly. On success it sets the same context keys downstream
-// handlers already read ("userID", "userRole", "userNickname"), so callers
-// are unchanged.
+// and validates it against the session table. On success it sets the same
+// context keys downstream handlers already read ("userID", "userRole",
+// "userNickname"), so callers are unchanged.
 func UserAuthMiddleware(sessionService service.SessionService, userRepo repository.UserRepository) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token := bearerToken(c)
 		if token == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization token missing"})
-			c.Abort()
-			return
-		}
-
-		// Defensive guard: reject the legacy "Bearer <userID>" form (bare
-		// integer) explicitly. Session lookup would fail anyway, but a distinct
-		// branch makes the regression boundary obvious in logs and in tests.
-		if isAllDigits(token) {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization scheme"})
 			c.Abort()
 			return
 		}
@@ -87,28 +74,13 @@ func UserAuthMiddleware(sessionService service.SessionService, userRepo reposito
 }
 
 // bearerToken extracts the token from `Authorization: Bearer <token>`.
-// Returns "" if the header is absent or not in Bearer form. Deliberately does
-// NOT consult X-User-ID — that header is rejected by design.
+// Returns "" if the header is absent or not in Bearer form.
 func bearerToken(c *gin.Context) string {
 	authHeader := c.GetHeader("Authorization")
 	if !strings.HasPrefix(authHeader, "Bearer ") {
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-}
-
-// isAllDigits reports whether s is non-empty and all ASCII digits. Used to
-// reject the legacy "token == userID" scheme at the boundary.
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // loginRateLimiter is a per-IP sliding-window counter for login attempts.

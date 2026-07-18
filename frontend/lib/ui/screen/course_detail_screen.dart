@@ -11,6 +11,7 @@ import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
 import '../widget/state_widgets.dart';
+import '../widget/subject_icon.dart';
 import '../responsive.dart';
 import 'player_screen.dart';
 import 'ai_study_screen.dart';
@@ -59,7 +60,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     super.initState();
     _refreshData();
     // Resolve the subject catalog so the header chip shows the configured
-    // label/emoji and the hero gradient matches the subject color. Non-fatal.
+    // label and the hero gradient matches the subject color. Non-fatal.
     ApiService.fetchSubjects(widget.activeUserId).then((list) {
       if (mounted) setState(() => _subjectsCatalog = list);
     });
@@ -348,7 +349,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           spacing: 10,
           runSpacing: 8,
           children: [
-            _buildHeaderChip('${resolveSubject(widget.course.subject, _subjectsCatalog).emoji} ${resolveSubject(widget.course.subject, _subjectsCatalog).label}'.trim()),
+            _buildHeaderChip(
+              resolveSubject(widget.course.subject, _subjectsCatalog).label,
+              icon: subjectIconData(widget.course.subject),
+            ),
             _buildHeaderChip(widget.course.grade == 'universal' ? '通用' : '${widget.course.grade}年级'),
             if (firstTag != null) _buildHeaderChip(firstTag),
           ],
@@ -436,7 +440,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     );
   }
 
-  Widget _buildHeaderChip(String text) {
+  Widget _buildHeaderChip(String text, {IconData? icon}) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(
@@ -444,9 +448,18 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white.withOpacity(0.2)),
       ),
-      child: Text(
-        text,
-        style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 14, color: Colors.white),
+            const SizedBox(width: 5),
+          ],
+          Text(
+            text,
+            style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
+          ),
+        ],
       ),
     );
   }

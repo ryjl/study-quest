@@ -34,10 +34,13 @@ export function Login() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-bg via-card-2 to-bg p-4">
+    <div className="flex min-h-screen items-center justify-center bg-bg p-4">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <div className="mb-2 bg-gradient-to-r from-primary to-primary-dark bg-clip-text text-4xl font-bold text-transparent">StudyQuest</div>
+          <div className="mb-3 flex items-center justify-center gap-2">
+            <div className="h-8 w-8 rounded-md bg-primary flex items-center justify-center text-bg font-bold">S</div>
+          </div>
+          <div className="text-3xl font-semibold tracking-tight text-txt">StudyQuest</div>
           <div className="text-sm text-muted">学途奇旅后台管理系统</div>
         </div>
         <form onSubmit={submit} className="card">

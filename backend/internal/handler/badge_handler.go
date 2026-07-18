@@ -62,7 +62,6 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		Code        string `json:"code" binding:"required"`
 		Title       string `json:"title" binding:"required"`
 		Description string `json:"description"`
-		IconName    string `json:"icon_name" binding:"required"`
 		RuleType    string `json:"rule_type" binding:"required"`
 		RuleTarget  string `json:"rule_target"`
 		Threshold   int    `json:"threshold"`
@@ -80,9 +79,9 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 	// legacy single-rule fields are kept as-is for back-compat display.
 	ruleType := req.RuleType
 	if req.RuleJSON != "" {
-		ruleType = "composite"
+		ruleType = model.RuleComposite
 	}
-	if req.Threshold == 0 && ruleType != "composite" && req.Tiers == "" {
+	if req.Threshold == 0 && ruleType != model.RuleComposite && req.Tiers == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold or tiers is required for non-composite badges"})
 		return
 	}
@@ -91,7 +90,6 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		Code:        req.Code,
 		Title:       req.Title,
 		Description: req.Description,
-		IconName:    req.IconName,
 		RuleType:    ruleType,
 		RuleTarget:  req.RuleTarget,
 		Threshold:   req.Threshold,
@@ -119,7 +117,6 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 		Code        string `json:"code" binding:"required"`
 		Title       string `json:"title" binding:"required"`
 		Description string `json:"description"`
-		IconName    string `json:"icon_name" binding:"required"`
 		RuleType    string `json:"rule_type" binding:"required"`
 		RuleTarget  string `json:"rule_target"`
 		Threshold   int    `json:"threshold"`
@@ -134,9 +131,9 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 
 	ruleType := req.RuleType
 	if req.RuleJSON != "" {
-		ruleType = "composite"
+		ruleType = model.RuleComposite
 	}
-	if req.Threshold == 0 && ruleType != "composite" && req.Tiers == "" {
+	if req.Threshold == 0 && ruleType != model.RuleComposite && req.Tiers == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "threshold or tiers is required for non-composite badges"})
 		return
 	}
@@ -154,7 +151,6 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 	badge.Code = req.Code
 	badge.Title = req.Title
 	badge.Description = req.Description
-	badge.IconName = req.IconName
 	badge.RuleType = ruleType
 	badge.RuleTarget = req.RuleTarget
 	badge.Threshold = req.Threshold

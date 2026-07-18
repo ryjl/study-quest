@@ -148,7 +148,6 @@ func TestSubjectCRUD(t *testing.T) {
 	resp := env.do(t, http.MethodPost, "/admin/api/subjects", map[string]any{
 		"key":        "computer",
 		"label":      "计算机",
-		"emoji":      "💻",
 		"color":      "#8b5cf6",
 		"sort_order": 20,
 	})
@@ -171,7 +170,6 @@ func TestSubjectCRUD(t *testing.T) {
 	resp = env.do(t, http.MethodPut, "/admin/api/subjects/"+itoa(created.ID), map[string]any{
 		"key":        "computer",
 		"label":      "计算机科学",
-		"emoji":      "💻",
 		"color":      "#8b5cf6",
 		"sort_order": 20,
 	})

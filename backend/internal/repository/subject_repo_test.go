@@ -11,7 +11,7 @@ func TestSubjectCRUD(t *testing.T) {
 	repo := NewSubjectRepository(db)
 
 	// Create
-	s := &model.Subject{Key: "history", Label: "历史", Emoji: "📜", Color: "#fbbf24", SortOrder: 6}
+	s := &model.Subject{Key: "history", Label: "历史", Color: "#fbbf24", SortOrder: 6}
 	if err := repo.Create(s); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestSubjectUpdateBadgesRuleTarget(t *testing.T) {
 
 	// Create a subject_count badge targeting "math".
 	badge := &model.Badge{
-		Code: "math_pro", Title: "数学高手", IconName: "badge_math",
+		Code: "math_pro", Title: "数学高手",
 		RuleType: "subject_count", RuleTarget: "math", Threshold: 3,
 	}
 	if err := badgeRepo.Create(badge); err != nil {

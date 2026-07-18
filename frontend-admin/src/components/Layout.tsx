@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
@@ -6,11 +6,30 @@ import { useSubjects } from '../lib/useSubjects';
 import { useStorageSources } from '../lib/useStorageSources';
 import { useTags } from '../lib/useTags';
 import { useTheme } from './ThemeProvider';
+import {
+  LayoutGrid,
+  Library,
+  Captions,
+  BookOpen,
+  Users,
+  Calendar,
+  Bot,
+  Brain,
+  Tags,
+  Medal,
+  Package,
+  Settings,
+  Moon,
+  Sun,
+  LogOut,
+  ChevronRight,
+  Loader2,
+} from 'lucide-react';
 
 interface NavItem {
   to: string;
   label: string;
-  icon: string;
+  icon: ReactNode;
   end?: boolean;
 }
 
@@ -23,41 +42,41 @@ interface NavGroup {
 // flat 14-item list read like a feature inventory; grouping by user task
 // (operating content, managing users, AI ops, system config) gives the
 // sidebar product-level structure. The 概览 group holds only the dashboard.
+// Icons are lucide-react line icons (Linear/Notion pattern), sized 16px.
 const NAV_GROUPS: NavGroup[] = [
   {
     group: '概览',
-    items: [{ to: '/admin/', label: '控制台', icon: '📊', end: true }],
+    items: [{ to: '/admin/', label: '控制台', icon: <LayoutGrid size={16} />, end: true }],
   },
   {
     group: '内容运营',
     items: [
-      { to: '/admin/courses', label: '课程库管理', icon: '📚' },
-      { to: '/admin/subtitle-queue', label: '字幕队列', icon: '💬' },
-      { to: '/admin/import', label: '文件导入', icon: '📥' },
-      { to: '/admin/reading-room', label: '阅读室', icon: '📖' },
+      { to: '/admin/courses', label: '课程库管理', icon: <Library size={16} /> },
+      { to: '/admin/subtitle-queue', label: '字幕队列', icon: <Captions size={16} /> },
+      { to: '/admin/reading-room', label: '阅读室', icon: <BookOpen size={16} /> },
     ],
   },
   {
     group: '用户与授权',
     items: [
-      { to: '/admin/users', label: '用户与授权', icon: '👥' },
-      { to: '/admin/watch-history', label: '观看历史', icon: '📅' },
+      { to: '/admin/users', label: '用户与授权', icon: <Users size={16} /> },
+      { to: '/admin/watch-history', label: '观看历史', icon: <Calendar size={16} /> },
     ],
   },
   {
     group: 'AI 运营',
     items: [
-      { to: '/admin/ai-workflow', label: 'AI Workflow', icon: '🤖' },
-      { to: '/admin/ai-user', label: 'AI 用户视图', icon: '🧠' },
+      { to: '/admin/ai-workflow', label: 'AI Workflow', icon: <Bot size={16} /> },
+      { to: '/admin/ai-user', label: 'AI 用户视图', icon: <Brain size={16} /> },
     ],
   },
   {
     group: '系统配置',
     items: [
-      { to: '/admin/classification', label: '分类与标签', icon: '🏷️' },
-      { to: '/admin/badges', label: '荣誉徽章', icon: '🏅' },
-      { to: '/admin/releases', label: '版本发布', icon: '📦' },
-      { to: '/admin/settings', label: '系统设置', icon: '⚙️' },
+      { to: '/admin/classification', label: '分类与标签', icon: <Tags size={16} /> },
+      { to: '/admin/badges', label: '荣誉徽章', icon: <Medal size={16} /> },
+      { to: '/admin/releases', label: '版本发布', icon: <Package size={16} /> },
+      { to: '/admin/settings', label: '系统设置', icon: <Settings size={16} /> },
     ],
   },
 ];
@@ -106,12 +125,15 @@ export function Layout() {
 
   return (
     <div className="flex min-h-screen">
-      {/* Sidebar */}
-      <aside className="fixed left-0 top-0 z-30 flex h-screen w-64 flex-col border-r border-border bg-card p-6">
-        <div className="mb-10 bg-gradient-to-r from-primary to-primary-dark bg-clip-text text-2xl font-bold text-transparent">
-          StudyQuest
+      {/* Sidebar — 240px (w-60), tighter than the old 256px. */}
+      <aside className="fixed left-0 top-0 z-30 flex h-screen w-60 flex-col border-r border-border bg-card px-3 py-4">
+        {/* Logo: small mark + wordmark. No gradient text — just font weight. */}
+        <div className="mb-6 flex items-center gap-2 px-2">
+          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-bg">S</div>
+          <span className="text-base font-semibold tracking-tight text-txt">StudyQuest</span>
         </div>
-        <nav className="flex flex-1 flex-col gap-1">
+
+        <nav className="flex flex-1 flex-col gap-0.5 overflow-y-auto">
           {NAV_GROUPS.map((g, gi) => {
             // Auto-expand on active: if any item matches the current path the
             // group is always shown, regardless of the user's toggle state.
@@ -124,27 +146,27 @@ export function Layout() {
                 <button
                   type="button"
                   onClick={() => toggleGroup(g.group)}
-                  className={`flex w-full cursor-pointer items-center gap-1.5 rounded-lg px-4 text-[11px] font-semibold uppercase tracking-wider text-muted transition-colors hover:bg-card-2 hover:text-txt ${
-                    gi === 0 ? 'mt-0' : 'mt-4'
-                  }`}
+                  className={`flex w-full items-center gap-1.5 rounded-md px-2 text-[11px] font-medium uppercase tracking-wider text-muted transition-colors hover:bg-card-2 hover:text-txt ${gi === 0 ? 'mt-0' : 'mt-4'}`}
                 >
-                  <span className="text-[10px]">{isCollapsed ? '▸' : '▾'}</span>
+                  <ChevronRight size={11} className={`transition-transform duration-150 ${isCollapsed ? '' : 'rotate-90'}`} />
                   <span>{g.group}</span>
                 </button>
                 {!isCollapsed && (
-                  <div className="mt-1 flex flex-col gap-1">
+                  <div className="mt-0.5 flex flex-col gap-0.5">
                     {g.items.map((n) => (
                       <NavLink
                         key={n.to}
                         to={n.to}
                         end={n.end}
                         className={({ isActive }) =>
-                          `flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-medium transition-all ${
-                            isActive ? 'bg-gradient-to-br from-primary to-primary-dark text-white shadow-primary-glow' : 'text-muted hover:bg-card-2 hover:text-txt'
-                          }`
+                          // Active: muted bg + left accent bar (via border-l) +
+                          // primary-colored text. No gradient fill, no glow.
+                          isActive
+                            ? 'relative flex items-center gap-2.5 rounded-md bg-card-2 px-2.5 py-1.5 text-sm font-medium text-txt before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary'
+                            : 'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-card-2 hover:text-txt'
                         }
                       >
-                        <span className="text-base">{n.icon}</span>
+                        <span className="flex-shrink-0">{n.icon}</span>
                         {n.label}
                       </NavLink>
                     ))}
@@ -157,15 +179,18 @@ export function Layout() {
 
         {/* Probe progress indicator */}
         {running && (
-          <div className="mb-3 rounded-xl border border-primary/30 bg-primary/10 p-3">
+          <div className="mb-2 mt-3 rounded-lg border border-border bg-card-2/50 p-2.5">
             <div className="mb-1.5 flex items-center justify-between text-xs">
-              <span className="text-primary">⏱ 探测时长中</span>
-              <span className="text-muted">
+              <span className="flex items-center gap-1.5 text-txt">
+                <Loader2 size={12} className="animate-spin text-muted" />
+                探测时长中
+              </span>
+              <span className="tabular-nums text-muted">
                 {probeQ.data?.done}/{probeQ.data?.total}
               </span>
             </div>
-            <div className="h-1.5 overflow-hidden rounded-full bg-card-2">
-              <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${progress}%` }} />
+            <div className="h-1 overflow-hidden rounded-full bg-card">
+              <div className="h-full rounded-full bg-txt transition-all" style={{ width: `${progress}%` }} />
             </div>
             {probeQ.data?.current_title && <div className="mt-1 truncate text-[10px] text-muted">{probeQ.data.current_title}</div>}
           </div>
@@ -173,19 +198,23 @@ export function Layout() {
 
         <button
           onClick={toggleTheme}
-          className="mb-2 flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-muted transition hover:bg-card-2 hover:text-txt"
+          className="mb-1 flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted transition-colors hover:bg-card-2 hover:text-txt"
           title={theme === 'light' ? '切换到暗色主题' : '切换到亮色主题'}
         >
-          <span className="text-base">{theme === 'light' ? '🌙' : '☀️'}</span>
+          {theme === 'light' ? <Moon size={16} /> : <Sun size={16} />}
           {theme === 'light' ? '暗色主题' : '亮色主题'}
         </button>
-        <button onClick={onLogout} className="flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-medium text-bad transition hover:bg-bad/10">
-          ⏏ 退出登录
+        <button
+          onClick={onLogout}
+          className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-muted transition-colors hover:bg-card-2 hover:text-bad"
+        >
+          <LogOut size={16} />
+          退出登录
         </button>
       </aside>
 
-      {/* Main content */}
-      <main className="ml-64 flex-1 p-10">
+      {/* Main content — px-8 py-6 (was p-10). PageHeader uses -mx-8 to span full width. */}
+      <main className="ml-60 flex-1 px-8 py-6">
         <Outlet />
       </main>
     </div>

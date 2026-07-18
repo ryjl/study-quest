@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Check } from 'lucide-react';
 import { api } from '../lib/api';
 import type { AiQuizDetail, AiTraceStep } from '../lib/types';
 import { Modal } from '../components/ui';
@@ -96,15 +97,15 @@ export function AIUserView() {
           {selectedUser ? `正在查看:${selectedUser.nickname}` : '题库列表'}
         </h2>
         {userId == null ? (
-          <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">
+          <div className="rounded-lg border border-border bg-card px-4 py-10 text-center text-sm text-muted">
             选择一个用户查看
           </div>
         ) : quizzesQ.isLoading ? (
-          <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">加载中…</div>
+          <div className="rounded-lg border border-border bg-card px-4 py-10 text-center text-sm text-muted">加载中…</div>
         ) : quizzes.length === 0 ? (
-          <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">该用户暂无题库</div>
+          <div className="rounded-lg border border-border bg-card px-4 py-10 text-center text-sm text-muted">该用户暂无题库</div>
         ) : (
-          <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          <div className="overflow-hidden rounded-lg border border-border bg-card">
             <table className="w-full text-sm">
               <thead className="border-b border-border bg-card-2 text-xs text-muted">
                 <tr>
@@ -187,7 +188,7 @@ function UserStudyReportSection({ userId }: { userId: number }) {
   };
 
   return (
-    <div className="rounded-2xl border border-border bg-card p-4">
+    <div className="rounded-lg border border-border bg-card p-4">
       <div className="mb-2 flex items-center justify-between">
         <h2 className="text-base font-semibold">跨课程学习报告</h2>
         {/* 任何时候都允许"重新生成"——报告是快照,admin 可刷新过期数据。
@@ -244,7 +245,7 @@ function QuizDetailModal({ quizId, onClose }: { quizId: number | null; onClose: 
               observability artifact: the agent read the student's memory and
               produced this assessment + study advice. */}
           {detail.quiz.agent_feedback && (
-            <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-3">
+            <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3">
               <div className="mb-1 text-xs font-medium text-blue-600">Agent 对这个学生的评价与建议</div>
               <p className="text-sm text-txt whitespace-pre-wrap">{detail.quiz.agent_feedback}</p>
             </div>
@@ -311,7 +312,7 @@ function QuestionCard({ index, q, answers }: { index: number; q: AiQuizDetail['q
   }
   const typeLabel = q.type === 'fill' ? '填空' : '选择';
   return (
-    <li className="rounded-xl border border-border bg-card-2 p-3">
+    <li className="rounded-lg border border-border bg-card-2 p-3">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-muted">第{index + 1}题</span>
         <span className="rounded-full bg-card px-2 py-0.5 text-[10px] text-muted">{typeLabel}</span>
@@ -320,8 +321,8 @@ function QuestionCard({ index, q, answers }: { index: number; q: AiQuizDetail['q
       {q.type !== 'fill' && (
         <ul className="mt-1 space-y-0.5 text-xs">
           {options.map((o, i) => (
-            <li key={i} className={i === q.answer ? 'text-emerald-600' : 'text-muted'}>
-              {String.fromCharCode(65 + i)}. {o} {i === q.answer && '✓'}
+            <li key={i} className={`inline-flex items-center gap-1 ${i === q.answer ? 'text-emerald-600' : 'text-muted'}`}>
+              {String.fromCharCode(65 + i)}. {o} {i === q.answer && <Check size={12} />}
             </li>
           ))}
         </ul>
@@ -360,7 +361,7 @@ function TraceTimeline({ runs }: { runs: AiQuizDetail['runs'] }) {
       <div className="mb-1 text-xs font-medium text-muted">出题思考时间线 (agent ReAct 循环)</div>
       <ol className="space-y-2">
         {steps.map((s) => (
-          <li key={s.step} className="rounded-xl border border-border bg-card-2 p-3 text-xs">
+          <li key={s.step} className="rounded-lg border border-border bg-card-2 p-3 text-xs">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[11px] text-muted">#{s.step}</span>
               <span className="font-medium text-txt">{s.thought}</span>

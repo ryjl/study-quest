@@ -4,6 +4,7 @@ import '../../model/subject.dart';
 import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../widget/state_widgets.dart';
+import '../widget/subject_icon.dart';
 import 'pdf_reader_screen.dart';
 import 'article_reader_screen.dart';
 
@@ -86,9 +87,9 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
                           ApiService.absoluteUrl(series.coverUrl),
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) =>
-                              _gradientHeader(gradient, subj.emoji),
+                              _gradientHeader(gradient, series.subject, subj.color),
                         )
-                      : _gradientHeader(gradient, subj.emoji),
+                      : _gradientHeader(gradient, series.subject, subj.color),
                 ),
                 leading: IconButton(
                   icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
@@ -123,7 +124,8 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
                             final bSubj = resolveSubject(b.subject, _subjectsCatalog);
                             return _buildCoverTile(
                               coverUrl: b.coverUrl,
-                              fallbackEmoji: bSubj.emoji,
+                              subjectKey: b.subject,
+                              subjectColor: bSubj.color,
                               gradient: AppTheme.getSubjectGradientFromColor(bSubj.color),
                               badgeIcon: Icons.picture_as_pdf_rounded,
                               title: b.title,
@@ -152,7 +154,8 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
                             final aSubj = resolveSubject(a.subject, _subjectsCatalog);
                             return _buildCoverTile(
                               coverUrl: a.coverUrl,
-                              fallbackEmoji: aSubj.emoji,
+                              subjectKey: a.subject,
+                              subjectColor: aSubj.color,
                               gradient: AppTheme.getSubjectGradientFromColor(aSubj.color),
                               badgeIcon: Icons.language_rounded,
                               title: a.title,
@@ -192,10 +195,16 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
     );
   }
 
-  Widget _gradientHeader(Gradient gradient, String emoji) {
+  Widget _gradientHeader(Gradient gradient, String subjectKey, String subjectColor) {
     return Container(
       decoration: BoxDecoration(gradient: gradient),
-      child: Center(child: Text(emoji, style: const TextStyle(fontSize: 64))),
+      child: Center(
+        child: Icon(
+          subjectIconData(subjectKey),
+          size: 64,
+          color: AppTheme.colorFromHex(subjectColor),
+        ),
+      ),
     );
   }
 
@@ -233,7 +242,8 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
 
   Widget _buildCoverTile({
     required String coverUrl,
-    required String fallbackEmoji,
+    required String subjectKey,
+    required String subjectColor,
     required Gradient gradient,
     required IconData badgeIcon,
     required String title,
@@ -275,9 +285,9 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
                           ApiService.absoluteUrl(coverUrl),
                           fit: BoxFit.cover,
                           errorBuilder: (_, __, ___) => _gradientCover(
-                              gradient, fallbackEmoji, coverWidth, coverHeight),
+                              gradient, subjectKey, subjectColor, coverWidth, coverHeight),
                         )
-                      : _gradientCover(gradient, fallbackEmoji, coverWidth, coverHeight),
+                      : _gradientCover(gradient, subjectKey, subjectColor, coverWidth, coverHeight),
                 ),
               ),
               Container(
@@ -331,12 +341,18 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
     );
   }
 
-  Widget _gradientCover(Gradient gradient, String emoji, double w, double h) {
+  Widget _gradientCover(Gradient gradient, String subjectKey, String subjectColor, double w, double h) {
     return Container(
       width: w,
       height: h,
       decoration: BoxDecoration(gradient: gradient),
-      child: Center(child: Text(emoji, style: const TextStyle(fontSize: 48))),
+      child: Center(
+        child: Icon(
+          subjectIconData(subjectKey),
+          size: 48,
+          color: AppTheme.colorFromHex(subjectColor),
+        ),
+      ),
     );
   }
 }

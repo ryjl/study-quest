@@ -26,8 +26,7 @@ type AIHandler interface {
 	// play-info (IsEpisodeVisible): a student can only quiz on episodes they
 	// may watch.
 	GetEpisodeQuiz(c *gin.Context)
-	SubmitQuizAnswer(c *gin.Context)
-	// SubmitAllQuizAnswers 是 Phase B 的统一交卷端点(替代单题 submit 的主流程)。
+	// SubmitAllQuizAnswers 是 Phase B 的统一交卷端点(一次提交 = 一次考试)。
 	SubmitAllQuizAnswers(c *gin.Context)
 	RegenerateQuiz(c *gin.Context)
 	// GetEpisodeQuizHistory returns the user's archived (superseded) quizzes for
@@ -224,45 +223,6 @@ func (h *aiHandler) GetEpisodeQuiz(c *gin.Context) {
 	default:
 		c.JSON(http.StatusNotFound, quizResponse{Status: "unavailable"})
 	}
-}
-
-// submitQuizRequest is the body for POST /ai-quiz/submit. For a choice question
-// the client sends answer_index; for a fill question, answer_text. The service
-// grades by question type, ignoring the irrelevant field.
-type submitQuizRequest struct {
-	QuestionID  uint   `json:"question_id"`
-	AnswerIndex *int   `json:"answer_index,omitempty"`
-	AnswerText  string `json:"answer_text,omitempty"`
-}
-
-// SubmitQuizAnswer grades one answer, persists it, updates memory, returns the
-// verdict (correct? correct answer? explanation? jump-to-video time?).
-// POST /api/v1/episodes/:id/ai-quiz/submit
-func (h *aiHandler) SubmitQuizAnswer(c *gin.Context) {
-	if h.aiService == nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "AI not available"})
-		return
-	}
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
-	}
-	var req submitQuizRequest
-	if err := c.ShouldBindJSON(&req); err != nil || req.QuestionID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
-		return
-	}
-	var answerText *string
-	if req.AnswerText != "" {
-		t := req.AnswerText
-		answerText = &t
-	}
-	result, err := h.aiService.SubmitQuizAnswer(userID, req.QuestionID, req.AnswerIndex, answerText)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "题目不存在或无权作答"})
-		return
-	}
-	c.JSON(http.StatusOK, result)
 }
 
 // submitAllQuizRequest 是统一交卷的 body:answers 是一整张卷子的作答数组。

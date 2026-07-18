@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Home, Folder, Film, ArrowRight, Check } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatFileSize } from '../lib/format';
 import { Modal, LoadingState } from './ui';
@@ -106,8 +107,8 @@ export function PathBrowser({
     <Modal open={open} onClose={onClose} title={headerTitle} size="lg">
       {/* Breadcrumb */}
       <div className="mb-3 flex flex-wrap items-center gap-1 rounded-lg border border-border bg-card-2 px-3 py-2 text-sm">
-        <button className="text-muted hover:text-primary" onClick={() => { setCwd('/'); setSelected(''); }} title="根目录">
-          🏠 /
+        <button className="inline-flex items-center gap-1 text-muted hover:text-primary" onClick={() => { setCwd('/'); setSelected(''); }} title="根目录">
+          <Home size={14} /> /
         </button>
         {segments.map((seg, i) => {
           const sub = '/' + segments.slice(0, i + 1).join('/');
@@ -154,15 +155,15 @@ export function PathBrowser({
                     onClick={() => onEntryClick(e.is_dir, e.name, e.path)}
                     disabled={dim}
                   >
-                    <span className="text-base">{e.is_dir ? '📁' : '🎬'}</span>
+                    <span className="text-muted">{e.is_dir ? <Folder size={14} /> : <Film size={14} />}</span>
                     <span className={`flex-1 truncate ${e.is_dir ? 'font-medium text-txt' : 'text-txt'}`}>
                       {e.name}
                     </span>
                     {!e.is_dir && e.size > 0 && (
                       <span className="flex-shrink-0 text-xs text-muted">{formatFileSize(e.size)}</span>
                     )}
-                    {e.is_dir && <span className="flex-shrink-0 text-xs text-muted">→</span>}
-                    {!e.is_dir && isSel && <span className="flex-shrink-0 text-xs text-primary">✓ 已选</span>}
+                    {e.is_dir && <span className="flex-shrink-0 text-muted"><ArrowRight size={14} /></span>}
+                    {!e.is_dir && isSel && <span className="flex-shrink-0 inline-flex items-center gap-1 text-xs text-primary"><Check size={12} /> 已选</span>}
                   </button>
                 </li>
               );

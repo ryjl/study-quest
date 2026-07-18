@@ -32,9 +32,6 @@ type BadgeService interface {
 	// SeedSubjectBadge creates the auto-generated multi-tier subject_count
 	// badge for a subject (idempotent). Called when a subject is created.
 	SeedSubjectBadge(subjectID uint, key, label string) error
-	// RemoveDeprecatedDefaults is retained for interface compat; the multi-tier
-	// rebuild handles cleanup now.
-	RemoveDeprecatedDefaults() error
 }
 
 type badgeService struct {
@@ -169,7 +166,7 @@ func (s *badgeService) EvaluateRules(userID uint) ([]model.Badge, error) {
 			ledger := &model.PointsLedger{
 				UserID:       userID,
 				ChangeAmount: reward,
-				ReasonType:   "badge_unlocked",
+				ReasonType:   model.ReasonBadgeUnlocked,
 				Description:  desc,
 			}
 			err = s.db.Transaction(func(tx *gorm.DB) error {
@@ -200,7 +197,7 @@ func (s *badgeService) EvaluateRules(userID uint) ([]model.Badge, error) {
 			ledger := &model.PointsLedger{
 				UserID:       userID,
 				ChangeAmount: 0, // single-tier unlock awards no points
-				ReasonType:   "badge_unlocked",
+				ReasonType:   model.ReasonBadgeUnlocked,
 				Description:  fmt.Sprintf("解锁荣誉徽章：%s (%s)", badge.Title, badge.Description),
 			}
 			err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -253,21 +250,21 @@ func (s *badgeService) evalMultiTier(userID uint, badge *model.Badge) (progress 
 // error for composite rule types (those can't be reduced to one number).
 func (s *badgeService) evalLeafProgress(userID uint, ruleType, ruleTarget string) (int, error) {
 	switch ruleType {
-	case "watch_duration":
+	case model.RuleWatchDuration:
 		return s.badgeRepo.GetTotalWatchDurationMinutes(userID)
-	case "consecutive_days":
+	case model.RuleConsecutiveDays:
 		return s.badgeRepo.GetConsecutiveActiveDays(userID)
-	case "subject_count":
+	case model.RuleSubjectCount:
 		return s.badgeRepo.GetCompletedEpisodesCountBySubject(userID, ruleTarget)
-	case "episode_completed_count":
+	case model.RuleEpisodeCount:
 		return s.badgeRepo.GetCompletedEpisodesCount(userID)
-	case "distinct_subject_count":
+	case model.RuleDistinctSubject:
 		return s.badgeRepo.GetDistinctSubjectCompletedCount(userID)
-	case "course_completion":
+	case model.RuleCourseCompletion:
 		return s.badgeRepo.GetCompletedCoursesCount(userID)
-	case "weekly_all_present":
+	case model.RuleWeeklyAllPresent:
 		return s.badgeRepo.GetActiveDaysInLastWeek(userID)
-	case "points_earned":
+	case model.RulePointsEarned:
 		pt, err := s.progressRepo.GetPoints(userID)
 		if err != nil || pt == nil {
 			return 0, err
@@ -281,28 +278,28 @@ func (s *badgeService) evalLeafProgress(userID uint, ruleType, ruleTarget string
 // Returns false on any aggregate error so a broken query never falsely unlocks.
 func (s *badgeService) evalLeaf(userID uint, ruleType, ruleTarget string, threshold int) bool {
 	switch ruleType {
-	case "watch_duration":
+	case model.RuleWatchDuration:
 		minutes, err := s.badgeRepo.GetTotalWatchDurationMinutes(userID)
 		return err == nil && minutes >= threshold
-	case "consecutive_days":
+	case model.RuleConsecutiveDays:
 		days, err := s.badgeRepo.GetConsecutiveActiveDays(userID)
 		return err == nil && days >= threshold
-	case "subject_count":
+	case model.RuleSubjectCount:
 		count, err := s.badgeRepo.GetCompletedEpisodesCountBySubject(userID, ruleTarget)
 		return err == nil && count >= threshold
-	case "episode_completed_count":
+	case model.RuleEpisodeCount:
 		count, err := s.badgeRepo.GetCompletedEpisodesCount(userID)
 		return err == nil && count >= threshold
-	case "distinct_subject_count":
+	case model.RuleDistinctSubject:
 		count, err := s.badgeRepo.GetDistinctSubjectCompletedCount(userID)
 		return err == nil && count >= threshold
-	case "course_completion":
+	case model.RuleCourseCompletion:
 		count, err := s.badgeRepo.GetCompletedCoursesCount(userID)
 		return err == nil && count >= threshold
-	case "weekly_all_present":
+	case model.RuleWeeklyAllPresent:
 		days, err := s.badgeRepo.GetActiveDaysInLastWeek(userID)
 		return err == nil && days >= threshold
-	case "points_earned":
+	case model.RulePointsEarned:
 		pt, err := s.progressRepo.GetPoints(userID)
 		return err == nil && pt != nil && pt.TotalEarnedPoints >= threshold
 	}
@@ -448,23 +445,23 @@ func defaultBadges() []model.Badge {
 	return []model.Badge{
 		// 首战告捷 — single-tier, instant first-win to hook enthusiasm.
 		{
-			Code: "first_blood", Title: "首战告捷", IconName: "badge_first_blood",
+			Code: "first_blood", Title: "首战告捷",
 			Description: "累计视频学习时长达到 1 分钟",
-			RuleType:    "watch_duration", Threshold: 1, IsSystem: true,
+			RuleType:    model.RuleWatchDuration, Threshold: 1, IsSystem: true,
 		},
 		// 连续学习 — 7 tiers: 3/7/14/30/60/100/200 days.
 		{
-			Code: "streak", Title: "连续学习", IconName: "badge_streak_7",
+			Code: "streak", Title: "连续学习",
 			Description: "保持每天学习的连胜记录",
-			RuleType: "consecutive_days", Tiers: tiers(
+			RuleType: model.RuleConsecutiveDays, Tiers: tiers(
 				3, 10, 7, 20, 14, 30, 30, 50, 60, 80, 100, 120, 200, 200,
 			), IsSystem: true,
 		},
 		// 累计课时 — 7 tiers: 3/10/30/60/120/300/600 episodes.
 		{
-			Code: "episode_master", Title: "课时大师", IconName: "badge_first_blood",
+			Code: "episode_master", Title: "课时大师",
 			Description: "累计完成的视频课时数",
-			RuleType: "episode_completed_count", Tiers: tiers(
+			RuleType: model.RuleEpisodeCount, Tiers: tiers(
 				3, 10, 10, 20, 30, 30, 60, 50, 120, 80, 300, 120, 600, 200,
 			), IsSystem: true,
 		},
@@ -472,41 +469,41 @@ func defaultBadges() []model.Badge {
 		// tier fills the early gap so a child gets a tier-up within the first
 		// session instead of waiting until 60 accumulated minutes.
 		{
-			Code: "time_master", Title: "专注时长", IconName: "badge_first_blood",
+			Code: "time_master", Title: "专注时长",
 			Description: "累计视频学习时长（分钟）",
-			RuleType: "watch_duration", Tiers: tiers(
+			RuleType: model.RuleWatchDuration, Tiers: tiers(
 				1, 10, 15, 10, 60, 15, 300, 25, 1500, 50, 5000, 100, 15000, 250,
 			), IsSystem: true,
 		},
 		// 积分成就 — 6 tiers: 50/200/500/1000/3000/8000 points.
 		{
-			Code: "points_hero", Title: "星币成就", IconName: "badge_gold",
+			Code: "points_hero", Title: "星币成就",
 			Description: "累计获得的积分里程碑",
-			RuleType: "points_earned", Tiers: tiers(
+			RuleType: model.RulePointsEarned, Tiers: tiers(
 				50, 10, 200, 20, 500, 30, 1000, 50, 3000, 80, 8000, 200,
 			), IsSystem: true,
 		},
 		// 博学多闻 — 4 tiers: 2/3/5/8 distinct subjects.
 		{
-			Code: "explorer", Title: "博学多闻", IconName: "badge_english",
+			Code: "explorer", Title: "博学多闻",
 			Description: "涉猎的不同学科数量",
-			RuleType: "distinct_subject_count", Tiers: tiers(
+			RuleType: model.RuleDistinctSubject, Tiers: tiers(
 				2, 10, 3, 20, 5, 40, 8, 80,
 			), IsSystem: true,
 		},
 		// 课程通关 — 5 tiers: 1/3/5/10/20 fully-completed courses.
 		{
-			Code: "course_master", Title: "课程通关", IconName: "badge_gold",
+			Code: "course_master", Title: "课程通关",
 			Description: "完整学完的课程数（学完所有视频）",
-			RuleType: "course_completion", Tiers: tiers(
+			RuleType: model.RuleCourseCompletion, Tiers: tiers(
 				1, 10, 3, 20, 5, 30, 10, 50, 20, 100,
 			), IsSystem: true,
 		},
 		// 周全勤 — 3 tiers: 3/5/7 active days in the last 7 days.
 		{
-			Code: "weekly_dedication", Title: "周全勤", IconName: "badge_streak_7",
+			Code: "weekly_dedication", Title: "周全勤",
 			Description: "最近 7 天内有学习活动的天数",
-			RuleType: "weekly_all_present", Tiers: tiers(
+			RuleType: model.RuleWeeklyAllPresent, Tiers: tiers(
 				3, 10, 5, 20, 7, 40,
 			), IsSystem: true,
 		},
@@ -545,7 +542,7 @@ func (s *badgeService) SeedSubjectBadge(subjectID uint, key, label string) error
 		return nil // already exists
 	}
 	return s.badgeRepo.Create(&model.Badge{
-		Code: code, Title: label + "达人", IconName: "badge_english",
+		Code: code, Title: label + "达人",
 		Description: "完成的 " + label + " 视频课时数",
 		RuleType: model.RuleSubjectCount, RuleTarget: key,
 		SubjectID: &subjectID,
@@ -554,10 +551,4 @@ func (s *badgeService) SeedSubjectBadge(subjectID uint, key, label string) error
 		),
 		IsSystem: true,
 	})
-}
-
-// RemoveDeprecatedDefaults is retained for interface compat; the multi-tier
-// rebuild now handles cleanup. No-op.
-func (s *badgeService) RemoveDeprecatedDefaults() error {
-	return nil
 }

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Captions, Check } from 'lucide-react';
 import { api } from '../../lib/api';
 import type { Episode } from '../../lib/types';
 import { Drawer, LoadingState, EmptyState } from '../../components/ui';
@@ -100,7 +101,7 @@ export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose
         {subsQ.isLoading ? (
           <LoadingState />
         ) : subs.length === 0 ? (
-          <EmptyState icon="💬" title="暂无字幕" hint="在下方上传 .srt 或 .vtt 文件" />
+          <EmptyState icon={<Captions size={28} />} title="暂无字幕" hint="在下方上传 .srt 或 .vtt 文件" />
         ) : (
           <div className="space-y-2">
             {subs.map((s) => (
@@ -143,7 +144,7 @@ export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose
                 if (f) onFile(f);
               }}
             />
-            {fileName && <div className="mt-1 text-xs text-good">✓ 已读取: {fileName}</div>}
+            {fileName && <div className="mt-1 inline-flex items-center gap-1 text-xs text-good"><Check size={12} /> 已读取: {fileName}</div>}
           </div>
           <button className="btn-primary w-full" onClick={() => saveMut.mutate()} disabled={saveMut.isPending || !content}>
             {saveMut.isPending ? '上传中...' : '开始上传'}

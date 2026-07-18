@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { Plus, Lock, Tags as TagsIcon } from 'lucide-react';
 import { api } from '../lib/api';
 import { useTags, useInvalidateTags } from '../lib/useTags';
 import { useDeleteConfirm } from '../lib/useDeleteConfirm';
@@ -8,7 +9,7 @@ import { Modal, LoadingState, EmptyState } from '../components/ui';
 import { useToast } from '../lib/toast';
 
 const COLOR_CHOICES = [
-  '#ef4444', '#f59e0b', '#8b5cf6', '#06b6d4', '#10b981',
+  '#ef4444', '#f59e0b', '#0EA5E9', '#06b6d4', '#10b981',
   '#ec4899', '#3b82f6', '#84cc16', '#eab308', '#64748b',
 ];
 
@@ -46,11 +47,11 @@ export function TagsTable() {
   return (
     <div>
       <div className="mb-4 flex justify-end">
-        <button className="btn-primary" onClick={() => setCreating(true)}>+ 新增标签</button>
+        <button className="btn-primary inline-flex items-center gap-1.5" onClick={() => setCreating(true)}><Plus size={14} /> 新增标签</button>
       </div>
 
       {tags.length === 0 ? (
-        <EmptyState icon="🏷️" title="还没有标签" hint="新增第一个标签以开始给课程打标。" />
+        <EmptyState icon={<TagsIcon size={28} />} title="还没有标签" hint="新增第一个标签以开始给课程打标。" />
       ) : (
         <div className="card overflow-hidden p-0">
           <table className="w-full text-sm">
@@ -74,7 +75,7 @@ export function TagsTable() {
                     >
                       {t.label}
                       {t.is_system && (
-                        <span title="系统默认标签，不可删除（可在编辑里改名/改色）" className="text-xs">🔒</span>
+                        <span title="系统默认标签，不可删除（可在编辑里改名/改色）" className="text-muted"><Lock size={12} /></span>
                       )}
                     </span>
                   </td>

@@ -110,8 +110,8 @@ export function AIWorkflow() {
               <button
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition ${
-                  filter === f ? 'bg-primary text-white' : 'bg-card-2 text-muted hover:text-txt'
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  filter === f ? 'bg-txt text-bg' : 'text-muted hover:bg-card-2 hover:text-txt'
                 }`}
               >
                 {f === 'all' ? '全部' : STATUS_META[f].label}
@@ -120,18 +120,18 @@ export function AIWorkflow() {
           </div>
         </div>
 
-        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
           <table className="w-full text-sm">
-            <thead className="border-b border-border bg-card-2 text-xs text-muted">
+            <thead className="border-b border-border bg-card-2 text-xs uppercase tracking-wide text-muted">
               <tr>
-                <th className="px-4 py-3 text-left font-medium">类型</th>
-                <th className="px-4 py-3 text-left font-medium">状态</th>
-                <th className="px-4 py-3 text-left font-medium">Episode</th>
-                <th className="px-4 py-3 text-left font-medium">进度</th>
-                <th className="px-4 py-3 text-left font-medium">耗时</th>
-                <th className="px-4 py-3 text-left font-medium">创建时间</th>
-                <th className="px-4 py-3 text-left font-medium">错误</th>
-                <th className="px-4 py-3 text-right font-medium">操作</th>
+                <th className="px-4 py-2.5 text-left font-medium">类型</th>
+                <th className="px-4 py-2.5 text-left font-medium">状态</th>
+                <th className="px-4 py-2.5 text-left font-medium">Episode</th>
+                <th className="px-4 py-2.5 text-left font-medium">进度</th>
+                <th className="px-4 py-2.5 text-left font-medium">耗时</th>
+                <th className="px-4 py-2.5 text-left font-medium">创建时间</th>
+                <th className="px-4 py-2.5 text-left font-medium">错误</th>
+                <th className="px-4 py-2.5 text-right font-medium">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -260,25 +260,25 @@ function RunList({ runs, loading }: { runs: AiRun[]; loading: boolean }) {
   const openRun = runs.find((r) => r.id === openId) ?? null;
 
   if (loading) {
-    return <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">加载中…</div>;
+    return <div className="rounded-lg border border-border/60 bg-card px-4 py-10 text-center text-sm text-muted">加载中…</div>;
   }
   if (runs.length === 0) {
-    return <div className="rounded-2xl border border-border bg-card px-4 py-10 text-center text-sm text-muted">暂无运行记录</div>;
+    return <div className="rounded-lg border border-border/60 bg-card px-4 py-10 text-center text-sm text-muted">暂无运行记录</div>;
   }
 
   return (
     <>
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
         <table className="w-full text-sm">
-          <thead className="border-b border-border bg-card-2 text-xs text-muted">
+          <thead className="border-b border-border bg-card-2 text-xs uppercase tracking-wide text-muted">
             <tr>
-              <th className="px-4 py-3 text-left font-medium">能力</th>
-              <th className="px-4 py-3 text-left font-medium">模型</th>
-              <th className="px-4 py-3 text-left font-medium">Tokens (输入/输出)</th>
-              <th className="px-4 py-3 text-left font-medium">耗时</th>
-              <th className="px-4 py-3 text-left font-medium">自检</th>
-              <th className="px-4 py-3 text-left font-medium">时间</th>
-              <th className="px-4 py-3 text-right font-medium">操作</th>
+              <th className="px-4 py-2.5 text-left font-medium">能力</th>
+              <th className="px-4 py-2.5 text-left font-medium">模型</th>
+              <th className="px-4 py-2.5 text-left font-medium">Tokens (输入/输出)</th>
+              <th className="px-4 py-2.5 text-left font-medium">耗时</th>
+              <th className="px-4 py-2.5 text-left font-medium">自检</th>
+              <th className="px-4 py-2.5 text-left font-medium">时间</th>
+              <th className="px-4 py-2.5 text-right font-medium">操作</th>
             </tr>
           </thead>
           <tbody>
@@ -414,9 +414,9 @@ function Stat({ label, value, tone }: { label: string; value?: number; tone: 'bl
     muted: 'text-muted',
   }[tone];
   return (
-    <div className="rounded-xl border border-border bg-card p-3">
+    <div className="rounded-lg border border-border/60 bg-card p-3">
       <div className="text-[11px] text-muted">{label}</div>
-      <div className={`mt-0.5 text-2xl font-bold ${toneCls}`}>{value ?? 0}</div>
+      <div className={`mt-0.5 text-xl font-semibold tabular-nums ${toneCls}`}>{value ?? 0}</div>
     </div>
   );
 }

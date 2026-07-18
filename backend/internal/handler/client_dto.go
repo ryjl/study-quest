@@ -35,7 +35,6 @@ type clientCourseDTO struct {
 	Subject        string `json:"Subject"` // subject key, e.g. "math"
 	ContentType    string `json:"ContentType"` // learning | entertainment
 	CoverURL       string `json:"CoverURL"`
-	Tags           string `json:"Tags"`     // comma-joined labels (legacy)
 	TagsList       []string `json:"TagsList"` // tag labels in sort order
 	TagIDs         []uint   `json:"TagIDs"`   // tag ids (for ID-based filtering)
 	GradeDisplay   string `json:"GradeDisplay"`
@@ -123,7 +122,6 @@ type clientReadingSeriesDTO struct {
 	Grade        string   `json:"Grade"`
 	Subject      string   `json:"Subject"`
 	CoverURL     string   `json:"CoverURL"`
-	Tags         string   `json:"Tags"`
 	TagsList     []string `json:"TagsList"`
 	TagIDs       []uint   `json:"TagIDs"`
 	GradeDisplay string   `json:"GradeDisplay"`

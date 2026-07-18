@@ -1,3 +1,4 @@
+import { X, Plus } from 'lucide-react';
 import { STRATEGIES, WEEKDAY_LABELS } from '../lib/useUnlock';
 import type { UnlockStrategy, WeeklyTime } from '../lib/types';
 
@@ -143,12 +144,12 @@ function WeeklyTimesEditor({ times, onChange }: { times: WeeklyTime[]; onChange:
             ))}
           </select>
           <button type="button" className="btn-ghost btn-sm" onClick={() => remove(i)}>
-            ✕
+            <X size={12} />
           </button>
         </div>
       ))}
-      <button type="button" className="btn-secondary btn-sm" onClick={add}>
-        + 添加时间点
+      <button type="button" className="btn-secondary btn-sm inline-flex items-center gap-1" onClick={add}>
+        <Plus size={14} /> 添加时间点
       </button>
     </div>
   );

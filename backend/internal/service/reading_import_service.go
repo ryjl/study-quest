@@ -35,8 +35,9 @@ type ExecuteReadingImportRequest struct {
 	TargetSeriesID uint                  `json:"target_series_id"`
 	NewSeries      *NewReadingSeriesReq  `json:"new_series"`
 	Tree           *ReadingPreviewNode   `json:"tree"`
-	// SourceID stamps every imported book with its storage source. Nil =
-	// legacy (resolved via the global settings fallback at stream time).
+	// SourceID stamps every imported book with its storage source. Required:
+	// there is no longer a global-settings fallback at stream time, so a nil
+	// SourceID would leave the row un-streamable.
 	SourceID *uint `json:"source_id"`
 }
 
@@ -185,6 +186,12 @@ func pruneReadingEmptyNodes(node *ReadingPreviewNode) bool {
 func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportRequest) error {
 	if req.Tree == nil {
 		return errors.New("empty tree payload")
+	}
+	// Every imported book must be bound to a storage source. There is no
+	// longer a global-settings fallback at stream time, so a nil SourceID would
+	// leave the row un-streamable.
+	if req.SourceID == nil {
+		return errors.New("source_id is required (no global storage fallback)")
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
