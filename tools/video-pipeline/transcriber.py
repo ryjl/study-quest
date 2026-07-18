@@ -6,7 +6,8 @@ Two responsibilities:
      that biases style and injects hot-words. We compose three parts:
        - base_prompt  : style引导 (from config, e.g. "以下是普通话的句子。")
        - course ctx   : subject/course/chapter titles → subject terminology
-       - ai_hint      : admin-authored针对性提示 (accent, the key theorem...)
+       - whisper_hint : admin-authored针对性提示 (accent, the key theorem...)
+                       sourced from Course.AIConfigJSON on the backend
      All auto-derived from the claim response, so every job gets a tailored
      prompt with zero manual per-video work.
   2. Lazily load the model and transcribe, reporting progress via a callback
@@ -30,12 +31,12 @@ from api_client import EpisodeInfo
 log = logging.getLogger("sq.transcriber")
 
 # Whisper's decoder prompt budget. Keep some headroom under the hard limit so
-# the course context + ai_hint don't crowd out the actual decoding.
+# the course context + whisper_hint don't crowd out the actual decoding.
 PROMPT_MAX_CHARS = 240
 
 
 def build_prompt(ep: EpisodeInfo, base_prompt: str) -> str:
-    """Compose the initial_prompt: base style句 + course context + ai_hint.
+    """Compose the initial_prompt: base style句 + course context + whisper_hint.
 
     Truncated to PROMPT_MAX_CHARS (approximating the Whisper ~244-token budget
     in characters, which is conservative for CJK where 1 char ≈ 1 token).
@@ -52,8 +53,8 @@ def build_prompt(ep: EpisodeInfo, base_prompt: str) -> str:
         ctx_bits.append(ep.chapter_title)
     if ctx_bits:
         parts.append("，".join(ctx_bits) + "。")
-    if ep.ai_hint:
-        parts.append(ep.ai_hint)
+    if ep.whisper_hint:
+        parts.append(ep.whisper_hint)
     prompt = "".join(parts)
     return prompt[:PROMPT_MAX_CHARS]
 

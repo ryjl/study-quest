@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import type { Chapter, Course, Episode } from '../../lib/types';
-import { LoadingState, EmptyState, DropdownMenu } from '../../components/ui';
+import { LoadingState, EmptyState } from '../../components/ui';
 import { codecLabel, formatDuration, formatFileSize, resolutionLabel } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
 import { sortBy, timeValue, type SortDir, type SortOption } from '../../lib/sort';
@@ -355,12 +355,10 @@ export function CourseTree({ course, onChanged }: { course: Course; onChanged: (
           <button className="btn-secondary btn-sm" onClick={() => setAddingEpisode({ chapterId: 0 })} title="添加课时到默认分类">
             <Plus size={14} /> 课时
           </button>
-          <DropdownMenu
-            align="right"
-            items={[
-              { label: '探测缺失时长', icon: <Radio size={14} />, onClick: () => probeMissingMut.mutate() },
-            ]}
-          />
+          {/* 低频维护操作:直接降级成按钮(原三点菜单只有这一项,没必要藏)。 */}
+          <button className="btn-secondary btn-sm" onClick={() => probeMissingMut.mutate()} title="扫描所有课时,补全缺失的视频时长信息">
+            <Radio size={14} /> 探测时长
+          </button>
         </div>
       </div>
 

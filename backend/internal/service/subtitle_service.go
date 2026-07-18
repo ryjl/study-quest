@@ -118,7 +118,14 @@ type ClaimResult struct {
 	Subject      string `json:"subject,omitempty"`
 	CourseTitle  string `json:"course_title,omitempty"`
 	ChapterTitle string `json:"chapter_title,omitempty"`
-	AIHint       string `json:"ai_hint,omitempty"`
+	// WhisperHint is the prompt context for the worker's Whisper initial_prompt
+	// (admin-authored terminology/accent notes). Derived from
+	// Course.EffectiveWhisperHint(), which reads AIConfigJSON (falling back to
+	// the deprecated AIHint column for un-migrated rows). The HTTP layer emits
+	// ONLY this field (no legacy ai_hint mirror) — the Python worker reads
+	// whisper_hint exclusively. Both ends are in the same repo and ship together,
+	// so there is no protocol-compat window to maintain.
+	WhisperHint  string `json:"whisper_hint,omitempty"`
 }
 
 // SubtitleJobStats is the progress snapshot polled by the admin UI, mirroring
@@ -282,7 +289,7 @@ func (s *subtitleJobService) ClaimNext(workerID, userAgent string) (*ClaimResult
 	var dur *int
 	var filename string
 	var fileSize *int64
-	subject, courseTitle, chapterTitle, aiHint := "", "", "", ""
+	subject, courseTitle, chapterTitle, whisperHint := "", "", "", ""
 	if ep, eerr := s.episodeRepo.FindByID(job.EpisodeID); eerr == nil && ep != nil {
 		title = ep.Title
 		dur = ep.DurationSeconds
@@ -297,7 +304,9 @@ func (s *subtitleJobService) ClaimNext(workerID, userAgent string) (*ClaimResult
 		filename = filepath.Base(path)
 		if course, cerr := s.courseRepo.FindByID(ep.CourseID); cerr == nil && course != nil {
 			courseTitle = course.Title
-			aiHint = course.AIHint
+			// Whisper consumer: EffectiveWhisperHint() prefers the new WhisperHint
+			// field and falls back to the deprecated AIHint for un-migrated rows.
+			whisperHint = course.EffectiveWhisperHint()
 			if subj, serr := s.subjectRepo.FindByID(course.SubjectID); serr == nil && subj != nil {
 				subject = subj.Key
 			}
@@ -324,7 +333,7 @@ func (s *subtitleJobService) ClaimNext(workerID, userAgent string) (*ClaimResult
 		Subject:        subject,
 		CourseTitle:    courseTitle,
 		ChapterTitle:   chapterTitle,
-		AIHint:         aiHint,
+		WhisperHint:    whisperHint,
 	}, nil
 }
 

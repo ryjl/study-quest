@@ -134,10 +134,20 @@ export interface Course {
   cover_url: string;
   cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
   attachment_json: string;
-  /** Admin-authored hint fed to the subtitle worker's Whisper prompt (and the
-   * future quiz agent): terminology, accent notes, the key topic to catch.
-   * Optional; empty when unset. */
+  /** DEPRECATED. Single-field predecessor of the split whisper_hint/quiz_hint
+   * (now stored together in one backend JSON column, AIConfigJSON). Kept for
+   * edit-form repopulation of legacy rows; new writes go to whisper_hint /
+   * quiz_hint. See backend model.Course.AIConfig. */
   ai_hint?: string;
+  /** Admin-authored hint fed to the subtitle worker's Whisper initial_prompt
+   * (terminology list, accent notes, ≤240 chars). Sourced from the backend's
+   * AIConfigJSON blob. Empty when unset. */
+  whisper_hint?: string;
+  /** Admin-authored hint fed to the summary/quiz/advice LLM agents: question-
+   * style preferences, difficulty bias, AND a terminology correction dictionary
+   * (terms Whisper mishears that the LLM must output correctly). Longer text.
+   * Sourced from the backend's AIConfigJSON blob. Empty when unset. */
+  quiz_hint?: string;
   /** Course-level switches for AI post-processing of its episodes. When false,
    * the worker skips summary / quiz generation for this course even if the AI
    * pipeline is globally configured. Optional (absent = disabled, the model
@@ -667,11 +677,17 @@ export interface AiQuizQuestion {
   id: number;
   quiz_id: number;
   chunk_id?: number;
-  type: string; // "choice" | "fill"
+  type: string; // "choice" | "multi_choice" | "fill"
   stem: string;
-  options?: string; // JSON []string (choice)
-  answer: number; // choice: 0-based index
-  answer_text?: string; // fill: JSON []string of acceptable answers
+  options?: string; // JSON []string (choice / multi_choice)
+  answer: number; // DEPRECATED choice: 0-based index (multi_choice 恒 0,看 correct_indices)
+  answer_text?: string; // DEPRECATED fill: JSON []string of acceptable answers (multi_choice 空)
+  /** multi_choice: 正确选项索引数组(choice/fill 不下发)。admin 核对多选题答案用。 */
+  correct_indices?: number[];
+  /** multi_choice: 是否允许部分对 scoring。 */
+  partial_credit?: boolean;
+  /** 原始判分元数据 JSON(按 type 解析),供 admin 排查判分问题。 */
+  scoring?: string;
   explanation: string;
   chunk_start_time?: number | null; // joined from content_chunks, for video-jump
 }

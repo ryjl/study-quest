@@ -106,7 +106,7 @@ enum QuizStatus { ready, generating, unavailable }
 /// the correct answer is only revealed after submit (QuizAnswerResult).
 class QuizQuestion {
   final int id;
-  final String type; // "choice" | "fill"
+  final String type; // "choice" | "fill" | "multi_choice"
   final String stem;
   final List<String> options; // choice only
   final int? chunkStartTime; // seconds, for "[跳转 12:38]"; null if synthetic
@@ -124,6 +124,16 @@ class QuizQuestion {
   final int? correctIndex; // choice: 正确选项索引
   final String correctText; // fill: 标准答案
   final String explanation; // 解析
+  // ── multi_choice 专用(交卷后回填)──
+  // correctIndices:多选题的正确答案索引集合(交卷后后端揭示);单选/填空为 const []。
+  // userAnswerIndices:学生当时选的索引集合(重进已交卷卷子时回填,用于错项红框高亮)。
+  // partial:多选题"部分对"(漏选但没多选错项)。correct=true 表示全对;两者都 false 表示错。
+  final List<int> correctIndices;
+  final List<int> userAnswerIndices;
+  final bool partial;
+  // missedCount/extraCount:多选题部分对/错时回填,供横幅显示"漏选 X / 多选 Y"。
+  final int missedCount;
+  final int extraCount;
 
   QuizQuestion({
     required this.id,
@@ -139,9 +149,17 @@ class QuizQuestion {
     this.correctIndex,
     this.correctText = '',
     this.explanation = '',
+    this.correctIndices = const [],
+    this.userAnswerIndices = const [],
+    this.partial = false,
+    this.missedCount = 0,
+    this.extraCount = 0,
   });
 
   bool get isFill => type == 'fill';
+
+  // multi_choice:多选题(可选多个答案,后端按集合判分 + partial 部分对)。
+  bool get isMultiChoice => type == 'multi_choice';
 
   factory QuizQuestion.fromJson(Map<String, dynamic> j) => QuizQuestion(
         id: (j['id'] as num).toInt(),
@@ -157,6 +175,12 @@ class QuizQuestion {
         correctIndex: j['correct_index'] == null ? null : (j['correct_index'] as num).toInt(),
         correctText: (j['correct_text'] ?? '').toString(),
         explanation: (j['explanation'] ?? '').toString(),
+        // multi_choice 字段:用 ?.cast<int>() 防 null/脏类型。后端 omitempty 时为 const []。
+        correctIndices: (j['correct_indices'] as List<dynamic>?)?.cast<int>() ?? const [],
+        userAnswerIndices: (j['user_answer_indices'] as List<dynamic>?)?.cast<int>() ?? const [],
+        partial: (j['partial'] ?? false) as bool,
+        missedCount: (j['missed_count'] as num?)?.toInt() ?? 0,
+        extraCount: (j['extra_count'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -230,6 +254,15 @@ class QuizAnswerResult {
   final String correctText; // fill: canonical answer(s)
   final String explanation;
   final int? chunkStartTime; // seconds, for "[跳转 12:38]"
+  // multi_choice 专用:correctIndices 是正确答案索引集合(后端在交卷后揭示);
+  // partial=true 表示部分对(漏选但没多选错项),correct=true 表示全对,两者都 false 表示错。
+  // 单选/填空题这两字段保持默认值(const [] / false),不影响渲染。
+  final List<int> correctIndices;
+  final bool partial;
+  // missedCount/extraCount:多选题部分对/错时,后端下发漏选数和错选数,供横幅显示
+  // "漏选 2 项"等具体反馈。单选/填空恒 0。
+  final int missedCount;
+  final int extraCount;
 
   QuizAnswerResult({
     this.questionId,
@@ -238,6 +271,10 @@ class QuizAnswerResult {
     required this.correctText,
     required this.explanation,
     this.chunkStartTime,
+    this.correctIndices = const [],
+    this.partial = false,
+    this.missedCount = 0,
+    this.extraCount = 0,
   });
 
   factory QuizAnswerResult.fromJson(Map<String, dynamic> j) => QuizAnswerResult(
@@ -247,6 +284,10 @@ class QuizAnswerResult {
         correctText: (j['correct_text'] ?? '').toString(),
         explanation: (j['explanation'] ?? '').toString(),
         chunkStartTime: j['chunk_start_time'] == null ? null : (j['chunk_start_time'] as num).toInt(),
+        correctIndices: (j['correct_indices'] as List<dynamic>?)?.cast<int>() ?? const [],
+        partial: (j['partial'] ?? false) as bool,
+        missedCount: (j['missed_count'] as num?)?.toInt() ?? 0,
+        extraCount: (j['extra_count'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -267,7 +308,7 @@ class JumpRequest {
 /// One question in an archived (history) quiz, WITH the correct answer revealed.
 class ArchivedQuizQuestion {
   final int id;
-  final String type; // "choice" | "fill"
+  final String type; // "choice" | "fill" | "multi_choice"
   final String stem;
   final List<String> options; // choice only
   final int? correctIndex; // choice: the right option index
@@ -281,6 +322,10 @@ class ArchivedQuizQuestion {
   final String userText;
   // hasJump:历史题是否可跳转视频(透传 question.HasJump)。仅 has_jump=true 才给按钮。
   final bool hasJump;
+  // multi_choice 专用(历史 review):correctIndices 是正确答案索引集合;
+  // userIndices 是学生当时选的索引集合(对应后端 user_indices)。单选/填空为 const []。
+  final List<int> correctIndices;
+  final List<int> userIndices;
 
   ArchivedQuizQuestion({
     required this.id,
@@ -295,9 +340,14 @@ class ArchivedQuizQuestion {
     this.userIndex,
     this.userText = '',
     this.hasJump = false,
+    this.correctIndices = const [],
+    this.userIndices = const [],
   });
 
   bool get isFill => type == 'fill';
+
+  // multi_choice:历史多选题,按集合高亮正确项 + 学生错选项。
+  bool get isMultiChoice => type == 'multi_choice';
 
   factory ArchivedQuizQuestion.fromJson(Map<String, dynamic> j) => ArchivedQuizQuestion(
         id: (j['id'] as num).toInt(),
@@ -312,6 +362,8 @@ class ArchivedQuizQuestion {
         userIndex: j['user_index'] == null ? null : (j['user_index'] as num).toInt(),
         userText: (j['user_text'] ?? '').toString(),
         hasJump: (j['has_jump'] ?? false) as bool,
+        correctIndices: (j['correct_indices'] as List<dynamic>?)?.cast<int>() ?? const [],
+        userIndices: (j['user_indices'] as List<dynamic>?)?.cast<int>() ?? const [],
       );
 }
 

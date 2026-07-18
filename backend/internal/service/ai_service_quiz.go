@@ -22,6 +22,38 @@ import (
 // results, and enforces the access/AI-enabled gates. It never makes a decision
 // the agent should make.
 
+// --- 多选题作答存储(Answer 表无多选专用列,复用 UserAnswerText)---
+//
+// model.Answer 只有一个 int 列(UserAnswer)+ 一个 text 列(UserAnswerText)。choice 用
+// UserAnswer,fill 用 UserAnswerText。多选题的"选中多个索引"两者都不够用,但加列要迁移
+// schema 且不向后兼容(老进程读新行会炸)。
+//
+// 决策:多选题把用户选中的索引数组序列化成 JSON 存到 UserAnswerText(如 "[0,2,3]"),
+// UserAnswer 存 -1(语义同 fill,标记"int 列无意义")。判分时从 UserAnswerText 解析回 []int。
+// 这样不动表结构、不改老 answer 行(choice/fill 的 UserAnswerText 不受影响)。
+
+// encodeMultiAnswer 把用户的多选索引数组序列化成 JSON 文本,存进 Answer.UserAnswerText。
+func encodeMultiAnswer(indices []int) string {
+	b, err := json.Marshal(indices)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+// decodeMultiAnswer 从 Answer.UserAnswerText 解析多选索引数组。空串/格式错 → nil。
+// 用来回填 history / view 里的 user_answer_indices。
+func decodeMultiAnswer(stored string) []int {
+	if stored == "" {
+		return nil
+	}
+	var idx []int
+	if err := json.Unmarshal([]byte(stored), &idx); err != nil {
+		return nil
+	}
+	return idx
+}
+
 // --- client-facing view types ---
 
 // QuizView is the client-safe quiz payload. Questions omit the correct answer
@@ -61,10 +93,21 @@ type QuizViewQuestion struct {
 	UserAnswerIndex *int   `json:"user_answer_index,omitempty"` // choice: 学生当时选的索引
 	// UserAnswerText 是填空题学生当时填的原文(交卷后回填,用于"你填的 X"回放)。
 	// 之前因 Answer 表只有 int 列存不下,现在补上 Answer.UserAnswerText 后可回放。
+	// 多选题也复用这一列:存用户选中索引的 JSON 数组(回放时解析成 user_answer_indices)。
 	UserAnswerText string `json:"user_answer_text,omitempty"` // fill: 学生当时填的
+	// UserAnswerIndices 是多选题学生当时选中的索引数组(交卷后回填)。从 Answer.UserAnswerText
+	// 解析(JSON []int);解析失败/没存时为 nil。
+	UserAnswerIndices []int `json:"user_answer_indices,omitempty"` // multi_choice: 学生当时选的
 	Correct         bool   `json:"correct,omitempty"`           // 这题对不对(交卷后才有意义)
+	// Partial 仅多选题部分对时为 true(漏选但没多选错项)。单选/填空恒 false(omitempty 不下发)。
+	Partial         bool   `json:"partial,omitempty"`
+	// MissedCount/ExtraCount 仅多选题部分对/错时下发,供前端展示"漏选 X / 多选 Y"。
+	MissedCount     int    `json:"missed_count,omitempty"`
+	ExtraCount      int    `json:"extra_count,omitempty"`
 	CorrectIndex    *int   `json:"correct_index,omitempty"`     // choice: 正确选项索引
 	CorrectText     string `json:"correct_text,omitempty"`      // fill: 标准答案
+	// CorrectIndices 是多选题的正确选项索引数组(交卷后回填)。choice 题为 nil。
+	CorrectIndices []int `json:"correct_indices,omitempty"`    // multi_choice: 正确索引
 	Explanation     string `json:"explanation,omitempty"`       // 解析
 }
 
@@ -75,7 +118,14 @@ type AnswerResult struct {
 	// (位置映射是脆弱契约——并发删题或 DB 排序漂移会导致错位)。
 	QuestionID     uint   `json:"question_id"`
 	Correct        bool   `json:"correct"`
+	// Partial 仅多选题部分对时 true(漏选但没多选错项)。单选/填空恒 false(omitempty)。
+	Partial        bool   `json:"partial,omitempty"`
+	// MissedCount/ExtraCount 仅多选题下发,供前端展示"漏选 X / 多选 Y"。
+	MissedCount    int    `json:"missed_count,omitempty"`
+	ExtraCount     int    `json:"extra_count,omitempty"`
 	CorrectIndex   *int   `json:"correct_index,omitempty"`    // choice: the right option index
+	// CorrectIndices 多选题的正确索引数组(交卷后揭示)。choice 题为 nil。
+	CorrectIndices []int `json:"correct_indices,omitempty"`   // multi_choice: 正确索引
 	CorrectText    string `json:"correct_text,omitempty"`     // fill: the canonical answer(s)
 	Explanation    string `json:"explanation"`
 	ChunkStartTime *int   `json:"chunk_start_time,omitempty"` // seconds, for "[跳转 12:38]"
@@ -119,9 +169,14 @@ type QuizDetailQuestion struct {
 	Type           string `json:"type"`
 	ChunkID        uint   `json:"chunk_id"`
 	Stem           string `json:"stem"`
-	Options        string `json:"options"`         // JSON []string (choice)
-	Answer         int    `json:"answer"`          // choice: 0-based index
-	AnswerText     string `json:"answer_text"`     // fill: JSON []string
+	Options        string `json:"options"`         // JSON []string (choice/multi_choice)
+	Answer         int    `json:"answer"`          // DEPRECATED choice: 0-based index (multi_choice 恒 0,看 correct_indices)
+	AnswerText     string `json:"answer_text"`     // DEPRECATED fill: JSON []string (multi_choice 空,看 scoring)
+	// CorrectIndices 多选题的正确选项索引数组(choice/fill 为 nil)。admin 核对多选题答案用。
+	CorrectIndices []int  `json:"correct_indices,omitempty"` // multi_choice: 正确索引
+	PartialCredit  bool   `json:"partial_credit,omitempty"`  // multi_choice: 是否允许部分对
+	// Scoring 透传原始判分元数据 JSON,供 admin 排查判分问题(按 type 解析)。
+	Scoring        string `json:"scoring,omitempty"`
 	Explanation    string `json:"explanation"`
 	ChunkStartTime *int   `json:"chunk_start_time,omitempty"`
 }
@@ -174,6 +229,8 @@ type QuizHistoryQuestion struct {
 	Stem           string   `json:"stem"`
 	Options        []string `json:"options,omitempty"`
 	CorrectIndex   *int     `json:"correct_index,omitempty"`   // choice
+	// CorrectIndices 多选题的正确索引数组(历史 review 也揭示)。choice 题为 nil。
+	CorrectIndices []int    `json:"correct_indices,omitempty"`  // multi_choice
 	CorrectText    string   `json:"correct_text,omitempty"`    // fill
 	Explanation    string   `json:"explanation"`
 	ChunkStartTime *int     `json:"chunk_start_time,omitempty"`
@@ -187,6 +244,9 @@ type QuizHistoryQuestion struct {
 	UserIndex *int `json:"user_index,omitempty"`
 	// UserText 是学生当时填的填空题答案(填空题原文)。同样取最新一条;空串表示没作答。
 	UserText string `json:"user_text,omitempty"`
+	// UserIndices 是多选题学生当时选中的索引数组(历史 review 回放)。从 Answer.UserAnswerText
+	// 解析的 JSON []int。multi_choice 题专用;nil 表示没作答。
+	UserIndices []int `json:"user_indices,omitempty"` // multi_choice
 	// HasJump 透传 question.HasJump,历史 review 里只有 has_jump=true 的题才给跳转按钮。
 	HasJump bool `json:"has_jump"`
 }
@@ -386,13 +446,35 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 		// (这里用短路 OR 兜底,只填一次,不区分"显式 false"和"缺失"——JSON 的 false
 		// 经过解析就是 false,缺失也是 false,二者都走兜底。)
 		q.HasJump = d.HasJump || chunkID != 0
-		if d.Type == agent.QuestionChoice {
+		// 判分元数据统一走 Scoring(JSON,按 type 解析),grading 优先读 Scoring。
+		// choice/fill 同时写老字段(Answer/AnswerText)兼容老代码路径(老 query / 单题
+		// submit / 未升级的判分点),多选题没有老字段可写只能进 Scoring。
+		switch d.Type {
+		case agent.QuestionMultiChoice:
+			opts, _ := json.Marshal(d.Options)
+			q.Options = string(opts)
+			// min_correct_for_half 缺省 1(parseQuizGeneration 已保证 ≥1,这里兜底防 0)。
+			minForHalf := d.MinCorrectForHalf
+			if minForHalf < 1 {
+				minForHalf = 1
+			}
+			scoring, _ := json.Marshal(map[string]any{
+				"correct_indices":      d.CorrectIndices,
+				"partial_credit":       d.PartialCredit,
+				"min_correct_for_half": minForHalf,
+			})
+			q.Scoring = string(scoring)
+		case agent.QuestionChoice:
 			opts, _ := json.Marshal(d.Options)
 			q.Options = string(opts)
 			q.Answer = d.Answer
-		} else {
+			scoring, _ := json.Marshal(map[string]any{"correct_index": d.Answer})
+			q.Scoring = string(scoring)
+		default: // fill
 			at, _ := json.Marshal(d.AnswerText)
 			q.AnswerText = string(at)
+			scoring, _ := json.Marshal(map[string]any{"accept": d.AnswerText})
+			q.Scoring = string(scoring)
 		}
 		questions = append(questions, q)
 	}
@@ -421,7 +503,7 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 // This single run carries the observability payload for the whole generation.
 func (s *aiService) recordQuizRun(jobID uint, modelName string, res *agent.QuizResult, elapsed time.Duration, selfCheck, note string) {
 	input := fmt.Sprintf(`{"job_id":%d,"turns":%d,"steps":%d}`, jobID, res.Turns, len(res.Trace))
-	s.contentRepo.CreateRun(&model.AIRun{
+	if err := s.contentRepo.CreateRun(&model.AIRun{
 		JobID:            jobID,
 		Capability:       "quiz",
 		InputJSON:        input,
@@ -433,7 +515,9 @@ func (s *aiService) recordQuizRun(jobID uint, modelName string, res *agent.QuizR
 		SelfCheckResult:  selfCheck,
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
-	})
+	}); err != nil {
+		log.Printf("AI: recordQuizRun failed for job %d: %v", jobID, err)
+	}
 }
 
 // truncateForRun builds a compact response_text snapshot of the generated quiz
@@ -598,24 +682,42 @@ func (s *aiService) GetQuizForClient(userID, episodeID uint) (*QuizView, error) 
 		}
 		// 已交卷:回填该题的作答 + 判定 + 正确答案 + 解析,让学生重进页面能 review。
 		// 未交卷时这些字段保持零值(omitempty 不下发),不泄露答案。
-		// 注意:Answer.UserAnswer 是 int(choice 的选项索引);填空题的用户原文当前
-		// 没持久化(model 限制),填空题只能回填 Correct/CorrectText/Explanation。
+		// 三种题型分别回填:choice→UserAnswerIndex/CorrectIndex,fill→UserAnswerText/
+		// CorrectText,multi_choice→UserAnswerIndices/CorrectIndices/Partial(+Missed/Extra)。
+		// 注意 multi_choice 的 Partial 不在 Answer 表(只存了 Correct=是否全对),这里按
+		// UserAnswerIndices 重算 GradeMultiChoice 得到 partial/missed/extra。
 		if submitted {
 			if a := answerByQID[q.ID]; a != nil {
-				if q.Type == "choice" {
+				switch q.Type {
+				case agent.QuestionMultiChoice:
+					userIdx := decodeMultiAnswer(a.UserAnswerText)
+					qv.UserAnswerIndices = userIdx
+					mv := agent.GradeMultiChoice(q, userIdx)
+					qv.Partial = mv.Partial
+					qv.MissedCount = mv.MissedCount
+					qv.ExtraCount = mv.ExtraCount
+					qv.Correct = mv.Correct
+				case agent.QuestionFill:
+					qv.UserAnswerText = a.UserAnswerText
+					qv.Correct = a.Correct
+				default: // choice
 					idx := a.UserAnswer
 					qv.UserAnswerIndex = &idx
-				} else {
-					// 填空题回放学生原文(Answer.UserAnswerText 已持久化)。
-					qv.UserAnswerText = a.UserAnswerText
+					qv.Correct = a.Correct
 				}
-				qv.Correct = a.Correct
 			}
-			if q.Type == "choice" {
-				idx := q.Answer
+			// 揭示正确答案(三题型分别走各自字段)。
+			switch q.Type {
+			case agent.QuestionMultiChoice:
+				if s := agent.ParseScoring(q); s != nil {
+					qv.CorrectIndices = s.MultiCorrectIndices
+				}
+			case agent.QuestionFill:
+				qv.CorrectText = joinAcceptable(fillAcceptable(q))
+			default: // choice
+				idx := choiceAnswerIndex(q)
 				qv.CorrectIndex = &idx
 			}
-			qv.CorrectText = q.AnswerText
 			qv.Explanation = q.Explanation
 		}
 		view.Questions = append(view.Questions, qv)
@@ -676,13 +778,20 @@ func (s *aiService) SubmitQuizAnswer(userID, questionID uint, answerIndex *int, 
 	}
 
 	// Build the result, revealing the correct answer + jump time.
+	// 三题型分别揭示:choice→CorrectIndex,fill→CorrectText,multi_choice→CorrectIndices。
+	// 注意:这条单题 submit 路径当前前端不走(前端用 submit-all),且签名不支持 multi_choice
+	// 作答(没 answerIndices 参数)。但 reveal 逻辑仍要按题型分派,避免万一调用方传
+	// multi_choice 题时把 q.Answer=0 当正确答案下发。
 	res := &AnswerResult{QuestionID: q.ID, Correct: correct, Explanation: q.Explanation}
-	if q.Type == agent.QuestionFill {
-		var accept []string
-		_ = json.Unmarshal([]byte(q.AnswerText), &accept)
-		res.CorrectText = joinAcceptable(accept)
-	} else {
-		i := q.Answer
+	switch q.Type {
+	case agent.QuestionMultiChoice:
+		if s := agent.ParseScoring(*q); s != nil {
+			res.CorrectIndices = s.MultiCorrectIndices
+		}
+	case agent.QuestionFill:
+		res.CorrectText = joinAcceptable(fillAcceptable(*q))
+	default: // choice
+		i := choiceAnswerIndex(*q)
 		res.CorrectIndex = &i
 	}
 	// Jump-to-video time from the linked chunk.
@@ -711,11 +820,14 @@ func joinAcceptable(accept []string) string {
 }
 
 // QuizAnswerInput 是批量提交里一道题的作答。选择题填 AnswerIndex,填空题填
-// AnswerText;另一字段留空。与单题 submit 的 request 字段名保持一致,方便前端复用。
+// AnswerText,多选题填 AnswerIndices;其余字段留空。与单题 submit 的 request 字段名
+// 保持一致,方便前端复用。
 type QuizAnswerInput struct {
-	QuestionID  uint   `json:"question_id"`
-	AnswerIndex *int   `json:"answer_index,omitempty"`
-	AnswerText  string `json:"answer_text,omitempty"`
+	QuestionID    uint   `json:"question_id"`
+	AnswerIndex   *int   `json:"answer_index,omitempty"`
+	AnswerText    string `json:"answer_text,omitempty"`
+	// AnswerIndices 是多选题学生选中的选项索引数组(无序)。仅 multi_choice 题有意义。
+	AnswerIndices []int `json:"answer_indices,omitempty"`
 }
 
 // SubmitAllQuizAnswers 是 Phase B 的"统一交卷":一次性判分本 quiz 全部题目,逐题
@@ -743,6 +855,20 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 	if quiz.SubmittedAt != nil {
 		return nil, ErrQuizAlreadySubmitted
 	}
+	// 并发安全:在落任何 answer/memory 之前,用条件 UPDATE 抢占 submitted_at。
+	// 两个并发 submit-all 都可能过上面的非事务 nil 检查,但只有一个能抢到这把锁——
+	// SQLite 的 UPDATE 自动行锁,败者 RowsAffected=0,直接拒绝,不会落重复 Answer 行
+	// 或重复扣 mastery(消除 TOCTOU)。抢到后即使后续步骤失败,quiz 也已锁定(交卷态),
+	// 符合"一次提交=一次考试"的语义。
+	now := time.Now()
+	claimed, err := s.contentRepo.TryMarkQuizSubmitted(quiz.ID, now)
+	if err != nil {
+		return nil, fmt.Errorf("lock quiz for submit: %w", err)
+	}
+	if !claimed {
+		// 别的请求抢先盖了戳——本请求是并发重复交卷,拒绝。
+		return nil, ErrQuizAlreadySubmitted
+	}
 	questions, err := s.contentRepo.GetQuestions(quiz.ID)
 	if err != nil {
 		return nil, err
@@ -762,52 +888,68 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 
 	memory := agent.NewMemoryStore(s.contentRepo)
 	ctx := context.Background()
-	now := time.Now()
+	// now 复用前面 TryMarkQuizSubmitted 盖戳的同一时间戳——整个交卷动作(盖戳/落 answer/
+	// 更新 memory)用统一时间,语义更一致。
 
 	// 累计判分:落 answer 行 + 更新 memory,逐题产出 AnswerResult。任何一题失败直接
-	// 中断并返回错误——交卷是原子的,要么全交要么不交(已落的 answer 行不影响:还没盖
-	// SubmittedAt,quiz 仍可重新交卷;memory 更新也是幂等的增量,不会错乱)。
+	// 中断并返回错误。注意:submitted_at 已在前面 TryMarkQuizSubmitted 抢占盖戳,所以
+	// 这里即使中途失败,quiz 也已锁定(交卷态),不会出现"落了一半 answer 但 quiz 未交卷"
+	// 的窗口——这正是把抢占提前的收益。
 	results := make([]AnswerResult, 0, len(questions))
 	for _, q := range questions {
 		input, answered := inputByQ[q.ID]
+		// 解析用户作答:int / 文本 / 索引数组(多选)。choice 用 idx,fill 用 txt,
+		// multi 用 indices。三者来源不同,落库时按 type 选其一。
 		idx := -1
 		txt := ""
+		var indices []int
 		if answered && input.AnswerIndex != nil {
 			idx = *input.AnswerIndex
 		}
 		if answered {
 			txt = input.AnswerText
 		}
-		correct := false
+		if answered && len(input.AnswerIndices) > 0 {
+			indices = input.AnswerIndices
+		}
+		verdict := agent.Verdict{}
 		if answered {
-			correct = agent.GradeAnswer(q, idx, txt)
+			verdict = agent.GradeAnswerV(q, idx, txt, indices)
+			// 落 answer 行。多选题把索引数组 JSON 存进 UserAnswerText(choice/fill 不变),
+			// 见文件头 encodeMultiAnswer 的设计说明。
+			storedText := txt
+			if q.Type == agent.QuestionMultiChoice {
+				storedText = encodeMultiAnswer(indices)
+			}
 			s.contentRepo.CreateAnswer(&model.Answer{
 				QuestionID:     q.ID,
 				QuizID:         quiz.ID,
 				UserID:         userID,
 				UserAnswer:     idx,
-				UserAnswerText: txt,
-				Correct:        correct,
+				UserAnswerText: storedText,
+				Correct:        verdict.Correct,
 				AnsweredAt:     now,
 			})
 			// 更新 memory(feedback loop)。合成题(chunkID=0)是 no-op。
-			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, correct); err != nil {
+			// memory 更新的口径:全对 +0.1(增 mastery),错 -0.2。
+			// 多选题部分对(漏选但没多选错项)的处理:RecordAnswer 只支持 correct=true/false,
+			// 没有中性态。部分对学生其实掌握了大部分知识点(漏 1 个 ≠ 全错),扣 0.2 会系统性
+			// 压低善做多选题学生的 mastery,进而误导 advice。所以这里给部分对传 true(不扣分,
+			// 视为"基本掌握")。全错才扣分。TODO.md 记了"RecordAnswer 支持 partial 加权"的演进。
+			masteryCorrect := verdict.Correct || verdict.Partial
+			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, masteryCorrect); err != nil {
 				log.Printf("AI: update memory for question %d failed: %v", q.ID, err)
 				// non-fatal,同单题 submit 的处理:答案已记录,memory 没更新不阻断交卷
 			}
 		}
 		// 交卷后阅卷,无论是否作答都揭示正确答案(学生要看错题解析)。
-		res := buildAnswerResult(q, correct, startByChunk[q.ChunkID])
+		res := buildAnswerResult(q, verdict, startByChunk[q.ChunkID])
 		results = append(results, res)
 	}
 
-	// 盖已交卷戳。放最后:前面有任何 error 都不会到这,quiz 仍是未交卷状态。
-	if err := s.contentRepo.MarkQuizSubmitted(quiz.ID, now); err != nil {
-		// answer/memory 已落,只是没盖戳——返回结果 + 日志。前端可凭 results 渲染,
-		// 下次进页面 GetQuizForClient 会发现 SubmittedAt=nil 而显示未交卷,这是个
-		// 罕见的不一致,但不会丢数据。这里不回滚已落的 answer(回滚更糟)。
-		log.Printf("AI: mark quiz %d submitted failed: %v", quiz.ID, err)
-	}
+	// 注:submitted_at 已在函数开头 TryMarkQuizSubmitted 抢占盖戳,这里不再重复盖。
+	// 旧实现把盖戳放最后(前面 error 时 quiz 保持未交卷),但那留下了 TOCTOU 窗口;
+	// 现在盖戳提前到所有副作用之前,quiz 一开始就锁定,更安全。
 
 	// Phase C 链式触发:交卷成功后异步入队 episode 级 advice job。理由——学生刚交完
 	// 卷,memory 已是最新(本次答题已更新),这时跑 advice 最准;且"复习建议"和"错题
@@ -820,19 +962,54 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 }
 
 // buildAnswerResult 把一道题的判分结果组装成客户端要的 AnswerResult。choice 题
-// 给 correct_index,fill 题给 correct_text;有 chunk 锚点的题给 chunk_start_time。
-// 抽出来让 SubmitQuizAnswer 和 SubmitAllQuizAnswers 共用同一套 reveal 规则。
-func buildAnswerResult(q model.Question, correct bool, chunkStart *int) AnswerResult {
-	res := AnswerResult{QuestionID: q.ID, Correct: correct, Explanation: q.Explanation, ChunkStartTime: chunkStart}
-	if q.Type == agent.QuestionFill {
-		var accept []string
-		_ = json.Unmarshal([]byte(q.AnswerText), &accept)
-		res.CorrectText = joinAcceptable(accept)
-	} else {
-		i := q.Answer
+// 给 correct_index,fill 题给 correct_text,multi_choice 题给 correct_indices + 部分对信息;
+// 有 chunk 锚点的题给 chunk_start_time。抽出来让 SubmitQuizAnswer 和
+// SubmitAllQuizAnswers 共用同一套 reveal 规则。
+func buildAnswerResult(q model.Question, v agent.Verdict, chunkStart *int) AnswerResult {
+	res := AnswerResult{
+		QuestionID:     q.ID,
+		Correct:        v.Correct,
+		Partial:        v.Partial,
+		Explanation:    q.Explanation,
+		ChunkStartTime: chunkStart,
+	}
+	if v.Multi != nil {
+		// 多选题:带出漏选/多选计数 + 正确索引数组。
+		res.MissedCount = v.Multi.MissedCount
+		res.ExtraCount = v.Multi.ExtraCount
+	}
+	switch q.Type {
+	case agent.QuestionFill:
+		res.CorrectText = joinAcceptable(fillAcceptable(q))
+	case agent.QuestionMultiChoice:
+		if s := agent.ParseScoring(q); s != nil {
+			res.CorrectIndices = s.MultiCorrectIndices
+		}
+	default: // choice
+		i := choiceAnswerIndex(q)
 		res.CorrectIndex = &i
 	}
 	return res
+}
+
+// fillAcceptable resolves the fill acceptable answers (Scoring.accept first,
+// then legacy AnswerText JSON).
+func fillAcceptable(q model.Question) []string {
+	if s := agent.ParseScoring(q); s != nil && len(s.FillAccept) > 0 {
+		return s.FillAccept
+	}
+	var accept []string
+	_ = json.Unmarshal([]byte(q.AnswerText), &accept)
+	return accept
+}
+
+// choiceAnswerIndex resolves the choice correct index (Scoring.correct_index
+// first, then legacy Answer column).
+func choiceAnswerIndex(q model.Question) int {
+	if s := agent.ParseScoring(q); s != nil && s.ChoiceIndex != nil {
+		return *s.ChoiceIndex
+	}
+	return q.Answer
 }
 
 // ErrQuizAlreadySubmitted 在对已交卷的 quiz 再次调用 SubmitAllQuizAnswers 时返回。
@@ -971,7 +1148,7 @@ func (s *aiService) GetQuizDetail(quizID uint) (*QuizDetail, error) {
 	}
 	detailQuestions := make([]QuizDetailQuestion, 0, len(questions))
 	for _, q := range questions {
-		detailQuestions = append(detailQuestions, QuizDetailQuestion{
+		dq := QuizDetailQuestion{
 			ID:             q.ID,
 			Type:           q.Type,
 			ChunkID:        q.ChunkID,
@@ -979,9 +1156,18 @@ func (s *aiService) GetQuizDetail(quizID uint) (*QuizDetail, error) {
 			Options:        q.Options,
 			Answer:         q.Answer,
 			AnswerText:     q.AnswerText,
+			Scoring:        q.Scoring,
 			Explanation:    q.Explanation,
 			ChunkStartTime: startByChunk[q.ChunkID],
-		})
+		}
+		// 多选题从 Scoring 解析正确索引 + partial_credit,让 admin 能核对答案。
+		if q.Type == agent.QuestionMultiChoice {
+			if s := agent.ParseScoring(q); s != nil {
+				dq.CorrectIndices = s.MultiCorrectIndices
+				dq.PartialCredit = s.MultiPartialCredit
+			}
+		}
+		detailQuestions = append(detailQuestions, dq)
 	}
 	rawAnswers, _ := s.contentRepo.ListAnswersForQuiz(quizID, quiz.UserID)
 	detailAnswers := make([]QuizDetailAnswer, 0, len(rawAnswers))
@@ -1130,22 +1316,31 @@ func (s *aiService) buildQuizHistoryView(quiz *model.Quiz) (*QuizHistoryView, er
 			Wrong:          wrongQIDs[q.ID],
 			HasJump:        q.HasJump,
 		}
-		if q.Type == agent.QuestionFill {
-			var accept []string
-			_ = json.Unmarshal([]byte(q.AnswerText), &accept)
-			hq.CorrectText = joinAcceptable(accept)
-		} else {
-			i := q.Answer
+		// 揭示正确答案(三题型分别走各自字段)。历史 review 是只读,所有答案都揭示。
+		switch q.Type {
+		case agent.QuestionMultiChoice:
+			if s := agent.ParseScoring(q); s != nil {
+				hq.CorrectIndices = s.MultiCorrectIndices
+			}
+		case agent.QuestionFill:
+			hq.CorrectText = joinAcceptable(fillAcceptable(q))
+		default: // choice
+			i := choiceAnswerIndex(q)
 			hq.CorrectIndex = &i
 		}
-		// 回放学生当时的作答:选择题给索引,填空题给原文(Answer.UserAnswerText)。
-		// 未作答的题两字段都为零值(UserIndex=nil,UserText=""),前端据此显示"未作答"。
+		// 回放学生当时的作答:选择题给索引,填空题给原文,多选题给索引数组。
+		// 未作答的题相应字段为零值(UserIndex=nil/UserText=""/UserIndices=nil),前端据此显示"未作答"。
 		if ans, ok := latestByQ[q.ID]; ok {
-			if q.Type == agent.QuestionFill {
+			switch q.Type {
+			case agent.QuestionMultiChoice:
+				hq.UserIndices = decodeMultiAnswer(ans.UserAnswerText)
+			case agent.QuestionFill:
 				hq.UserText = ans.UserAnswerText
-			} else if ans.UserAnswer >= 0 {
-				idx := ans.UserAnswer
-				hq.UserIndex = &idx
+			default: // choice
+				if ans.UserAnswer >= 0 {
+					idx := ans.UserAnswer
+					hq.UserIndex = &idx
+				}
 			}
 		}
 		out.Questions = append(out.Questions, hq)

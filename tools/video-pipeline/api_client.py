@@ -32,7 +32,7 @@ class EpisodeInfo:
     subject: str
     course_title: str
     chapter_title: str
-    ai_hint: str
+    whisper_hint: str
 
 
 @dataclass
@@ -83,7 +83,7 @@ class ApiClient:
                 subject=ep.get("subject", ""),
                 course_title=ep.get("course_title", ""),
                 chapter_title=ep.get("chapter_title", ""),
-                ai_hint=ep.get("ai_hint", ""),
+                whisper_hint=ep.get("whisper_hint", ""),
             ),
         )
 

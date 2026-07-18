@@ -72,10 +72,13 @@ export function Modal({
     };
   }, [open, onClose]);
 
-  if (!open) return null;
-
+  // clickOutsideOnly 是个 hook(内部用 useRef),必须在所有 early return 之前无条件
+  // 调用——否则 open 切换时 Modal 的 hook 数变化会触发 React #310
+  // ("Rendered fewer hooks than expected")。下面 Drawer 同理。
   const widths = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
   const overlay = clickOutsideOnly(onClose);
+
+  if (!open) return null;
 
   return (
     <div
@@ -120,9 +123,11 @@ export function Drawer({
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  if (!open) return null;
+  // clickOutsideOnly 是 hook,必须在 early return 前调用(见 Modal 的同类注释)。
   const w = width === 'lg' ? 'max-w-2xl' : 'max-w-md';
   const overlay = clickOutsideOnly(onClose);
+
+  if (!open) return null;
 
   return (
     <div

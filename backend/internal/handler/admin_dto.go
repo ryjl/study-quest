@@ -30,9 +30,20 @@ type courseDTO struct {
 	TagIDs              []uint   `json:"tag_ids"`     // tag ids (for admin edit forms)
 	GradeDisplay        string   `json:"grade_display"`
 	AttachmentJSON      string   `json:"attachment_json"`
-	// AIHint is the admin-authored hint for the subtitle worker / quiz agent.
-	// Echoed back so the edit form can repopulate. See model.Course.AIHint.
+	// AIHint is DEPRECATED. Replaced by AIConfigJSON (a single JSON blob holding
+	// whisper_hint + quiz_hint + future knobs). Still echoed so older admin SPAs
+	// can repopulate; the edit form reads whisper_hint / quiz_hint instead.
+	// See model.Course.AIHint / AIConfig.
 	AIHint              string   `json:"ai_hint"`
+	// WhisperHint is the admin-authored hint fed to the subtitle worker's
+	// Whisper initial_prompt (terminology / accent notes). Echoed so the edit
+	// form can repopulate. Sourced from Course.AIConfig().WhisperHint (the JSON
+	// blob), NOT a dedicated column — kept as a flat field here for form convenience.
+	WhisperHint         string   `json:"whisper_hint"`
+	// QuizHint is the admin-authored hint fed to the summary/quiz/advice LLM
+	// agents (question style, difficulty, terminology correction dictionary).
+	// Echoed so the edit form can repopulate. Sourced from Course.AIConfig().QuizHint.
+	QuizHint            string   `json:"quiz_hint"`
 	// AISummaryEnabled/AIQuizEnabled echo the per-course AI switches so the admin
 	// edit form (CourseModal) can repopulate the checkboxes. These previously
 	// existed on the model but were never projected here, so the form kept
@@ -86,6 +97,10 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		GradeDisplay:         c.GradeDisplay(),
 		AttachmentJSON:       c.AttachmentJSON,
 		AIHint:               c.AIHint,
+		// WhisperHint/QuizHint 从单一 JSON 列(AIConfigJSON)解析出来,DTO 层保持
+		// 双字段给前端表单用。加新配置项时扩 model.AIConfig,这里跟着加字段即可。
+		WhisperHint:          c.AIConfig().WhisperHint,
+		QuizHint:             c.AIConfig().QuizHint,
 		AISummaryEnabled:     c.AISummaryEnabled,
 		AIQuizEnabled:        c.AIQuizEnabled,
 		EpisodeCount:         eps,

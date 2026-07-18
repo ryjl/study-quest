@@ -132,6 +132,33 @@ AIQuizEnabled    bool `gorm:"default:false"`  // 课程级 AI 出题开关（默
 ```
 课程级开关是 AI 的入口闸门：只有 admin 在课程上勾选启用，该课程的课时才进入 agent 工作范围。这比全局开关更直觉（"不是所有课都需要 AI"），也强化了附加层定位。
 
+### Course.AIConfig：单 JSON 列承载全部 AI 配置（质量优化轮次）
+
+原来单个 `Course.AIHint` 同时喂给两个消费者：Whisper（字幕转录时作 initial_prompt 术语提示）和 LLM agent（出题/总结时作偏好+术语字典）。两者需要的内容完全不同——Whisper 要术语列表/口音提示（≤240 字符），LLM 要出题偏好 + 术语纠错字典 + 难度倾向。单字段塞两份语义混在一起，admin 不好维护。
+
+质量优化轮次把 AI 配置统一收进**单个 JSON 列** `AIConfigJSON`，解析成 `AIConfig` 结构。**设计动机和 `Question.Scoring` 一致——前向兼容：以后加新配置项（难度系数、题型配比、语言偏好…）只需扩 `AIConfig` struct + admin 表单，不必 ALTER TABLE。**
+
+```go
+// 存储：单一 JSON 列（text），shape {"whisper_hint":"...", "quiz_hint":"...", ...future}
+AIConfigJSON string `gorm:"column:ai_config_json;type:text"`
+// DEPRECATED，保留一个迁移周期供 Effective* 回退。删除计划见 TODO.md。
+AIHint       string `gorm:"type:text"`
+
+// 解析后的结构（加新配置项就加字段，不改 schema）：
+type AIConfig struct {
+    WhisperHint string `json:"whisper_hint,omitempty"` // 喂 Whisper：术语/口音，≤240 字符
+    QuizHint    string `json:"quiz_hint,omitempty"`    // 喂 summary/quiz/advice LLM：出题偏好 + 术语纠错字典
+    // Future: DifficultyBias / QuestionTypeMix / Language ... 加字段即可
+}
+// 读写方法：Course.AIConfig() 解析、Course.SetAIConfig(cfg) 序列化。
+```
+
+- `WhisperHint`：示例 `"象棋术语：车马炮兵卒将帅士仕相象，屏风马，中炮，巡河炮。老师带南方口音。"`。transcriber.py 截断到 240 字符（Whisper prompt 预算 ~244 token）。
+- `QuizHint`：除了出题偏好/难度，还承载**术语纠错字典**——Whisper 同音错字（"车"被转成"居"、"和棋"被转成"合棋"），LLM 输出时要按字典纠正（只改 LLM 输出，不改已落库的字幕）。
+- **Effective\* 回退方法**（`EffectiveWhisperHint()` / `EffectiveQuizHint()`）：从 `AIConfig()` 解析新字段；旧课程 `AIHint` 有值、JSON 里对应字段空时回退到旧列，保证迁移前创建的课程继续工作到 admin 重新保存。
+- **消费方零感知**：service/handler/agent 都调 `Effective*` 方法，不知道底层是独立列还是 JSON。admin DTO 对外仍暴露 `whisper_hint`/`quiz_hint` 双字段（前端友好），service 层组装成 `AIConfig` 再 `SetAIConfig`。
+- admin 前端按科目提供默认模板（数学/象棋/语文/英语/物理/化学），admin 在课程表单点"套用科目模板"即填入，可继续微调。模板常量在 `frontend-admin/src/lib/aiHintTemplates.ts`。
+
 > ✅ **第一轮打通了开关三层断链**。早期 `AISummaryEnabled/AIQuizEnabled` 只在 model 上声明，admin 改不了——handler struct、service 签名、create/update DTO 都没绑这两个字段，开关实际一直是 false。第一轮把三层都接上：`admin_content.go` 的 create/update DTO 加 `ai_summary_enabled/ai_quiz_enabled`，`CourseService.CreateCourse/UpdateCourse` 签名补两个 bool 参数，`UpdateCourse` 还会 diff 旧值——`off→on` 时触发 `EnqueueSegmentForCourse` 回填历史字幕的 segment job（开关关着时落地的字幕没产生任何 AI 工作，开关打开那一刻补一次）。客户端 DTO（`client_dto.go`）也回显这两个开关，前端据此决定是否渲染 AI 入口。
 
 ### AI 私有表
@@ -170,15 +197,26 @@ mastery 是"这个学生对这个知识点掌握到什么程度"。答题更新�
 >
 > 两者的结果都按 mastery ASC 排序（弱点优先），让 agent 先看到最需要加强的知识点。这是 advice/user_study agent 的核心数据源。
 
-**`quizzes` / `questions` / `answers`** — ✅ 出题表（Phase C，第二轮扩展）
+**`quizzes` / `questions` / `answers`** — ✅ 出题表（Phase C，第二轮扩展；质量优化轮次加 Scoring 列 + multi_choice 题型）
 ```
 quizzes:   id, episode_id, user_id, course_id, difficulty, agent_feedback,
            status(active|archived), archived_at, submitted_at, created_at
-questions: id, quiz_id, chunk_id, type(choice|fill), stem, options(JSON),
-           answer(choice index), answer_text(fill JSON[]), explanation, has_jump, created_at
-answers:   id, question_id, quiz_id(denormalized), user_id, user_answer, correct, answered_at
+questions: id, quiz_id, chunk_id, type(choice|multi_choice|fill), stem, options(JSON),
+           answer(choice index, DEPRECATED), answer_text(fill JSON[], DEPRECATED),
+           scoring(JSON, 判分元数据), explanation, has_jump, created_at
+answers:   id, question_id, quiz_id(denormalized), user_id, user_answer, user_answer_text, correct, answered_at
 ```
 question.chunk_id → content_chunk.start_time 实现题目跳转视频时间点。
+
+质量优化轮次的 schema 变更：
+- **`questions.scoring` 列（JSON，判分元数据）** — 按题型解析判分元数据，前向兼容设计，**加新题型只扩 Scoring schema，不必改表结构**：
+  - `choice`：`{"correct_index":N}`
+  - `multi_choice`（新题型）：`{"correct_indices":[0,2,3],"partial_credit":true,"min_correct_for_half":1}`
+  - `fill`：`{"accept":["12","十二"]}`
+  - 未来 `judge`/`order`/`short_answer` 也走 Scoring
+- **`questions.type` 扩展枚举值**：`choice | multi_choice | fill`（未来可加 `judge | order | short_answer`）。
+- **`questions.answer` / `questions.answer_text` DEPRECATED**：新数据改走 `Scoring.correct_index` / `Scoring.accept`。保留兼容老数据/老 prompt——grading 优先读 Scoring，空则回退老字段。
+- **`answers.user_answer_text`**：填空题学生原文持久化（第三轮加），`multi_choice` 题型的多选答案走 `user_answer` 编码（见 §17）。
 
 第二轮新增/变化的字段：
 - **`quizzes.status` / `archived_at`** — quiz 历史保留。`regenerate`（换题）不再删旧 quiz，而是把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 `active` 行。旧卷子只读保留，学生可在历史面板 review。单 active 不变量靠**部分唯一索引**强制（`WHERE status='active'`，GORM 表达不了 partial index，AutoMigrate 后用 raw SQL 建，见 `migrateQuizActiveUniqueIndex`）。
@@ -437,6 +475,10 @@ Phase F 把 summary 从"一串平铺要点"升级到接近真实学习笔记的�
 ### 实测质量
 31min 小学数学计算课 → 总结准确提炼了"位值原理/对应思想/实境制（凑整）/加减互逆"四个算理 + 9 个 concepts。Phase F 丰富化后 sections/methods/common_mistakes/pre_adventure 都正常产出。
 
+### 输出前纠正 Whisper 同音错字（质量优化轮次）
+
+字幕经 Whisper 转录，同音字经常被转错（象棋课里"车"被转成"居"、"和棋"被转成"合棋"）。这些错字会污染 summary 概念名、concepts 检索词、takeaway 文本。质量优化轮次在 summarizer 输出前加一步**术语纠错**（结合 `Course.QuizHint` 的术语字典）：LLM 输出的 summary 文本按字典做替换纠正，**只改 LLM 输出、不改已落库的字幕**（字幕是历史事实，保留原样）。这让 summary 读起来不再被同音错字打断，也为 quiz/advice 的术语一致性打好基础。
+
 ## 10. 并发与正确性设计
 
 ### 原子 claim（ClaimNextQueuedJob）
@@ -487,7 +529,7 @@ provider 构造结果缓存在内存（chat/embedder 各一个 slot）。admin �
 ### 已有
 - **`AiProvidersSection.tsx`**（Settings 页区块）— provider 配置 CRUD + 测连接（照搬 StorageSourcesSection 模式）
 - **`AIWorkflow.tsx`**（独立页）— 观测：job 状态统计+轮询、job 列表、决策痕迹回放（点 run 展开 response_text/input_json）
-- **`CourseModal.tsx`** — AI 总结/出题开关（默认关，符合附加层原则）
+- **`CourseModal.tsx`** — AI 总结/出题开关（默认关，符合附加层原则）+ **AI 提示双 textarea**（质量优化轮次）：WhisperHint（喂字幕转录，术语/口音，≤240 字）+ QuizHint（喂 summary/quiz/advice LLM，出题偏好 + 术语纠错字典）。两字段在表单里分开编辑，service 层组装成 `AIConfig` 存进 `AIConfigJSON` 单列（详见 §4）。带"套用科目模板"按钮：按当前科目一键填入默认模板（`aiHintTemplates.ts`，覆盖数学/象棋/围棋/语文/英语/物理/化学/生物/历史/地理/政治 11 科 + alias 机制），admin 可在模板基础上微调。
 
 ### 信息架构（产品视角重构）
 
@@ -533,8 +575,8 @@ AI 运营       AI Workflow · AI 用户视图
 
 ### 关键交互改造
 
-- **课程库卡片**：整卡头部可点展开（hover 反馈）+ 操作按钮（编辑/解锁节奏/删除）收进右上 ⋯ 菜单。封面占位用科目图标（lucide/Material Icon，按 subject key 映射）。卡片头信息分主-辅两层（标题 + 点分隔的元信息行）。
-- **课程库课时树**（`CourseTree`）：+章节/+课时 为常驻高频按钮，探测缺失时长等低频维护操作收进 ⋯ 菜单。EpisodeRow 的操作按钮 hover 才出现（`opacity-0 group-hover:opacity-100`），行间视觉更安静。批量工具栏选中态出现。
+- **课程库卡片**：整卡头部可点展开（hover 反馈，左侧 chevron 旋转）+ **右侧 3 个直接可见的图标按钮**（解锁节奏/编辑/删除，质量优化轮次从原 ⋯ 三点菜单里拎出来）。"展开/折叠"不再单独占一项——点卡片头部或左侧 chevron 就能展开，菜单里那份是冗余。封面占位用科目图标（lucide/Material Icon，按 subject key 映射）。卡片头信息分主-辅两层（标题 + 点分隔的元信息行）。
+- **课程库课时树**（`CourseTree`）：+章节/+课时/**探测时长** 都为常驻按钮（质量优化轮次把只剩 1 项的 ⋯ 菜单降级成普通按钮，整个课程库不再有任何三点菜单）。EpisodeRow 的操作按钮 hover 才出现（`opacity-0 group-hover:opacity-100`），行间视觉更安静。批量工具栏选中态出现。
 - **文件导入**：原独立页迁进课程库 PageHeader 的「从文件夹导入」按钮 + Dialog（`courses/ImportDialog.tsx`），3 步向导逻辑不变。
 - **用户授权抽屉**（去程序员感核心）：顶加用户概要卡；课程授权**按科目分组**（每组用科目图标 + 全选/清空 + 搜索）；**解锁节奏/积分徽章默认折叠**；**staged 保存**（本地暂存 diff，顶部 sticky「有 N 项未保存」+ 保存/放弃，保存时并行发 per-item grant/revoke，后端无批量端点用 Promise.allSettled + 部分失败提示）。
 - **控制台**：三段式（待办/异常置顶 → 数据概览降级 → 最近活动流），全正常时显示绿色「一切正常」。活动流的 AI 任务条目带 episode/course 标题（不只是 model_used）。
@@ -554,7 +596,7 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - `agent/quizzer.go` — 出题（走 agent loop + LLM self-check 自我修正 + agent_feedback 评价）
 - `agent/memory.go` — memory 读写 + mastery 更新（+0.1/-0.2 线性，衰减留 Phase D）
 - `agent/prompts.go` — QuizzerSystemPrompt / QuizSelfCheckPrompt / buildQuizUserPrompt
-- `agent/grading.go` — GradeChoice / GradeFill / NormalizeText（填空题归一化判题）
+- `agent/grading.go` — GradeChoice / GradeMultiChoice / GradeFill / NormalizeText（填空题归一化判题；Scoring 列解析在内部）
 - `vector.go`（ai 根包）— CosineSim / TopK / ParseEmbedding / NormalizeText（纯函数）
 - `service/ai_service_quiz.go` — 出题编排：worker runQuizJob + 懒生成 + 答题 + 观测读
 - `handler/ai_handler.go`（客户端 quiz 3 方法）+ `handler/admin_ai.go`（观测 3 方法）
@@ -585,12 +627,16 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - 触发：客户端首次 `GET /ai-quiz` 发现无 quiz → 入队 per-user quiz job → 返回 `202 generating` → 客户端轮询（3s）
 - admin 批量预热：结构预留（`EnqueueQuiz`），本次不接路由（懒加载够用，省钱符合纯附加层）
 
-**3. 题型：选择 + 填空混搭**
-- `Question.Type` = `choice | fill`
-- 选择题：`Options` JSON 数组 + `Answer` 索引；填空题：`AnswerText` JSON 数组（多等价答案）
-- **填空题仅限唯一答案的知识点**（数学计算/事实），prompt 强约束；主观/辨析一律选择
-- 判题：选择题比索引；填空题 `NormalizeText` 归一化（全角→半角、去标点空格、小写）后与可接受答案精确匹配——**不做模糊匹配**（数学题 11≠12）
-- `GradeChoice`/`GradeFill` 纯函数，单测覆盖
+**3. 题型：选择 + 多选 + 填空混搭**
+- `Question.Type` = `choice | multi_choice | fill`（质量优化轮次新增 `multi_choice`，未来可加 `judge | order | short_answer`，全部走 `Scoring` 列）
+- **选择题（choice）**：`Options` JSON 数组 + `Scoring.correct_index`（老数据用 `Answer` 索引，grading 优先读 Scoring）
+- **多选题（multi_choice，质量优化轮次新增）**：`Options` JSON 数组 + `Scoring.correct_indices:[0,2,3]` + `partial_credit`/`min_correct_for_half`。支持"以下哪些是 XX 的特征"这类多选正确项的题。grading 三态判分（全对/部分对/错），详见 §17
+- **填空题（fill）**：`Scoring.accept` JSON 数组（多等价答案，如 `["12","十二"]`；老数据用 `AnswerText`，grading 优先读 Scoring）
+- **填空题仅限唯一答案的知识点**（数学计算/事实），prompt 强约束；主观/辨析一律选择/多选
+- 判题：选择题比索引；多选题三态（全对 +0.1 / 部分对按"基本掌握"处理、传 true 不扣分 / 错 -0.2，详见 §17）；填空题 `NormalizeText` 归一化（全角→半角、去标点空格、小写）后与可接受答案精确匹配——**不做模糊匹配**（数学题 11≠12）。注：RecordAnswer 当前只支持 correct=true/false，部分对的"中性态"是 TODO（按 Score 加权 +0.05 之类），现阶段 partial 视为掌握传 true，避免漏选 1 个就扣 0.2 系统性压低 mastery。
+- `GradeChoice` / `GradeMultiChoice` / `GradeFill` 纯函数，单测覆盖；`Scoring` 解析在 grading.go 内部，对调用方透明
+
+> **Scoring 列设计动机**：质量优化轮次前，题型判分元数据散落在 `Answer`（choice）+ `AnswerText`（fill）两个列里，每加一个新题型就要改表加列（违反 §18 定档承诺）。`Scoring` 把判分元数据收敛到一个 JSON 列、按 type 解析——加新题型只扩 Scoring schema（向前兼容设计）。老 `Answer`/`AnswerText` 字段保留兼容老数据/老 prompt，grading 优先读 Scoring、空则回退。
 
 **4. memory 两表分工**
 - `Answer`（append-only 做题流水）+ `KnowledgeMemory`（汇总掌握度，agent 读）
@@ -598,14 +644,36 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - 不对称增量：答对 +0.1，答错 -0.2——错误信号更强，弱点快速浮现
 
 **5. meta 充分利用**
-- `get_episode_info` 工具返回富信息包：标题、**文件名**（从 VideoRelativePath/OriginalRelativePath 提取，常带章节信息如"第3讲_分数加减法.mp4"）、时长、科目、标签、年级、AIHint、已生成 summary 的 concepts/key_points
+- `get_episode_info` 工具返回富信息包：标题、**文件名**（从 VideoRelativePath/OriginalRelativePath 提取，常带章节信息如"第3讲_分数加减法.mp4"）、时长、科目、标签、年级、**QuizHint**（喂 LLM 的出题偏好+术语字典；质量优化轮次前是 AIHint）、已生成 summary 的 concepts/key_points
 - 文件名帮 agent 快速锁定主题，比纯靠字幕召回更准更省 token
+- QuizHint 进 prompt：让 agent 按科目题型倾向出题（数学偏填空）、按术语字典纠正 Whisper 同音错字
 
 **6. 可观测性（学习载体，非附属）**
 - `AIRun.TraceJSON`：quiz run 携带 `[{step,thought,action:{tool,args},observation}]`，admin "思考时间线"展开成步骤列表——学 agent 决策流的核心
 - `Quiz.AgentFeedback`：LLM 出题副产品（基于 memory 生成弱点分析+学习建议），不额外调 LLM；展示给学生 + admin
 - 两个观测视图：AIWorkflow（job 视图，run 详情含 trace 时间线）+ AIUserView（用户视图，选用户→题库→详情：题+答题历史+memory+评价+思考时间线）
 - admin 能看 AI 生成的总结内容（`GET /admin/api/ai/summaries/:episodeID`）
+
+### Prompt 质量优化（质量优化轮次，核心改动）
+
+第二轮之后出题跑通，但实测题目质量有几个稳定问题：题干依赖视频上下文（"老师说的这个概念"离开视频就不知所云）、干扰项太弱（一眼排除）、正确答案位置不均衡（总是 B/C）、多选/填空题型几乎不用。质量优化轮次系统性强化了 quizzer 的 system prompt（`agent/prompts.go` 的 `QuizzerSystemPrompt` / `QuizSelfCheckPrompt`），方向如下：
+
+- **上下文自足（硬规则）**：题干必须脱离视频独立成立，禁止"这里"/"老师说的"/"刚才那个"等指代词。题干不写自足的题直接判废重出。
+- **反蒙题四原则**：① 三同（错误项与正确项在语法/长度/结构上同形）② plausible（每个错误项都得是合理误答，不能是常识性荒谬项）③ 位置均衡（一份卷子里 A/B/C/D 出现频次接近，不集中在某位置）④ 需要看课（不学这节课也能蒙对的常识题，不算有效检测）。
+- **Whisper 同音错字纠正**：输出题干/选项/解析时，按 `QuizHint` 的术语字典纠正（"居"→"车"、"合棋"→"和棋"），**不改字幕原文**——字幕是历史事实保留原样，只改 LLM 输出的文本。
+- **题型倾向由 QuizHint 驱动**：不同科目默认题型比例不同（数学偏填空考计算，文科偏选择考辨析），agent 读 QuizHint 决定。
+- **multi_choice 题型支持**：新增"以下哪些是 XX 的特征"这类多选正确项的题（详见上面"题型"小节 + §17 的 grading/UI）。
+
+### self-check 新增维度（质量优化轮次）
+
+quizzer 的 self-check（`QuizSelfCheckPrompt`）原本审"答案对不对、题干清晰不清晰"。质量优化轮次加 4 个维度对齐 prompt 的硬规则：
+
+- **题干自足性**：题干是否脱离视频独立成立（"老师说的"这类指代词出现 → fail）
+- **蒙题测试**：四个选项里蒙中率是否合理（错误项太弱/常识项太多 → fail）
+- **多选题答案合理性**：`correct_indices` 长度是否合理（1 个正确项等于退化为单选、3+ 个正确项要审是否真的多选语义）
+- **答案位置均衡**：一份卷子里正确答案位置分布（4 个题里有 3 个 C → fail）
+
+self-check 仍走"判废→重出"循环（agent.go 的 ReAct loop），不通过时让 LLM 重新生成，达步数上限用最后一次结果（记 `self_check_result=fail` + note，admin 观测可见）。
 
 ### 砍掉 / 调整的设计
 - **80% 弹题已废弃**——改为独立 AI 学习页。播放器加一个 AI 学习入口图标
@@ -639,6 +707,20 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - **advice 前端展示**：客户端 `AiStudyScreen` 接 `/ai-advice` 端点，展示 advice agent 的自然语言建议（advice 优先，空则回退 quiz 的 `agent_feedback`）—— handoff 列的头号待办，第三轮补上
 - advice/course_summary/user_report 三表 Upsert 改 `ON CONFLICT`（原 delete-then-insert），无并发窗口
 
+### ✅ 已实现（质量优化轮次）
+- **AIHint → AIConfigJSON（单 JSON 列）**：原 §15"仍未来"里"AIHint 语义过载"的方向落地——不是拆成两列，而是收进单个 JSON 列 `AIConfigJSON`，解析成 `AIConfig` struct。设计动机同 `Question.Scoring`：前向兼容，加新配置项只扩 struct 不改 schema。`Effective*` 方法做老列回退兼容。详见 §4
+- **多选题（multi_choice）题型**：原 §18 forward-safe 表里"更多题型（多选/连线/排序）= 加枚举值"的第一项落地。grading 三态判分（全对/部分对/错），前端 checkbox 多选 UI + partial credit。详见 §14、§17
+- **advice 门控（无答题记录不生成）**：episode/course/subject 三级 advice，该 scope 下学生没有答题记录时后端直接返回 `status=unavailable`（不入队 LLM job、不轮询、前端隐藏卡片），而不是首次进 AI 页就白烧 token 生成"新学生建议先做题"。只有交卷（submit-all）后才链式触发 advice 重算。详见 §16
+- **进 AI tab 暂停视频**：从视频页跳到 AI 学习页前调 `_player.pause()`，避免视频/音频在后台继续播
+- **prompt 质量优化**：上下文自足硬规则、反蒙题四原则、Whisper 术语纠正、题型倾向由 QuizHint 驱动、self-check 加 4 个维度。详见 §14
+- **科目默认模板**：admin CourseModal 的"套用科目模板"按钮，按科目一键填 WhisperHint/QuizHint（11 科 + alias 机制），admin 在模板基础上微调。详见 §13、`frontend-admin/src/lib/aiHintTemplates.ts`
+- **Whisper 协议去兼容债**：`EpisodeInfo.ai_hint` → `whisper_hint`（Python worker + backend 同步改造，handler 只发 `whisper_hint`，不再双发 `ai_hint` 兼容老 worker）
+- **submit-all 并发安全（TOCTOU 修复）**：新增 `TryMarkQuizSubmitted`（条件 `UPDATE ... WHERE submitted_at IS NULL`），在落任何 answer/memory 之前抢占交卷锁，消除"并发双交卷重复落 answer + 重复扣 mastery"窗口。详见 §17
+- **多选题已交卷回填补全**：`GetQuizForClient`/`SubmitQuizAnswer`/`buildQuizHistoryView` 三处对 multi_choice 的正确答案揭示 + 作答回填统一走三题型 switch（原把 `q.Answer=0` 当多选正确答案、把 `[0,2,3]` JSON 当文本回传的 bug 修复）
+- **多选题部分对 mastery 不扣分**：`RecordAnswer` 传 `verdict.Correct || verdict.Partial`（部分对视为掌握），避免漏选 1 个就 -0.2 系统性压低 mastery 误导 advice
+- **课程库去三点菜单**：课程卡片 + 课时树顶部的 ⋯ 菜单全部去掉，操作直接露出为图标按钮（编辑/解锁/删除/探测时长）。整个课程库不再有三点菜单
+- **Modal/Drawer hook 顺序 bug 修复**：`clickOutsideOnly`（含 `useRef`）从 `if (!open) return null` 之后移到之前，消除 React #310（open 切换时 hook 数变化）
+
 ### ⏳ 仍未来
 - **chat（原 Phase D 原计划）**：advice/course_summary/user_report 已占了原 Phase D 的"agent 驱动"版图，chat 作为"多轮对话"能力仍未来（复用 RAG + memory，答案带视频时间戳跳转）
 - **memory 衰减曲线**（艾宾浩斯，复用 knowledge_memory；目前 mastery 是单调累积，不随时间衰减）
@@ -669,6 +751,19 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 为什么不一次性 prompt engineering？因为课程大小、学生数据量差异巨大——小课程几节、大课程几十节；新学生无答题记录、老学生几十条 mastery。一次性塞进 prompt 要么撑爆 context，要么信息不全。agent 模式让 agent 自己按需调工具，大课程/数据多的学生多调几次，小课程少调几次，自适应。
 
 三个 agent 都**无 self-check**（quiz 需要"审题"保证答案正确性；advice/summary/report 是开放文本，无客观正误，只做轻量的非空 + 长度合理性检查）。
+
+### Advice 门控：无答题记录不生成（质量优化轮次）
+
+`StudyAdvice` 的 prompt 本质是"基于学生的 mastery 弱点给建议"。如果一个 scope 下学生**一条答题记录都没有**（mastery 全空），advice agent 只能产出"建议先做几道题"这类空话——白烧一次 LLM token，学生看着也尴尬。质量优化轮次在 service 层（`ai_service_advice.go` 的 `GetOrEnqueueAdvice`）加门控：
+
+- **该 scope 下学生没有 answer 记录 → 直接返回 `status=unavailable`**：不入队 advice job、客户端不轮询、前端隐藏 advice 卡片。
+  - episode 级：查该 episode 下该 user 的 answer 行
+  - course 级：查该 user 在该 course 所有 episode 下的 answer 行
+  - subject 级：查该 user 在该 subject 所有课程下的 answer 行
+- **只有交卷（submit-all）后才链式触发 advice 重算**：学生做了一节课的题交卷后，`EnqueueAdviceForEpisode` 异步入队 episode 级 advice job；course/subject 级目前仍走客户端 lazy 生成（已有答题记录后才会入队，门控保证不会白跑）。
+- 这套门控和"AI off → unavailable"叠加（前者是"没数据"，后者是"没配置"），客户端只看到一个 `unavailable`，不区分原因（都隐藏卡片）。
+
+> 门控补上了早期 advice agent 的一个浪费点：第一次进 AI 页就触发生成"新学生建议先做题"，token 烧了、学生看不到价值。现在改成"做了题才有建议"，advice 的边际成本花在真有数据可分析的学生身上。
 
 ### AdviceAgent（episode / course / subject 三级学习建议）
 
@@ -739,7 +834,9 @@ agent 据此 observation 就能写出人话建议。这是"目前靠 LLM 推理�
 
 - **流程**：单题即时判分 → 全部做完**统一提交**。提交前所有题可改，提交后锁定（`Quiz.SubmittedAt` 标记，不可再改答案）。
 - **`POST /episodes/:id/ai-quiz/submit-all`**：一次性判分整张卷子，逐题返回结果（correct/正确答案/解析/跳转时间戳），并为每题落 answer 行 + 更新 memory。已交卷 → 409 `ErrQuizAlreadySubmitted`（防重复提交）。
-- **`GET /episodes/:id/ai-quiz` 回填**：quiz 已交卷（`submitted_at != nil`）时，拉题响应回填逐题结果（`correct`/`correct_index`/`explanation`/`user_answer_index`），学生重进 AI 学习页直接进入只读 review 态，不用重新交卷。
+- **并发安全（TOCTOU 修复）**：旧实现"读 `SubmittedAt` 判空 → 落 N 个 answer + memory → 盖戳"非事务，两个并发交卷请求都能过判空、各落一份 answer、各扣一次 mastery。修复：在 GetQuiz 之后、**落任何副作用之前**调 `TryMarkQuizSubmitted(quizID, now)`——条件 `UPDATE quizzes SET submitted_at=? WHERE id=? AND submitted_at IS NULL`，SQLite 行锁串行化，只有一个请求 `RowsAffected>0`（赢家继续），败者直接 409。这把"抢占交卷锁"提前到所有副作用之前，彻底消除窗口。
+- **多选题部分对的 mastery 处理**：`RecordAnswer` 当前只支持 correct=true/false（无中性态）。多选题部分对（漏选但没多选错项）传 true（视为"基本掌握"，不扣分）——避免漏选 1 个就 -0.2 系统性压低 mastery 误导 advice。"按 Score 加权"的精确方案记在 TODO。
+- **`GET /episodes/:id/ai-quiz` 回填**：quiz 已交卷（`submitted_at != nil`）时，拉题响应按题型回填逐题结果——choice：`correct`/`correct_index`/`user_answer_index`；fill：`correct_text`/`user_answer_text`；multi_choice：`correct_indices`/`user_answer_indices`/`partial`/`missed_count`/`extra_count`（partial 不存在 Answer 表，回填时按 user indices 重算 `GradeMultiChoice` 得到）。学生重进 AI 学习页直接进入只读 review 态，三题型都能看到自己当时选了什么 + 正确答案。
 - 客户端状态机：`loading → generating/ready/unavailable → (answering | submitted)`。
 
 ### has_jump（跳转按钮控制）
@@ -759,6 +856,26 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 - key 形如 `quiz_draft.<uid>.<eid>`，多用户共用一台 PAD 时每人每节课草稿隔离。
 - 格式：`{choice_picks: {qid: idx}, fill_texts: {qid: text}}`。
 - 生命周期：改答案 → `saveDraft`（覆盖写）；提交成功 / 换题 → `clearDraft`；打开页面 quiz 未交卷且有草稿 → `loadDraft` 自动恢复填入。
+- **multi_choice 草稿扩展（质量优化轮次）**：多选题的勾选集合走新字段 `multi_picks: {qid: [0,2,3]}`（与 `choice_picks` 分开，避免单选/多选编码混淆），生命周期同上。
+
+### multi_choice 题型 UI + partial credit（质量优化轮次）
+
+多选题是质量优化轮次的新题型，配套前端 + grading 一整套：
+
+- **前端 UI**：multi_choice 题渲染成 **checkbox 多选**（区别于单选 radio）。学生可勾任意数量选项；提交前可改。
+- **草稿**：勾选状态走 `multi_picks` 字段（见上），切后台/误返回恢复。
+- **submit-all**：客户端把勾选的索引数组 `answer_indices:[0,2,3]` 一起发（区别于单选的 `answer_index`）。
+- **grading 三态**（`GradeMultiChoice`）：与 `Scoring.correct_indices` 对比：
+  - **全对**：勾选集合 = 正确集合 → `correct=true`，mastery +0.1
+  - **部分对**：勾选集合与正确集合有交集但不全等（且 `partial_credit=true`、勾中数 ≥ `min_correct_for_half`）→ 算部分对，mastery +0.0（不奖不罚）
+  - **错**：勾选集合与正确集合无交集，或漏选/多选超过阈值 → `correct=false`，mastery -0.2
+- **前端反馈**：交卷 review 时每个选项标对/错（正确项打勾、错选项打叉、漏选项提示），让学生看清"我漏了哪个 / 多选了哪个"。
+
+> mastery 加权当前是固定数值（全对 +0.1 / 部分对 +0.0 / 错 -0.2），未来可改成按 Score 加权（如部分对按勾中比例给 +0.03~+0.07），见 TODO.md。
+
+### 进 AI tab 暂停视频（质量优化轮次）
+
+从视频页跳到 AI 学习页（`PlayerScreen` → push `AiStudyScreen`）之前调 `_player.pause()`。早期实现没暂停，学生进 AI 页后视频/音频还在后台播——既浪费带宽，也在学生看 advice/做题时分心。pause 后保留播放位置，从 AI 页返回时学生回到原处继续看。
 
 ### quiz 历史（regen 不删旧）
 
@@ -825,7 +942,7 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 |---|---|---|---|
 | memory 衰减曲线（艾宾浩斯） | `KnowledgeMemory` 加 `decay_*` 列 + 读时算 | 加列 | 零风险 |
 | chat 多轮对话 | 用已预留的 `ChatSession`/`ChatMessage`（见下） | 加表内容 | 零风险 |
-| 更多题型（多选/连线/排序） | `Question.Type` 加枚举值 | 加枚举值 | 零风险 |
+| 更多题型（多选/连线/排序） | `Question.Type` 加枚举值 + `Scoring` JSON 加 schema | 加枚举值 + 加 JSON 字段 | 零风险（multi_choice 已落地；judge/order/short_answer 同路径，见 TODO.md） |
 | 附件提取入 content_chunks（PDF/练习册） | `ContentChunk.SourceType` 加 `"attachment"` 值 | 加枚举值 | 零风险 |
 | rerank | `AIProvider.Capability` 加 `"rerank"` 值 + resolver 一个 case | 加枚举值 | 零风险 |
 | 多 provider 轮询/failover | resolver 逻辑改，不动表 | 无 schema 变更 | 零风险 |
@@ -857,6 +974,24 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 > **关于"定档"承诺的诚实说明**：这两处是定档后发生的 schema 相关操作。#1 不动 schema（只是让既有约束生效）。#2 是表重命名，技术上属于"定档"想避免的类别，但因为用 `ALTER TABLE RENAME` 实现（SQLite 原生、保留数据、幂等、AutoMigrate 前跑），实际升级路径仍是 `make deploy` 零手动干预。记录在此提醒未来：表名/列名一旦定，再改就要走这种"AutoMigrate 前 raw SQL 迁移"的路径——能做但要谨慎。
 
 > **注**：第三轮还有一块 provider UX 改造（embedding 干净化不进 DB、chat 单例表单、模型下拉拉取、docker 卷遮蔽修复）—— 这块**不动 ai_providers 表结构**（embedding 现在完全不用这张表，直接从镜像文件构造），只是改了 admin UI 怎么配 + resolver 怎么找 embedding + Dockerfile/Makefile 的模型路径。详见 §3「Round-3 Provider UX 定档」。表结构定档不受影响。
+
+### 质量优化轮次的 schema 变更（AI workflow 质量优化，2026-07）
+
+全部落在"加列/加枚举值"的安全类别，AutoMigrate 零风险升级，不动既有列定义/列类型/唯一索引：
+
+**加列**：
+- **`courses.AIConfigJSON`**（text，JSON）—— 课程级 AI 配置的单 JSON 列，shape `{"whisper_hint":"...", "quiz_hint":"...", ...}`。解析成 `AIConfig` struct（`Course.AIConfig()` / `SetAIConfig()`）。**设计动机同 `questions.Scoring`：前向兼容，加新配置项（难度/题型配比/语言…）只扩 struct + 表单，不必 ALTER TABLE。** 详见 §4。
+- **`questions.Scoring`**（text，JSON）—— 各题型判分元数据，按 type 解析。前向兼容设计，加新题型只扩 Scoring schema 不改表。详见 §4。
+
+**Deprecated（保留一个迁移周期，删除计划见 TODO.md）**：
+- `courses.AIHint` —— 收进 `AIConfigJSON` 后语义过载。`EffectiveWhisperHint()` / `EffectiveQuizHint()` 方法从 JSON 解析，JSON 对应字段空时回退到老 AIHint 列，保证旧课程继续工作到 admin 重新保存。
+- `questions.Answer` —— choice 单选正确索引。新数据走 `Scoring.correct_index`。grading 优先读 Scoring，空回退 Answer。
+- `questions.AnswerText` —— fill 可接受答案 JSON。新数据走 `Scoring.accept`。grading 优先读 Scoring，空回退 AnswerText。
+
+**加枚举值**：
+- **`questions.Type`**：`choice | fill` → `choice | multi_choice | fill`。`multi_choice` 是质量优化轮次的新题型（详见 §14、§17）。未来 `judge | order | short_answer` 也是加枚举值（判分元数据全部走 Scoring）。
+
+> 本次 schema 变更延续"定档"承诺：只加列 / 加枚举值 / 加 deprecated 注释，不改列类型、不删列、不动唯一索引。deprecated 字段的删除要等下一轮数据清零（或显式迁移脚本），不能在 AutoMigrate 里直接 DROP COLUMN（SQLite DROP COLUMN 有版本/约束限制，且会触发"升级困难"）。
 
 ## 19. 部署架构（第三轮：alpine → debian-slim + 三个踩坑）
 

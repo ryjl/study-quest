@@ -183,13 +183,12 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		req.ScopeTitle = course.Title
 	case agent.ScopeSubject:
 		// 科目标题由 handler/job 入队时放进 PayloadJSON.subject_title(或留空,prompt
-		// 会用"这个科目"占位)。subject_id 必须有(scopeID 即是)。
+		// 会用"这个科目"占位)。subject_id 必须有(scopeID 即是);payload 里的 subject_id
+		// 若有也用(冗余兜底,enqueueAdviceJob 目前写死 0,所以实际走 scopeID)。
 		req.SubjectID = scopeID
 		if subjectID != 0 {
 			req.SubjectID = subjectID
 		}
-		// scopeID 就是 subject_id,确保一致。
-		req.SubjectID = scopeID
 	default:
 		return req, fmt.Errorf("unknown advice scope: %s", scope)
 	}
@@ -200,7 +199,7 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 // capability="advice",response_text 存 advice 文本预览(截断,避免 ai_run 行过大)。
 func (s *aiService) recordAdviceRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, adviceText string) {
 	preview := truncateAdvicePreview(adviceText)
-	s.contentRepo.CreateRun(&model.AIRun{
+	if err := s.contentRepo.CreateRun(&model.AIRun{
 		JobID:            jobID,
 		Capability:       "advice",
 		InputJSON:        fmt.Sprintf(`{"job_id":%d,"turns":%d,"steps":%d}`, jobID, turns, len(trace)),
@@ -212,7 +211,9 @@ func (s *aiService) recordAdviceRun(jobID uint, modelName string, trace []agent.
 		SelfCheckResult:  result, // 复用字段存 advice 的 pass/fail(advice 无 self-check,这里记生成结果)
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
-	})
+	}); err != nil {
+		log.Printf("AI: recordAdviceRun failed for job %d: %v", jobID, err)
+	}
 }
 
 // truncateAdvicePreview 把 advice 文本截到 400 字并包成 JSON 预览(ai_run.response_text)。
@@ -256,10 +257,36 @@ func (s *aiService) GetOrEnqueueAdvice(userID uint, scope string, scopeID uint) 
 	if s.resolver == nil {
 		return adviceStatusUnavailable, nil, nil
 	}
+	// 门控:advice 分析的是 mastery 弱点,没有答题记录(新学生或该 scope 尚未做题)
+	// 时没有分析价值——直接返回 unavailable,不入队、不轮询、前端隐藏卡片。
+	// 这避免首次进 AI 学习页就白烧一次 LLM 调用生成"建议先做题"的无意义文本。
+	// 交卷(submit-all)后 EnqueueAdviceForEpisode 会链式触发重算,那时一定有记录了。
+	if !s.hasAnyMasteryForScope(userID, scope, scopeID) {
+		return adviceStatusUnavailable, nil, nil
+	}
 	if err := s.enqueueAdviceJob(userID, scope, scopeID); err != nil {
 		return adviceStatusUnavailable, nil, err
 	}
 	return adviceStatusGenerating, nil, nil
+}
+
+// hasAnyMasteryForScope 判断该学生在该 scope 下有没有任何答题掌握度记录。
+// 用 KnowledgeMemory 表(交卷时写入)而非 Answer 表——advice 关心的是 mastery 是否
+// 可分析,而非原始答题流水;且 KnowledgeMemory 已冗余 course_id,各 scope 都能直查
+// 不用 JOIN。任一 scope 查询出错时保守返回 true(宁可多生成一次,不要错误隐藏)。
+func (s *aiService) hasAnyMasteryForScope(userID uint, scope string, scopeID uint) bool {
+	switch scope {
+	case agent.ScopeEpisode:
+		rows, err := s.contentRepo.GetMasteries(userID, scopeID)
+		return err == nil && len(rows) > 0
+	case agent.ScopeCourse:
+		rows, err := s.contentRepo.GetCourseMasteries(userID, scopeID)
+		return err == nil && len(rows) > 0
+	case agent.ScopeSubject:
+		rows, err := s.contentRepo.GetSubjectMasteries(userID, scopeID)
+		return err == nil && len(rows) > 0
+	}
+	return true // 未知 scope 不阻断(保守)
 }
 
 // EnqueueAdviceForEpisode 是 submit-all 成功后的链式触发:异步入队 episode 级 advice

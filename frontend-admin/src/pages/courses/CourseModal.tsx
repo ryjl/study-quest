@@ -8,7 +8,8 @@ import { GradePicker } from '../../components/inputs';
 import { TagInput } from '../../components/TagInput';
 import { ImageUpload } from '../../components/inputs';
 import { useToast } from '../../lib/toast';
-import { BookOpen, Film } from 'lucide-react';
+import { getSubjectTemplate } from '../../lib/aiHintTemplates';
+import { BookOpen, Film, Wand2 } from 'lucide-react';
 
 export function CreateEditCourseModal({
   open,
@@ -33,7 +34,11 @@ export function CreateEditCourseModal({
   const [contentType, setContentType] = useState<'learning' | 'entertainment'>('learning');
   const [coverUrl, setCoverUrl] = useState('');
   const [tagIDs, setTagIDs] = useState<number[]>([]);
-  const [aiHint, setAiHint] = useState('');
+  // AI 提示拆成两部分：WhisperHint 喂字幕转录（术语/口音），QuizHint 喂出题/总结
+  // LLM（出题偏好 + 术语纠错字典）。后端存进单一 JSON 列 AIConfigJSON，这里拆开
+  // 两个 textarea 给 admin 编辑。详见 backend model.Course.AIConfig。
+  const [whisperHint, setWhisperHint] = useState('');
+  const [quizHint, setQuizHint] = useState('');
   const [aiSummaryEnabled, setAiSummaryEnabled] = useState(true);
   const [aiQuizEnabled, setAiQuizEnabled] = useState(true);
 
@@ -61,7 +66,10 @@ export function CreateEditCourseModal({
       setSubject(ct === 'entertainment' ? 'entertainment' : (course?.subject ?? subjects[0]?.key ?? ''));
       setCoverUrl(course?.cover_url ?? '');
       setTagIDs(course?.tag_ids ?? []);
-      setAiHint(course?.ai_hint ?? '');
+      // 优先读新的 whisper_hint/quiz_hint；老课程只有 ai_hint 时，把它整体放进
+      // whisperHint（保守：老字段语义偏 whisper），admin 重存后即迁移到 JSON。
+      setWhisperHint(course?.whisper_hint ?? (course?.ai_hint ?? ''));
+      setQuizHint(course?.quiz_hint ?? '');
       // AI switches default OFF when unset — AI is an opt-in add-on layer; a
       // course with no explicit setting behaves as plain video viewing (no AI
       // surfaces). Matches the backend gorm:"default:false".
@@ -72,6 +80,8 @@ export function CreateEditCourseModal({
   }, [open, course]);
 
   const isEntertainment = contentType === 'entertainment';
+  // 当前选中科目对应的 label（用于"应用科目模板"匹配）。entertainment 无模板。
+  const selectedSubjectLabel = subjects.find((s) => s.key === subject)?.label ?? '';
 
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -89,7 +99,9 @@ export function CreateEditCourseModal({
         content_type: contentType,
         cover_url: coverUrl,
         tag_ids: tagIDs,
-        ai_hint: aiHint.trim(),
+        // 后端读 whisper_hint / quiz_hint（存进 AIConfigJSON 单列）。不再写老 ai_hint。
+        whisper_hint: whisperHint.trim(),
+        quiz_hint: quizHint.trim(),
         ai_summary_enabled: aiSummaryEnabled,
         ai_quiz_enabled: aiQuizEnabled,
       };
@@ -163,15 +175,51 @@ export function CreateEditCourseModal({
           <TagInput value={tagIDs} onChange={setTagIDs} />
         </div>
 
-        <div>
-          <label className="mb-1 block text-xs text-muted">AI 提示（可选）</label>
-          <textarea
-            className="input min-h-[64px] resize-y"
-            placeholder="给字幕转录/出题的提示，如：重点听极限的 ε-δ 定义；老师口音较重"
-            value={aiHint}
-            onChange={(e) => setAiHint(e.target.value)}
-          />
-          <p className="mt-1 text-[11px] text-muted">拼入 Whisper 提示词，帮助压制学科术语错字。过长的内容会被截断。</p>
+        <div className="space-y-3 rounded-xl border border-border bg-card-2 p-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-muted">AI 提示（可选）</span>
+            {!isEntertainment && (
+              <button
+                type="button"
+                onClick={() => {
+                  const tpl = getSubjectTemplate(selectedSubjectLabel);
+                  if (!tpl) {
+                    toast.error(`「${selectedSubjectLabel}」暂无模板，请手动填写`);
+                    return;
+                  }
+                  setWhisperHint(tpl.whisperHint);
+                  setQuizHint(tpl.quizHint);
+                  toast.success(`已套用「${selectedSubjectLabel}」模板，可继续微调`);
+                }}
+                className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
+                title="按当前科目填入默认提示，可继续微调"
+              >
+                <Wand2 size={12} /> 套用{selectedSubjectLabel || '科目'}模板
+              </button>
+            )}
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] text-muted">Whisper 提示（喂字幕转录，术语/口音，≤240 字）</label>
+            <textarea
+              className="input min-h-[56px] resize-y"
+              placeholder="如：象棋术语：车马炮兵卒将帅士仕相象，屏风马，中炮。老师带南方口音。"
+              value={whisperHint}
+              onChange={(e) => setWhisperHint(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted">拼入 Whisper 的 initial_prompt，压制学科术语同音错字。过长会被截断到 240 字。</p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] text-muted">出题提示（喂总结/出题/建议 LLM：题型偏好 + 术语纠错字典）</label>
+            <textarea
+              className="input min-h-[80px] resize-y"
+              placeholder={'如：题型倾向：计算题 ≥50% 出填空；难度偏难。\n术语字典：车（勿作居）、和棋（勿作合棋）。'}
+              value={quizHint}
+              onChange={(e) => setQuizHint(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted">LLM 会按这里的偏好出题，并在输出时按术语字典纠正字幕错字（只改输出，不改字幕本身）。</p>
+          </div>
         </div>
 
         <div className="space-y-2 rounded-xl border border-border bg-card-2 p-3">

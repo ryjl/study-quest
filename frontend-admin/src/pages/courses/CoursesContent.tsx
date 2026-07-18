@@ -4,7 +4,7 @@ import { api } from '../../lib/api';
 import { GRADES, subjectMeta, type Course } from '../../lib/types';
 import { useSubjects } from '../../lib/useSubjects';
 import { useUnlockTemplate, strategyLabel } from '../../lib/useUnlock';
-import { DropdownMenu, EmptyState, LoadingState, SubjectBadge, SubjectIcon, Tag } from '../../components/ui';
+import { EmptyState, LoadingState, SubjectBadge, SubjectIcon, Tag } from '../../components/ui';
 import { CourseUnlockTemplateModal } from '../../components/CourseUnlockTemplateModal';
 import { formatDurationShort, relativeTime } from '../../lib/format';
 import { useToast, useConfirm } from '../../lib/toast';
@@ -12,8 +12,6 @@ import { sortBy, timeValue, type SortDir, type SortOption } from '../../lib/sort
 import { CourseTree } from './CourseTree';
 import {
   Search,
-  ChevronDown,
-  ChevronUp,
   ChevronRight,
   Clock,
   Pencil,
@@ -263,18 +261,19 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
                     )}
                   </div>
 
-                  {/* Action menu — wrapper stops propagation so opening the
-                      menu (or picking an item) never toggles the card expand. */}
-                  <div className="flex flex-shrink-0 items-center" onClick={(e) => e.stopPropagation()}>
-                    <DropdownMenu
-                      align="right"
-                      items={[
-                        { label: isOpen ? '折叠课时' : '展开课时', icon: isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />, onClick: () => toggleExpand(c.id) },
-                        { label: '解锁节奏', icon: <Clock size={14} />, onClick: () => setUnlockForCourse(c) },
-                        { label: '编辑课程', icon: <Pencil size={14} />, onClick: () => onEdit(c) },
-                        { label: '删除课程', icon: <Trash2 size={14} />, danger: true, onClick: () => onDeleteCourse(c) },
-                      ]}
-                    />
+                  {/* 操作按钮组:直接露出图标按钮,不用三点菜单(展开/折叠已由
+                      左侧 chevron + 点卡片头部承担,不再冗余露出)。stopPropagation
+                      让点按钮不触发卡片展开。风格对齐 CourseTree 的章节/课时行按钮。 */}
+                  <div className="flex flex-shrink-0 items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                    <button className="btn-ghost btn-sm !px-1.5" onClick={() => setUnlockForCourse(c)} title="解锁节奏">
+                      <Clock size={14} />
+                    </button>
+                    <button className="btn-ghost btn-sm !px-1.5" onClick={() => onEdit(c)} title="编辑课程">
+                      <Pencil size={14} />
+                    </button>
+                    <button className="btn-ghost btn-sm !px-1.5 text-bad hover:text-bad" onClick={() => onDeleteCourse(c)} title="删除课程">
+                      <Trash2 size={14} />
+                    </button>
                   </div>
                 </div>
 

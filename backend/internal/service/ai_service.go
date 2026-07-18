@@ -541,10 +541,12 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 	}
 	// Build course context for the prompt.
 	course, _ := s.courseRepo.FindByID(job.CourseID)
-	hint := ""
+	// QuizHint consumer: EffectiveQuizHint() prefers the new QuizHint field and
+	// falls back to the deprecated AIHint for un-migrated rows.
+	quizHint := ""
 	subject := ""
 	if course != nil {
-		hint = course.AIHint
+		quizHint = course.EffectiveQuizHint()
 		if course.Subject.Label != "" {
 			subject = course.Subject.Label
 		}
@@ -559,7 +561,7 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 	_, err = summarizer.Summarize(ctx, agent.SummarizerRequest{
 		EpisodeID:  job.EpisodeID,
 		CourseID:   job.CourseID,
-		CourseHint: hint,
+		CourseHint: quizHint,
 		Subject:    subject,
 		Chunks:     chunks,
 	}, job.ID)

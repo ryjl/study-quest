@@ -1001,6 +1001,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     );
                     return;
                   }
+                  // 进 AI 学习页前暂停视频,避免在后台继续播放(含音频)。
+                  // 返回时不自动 resume——用户可能只想看完解析,让其手动点播放更可控。
+                  _player.pause();
                   final result = await Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (context) => AiStudyScreen(

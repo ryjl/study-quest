@@ -42,16 +42,24 @@ type QuizzerRequest struct {
 // it's persisted as a model.Question. Normalized so the repo layer can't
 // receive a half-formed question.
 type QuestionDraft struct {
-	Type        string   `json:"type"`         // "choice" | "fill"; defaults to choice
+	Type        string   `json:"type"`         // "choice" | "multi_choice" | "fill"; defaults to choice
 	ChunkIndex  int      `json:"chunk_index"`  // resolved to a ChunkID at persist time; 0/absent = synthetic
 	Stem        string   `json:"stem"`         // required
-	Options     []string `json:"options"`      // choice only
+	Options     []string `json:"options"`      // choice / multi_choice only
 	Answer      int      `json:"answer"`       // choice: 0-based index
 	AnswerText  []string `json:"answer_text"`  // fill: acceptable answers
 	Explanation string   `json:"explanation"`  // shown after answering
 	// HasJump 来自 agent 的判断(见 QuizzerSystemPrompt):true = 这题锚定到具体
 	// chunk,答错可跳视频复习;false = 综合/贯穿全文题,无单一跳转点。
 	HasJump bool `json:"has_jump"`
+	// ── multi_choice 专用(其它题型忽略)──
+	// CorrectIndices 是正确选项的 0-based 索引数组(无序)。多选题必须 ≥1 项。
+	// PartialCredit 控制是否允许"部分对"(漏选但没多选错项)给半分。缺省 false。
+	// MinCorrectForHalf 是拿半分需要的最少正确项数。缺省 1。
+	// service 层持久化时这三项序列化进 Question.Scoring 的 multi_choice schema。
+	CorrectIndices    []int `json:"correct_indices"`              // multi_choice
+	PartialCredit     bool   `json:"partial_credit"`              // multi_choice
+	MinCorrectForHalf int   `json:"min_correct_for_half,omitempty"` // multi_choice
 }
 
 // QuizDraft is the full result of one generation: the questions + the LLM's
@@ -254,6 +262,33 @@ func parseQuizGeneration(raw string) (QuizDraft, error) {
 			}
 			if qd.Answer < 0 || qd.Answer >= len(qd.Options) {
 				continue // bad answer index
+			}
+		}
+		// Validate multi_choice questions: need ≥2 options, ≥2 correct indices
+		// (多选题本质是"有多个正确项",只有 1 个正确项的实质是单选,不该标 multi_choice),
+		// and all indices in range. 选项总数宽松于 prompt(prompt 建议 ≥5 项保证区分度,
+		// 但 LLM 偶尔返回 3-4 项的合法多选题不该被误杀——选项数留给 self-check 提示,
+		// 代码层只保证可判分)。
+		if qd.Type == QuestionMultiChoice {
+			if len(qd.Options) < 2 {
+				continue
+			}
+			if len(qd.CorrectIndices) < 2 || len(qd.CorrectIndices) > len(qd.Options) {
+				continue
+			}
+			bad := false
+			for _, idx := range qd.CorrectIndices {
+				if idx < 0 || idx >= len(qd.Options) {
+					bad = true
+					break
+				}
+			}
+			if bad {
+				continue
+			}
+			// 缺省:MinCorrectForHalf 视为 1(让 partial_credit 真正生效至少要 ≥1 正确项)。
+			if qd.MinCorrectForHalf < 1 {
+				qd.MinCorrectForHalf = 1
 			}
 		}
 		// Validate fill questions: need at least one acceptable answer.

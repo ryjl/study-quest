@@ -121,6 +121,10 @@ type AIContentRepository interface {
 	// 提交:一次 submit-all = 一次考试,提交后该 quiz 锁定不可再改。幂等:重复调用
 	// 只更新时间戳(用 Updates 只写 submitted_at 一列,不触碰其它字段)。
 	MarkQuizSubmitted(quizID uint, at time.Time) error
+	// TryMarkQuizSubmitted 是并发安全的抢占式交卷戳:仅当 submitted_at IS NULL 时
+	// 盖戳,返回是否抢到。供 SubmitAllQuizAnswers 消除 TOCTOU 窗口用——在落任何
+	// answer/memory 之前抢,抢不到直接拒。详见实现注释。
+	TryMarkQuizSubmitted(quizID uint, at time.Time) (bool, error)
 
 	// ── knowledge_memories (Phase C feedback loop) ──
 	// GetMasteries returns a user's per-chunk mastery for an episode (the agent
@@ -613,6 +617,25 @@ func (r *aiContentRepo) CreateAnswer(a *model.Answer) error {
 func (r *aiContentRepo) MarkQuizSubmitted(quizID uint, at time.Time) error {
 	return r.db.Model(&model.Quiz{}).Where("id = ?", quizID).
 		Updates(map[string]interface{}{"submitted_at": at}).Error
+}
+
+// TryMarkQuizSubmitted 是并发安全的"抢占式交卷戳":仅当 submitted_at 仍为 NULL 时
+// 才盖戳。返回 (claimed, error):claimed=true 表示本次调用抢到了(本请求是唯一赢家),
+// claimed=false 表示已被别人抢过(并发重复交卷)。用条件 UPDATE 实现,SQLite/MySQL
+// 都能原子完成"check + set",消除 SubmitAllQuizAnswers 的 TOCTOU 窗口
+// (GetQuiz 的非事务 nil 检查到 MarkQuizSubmitted 之间,两个请求都能通过)。
+//
+// 用法:SubmitAllQuizAnswers 在 GetQuiz 之后、落任何 answer/memory 之前调这个;
+// claimed=false 直接返回 ErrQuizAlreadySubmitted。这样败者不会落重复 Answer 行、
+// 不会重复扣 mastery。SQLite 下 UPDATE 自动拿行锁,两并发请求串行化于此。
+func (r *aiContentRepo) TryMarkQuizSubmitted(quizID uint, at time.Time) (bool, error) {
+	res := r.db.Model(&model.Quiz{}).
+		Where("id = ? AND submitted_at IS NULL", quizID).
+		Update("submitted_at", at)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
 }
 
 // --- knowledge_memories (Phase C feedback loop) ---

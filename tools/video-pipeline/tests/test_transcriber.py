@@ -10,7 +10,7 @@ from transcriber import PROMPT_MAX_CHARS
 def _ep(**kw) -> EpisodeInfo:
     defaults = dict(
         title="", duration_seconds=None, filename="", file_size=None,
-        subject="", course_title="", chapter_title="", ai_hint="",
+        subject="", course_title="", chapter_title="", whisper_hint="",
     )
     defaults.update(kw)
     return EpisodeInfo(**defaults)
@@ -19,7 +19,7 @@ def _ep(**kw) -> EpisodeInfo:
 def test_all_three_parts_composed():
     ep = _ep(
         subject="math", course_title="高等数学", chapter_title="第一章 极限",
-        ai_hint="注意 ε-δ 定义",
+        whisper_hint="注意 ε-δ 定义",
     )
     p = transcriber.build_prompt(ep, "以下是普通话的句子。")
     assert p.startswith("以下是普通话的句子。")
@@ -30,7 +30,7 @@ def test_all_three_parts_composed():
 
 
 def test_missing_context_still_builds():
-    ep = _ep(ai_hint="只有 hint")
+    ep = _ep(whisper_hint="只有 hint")
     p = transcriber.build_prompt(ep, "以下是普通话的句子。")
     assert p == "以下是普通话的句子。只有 hint"
 
@@ -48,7 +48,7 @@ def test_truncation_enforced():
 
 def test_hint_is_preserved_when_short():
     """A short hint should survive intact even with context present."""
-    ep = _ep(subject="math", course_title="数学", ai_hint="重点听导数")
+    ep = _ep(subject="math", course_title="数学", whisper_hint="重点听导数")
     p = transcriber.build_prompt(ep, "基础。")
     assert "重点听导数" in p
 

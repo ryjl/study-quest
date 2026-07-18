@@ -315,8 +315,12 @@ func (t *Toolbox) runGetEpisodeInfo(ctx context.Context, episodeID uint) (string
 		if len(course.Grades) > 0 {
 			fmt.Fprintf(&b, "- 适用年级: %s\n", gradesLabel(course.Grades))
 		}
-		if course.AIHint != "" {
-			fmt.Fprintf(&b, "- 术语提示: %s\n", course.AIHint)
+		// QuizHint consumer: EffectiveQuizHint() prefers the new QuizHint field
+		// (question style + difficulty + terminology correction dictionary) and
+		// falls back to the deprecated AIHint for un-migrated rows. The label
+		// spells out both purposes so the model knows it's more than terminology.
+		if eff := course.EffectiveQuizHint(); eff != "" {
+			fmt.Fprintf(&b, "- 出题指引（含术语纠错字典）: %s\n", eff)
 		}
 	}
 

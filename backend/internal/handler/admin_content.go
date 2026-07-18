@@ -100,7 +100,13 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		CoverURL         string `json:"cover_url"`
 		TagIDs           []uint `json:"tag_ids"`
 		AttachmentJSON   string `json:"attachment_json"`
+		// AIHint is deprecated: the admin form now writes WhisperHint + QuizHint
+		// (split per consumer). Kept on the request struct so an older admin SPA
+		// still posting ai_hint doesn't 400, but it's ignored — never reaches the
+		// service. Will be removed with model.Course.AIHint.
 		AIHint           string `json:"ai_hint"`
+		WhisperHint      string `json:"whisper_hint"`
+		QuizHint         string `json:"quiz_hint"`
 		AISummaryEnabled bool   `json:"ai_summary_enabled"`
 		AIQuizEnabled    bool   `json:"ai_quiz_enabled"`
 	}
@@ -122,7 +128,7 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		contentType = model.ContentLearning
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint, req.AISummaryEnabled, req.AIQuizEnabled)
+	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.WhisperHint, req.QuizHint, req.AISummaryEnabled, req.AIQuizEnabled)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -163,7 +169,11 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		CoverURL         string `json:"cover_url"`
 		TagIDs           []uint `json:"tag_ids"`
 		AttachmentJSON   string `json:"attachment_json"`
+		// AIHint is deprecated (see CreateCourse above). Ignored; kept for
+		// backward-compatible request binding only.
 		AIHint           string `json:"ai_hint"`
+		WhisperHint      string `json:"whisper_hint"`
+		QuizHint         string `json:"quiz_hint"`
 		AISummaryEnabled bool   `json:"ai_summary_enabled"`
 		AIQuizEnabled    bool   `json:"ai_quiz_enabled"`
 	}
@@ -191,7 +201,7 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 	// 读在 Update 之前,避免更新后的值污染比较。
 	oldCourse, _ := h.courseRepo.FindByID(id)
 
-	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.AIHint, req.AISummaryEnabled, req.AIQuizEnabled)
+	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.WhisperHint, req.QuizHint, req.AISummaryEnabled, req.AIQuizEnabled)
 	if err != nil {
 		respondError(c, err)
 		return

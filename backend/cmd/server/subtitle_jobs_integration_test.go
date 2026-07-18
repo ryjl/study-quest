@@ -587,7 +587,7 @@ func (e *testEnv) giveSubtitle(t *testing.T, episodeID uint, srt string) {
 
 // TestSubtitleJobClaimResponseContext verifies ClaimNext enriches the claim
 // payload with the cache-matching keys (filename + file_size) and the Whisper
-// prompt context (subject / course_title / chapter_title / ai_hint).
+// prompt context (subject / course_title / chapter_title / whisper_hint).
 //
 // It uses a webdav storage source on purpose: WebDAVProvider.GetDownloadURL is
 // pure URL construction (no network), so the storage round-trip inside
@@ -616,7 +616,8 @@ func TestSubtitleJobClaimResponseContext(t *testing.T) {
 	// Course with an AI hint, under the "math" subject.
 	var mathSubject model.Subject
 	db.Where("key = ?", "math").First(&mathSubject)
-	course := model.Course{Title: "高等数学", SubjectID: mathSubject.ID, ContentType: model.ContentLearning, AIHint: "重点听极限的 ε-δ 定义，老师口音较重"}
+	course := model.Course{Title: "高等数学", SubjectID: mathSubject.ID, ContentType: model.ContentLearning}
+	course.SetAIConfig(model.AIConfig{WhisperHint: "重点听极限的 ε-δ 定义，老师口音较重"})
 	if err := db.Create(&course).Error; err != nil {
 		t.Fatalf("create course: %v", err)
 	}
@@ -679,8 +680,14 @@ func TestSubtitleJobClaimResponseContext(t *testing.T) {
 	if got.ChapterTitle != "第一章 极限与连续" {
 		t.Errorf("ChapterTitle = %q, want 第一章 极限与连续", got.ChapterTitle)
 	}
-	if got.AIHint != course.AIHint {
-		t.Errorf("AIHint = %q, want %q", got.AIHint, course.AIHint)
+	// Whisper prompt context: ClaimResult.WhisperHint carries the value from
+	// Course.EffectiveWhisperHint() (sourced from AIConfigJSON, falling back
+	// to the deprecated AIHint column for un-migrated rows). The worker reads
+	// only whisper_hint now (legacy ai_hint protocol field was removed when
+	// the worker was upgraded in lockstep).
+	wantHint := course.EffectiveWhisperHint()
+	if got.WhisperHint != wantHint {
+		t.Errorf("WhisperHint = %q, want %q", got.WhisperHint, wantHint)
 	}
 	if got.EpisodeTitle != "连续性的定义" {
 		t.Errorf("EpisodeTitle = %q", got.EpisodeTitle)

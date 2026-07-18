@@ -121,12 +121,12 @@ func TestGetEpisodeInfoRichMetadata(t *testing.T) {
 		},
 		course: &model.Course{
 			Title:   "五年级数学",
-			AIHint:  "通分、约分术语",
 			Subject: model.Subject{Label: "数学"},
 			Tags:    []model.Tag{{Label: "必修"}, {Label: "思维训练"}},
 		},
 		summary: &model.AISummary{SummaryJSON: `{"headline":"分数加减法","concepts":["通分","公分母"],"key_points":["异分母先通分"]}`},
 	}
+	deps.course.SetAIConfig(model.AIConfig{QuizHint: "通分、约分术语"})
 	tb := NewQuizToolbox(deps, NewMemoryStore(&fakeMemoryRepo{}), &fakeEmbedder{}, 1, 1, 10)
 	out, err := tb.Execute(context.Background(), "get_episode_info", "{}")
 	if err != nil {

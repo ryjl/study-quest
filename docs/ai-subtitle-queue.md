@@ -338,8 +338,8 @@ Whisper 的 `initial_prompt` 不是自由指令，是解码器上下文（~244 t
 1. **base_prompt**（config）——风格引导，如 `"以下是普通话的句子。"`
 2. **课程元数据**（claim 响应自动带）——subject/course_title/chapter_title，学科术语密集
    的标题能压制 Whisper 把专有名词转错。
-3. **ai_hint**（admin 在课程编辑页手填）——针对性提示，如"老师口音重""重点听 ε-δ 定义"。
-   按课程设一次，该课所有 episode 共用。将来 Step 3 出题 agent 也复用这个字段。
+3. **whisper_hint**（admin 在课程编辑页手填，存 `Course.AIConfigJSON`）——针对性提示，如"老师口音重""重点听 ε-δ 定义"。
+   按课程设一次，该课所有 episode 共用。出题/总结 agent 用同一 JSON 列里的 `quiz_hint` 字段（见 `docs/ai-agent-module.md` §4）。
 
 截断到 240 字符（CJK 保守估计 1 字符 ≈ 1 token）。不需要每个视频手写 prompt。
 
@@ -381,12 +381,13 @@ claim 响应在 Step 1 基础上加了缓存键 + prompt 上下文（全部向�
   "subject": "math",                 // 科目 key，prompt 用
   "course_title": "高等数学",         // prompt 用
   "chapter_title": "第一章 极限",     // prompt 用
-  "ai_hint": "重点听 ε-δ 定义"        // admin 手填，prompt 用
+  "whisper_hint": "重点听 ε-δ 定义"   // admin 手填（存 Course.AIConfigJSON），prompt 用
 }
 ```
 
-后端 `ClaimNext` 顺路 join episode→course→chapter→subject 填上。`Course` model 新增
-`AIHint` 字段（text，admin 编辑页可填）。
+后端 `ClaimNext` 顺路 join episode→course→chapter→subject 填上。`whisper_hint` 来自
+`Course.EffectiveWhisperHint()`（读 `AIConfigJSON` JSON 列，回退老 `AIHint` 列）。
+admin 在课程编辑页填，详见 `docs/ai-agent-module.md` §4。
 
 ---
 
@@ -491,7 +492,8 @@ export，才能让动态链接器看到。
 ## 11. 演进方向
 
 - **字幕润色 LLM**：SRT 落库后过一遍 LLM 修 whisper 错别字（象棋等专业领域术语错字
-  明显）。Step 3 的事，`ai_hint` 字段已为润色 prompt 预留。
+  明显）。已部分实现——summary/quiz/advice LLM 在输出时按 `quiz_hint` 术语字典纠正
+  （只改输出不改字幕，见 `docs/ai-agent-module.md` §9/§14）。字幕本身的纠错仍待做。
 - **字幕切片 + embedding（RAG）**：为出题 agent 准备语料，Step 3。
 - **多语言**：当前默认 zh-CN，`Language` 字段已支持扩展。
 - ~~**worker 主动推送进度**~~：已实现（§9.3）。

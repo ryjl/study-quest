@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -225,10 +226,21 @@ type Course struct {
 	Tags           []Tag     `gorm:"many2many:course_tags;constraint:OnDelete:CASCADE"`
 	Grades         []CourseGrade `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 	AttachmentJSON string    `gorm:"type:text"`          // JSON array of attachments
-	// AIHint is an optional, admin-authored hint fed to the subtitle worker's
-	// Whisper initial_prompt (and later the quiz agent): terminology, teacher
-	// accent notes, the key theorem to listen for, etc. Empty by default. Free
-	// text — kept short by the consumer (Whisper's prompt budget is ~244 tokens).
+	// AIConfigJSON holds the course's AI configuration as a single JSON blob
+	// (see AIConfig / EffectiveWhisperHint / EffectiveQuizHint below). Storing
+	// the whole AI config in ONE text column means we can add new config knobs
+	// (difficulty bias, question-type mix, language prefs, …) WITHOUT a schema
+	// migration — just extend the AIConfig struct + the admin form. Mirrors the
+	// forward-compatible design used by Question.Scoring.
+	//
+	// JSON shape: {"whisper_hint":"...", "quiz_hint":"...", ...future fields}.
+	// Empty string = no AI config (the default for courses that never had one).
+	AIConfigJSON string `gorm:"column:ai_config_json;type:text"`
+	// AIHint is DEPRECATED. The single-field predecessor of AIConfigJSON. Kept
+	// only so the Effective* helpers can fall back to it for any pre-migration
+	// row (data was zeroed in round 4, so this is defense-in-depth). Do NOT write
+	// new code against AIHint — write AIConfigJSON via SetAIConfig instead.
+	// Removal is tracked in TODO.md.
 	AIHint string `gorm:"type:text"`
 	// AISummaryEnabled controls whether the AI agent generates summaries for
 	// this course's episodes. Off by default: AI is an opt-in add-on, not every
@@ -1038,11 +1050,22 @@ type Question struct {
 	ID          uint   `gorm:"primaryKey;autoIncrement"`
 	QuizID      uint   `gorm:"index;not null"`
 	ChunkID     uint   `gorm:"index"` // nullable: a question may be synthetic, not tied to one chunk
-	Type        string `gorm:"size:20;default:'choice'"` // choice | fill
+	// Type 扩展为 choice | multi_choice | fill（未来可加 judge | order | short_answer）。
+	// 每种题型的判分元数据走 Scoring 列（按 type 解析 JSON），让加新题型不必再改表结构。
+	Type        string `gorm:"size:20;default:'choice'"` // choice | multi_choice | fill
 	Stem        string `gorm:"type:text;not null"`
-	Options     string `gorm:"type:text"` // JSON []string (choice only)
-	Answer      int    // choice: 0-based index into Options
-	AnswerText  string `gorm:"type:text"` // fill: JSON []string of acceptable answers
+	Options     string `gorm:"type:text"` // JSON []string (choice/multi_choice)
+	Answer      int    // DEPRECATED（choice 单选正确索引）。新数据改走 Scoring.correct_index。保留兼容老数据/老 prompt。
+	AnswerText  string `gorm:"type:text"` // DEPRECATED（fill 可接受答案 JSON）。新数据改走 Scoring.accept。保留兼容。
+	// Scoring 承载各题型的判分元数据(JSON),按 type 解析。前向兼容设计:加新题型只扩
+	// Scoring 的 schema,不必改表。grading.go 优先读 Scoring,空则回退老字段(Answer/
+	// AnswerText)。示例:
+	//   choice:       {"correct_index":2}
+	//   multi_choice: {"correct_indices":[0,2,3],"partial_credit":true,"min_correct_for_half":1}
+	//   fill:         {"accept":["12","十二"]}
+	//   judge(未来):  {"correct":true}
+	//   short_answer(未来): {"rubric":"...","keywords":[...]}
+	Scoring     string `gorm:"type:text"`
 	Explanation string `gorm:"type:text"`
 	// HasJump 标记该题是否对应一个明确的视频片段(anchor chunk)。agent 出题时
 	// 判断:能锚定到具体知识点 chunk 的题 has_jump=true(答错可跳视频复习);
@@ -1274,4 +1297,77 @@ func migrateQuizActiveUniqueIndex(db *gorm.DB) error {
 		return fmt.Errorf("create partial unique idx_quiz_user_ep_active: %w", err)
 	}
 	return nil
+}
+
+// AIConfig is the parsed form of Course.AIConfigJSON. Add new fields here to
+// extend the course's AI configuration WITHOUT a DB migration — the whole
+// config is stored as one JSON blob (forward-compatible, same pattern as
+// Question.Scoring). Each field maps to a real config knob consumed by some AI
+// capability (Whisper, summary, quiz, advice).
+type AIConfig struct {
+	// WhisperHint is fed to the subtitle worker's Whisper initial_prompt:
+	// terminology list, teacher accent notes, a domain style sentence. Kept
+	// short by the consumer (transcriber.py truncates to 240 chars, Whisper's
+	// prompt budget is ~244 tokens).
+	WhisperHint string `json:"whisper_hint,omitempty"`
+	// QuizHint is fed to the summary/quiz/advice LLM agents: question-style
+	// preferences, difficulty bias, AND a terminology correction dictionary
+	// (terms Whisper mishears — 车→居, 和棋→合棋 — that the LLM must output as
+	// the correct term even if the subtitle has the wrong one).
+	QuizHint string `json:"quiz_hint,omitempty"`
+	// Future knobs go here, e.g.:
+	//   DifficultyBias  string  `json:"difficulty_bias,omitempty"`  // easy|medium|hard
+	//   QuestionTypeMix map[string]float64 `json:"question_type_mix,omitempty"`
+	//   Language        string  `json:"language,omitempty"`
+	// Adding any of them is a code-only change — no ALTER TABLE.
+}
+
+// AIConfig parses Course.AIConfigJSON into an AIConfig. Returns the zero value
+// on parse error or empty storage (callers treat zero-value fields as "unset").
+// Safe to call on hot paths; the JSON is small (a few hundred bytes typical).
+func (c Course) AIConfig() AIConfig {
+	if strings.TrimSpace(c.AIConfigJSON) == "" {
+		return AIConfig{}
+	}
+	var cfg AIConfig
+	if err := json.Unmarshal([]byte(c.AIConfigJSON), &cfg); err != nil {
+		return AIConfig{} // malformed → treat as unset; admin can re-save to fix
+	}
+	return cfg
+}
+
+// SetAIConfig serializes cfg into AIConfigJSON. Used by the service layer when
+// saving a course (admin form writes the two textareas → service builds an
+// AIConfig → calls this). Kept on the struct so the encoding rule lives next
+// to the field, not in the service.
+func (c *Course) SetAIConfig(cfg AIConfig) {
+	if cfg == (AIConfig{}) {
+		c.AIConfigJSON = "" // empty config → empty storage (not "{}")
+		return
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return // unreachable for this struct (only strings)
+	}
+	c.AIConfigJSON = string(out)
+}
+
+// EffectiveWhisperHint returns the hint text to feed Whisper's initial_prompt.
+// Reads from AIConfigJSON (parsed); falls back to the deprecated AIHint column
+// for any pre-migration row. Empty when neither is set.
+func (c Course) EffectiveWhisperHint() string {
+	if h := strings.TrimSpace(c.AIConfig().WhisperHint); h != "" {
+		return h
+	}
+	return c.AIHint // legacy fall-back; may also be ""
+}
+
+// EffectiveQuizHint returns the hint text to feed the summary/quiz/advice LLM
+// agents. Reads from AIConfigJSON (parsed); falls back to the deprecated AIHint
+// column for any pre-migration row. Empty when neither is set.
+func (c Course) EffectiveQuizHint() string {
+	if h := strings.TrimSpace(c.AIConfig().QuizHint); h != "" {
+		return h
+	}
+	return c.AIHint // legacy fall-back; may also be ""
 }
