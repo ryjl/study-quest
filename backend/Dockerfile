@@ -64,8 +64,9 @@ FROM golang:1.23-bookworm AS builder
 # Install build dependencies for CGO compilation (gcc + glibc headers, required
 # for go-sqlite3). We no longer UPX-compress the binary: upx isn't in the
 # golang:1.23-bookworm default apt sources, and the size saving (~10-15MB) is
-# marginal vs the image's real heavyweights (ffmpeg ~80MB + ONNX models ~45MB).
-# Skipping it also keeps the binary debuggable (strace/gdb symbols intact).
+# marginal vs the image's real heavyweights (self-compiled ffmpeg ~17MB +
+# ONNX models ~45MB). Skipping it also keeps the binary debuggable
+# (strace/gdb symbols intact).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -86,27 +87,6 @@ COPY --from=spa /build/backend/internal/admin/spa/dist ./internal/admin/spa/dist
 # -s -w strips debug info to shrink the binary without UPX.
 RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-s -w" -o server cmd/server/main.go
 
-# Stage -2: Fetch static ffmpeg/ffprobe binaries (ffbinaries v6.1 linux-64).
-# The Go code only invokes ffprobe (metadata), ffmpeg -vframes 1 (one-frame
-# screenshot for cover) and ffmpeg -c copy (extract embedded cover) — all
-# covered by the static GPL build, no transcoding. Replacing apt `ffmpeg`
-# (which pulls ~470MB of libav* codec/font/GUI deps) with two static binaries
-# (~58MB total) is the single biggest image win: 665MB → ~275MB.
-# ffbinaries.com serves GitHub release zips; --retry 3 guards against the
-# transient 404s observed in earlier docker build attempts.
-FROM debian:bookworm-slim AS ffmpeg-static
-RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /tmp
-ARG FFBIN_VER=6.1
-RUN curl -fL --retry 3 -o ffmpeg.zip \
-      "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFBIN_VER}/ffmpeg-${FFBIN_VER}-linux-64.zip" \
-    && curl -fL --retry 3 -o ffprobe.zip \
-      "https://github.com/ffbinaries/ffbinaries-prebuilt/releases/download/v${FFBIN_VER}/ffprobe-${FFBIN_VER}-linux-64.zip" \
-    && unzip -o ffmpeg.zip -d /out && unzip -o ffprobe.zip -d /out \
-    && chmod +x /out/ffmpeg /out/ffprobe \
-    && rm -f ffmpeg.zip ffprobe.zip
-
 # Stage 2: Runtime image using debian-slim (glibc).
 #
 # MUST be glibc-based (not alpine/musl) because libonnxruntime.so from the
@@ -115,25 +95,36 @@ RUN curl -fL --retry 3 -o ffmpeg.zip \
 # failed at embedding init with "loading ld-linux-x86-64.so.2: No such file".
 # debian-slim is also a safer base for any future cgo/.so dependency.
 #
-# SIZE STATUS (2026-07, optimized): image is ~275MB. The previously dominant
-# apt `ffmpeg` (~470MB) was replaced by two static binaries from the
-# ffmpeg-static stage (~58MB combined). Remaining cost: debian-slim base
-# (~75MB) + ONNX models (~45MB, baked-in) + Go binary (~14MB) + static
-# ffmpeg/ffprobe (~58MB) + ca-certs/tzdata/curl (~15MB).
+# ffmpeg/ffprobe: 由 `make fetch-ffmpeg` 预先编译到 backend/data/ffmpeg-bin/
+# （gitignored），Dockerfile 直接 COPY——不进 docker build 流水线。原因：
+#   1. ffbinaries/johnvansickle 全系列静态构建在新内核上对 HTTPS URL 必崩
+#      （probeMedia 走云盘 HTTPS → segfault exit 139）
+#   2. 自编译最小白名单配置 ~17MB（两文件），远小于 BtbN 全量 222MB / apt 459MB
+# 详见 scripts/build-ffmpeg.sh 和 Makefile 的 fetch-ffmpeg target。
+#
+# SIZE STATUS (2026-07, self-compiled ffmpeg): image is ~241MB. Dominant cost
+# now: debian-slim base (~75MB) + ONNX models (~45MB baked-in) + Go binary
+# (~14MB) + self-compiled ffmpeg/ffprobe (~17MB) + ca-certs/tzdata/curl
+# (~15MB). This is the smallest defensible footprint given the ONNX models
+# must ship glibc.
 FROM debian:bookworm-slim
 
 # ca-certificates for HTTPS to the chat relay / huggingface / github.
 # tzdata for appclock business-timezone handling. curl for operator debugging.
-# (ffmpeg/ffprobe are copied from the ffmpeg-static stage below — NOT apt, to
-# avoid pulling ~470MB of libav codec deps for code that never transcodes.)
+# libssl3 + libz：自编译 ffmpeg 链接了系统的 OpenSSL（--enable-openssl）和 zlib，
+# 所以 runtime 必须有这两个 .so。显式声明避免靠 ca-certificates 的顺带依赖
+# （那样太脆弱——一旦 ca-certificates 不再传递依赖 openssl 就 runtime 崩）。
+# (ffmpeg/ffprobe 二进制本身由 make fetch-ffmpeg COPY 进来——见下方，不进 apt)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates tzdata curl \
+        ca-certificates tzdata curl libssl3 zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
-# Static ffmpeg/ffprobe (ffbinaries v6.1). Used by episode_service.go for
-# ffprobe metadata + ffmpeg one-frame/cover extraction. glibc statically
-# linked into the binary, so no extra shared-lib deps in the runtime layer.
-COPY --from=ffmpeg-static /out/ffmpeg /out/ffprobe /usr/local/bin/
+# Self-compiled minimal ffmpeg/ffprobe (whitelist config, ~17MB combined).
+# Built by `make fetch-ffmpeg` (see scripts/build-ffmpeg.sh). Includes only
+# the codecs/demuxers/protocols actually needed (h264/hevc/vp9/av1 decode +
+# mjpeg encode + mp4/mkv/avi/wmv/flv/webm/ts/rm demux + http/https), so it's
+# ~13x smaller than BtbN full-build and avoids the ffbinaries segfault.
+COPY backend/data/ffmpeg-bin/ffmpeg backend/data/ffmpeg-bin/ffprobe /usr/local/bin/
 
 WORKDIR /app
 

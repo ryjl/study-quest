@@ -1,4 +1,4 @@
-.PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat fetch-ai-models clean-ai-models
+.PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat fetch-ai-models clean-ai-models fetch-ffmpeg clean-ffmpeg
 
 # Build the admin SPA (React/Vite). Output lands in
 # backend/internal/admin/spa/dist and is embedded into the Go binary via go:embed.
@@ -33,9 +33,11 @@ test-admin:
 	@echo "==> Testing Admin SPA..."
 	@cd frontend-admin && npm test
 
-# 构建 Docker 镜像（多阶段：Node 构建 SPA → Go 构建二进制 → Alpine 运行时）
+# 构建 Docker 镜像（多阶段：Node 构建 SPA → Go 构建二进制 → debian-slim 运行时）
 # 注意：build context 是仓库根，这样 SPA 阶段才能访问 frontend-admin/ 源码。
-docker-build:
+# 依赖 fetch-ffmpeg：若本地还没编过 ffmpeg/ffprobe，先编（~8min 首次，之后秒级
+# COPY）。fetch-ffmpeg 本身幂等，已存在就跳过。
+docker-build: fetch-ffmpeg
 	@echo "==> Building Docker Image..."
 	@docker build -f backend/Dockerfile -t studyquest-backend:latest .
 
@@ -73,7 +75,10 @@ build-apk-x64:
 build-apk-fat:
 	@cd frontend && $(FLUTTER) build apk --release
 
-# 清理构建产物
+# 清理构建产物。
+# 注意：`rm -rf backend/data/` 会顺带删掉 ai-models/ 和 ffmpeg-bin/ —— 这是 backend/data
+# 被 .gitignore 整个覆盖、且作为本地缓存目录的设计意图。重跑时 make fetch-ai-models
+# 和 make fetch-ffmpeg 会重新拉/编。
 clean:
 	@echo "==> Cleaning build artifacts..."
 	@rm -rf backend/bin/
@@ -133,6 +138,45 @@ fetch-ai-models:
 clean-ai-models:
 	@echo "==> Removing $(AI_MODELS_DIR)/ ..."
 	@rm -rf $(AI_MODELS_DIR)/
+
+# ─── 本地自编译 ffmpeg / ffprobe（最小白名单配置）─────────────────────────
+# 在 debian:bookworm-slim 容器内编译 ffmpeg 7.1.1 的"现实够用"白名单配置，产物
+# 落到 backend/data/ffmpeg-bin/（已被 .gitignore，二进制不进 git）。Dockerfile COPY
+# 这个目录进去，所以 docker build 永远不重编 ffmpeg——只在删除目录或改 configure
+# 选项后才需要重新跑这个 target。
+#
+# 为什么自编译而不是用预编译：
+#   1. ffbinaries / johnvansickle 全系列静态构建（gcc 8 工具链）在新内核上对任何
+#      网络协议输入（http/https URL）都 segfault (exit 139)——probeMedia 走云盘
+#      HTTPS URL 必崩。是静态 glibc 在新内核 socket 路径的 ABI 问题，不是版本问题。
+#   2. BtbN 预编译虽不崩，但是"全量 codec"配置，ffmpeg+ffprobe 两文件 222MB——
+#      项目只用 ffprobe 读 metadata + ffmpeg 截一帧/提取封面，95% codec 是死重。
+#   自编译最小白名单 ~17MB（两文件），规避 segfault，且省 ~200MB 镜像空间。
+#
+# 配置详见 scripts/build-ffmpeg.sh。改配置后：`make clean-ffmpeg && make fetch-ffmpeg`。
+FFMPEG_BIN_DIR := backend/data/ffmpeg-bin
+
+fetch-ffmpeg:
+	@echo "==> Ensuring minimal ffmpeg/ffprobe present in $(FFMPEG_BIN_DIR)/ ..."
+	@if [ -x "$(FFMPEG_BIN_DIR)/ffmpeg" ] && [ -x "$(FFMPEG_BIN_DIR)/ffprobe" ]; then \
+		echo "    ✓ ffmpeg/ffprobe already built, skip (delete $(FFMPEG_BIN_DIR)/ to rebuild)"; \
+	else \
+		echo "    ↓ Building ffmpeg 7.1.1 minimal whitelist (~8 min on first run)..."; \
+		mkdir -p $(FFMPEG_BIN_DIR); \
+		docker run --rm \
+			--platform linux/amd64 \
+			-v $(PWD)/scripts/build-ffmpeg.sh:/build.sh:ro \
+			-v $(PWD)/$(FFMPEG_BIN_DIR):/out \
+			debian:bookworm-slim bash /build.sh; \
+		echo "    ✓ $(FFMPEG_BIN_DIR)/ffmpeg ($$(ls -lh $(FFMPEG_BIN_DIR)/ffmpeg | awk '{print $$5}'))"; \
+		echo "    ✓ $(FFMPEG_BIN_DIR)/ffprobe ($$(ls -lh $(FFMPEG_BIN_DIR)/ffprobe | awk '{print $$5}'))"; \
+	fi
+	@echo "==> ffmpeg/ffprobe ready in $(FFMPEG_BIN_DIR)/"
+
+# 删除本地编译的 ffmpeg/ffprobe（换 configure 选项或 ffmpeg 版本时先跑这个）。
+clean-ffmpeg:
+	@echo "==> Removing $(FFMPEG_BIN_DIR)/ ..."
+	@rm -rf $(FFMPEG_BIN_DIR)/
 
 # 一键部署到远程服务器
 deploy: docker-build

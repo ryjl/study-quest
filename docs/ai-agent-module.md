@@ -1029,21 +1029,36 @@ spa 阶段 `WORKDIR /build` + vite outDir `../backend/...`（相对当前目录�
 
 ### 镜像大小现状（已优化）
 
-镜像已从 **~665MB 优化到 ~370MB**（省 ~295MB，44% 缩减）。优化手段：把 apt `ffmpeg`（~470MB，拖了全套 libav codec 依赖）换成 ffbinaries 预编译的静态 ffmpeg+ffprobe（johnvansickle GPL 静态版，~58MB 两文件）。
+镜像大小演进：**~665MB（apt ffmpeg）→ ~370MB（ffbinaries 静态，segfault）→ ~241MB（自编译最小 ffmpeg）**。
 
-代码只用到三个 ffmpeg 调用（`episode_service.go`），静态 GPL 版全覆盖：
+**当前方案：自编译最小白名单 ffmpeg 7.1.1**（`make fetch-ffmpeg`，`scripts/build-ffmpeg.sh`）。
+
+为什么不是预编译静态版：
+- **ffbinaries / johnvansickle 全系列静态构建在新内核上对任何网络协议输入（http/https URL）都 segfault**（exit 139）——probeMedia 走云盘 HTTPS URL 必崩。实测 v6.1 和 v7.0.2 都崩，是 gcc 8 工具链 + 静态 glibc 在新内核 socket 路径的 ABI 不兼容，不是版本问题。这是 ffbinaries 方案被废弃的直接原因。
+- BtbN 预编译虽不崩，但是"全量 codec"配置，ffmpeg+ffprobe 两文件 222MB——而本项目只用 ffprobe 读 metadata + ffmpeg 截一帧/提取封面，95% codec 是死重。
+
+自编译用 `--disable-everything` + 白名单开启现实可能遇到的所有格式：
+- 容器：mp4/mkv/avi/wmv/flv/webm/ts/rm
+- 视频解码：h264/hevc/vp9/vp8/av1/mpeg4/mpeg2/theora/wmv3/vc1/msmpeg4v3/rv30/rv40/flv1/mjpeg
+- 音频解码：aac/mp3/ac3/eac3/flac/opus/vorbis/pcm
+- 编码：mjpeg（截帧输出）
+- 协议：file/pipe/http/https（OpenSSL 后端）
+
+产物 ~17MB（两个二进制），比 ffbinaries 152MB 省 135MB，比 BtbN 全量 222MB 省 205MB。
+
+**编译缓存策略**（关键设计）：不在 Dockerfile 里编译（否则每次 `docker build --no-cache` 或换机器都要等 8 分钟），而是 `make fetch-ffmpeg` 在本地用 docker 编译到 `backend/data/ffmpeg-bin/`（gitignored），Dockerfile 只 COPY。模式照搬已有的 `fetch-ai-models`。改 configure 选项时：`make clean-ffmpeg && make fetch-ffmpeg`。
+
+代码只用到三个 ffmpeg 调用（`episode_service.go`），白名单全覆盖：
 - `ffprobe` 探测 metadata（时长/编码/分辨率）
 - `ffmpeg -vframes 1` 截一帧做封面（`extractScreenshot`）
 - `ffmpeg -c copy` 提内嵌封面（`extractEmbeddedCover`）
-不转码，所以不需要 apt ffmpeg 的全套编码器依赖。
+不转码，所以不需要全套编码器依赖。
 
-`Dockerfile` 实现细节：新增独立 `ffmpeg-static` stage 下载解压两个静态二进制到 `/usr/local/bin/`，运行时 stage `apt-get install` 里**删掉 `ffmpeg`**，改用 `COPY --from=ffmpeg-static`。源是 GitHub release zip（ffbinaries-prebuilt v6.1），`--retry 3` 兜底早期 docker build 里偶发的 404。实测在容器内对真实 mp4 跑 ffprobe + ffmpeg 截帧均正常。
-
-`docker history` 各层占比（优化后）：
+`docker history` 各层占比（自编译 ffmpeg 后）：
 - debian-slim 基础 ~75MB
 - ONNX 模型 ~47MB（必要，baked-in）
 - Go 二进制 ~14MB
-- 静态 ffmpeg+ffprobe ~58MB
+- 自编译 ffmpeg+ffprobe ~17MB
 - ca-certs/tzdata/curl ~15MB
 
-仍可能的后续优化（暂不做）：UPX 压缩二进制（省 ~10MB，收益小）、probe worker 外置（架构级，主镜像完全不带 ffmpeg）。
+**已知遗留（不影响主线）**：天翼云 OBS host（`obs-ynkmfy-suzhou-home.obs.cn-jssz1.ctyun.cn`，约占 lesson 视频 80%）对 ffmpeg/ffprobe 的 TLS 连接有偶发 RST 现象。`probeMedia`/`extractScreenshot`/`extractEmbeddedCover` 都已加 `-reconnect` 参数 + 3 次重试（见 `episode_service.go` 的 `runFFmpegWithRetry`），实测成功率约 75-85%。剩余失败的多扫几轮「扫描缺失时长」会逐步补齐——这是云盘 CDN 网络抖动，不是 ffmpeg 问题。
