@@ -928,8 +928,12 @@ func (AIProvider) TableName() string { return "ai_providers" }
 type AIJob struct {
 	ID          uint       `gorm:"primaryKey;autoIncrement"`
 	JobType     string     `gorm:"size:20;not null;index"` // segment | summary | quiz | advice | course_summary | user_report
-	EpisodeID   uint       `gorm:"index;not null"`
-	CourseID    uint       `gorm:"index;not null"`
+	// EpisodeID/CourseID 是 *uint(可空):subject 级 advice job 不属于任何 episode/
+	// course,enqueueAdviceJob 对它们写 nil。以前是 `uint not null` 但代码塞 0,
+	// 形式上的约束没保护——0 是合法整数值,SQLite 接受,但语义撒谎(指向不存在的
+	// episode)。改成显式 nil 让"无对应实体"的语义诚实表达。读处用 ptrVal() deref。
+	EpisodeID   *uint      `gorm:"index"`
+	CourseID    *uint      `gorm:"index"`
 	UserID      *uint      `gorm:"index"` // nullable: segment/summary leave it NULL; quiz jobs bind to a specific user (per-user adaptive generation)
 	Status      string     `gorm:"size:20;not null;default:'queued';index"`
 	Priority    int        `gorm:"default:0"`
@@ -944,6 +948,22 @@ type AIJob struct {
 	PayloadJSON string `gorm:"type:text"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+}
+
+// PtrVal 把可空的 *uint 安全 deref 成 uint,nil 返回 0。供所有读 AIJob.EpisodeID /
+// CourseID(以及未来其它可空 uint 列)的调用点使用,集中一处避免散落 nil 判断。
+//
+// 背景见 AIJob 字段注释:EpisodeID/CourseID 改成 *uint 是为了修"形式 not null 但代码
+// 塞 0"的 bug —— subject 级 advice job 现在写 nil 而不是 0,语义诚实。所有读处用 PtrVal
+// 把 nil 转回 0 保持向后兼容(uint 0 在老逻辑里一直表示"无对应实体")。
+//
+// 放在 model 包(不是 service)因为 handler/admin_ai.go 也要 deref(转 aiJobDTO 时),
+// 放 model 让两个包都能用,不破坏包依赖方向。
+func PtrVal(p *uint) uint {
+	if p != nil {
+		return *p
+	}
+	return 0
 }
 
 // ContentChunk is one retrievable unit of the RAG corpus, source-agnostic so
@@ -966,6 +986,11 @@ type ContentChunk struct {
 	Text       string  `gorm:"type:text;not null"`
 	Embedding  string  `gorm:"type:text"` // JSON []float32, length = embedder Dim
 	CreatedAt  time.Time
+	// FK 关系(单向,AI 附加层):删 episode/course 时 DB 自动 CASCADE 清本表。
+	// 关系字段只在 AI 侧声明,core 结构体(Episode/Course)零感知,保证 AI 关闭时
+	// core 包运行不查询任何 AI 表。
+	Episode Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE" json:"-"`
+	Course  Course  `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // AISummary is the agent-generated summary for one episode (one row per
@@ -979,6 +1004,9 @@ type AISummary struct {
 	ModelUsed  string `gorm:"size:255"`
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// FK 关系(AI 附加层,单向):删 episode/course 时 DB CASCADE 清本表。
+	Episode Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE" json:"-"`
+	Course  Course  `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // KnowledgeMemory is the per-user learning state for one knowledge-point chunk
@@ -999,6 +1027,11 @@ type KnowledgeMemory struct {
 	LastReviewed *time.Time
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	// FK 关系(AI 附加层,单向):删 user/episode/course/chunk 时 DB CASCADE 清本表。
+	User    User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"-"`
+	Episode Episode       `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE" json:"-"`
+	Course  Course        `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE" json:"-"`
+	Chunk   ContentChunk  `gorm:"foreignKey:ChunkID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // Quiz is one generated quiz set for a (user, episode). Questions belong to it.
@@ -1034,6 +1067,11 @@ type Quiz struct {
 	// 产生 answer 行,后者不能误判为已交卷。
 	SubmittedAt *time.Time
 	CreatedAt  time.Time
+	// FK 关系(AI 附加层,单向):删 user/episode/course 时 DB CASCADE 清本表。
+	// Quiz 是 Question/Answer 的父表(各自有 FK 指回 Quiz),CASCADE 会级联到它们。
+	Episode Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE" json:"-"`
+	Course  Course  `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE" json:"-"`
+	User    User    `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // Question is one question in a Quiz. ChunkID links it to the knowledge-point
@@ -1077,6 +1115,10 @@ type Question struct {
 	// (Phase B 之前生成的题没有此字段,视为不可跳转)。
 	HasJump bool `gorm:"default:false"`
 	CreatedAt   time.Time
+	// FK 关系(AI 附加层,单向):删 Quiz 时 DB CASCADE 清本表(以前最大孤儿源)。
+	// Chunk 关系不加:ChunkID 可空(合成题),且 ContentChunk 删时 Question 不应被级联
+	// 清(quiz 可能仍想引用它),让 Question 跟随 Quiz 生命周期走。
+	Quiz Quiz `gorm:"foreignKey:QuizID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // Answer records one user answer to one Question (append-only). Written on
@@ -1110,6 +1152,10 @@ type Answer struct {
 	UserAnswerText string `gorm:"type:text"`
 	Correct        bool
 	AnsweredAt     time.Time
+	// FK 关系(AI 附加层,单向):删 Question/Quiz/User 时 DB CASCADE 清本表。
+	Question Question `gorm:"foreignKey:QuestionID;constraint:OnDelete:CASCADE" json:"-"`
+	Quiz     Quiz     `gorm:"foreignKey:QuizID;constraint:OnDelete:CASCADE" json:"-"`
+	User     User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // AIRun records ONE LLM call's decision trace — input snapshot, the raw model
@@ -1145,6 +1191,11 @@ type AIRun struct {
 	SystemPromptText string `gorm:"column:system_prompt_text;type:text"`
 	UserPromptText   string `gorm:"column:user_prompt_text;type:text"`
 	CreatedAt        time.Time `json:"created_at"`
+	// FK 关系(AI 附加层,单向):删 AIJob 时 DB CASCADE 清本表(以前孤儿源,因为
+	// job_id 无 FK,删 AIJob 后 AIRun.job_id 悬空)。JobID=0 的 ad-hoc run(chat,
+	// 未来)没有对应 job,FK 约束对它们是 RESTRICT —— 但目前所有 AIRun 都挂在 job 上,
+	// 这条约束现在加是安全的。等 chat 上线时若需要 ad-hoc run,届时单独处理。
+	Job AIJob `gorm:"foreignKey:JobID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // ChatSession / ChatMessage hold the multi-turn chat (Phase D capability) so a
@@ -1205,6 +1256,8 @@ type AICourseSummary struct {
 	GeneratedAt time.Time `gorm:"not null"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// FK 关系(AI 附加层,单向):删 course 时 DB CASCADE 清本表。
+	Course Course `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 // UserStudyReport 是 Phase E 的产物:admin 视角下"某学生跨课程学习情况"的 agent 报告。
@@ -1221,6 +1274,9 @@ type UserStudyReport struct {
 	GeneratedAt time.Time `gorm:"not null"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// FK 关系(AI 附加层,单向):删 user 时 DB CASCADE 清本表(以前 user_repo.Delete
+	// 完全不动 AI 数据,是孤儿数据主源)。
+	User User `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
 func AutoMigrate(db *gorm.DB) error {

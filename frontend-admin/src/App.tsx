@@ -13,8 +13,7 @@ import { Releases } from './pages/Releases';
 import { ReadingRoom } from './pages/ReadingRoom';
 import { WatchHistory } from './pages/WatchHistory';
 import { SubtitleQueue } from './pages/SubtitleQueue';
-import { AIWorkflow } from './pages/AIWorkflow';
-import { AIUserView } from './pages/AIUserView';
+import { AIConsole } from './pages/AIConsole';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -51,8 +50,11 @@ export default function App() {
         <Route path="watch-history" element={<WatchHistory />} />
         <Route path="courses" element={<Courses />} />
         <Route path="subtitle-queue" element={<SubtitleQueue />} />
-        <Route path="ai-workflow" element={<AIWorkflow />} />
-        <Route path="ai-user" element={<AIUserView />} />
+        {/* 2026-07-19 集中化:旧 AI Workflow / AI 用户视图路由重定向到 AI 控制台
+            对应 tab,兼容老书签。AIConsole 内嵌原 AIWorkflow / AIUserView 组件,功能不丢。 */}
+        <Route path="ai-workflow" element={<Navigate to="/admin/ai-console?tab=jobs" replace />} />
+        <Route path="ai-user" element={<Navigate to="/admin/ai-console?tab=users" replace />} />
+        <Route path="ai-console" element={<AIConsole />} />
         <Route path="reading-room" element={<ReadingRoom />} />
         <Route path="classification" element={<Classification />} />
         <Route path="badges" element={<Badges />} />

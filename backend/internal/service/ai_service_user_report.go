@@ -262,7 +262,7 @@ func (s *aiService) HasPendingUserReportJob(userID uint) bool {
 }
 
 // enqueueUserReportJob 构造并持久化一条 user_report job。scope 就是 user_id(报告 per-
-// user,不需要 PayloadJSON 存额外 scope;episode_id/course_id 留 0,因为不属于具体课时/
+// user,不需要 PayloadJSON 存额外 scope;EpisodeID/CourseID 留 nil,因为不属于具体课时/
 // 课程)。低优先级(和 advice/summary 同级):admin 触发,不在屏幕前干等(页面显示
 // generating + 轮询),不该饿死 quiz(高优先级)。
 func (s *aiService) enqueueUserReportJob(userID uint) error {

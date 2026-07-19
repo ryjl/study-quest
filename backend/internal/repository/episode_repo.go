@@ -163,21 +163,17 @@ func (r *episodeRepo) Delete(id uint) error {
 		// carries _foreign_keys=on, but the explicit deletes are kept as
 		// defense-in-depth and to cover rows written before that fix landed.
 		//
-		// The AI / observability tables below carry a bare episode_id column
-		// with NO GORM foreignKey relation, so the DB cascade never reaches
-		// them — they MUST be removed by hand or they'd orphan (and block
-		// queries that join on episode_id, like the admin watch timeline).
+		// AI 表(AISummary/ContentChunk/KnowledgeMemory/Quiz → Question → Answer,
+		// 以及 AIRun via AIJob)现在都声明了 OnDelete:CASCADE 关系(2026-07-19 这轮加),
+		// DB 会自动级联清。只剩两类需要手动:
+		//   - AIJob:EpisodeID 是 *uint(无 FK,因为 subject/user_report job 不属于任何
+		//     episode),必须手清,否则会留指向已删 episode 的孤儿 job。
+		//   - StudyAdvice scope=episode:scope_id 多态(无 FK),必须 scope-qualify 手清。
 		tx.Delete(&model.Subtitle{}, "episode_id = ?", id)
 		tx.Delete(&model.UserProgress{}, "episode_id = ?", id)
 		tx.Delete(&model.EntertainmentProgress{}, "episode_id = ?", id)
 		tx.Delete(&model.WatchEvent{}, "episode_id = ?", id)
 		tx.Delete(&model.AIJob{}, "episode_id = ?", id)
-		tx.Delete(&model.AISummary{}, "episode_id = ?", id)
-		tx.Delete(&model.ContentChunk{}, "episode_id = ?", id)
-		tx.Delete(&model.KnowledgeMemory{}, "episode_id = ?", id)
-		tx.Delete(&model.Quiz{}, "episode_id = ?", id)
-		// StudyAdvice.scope_id is polymorphic (episode | course | subject) and
-		// carries no FK at all, so scope-qualify the delete.
 		tx.Delete(&model.StudyAdvice{}, "scope = ? AND scope_id = ?", "episode", id)
 		return tx.Delete(&model.Episode{}, id).Error
 	})

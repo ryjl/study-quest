@@ -263,6 +263,17 @@ func RegisterRoutes(
 		// wildcard 名字一致,用 :id 会和 :userID 冲突 panic)。
 		adm.POST("/api/ai/users/:userID/study-report", admin.TriggerUserStudyReport)
 		adm.GET("/api/ai/users/:userID/study-report", admin.GetUserStudyReport)
+		// 2026-07-19: 重新生成 + 删除(物理删)端点,AI 控制台中枢的后端。
+		// regen —— 覆盖式重跑,在途 job 去重。
+		adm.POST("/api/ai/users/:userID/quizzes/regenerate", admin.RegenerateUserQuiz)
+		adm.POST("/api/ai/users/:userID/advice/regenerate", admin.RegenerateUserAdvice)
+		adm.GET("/api/ai/users/:userID/advice", admin.ListUserAdvice)
+		// delete —— 物理删,和 archive 区分(archive 是保留历史)。
+		adm.DELETE("/api/ai/summaries/:episodeID", admin.DeleteAISummary)
+		adm.DELETE("/api/ai/quizzes/:quizID", admin.DeleteAIQuiz)
+		adm.DELETE("/api/ai/users/:userID/advice", admin.DeleteUserAdvice)
+		adm.DELETE("/api/ai/courses/:id/course-summary", admin.DeleteCourseSummary)
+		adm.DELETE("/api/ai/users/:userID/study-report", admin.DeleteUserStudyReport)
 
 		// Stats / Probe
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)

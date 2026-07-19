@@ -41,6 +41,9 @@ type AIContentRepository interface {
 	// ── ai_summaries ──
 	GetSummary(episodeID uint) (*model.AISummary, error)
 	UpsertSummary(s *model.AISummary) error
+	// DeleteSummary 删除某 episode 的 summary(物理删)。供 admin 控制台"删除"按钮用。
+	// 重新生成走 Upsert(覆盖);删除是独立操作,语义是"清掉,下次想再要时重新生成"。
+	DeleteSummary(episodeID uint) error
 
 	// ── ai_jobs ──
 	CreateJob(job *model.AIJob) error
@@ -92,6 +95,10 @@ type AIContentRepository interface {
 	GetQuiz(userID, episodeID uint) (*model.Quiz, error)
 	// GetQuizByID loads one quiz by its primary key (admin detail view).
 	GetQuizByID(quizID uint) (*model.Quiz, error)
+	// DeleteQuiz 物理删一条 quiz(连同其 Question/Answer 由 FK CASCADE 清)。
+	// 和 archive(active→archived)语义不同:archive 保留历史,delete 是彻底清除。
+	// 供 admin 控制台"删除"按钮用。
+	DeleteQuiz(quizID uint) error
 	// GetQuestions returns a quiz's questions ordered by id.
 	GetQuestions(quizID uint) ([]model.Question, error)
 	// CreateQuiz replaces the (user, episode) quiz in one transaction: ARCHIVES
@@ -157,6 +164,13 @@ type AIContentRepository interface {
 	// keeping only the latest snapshot. The unique index on the triple is the
 	// DB-level guard; this Save relies on it.
 	UpsertAdvice(a *model.StudyAdvice) error
+	// ListUserAdvice 列出某用户的所有 advice(所有 scope,所有 scope_id),按
+	// generated_at DESC 排序。给 admin 控制台显示"这个学生有哪些 advice"用。
+	ListUserAdvice(userID uint) ([]model.StudyAdvice, error)
+	// DeleteAdvice 物理删某 (user, scope, scope_id) 的 advice。重新生成走 Upsert
+	// (覆盖);删除是独立操作。多态 scope_id 不影响这里 —— 删除按 (user, scope, scope_id)
+	// 三元组定位,和 GetAdvice 一致。
+	DeleteAdvice(userID uint, scope string, scopeID uint) error
 
 	// ── ai_course_summaries (Phase D: course-unique 课程级总结) ──
 	// GetCourseSummary 取某课程的总结(unique on course_id,所以最多一条)。无记录返回
@@ -167,6 +181,8 @@ type AIContentRepository interface {
 	// 重新生成完全覆盖旧总结——和 UpsertAdvice/UpsertSummary 同语义)。admin 触发重生成
 	// 时调用。
 	UpsertCourseSummary(s *model.AICourseSummary) error
+	// DeleteCourseSummary 物理删某课程的总结(unique on course_id,最多一条)。
+	DeleteCourseSummary(courseID uint) error
 
 	// ── user_study_reports (Phase E: admin 跨课程学习报告) ──
 	// GetUserStudyReport 取某用户的最新学习报告(unique on user_id,所以最多一条)。
@@ -175,6 +191,8 @@ type AIContentRepository interface {
 	// UpsertUserStudyReport 替换该用户的旧报告(unique index on user_id 是 DB 级守卫,
 	// 重新生成完全覆盖旧报告——和 UpsertAdvice 同语义)。admin 触发重生成时调用。
 	UpsertUserStudyReport(r *model.UserStudyReport) error
+	// DeleteUserReport 物理删某用户的学习报告(unique on user_id,最多一条)。
+	DeleteUserReport(userID uint) error
 }
 
 // ErrJobNotProcessing is returned by ResetJob when the targeted job isn't in
@@ -265,6 +283,11 @@ func (r *aiContentRepo) GetSummary(episodeID uint) (*model.AISummary, error) {
 func (r *aiContentRepo) UpsertSummary(s *model.AISummary) error {
 	// uniqueIndex on episode_id → upsert: replace if exists (re-generation).
 	return r.db.Save(s).Error
+}
+
+// DeleteSummary 物理删某 episode 的 summary(unique on episode_id,最多一条)。
+func (r *aiContentRepo) DeleteSummary(episodeID uint) error {
+	return r.db.Where("episode_id = ?", episodeID).Delete(&model.AISummary{}).Error
 }
 
 // --- ai_jobs ---
@@ -488,6 +511,13 @@ func (r *aiContentRepo) GetQuizByID(quizID uint) (*model.Quiz, error) {
 		return nil, err
 	}
 	return &q, nil
+}
+
+// DeleteQuiz 物理删一条 quiz。Question/Answer 通过 FK OnDelete:CASCADE 自动跟随清除
+// (2026-07-19 加的 FK,以前删 quiz 会把 Question/Answer 留成孤儿)。和 archive 不同:
+// archive 翻 status='archived' 保留历史;delete 彻底清除。供 admin 控制台"删除"按钮。
+func (r *aiContentRepo) DeleteQuiz(quizID uint) error {
+	return r.db.Delete(&model.Quiz{}, quizID).Error
 }
 
 func (r *aiContentRepo) GetQuestions(quizID uint) ([]model.Question, error) {
@@ -751,6 +781,23 @@ func (r *aiContentRepo) UpsertAdvice(a *model.StudyAdvice) error {
 	}).Create(a).Error
 }
 
+// ListUserAdvice 列出某用户的所有 advice(所有 scope 和 scope_id)。给 admin 控制台
+// "这个学生有哪些 advice + 删除按钮"用。按 generated_at DESC。
+func (r *aiContentRepo) ListUserAdvice(userID uint) ([]model.StudyAdvice, error) {
+	var rows []model.StudyAdvice
+	if err := r.db.Where("user_id = ?", userID).Order("generated_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// DeleteAdvice 物理删某 (user, scope, scope_id) 的 advice。多态 scope_id 不影响
+// 这里 —— 删除按三元组定位,语义同 GetAdvice。
+func (r *aiContentRepo) DeleteAdvice(userID uint, scope string, scopeID uint) error {
+	return r.db.Where("user_id = ? AND scope = ? AND scope_id = ?", userID, scope, scopeID).
+		Delete(&model.StudyAdvice{}).Error
+}
+
 // --- ai_course_summaries (Phase D: course-unique 课程级总结) ---
 
 // GetCourseSummary 按 course_id 取该课程的总结(unique index 保证最多一条)。无记录返回
@@ -777,6 +824,11 @@ func (r *aiContentRepo) UpsertCourseSummary(s *model.AICourseSummary) error {
 	}).Create(s).Error
 }
 
+// DeleteCourseSummary 物理删某课程的总结(unique on course_id,最多一条)。
+func (r *aiContentRepo) DeleteCourseSummary(courseID uint) error {
+	return r.db.Where("course_id = ?", courseID).Delete(&model.AICourseSummary{}).Error
+}
+
 // --- user_study_reports (Phase E: admin 跨课程学习报告) ---
 
 // GetUserStudyReport 按 user_id 取该用户的最新学习报告(unique index 保证最多一条)。
@@ -800,4 +852,9 @@ func (r *aiContentRepo) UpsertUserStudyReport(rep *model.UserStudyReport) error 
 		Columns:   []clause.Column{{Name: "user_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"report_text", "model_used", "generated_at", "updated_at"}),
 	}).Create(rep).Error
+}
+
+// DeleteUserReport 物理删某用户的学习报告(unique on user_id,最多一条)。
+func (r *aiContentRepo) DeleteUserReport(userID uint) error {
+	return r.db.Where("user_id = ?", userID).Delete(&model.UserStudyReport{}).Error
 }

@@ -96,4 +96,109 @@ describe('api client', () => {
     await api.reorderEpisodes([3, 1, 2]);
     expect(JSON.parse(capturedBody!)).toEqual({ ids: [3, 1, 2] });
   });
+
+  // ---- AI regenerate + delete endpoints (2026-07-19) ----
+
+  it('regenerateUserQuiz POSTs episode_id in body', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"status":"generating"}') });
+    });
+    await api.regenerateUserQuiz(7, 42);
+    expect(captured.url).toBe('/admin/api/ai/users/7/quizzes/regenerate');
+    expect(captured.init?.method).toBe('POST');
+    expect(JSON.parse((captured.init as RequestInit).body as string)).toEqual({ episode_id: 42 });
+  });
+
+  it('regenerateUserAdvice POSTs scope + scope_id in body', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"status":"generating"}') });
+    });
+    await api.regenerateUserAdvice(7, 'course', 13);
+    expect(captured.url).toBe('/admin/api/ai/users/7/advice/regenerate');
+    expect(captured.init?.method).toBe('POST');
+    expect(JSON.parse((captured.init as RequestInit).body as string)).toEqual({ scope: 'course', scope_id: 13 });
+  });
+
+  it('listUserAdvice GETs the advice list', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    const rows = [{ scope: 'episode', scope_id: 42, advice_text: 'x', generated_at: '2026-07-19T00:00:00Z' }];
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(rows)) });
+    });
+    const res = await api.listUserAdvice(7);
+    expect(captured.url).toBe('/admin/api/ai/users/7/advice');
+    expect(captured.init?.method).toBeUndefined(); // GET — no method override passed
+    expect(res).toEqual(rows);
+  });
+
+  it('deleteSummary sends DELETE for the episode summary', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":true}') });
+    });
+    await api.deleteSummary(42);
+    expect(captured.url).toBe('/admin/api/ai/summaries/42');
+    expect(captured.init?.method).toBe('DELETE');
+  });
+
+  it('deleteAiQuiz sends DELETE for the quiz id', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":true}') });
+    });
+    await api.deleteAiQuiz(99);
+    expect(captured.url).toBe('/admin/api/ai/quizzes/99');
+    expect(captured.init?.method).toBe('DELETE');
+  });
+
+  it('deleteUserAdvice encodes scope + scope_id in query string', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":true}') });
+    });
+    await api.deleteUserAdvice(7, 'episode', 42);
+    expect(captured.url).toBe('/admin/api/ai/users/7/advice?scope=episode&scope_id=42');
+    expect(captured.init?.method).toBe('DELETE');
+  });
+
+  it('deleteCourseSummary sends DELETE for the course id', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":true}') });
+    });
+    await api.deleteCourseSummary(5);
+    expect(captured.url).toBe('/admin/api/ai/courses/5/course-summary');
+    expect(captured.init?.method).toBe('DELETE');
+  });
+
+  it('deleteUserStudyReport sends DELETE for the user id', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":true}') });
+    });
+    await api.deleteUserStudyReport(7);
+    expect(captured.url).toBe('/admin/api/ai/users/7/study-report');
+    expect(captured.init?.method).toBe('DELETE');
+  });
+
+  it('triggerCourseSummary POSTs to the course-summary endpoint', async () => {
+    let captured: { url?: string; init?: RequestInit } = {};
+    global.fetch = vi.fn().mockImplementation((url, init) => {
+      captured = { url: url as string, init };
+      return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"status":"queued"}') });
+    });
+    await api.triggerCourseSummary(5);
+    expect(captured.url).toBe('/admin/api/ai/courses/5/course-summary');
+    expect(captured.init?.method).toBe('POST');
+  });
 });

@@ -162,3 +162,50 @@
 - `CLAUDE.md`「Workflow: when to parallelize with subagents」—— 上一轮 4 个 bug 的教训
 - `TODO.md` P0 第一项 —— 本需求的正式条目
 - `docs/ai-agent-module.md` —— AI 模块整体设计
+
+---
+
+## 实施记录（2026-07-19）
+
+本轮已交付（代码在 working tree，尚未 commit）。对照本文档（上方"建议的交付范围"）逐条核对实际落地与分歧。
+
+### ✅ 全部命中（按 handoff 范围）
+
+- **5 类产物的 regen + DELETE 都做了**（handoff「必做 1」+「选做 3」一起做，而非二选一）。覆盖式重新生成（`POST .../quizzes/regenerate`、`POST .../advice/regenerate`、Course Summary / User Study Report 复用现有 trigger）+ 5 条 DELETE 端点（summaries / quizzes / advice / course-summary / study-report，全部 idempotent）。`RegenerateAdvice` 跳过 mastery gate —— admin 可强制重算，无需学生先答题。`RegenerateQuizForUser` 与客户端 `RegenerateQuiz` 共享实现。
+- **EnqueueSummary 去重门**（handoff「必做 2」）：照抄 `hasPendingJob("segment", id)` / `hasPendingQuizJob` 模式。有 queued/processing summary job 直接返回，不再入队。
+- **Cascade cleanup**（handoff「顺带 4」）：已解决，但**实现路径与 handoff 建议不一致**（见下方分歧）。
+- **AIConsole 集中化**（非 handoff 原始范围，但和「admin 端零入口」同源）：新建 `pages/AIConsole.tsx`，5 tabs（重新生成 / Prompt 配置 / 任务队列 / 学生数据 / Provider）。
+
+### ⚠️ 与 handoff 的分歧（诚实记录）
+
+**Cascade cleanup 实现路径不同（FK CASCADE 而非 service-layer 手动 delete）。**
+- handoff 说「在 service 层的 Delete 方法里显式清理 AI 数据」—— 这是当时以为 AI 表「无级联」的方案。
+- **实际情况比 handoff 描述的更复杂**：episode/course repo 的 Delete **本来就有 PARTIAL 手动清理**（handoff「无级联」的判断错了），但 Question/Answer/AIRun 这些下游表仍在 orphan；更严重的真 bug 是 **`userRepo.Delete` 之前清理 ZERO AI tables** —— 删用户时 AI 数据完全不动。
+- 最终方案：给 9 张 AI 表加 `gorm:"foreignKey:XxxID;constraint:OnDelete:CASCADE"`（**单向 AI 侧声明，core Episode/Course/User 零感知**，守住"AI 是 add-on 层"原则），让 GORM 自动级联；repo Delete 里只剩 AIJob（无 FK）和 StudyAdvice（polymorphic scope_id）还需要手动 `tx.Delete`。同时补了 `userRepo.Delete` 漏清 AI 数据的 bug。详见 TODO.md 顶部本轮条目。
+
+**AIConsole 集中化的范围比 handoff 大得多。**
+handoff 没提议把 CourseModal 的 AI 配置 / SubjectModal 的 AI 配置 / Settings 的 Provider 卡片都搬进控制台。本轮实际把这三处全搬了，抽出公共组件 `PromptConfigTab` + `AIHintFields`（5 textarea）。CourseModal 从 320 行降到 ~200 行（125 行 AI 相关代码挪走），SubjectModal 减 62 行。理由：跨切面功能集中到一个页面，实体 modal 只管实体本身的属性。
+
+### ❌ 明确放弃
+
+- **客户端 advice 刷新按钮**（handoff「顺带 5」）：**不做**。用户决策 —— 既然 admin 端能删 advice（删后客户端 lazy GET 会触发重算），客户端就不需要单独的刷新按钮。少一个按钮、少一份 Flutter 改动。
+
+### ➕ handoff 未覆盖的新增项
+
+- **AIJob.EpisodeID/CourseID "形式 not null" bug 修复**（FK 工作中顺带发现）。原本 `uint gorm:"not null"` 接受 0（SQLite 把 0 当合法整数），subject-scope advice job 静默写入 `episode_id=0` 指向不存在的 episode。加 FK 时立刻暴露（FK 会拒掉这些 0 行）。改成 `*uint`（nullable）+ 新增 `model.PtrVal(*uint) uint` helper + 更新 ~9 个 call site。
+- **象棋升系统级 + AIConfig seed**。删 `frontend-admin/src/lib/aiHintTemplates.ts` 死代码时发现：象棋模板只在那个文件里，没有后端 seed。顺手在 `SeedDefaultSubjects` 把 `xiangqi` 升为 `IsSystem=true` 并 seed 5 字段 AIConfig（内容来自原前端模板，含"车→居"纠错）。math/english 之前就已有 seed，象棋是本轮补的。手动 sqlite 查询确认：`is_system=1`，`ai_config_json` 489 字节，5 字段全在。
+
+### 🚨 handoff 的重要勘误（教训）
+
+handoff 第 33-34 行声称「入队 UI 在 CourseTree/CoursesContent，不在 AIWorkflow」、`api.enqueueAiJobs` 被接进 CourseTree/CoursesContent —— **这是错的**。`grep -r enqueueAiJobs frontend-admin/src` 在当前代码里**返回零调用方**：SPA 上从未有过"入队 summary"的 UI，`enqueueAiJobs` 方法存在但没人调。
+
+**教训**：handoff 是上一会话结束时整理的快照，文件/行号/调用关系可能与现在的代码漂移。把 handoff 当 ground truth 来做工作分解（"现有覆盖机制在 X 文件，我只要补 Y"）会过度或不足地 scope。下次读 handoff 起步前，先 `grep` 验证关键文件/调用是否还在、还那么接的。这一条已经写进 `CLAUDE.md`「Workflow: when to parallelize with subagents」section。
+
+### 验证
+
+- `go build` ✓
+- `go test ./internal/service/ ./internal/repository/` ✓
+- `npx tsc --noEmit` ✓
+- `npm test` 55/55 passed ✓（`lib/api.test.ts` +9 tests）
+- DB 删后重建，AutoMigrate 从零生成（FK 约束 baked in）
+- 手动启动服务器 + sqlite 查询确认象棋 seed

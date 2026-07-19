@@ -123,9 +123,12 @@ func (s *aiService) runAdviceJob(job *model.AIJob) {
 // 默认"episode 级"处理(用 job.EpisodeID)。这让 episode 级 advice job 不需要 PayloadJSON。
 func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, error) {
 	userID := *job.UserID
-	// 默认 episode 级。
+	// 默认 episode 级。EpisodeID 现在是 *uint,subject 级 advice job 是 nil ——
+	// ptrVal 把 nil 转成 0 作为默认 scopeID,buildAdviceRequest 后面会从 PayloadJSON
+	// 覆盖 scope/scopeID(advice job 一定带 PayloadJSON),所以这里的默认值实际只对
+	// 假设的"无 payload episode advice job"生效(enqueueAdviceJob 现在不创建这种)。
 	scope := agent.ScopeEpisode
-	scopeID := job.EpisodeID
+	scopeID := model.PtrVal(job.EpisodeID)
 	subjectID := uint(0)
 	if job.PayloadJSON != "" {
 		var p struct {
@@ -148,8 +151,8 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		UserID:    userID,
 		Scope:     scope,
 		ScopeID:   scopeID,
-		EpisodeID: job.EpisodeID,
-		CourseID:  job.CourseID,
+		EpisodeID: model.PtrVal(job.EpisodeID),
+		CourseID:  model.PtrVal(job.CourseID),
 		SubjectID: subjectID,
 	}
 
@@ -332,24 +335,61 @@ func (s *aiService) EnqueueAdviceForEpisode(userID, episodeID uint) error {
 	return s.enqueueAdviceJob(userID, agent.ScopeEpisode, episodeID)
 }
 
+// RegenerateAdvice 是 admin 触发的强制重生成 advice 入口(三档 scope 都支持)。
+// 和 GetOrEnqueueAdvice 的关键差异:
+//   - 跳过 mastery gate:GetOrEnqueueAdvice 在学生没做题时返回 unavailable,避免空跑;
+//     admin 强制重跑应能跑(即便 advice 内容多半是"建议先做题")。
+//   - 在途去重照抄 hasPendingAdviceJob,避免连点堆 job。
+//
+// 返回 status="generating"(已入队)或 "unavailable"(AI off)。和 lazy 生成语义对齐,
+// admin SPA 据此决定显示"重新生成中"还是直接关闭弹窗。
+//
+// 这是 admin 给 course/subject 级 advice"刷新"的唯一入口(lazy 生成只在 episode 级走,
+// course/subject 级以前一旦生成就永远不变)。admin 用这个端点能覆盖刷新任何 advice。
+func (s *aiService) RegenerateAdvice(userID uint, scope string, scopeID uint) (string, error) {
+	// scope 白名单兜底(input validation,在任何 early-return 之前校验,避免 nil resolver
+	// 路径静默吞掉坏 scope)。handler 也校验,service 层独立守一道(defense-in-depth)。
+	switch scope {
+	case agent.ScopeEpisode, agent.ScopeCourse, agent.ScopeSubject:
+	default:
+		return adviceStatusUnavailable, fmt.Errorf("invalid scope: %s", scope)
+	}
+	if s.resolver == nil {
+		return adviceStatusUnavailable, nil
+	}
+	// 在途去重:已有 advice job 就不重复入队(和 EnqueueAdviceForEpisode 一致)。
+	if s.hasPendingAdviceJob(userID, scope, scopeID) {
+		return adviceStatusGenerating, nil
+	}
+	if err := s.enqueueAdviceJob(userID, scope, scopeID); err != nil {
+		return adviceStatusUnavailable, err
+	}
+	return adviceStatusGenerating, nil
+}
+
 // enqueueAdviceJob 构造并持久化一条 advice job。scope/scopeID 编码进 PayloadJSON
 // (episode/course 级也走 PayloadJSON,保持单一编码路径;buildAdviceRequest 会解码)。
 // episode_id/course_id 字段也填上(让 admin job 列表能按 episode/course 过滤,且
 // buildAdviceRequest 的默认 episode 级路径能用 job.EpisodeID)。
 func (s *aiService) enqueueAdviceJob(userID uint, scope string, scopeID uint) error {
 	// 先尝试解析 episodeID/courseID,让 AIJob 表的索引字段也准确(便于 admin 过滤 +
-	// jobNameCache 解析标题)。不同 scope 的 ID 含义不同:
-	var episodeID, courseID uint
+	// jobNameCache 解析标题)。不同 scope 的 ID 含义不同。EpisodeID/CourseID 是 *uint,
+	// 能解析出来的取地址,subject 级两者都 nil(不属于任何 episode/course)。
+	var episodeID, courseID *uint
 	switch scope {
 	case agent.ScopeEpisode:
-		episodeID = scopeID
+		// copy scopeID to local before taking address (avoid pointing at the param)
+		epID := scopeID
+		episodeID = &epID
 		if ep, err := s.episodeRepo.FindByID(scopeID); err == nil && ep != nil {
-			courseID = ep.CourseID
+			c := ep.CourseID
+			courseID = &c
 		}
 	case agent.ScopeCourse:
-		courseID = scopeID
+		c := scopeID
+		courseID = &c
 	case agent.ScopeSubject:
-		// subject 级两者都 0(不属于具体 episode/course)。
+		// subject 级两者都 nil(以前塞 0,现在诚实表达"无对应实体")。
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"scope":      scope,
@@ -388,8 +428,9 @@ func (s *aiService) hasPendingAdviceJob(userID uint, scope string, scopeID uint)
 	for _, j := range jobs {
 		if j.PayloadJSON == "" {
 			// 无 PayloadJSON 的 advice job 默认是 episode 级(buildAdviceRequest
-			// 的回退路径),用 job.EpisodeID 比较。
-			if scope == agent.ScopeEpisode && j.EpisodeID == scopeID {
+			// 的回退路径),用 job.EpisodeID 比较。EpisodeID 是 *uint,subject 级 job 为 nil
+			// (绝不会进 episode 分支,scope=subject 已在上面 if 处过滤),所以 deref 安全。
+			if scope == agent.ScopeEpisode && j.EpisodeID != nil && *j.EpisodeID == scopeID {
 				return true
 			}
 			continue

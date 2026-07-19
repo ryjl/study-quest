@@ -52,7 +52,11 @@ function jobDuration(j: AiJob): string {
   return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
 }
 
-export function AIWorkflow() {
+// embedded=true 时不渲染自己的 PageHeader —— 由父页面(AIConsole 的 jobs tab)提供
+// 统一的"AI 控制台"标题。独立路由 /admin/ai-workflow 已重定向到 AIConsole,所以
+// 实际上 embedded 总是 true;但保留 embedded 默认值 false 是为了将来万一有别的嵌入
+// 场景或独立路由复活时不破坏 API。
+export function AIWorkflow({ embedded = false }: { embedded?: boolean } = {}) {
   const [filter, setFilter] = useState<AiJobStatus | 'all'>('all');
 
   // Jobs + stats come back together from one endpoint. We poll only while
@@ -86,11 +90,13 @@ export function AIWorkflow() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="AI Workflow"
-        breadcrumb={[{ label: 'AI 运营' }]}
-        description="观测 AI 任务队列与 agent 决策痕迹。失败任务可重试。"
-      />
+      {!embedded && (
+        <PageHeader
+          title="AI Workflow"
+          breadcrumb={[{ label: 'AI 运营' }]}
+          description="观测 AI 任务队列与 agent 决策痕迹。失败任务可重试。"
+        />
+      )}
 
       {/* Stats bar */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">

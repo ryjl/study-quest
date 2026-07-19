@@ -111,6 +111,10 @@ When publishing via the admin Releases page, set version_code = N matching the
 pubspec. Multi-ABI builds (`make build-apk --split-per-abi`) produce one APK
 per ABI; upload each under the matching ABI so all device types get served.
 
+### Frontend: cross-cutting features get their own page, not scattered across entity modals
+
+AI 配置曾散落在三处 —— CourseModal 125 行、SubjectModal 62 行、Settings 的 Provider 卡片。集中到 `AIConsole` 后,实体 modal 缩到只管实体本身的属性。当一个功能的配置从 N 个不同实体编辑器里都能改,把它抽到独立页面 + 链接入口。这样实体 modal 只管实体本身,功能不和它不该绑的 CRUD 纠缠。本轮 AI 提示配置集中化后,CourseModal 从 320 行降到 ~200 行,125 行 AI 相关代码挪走;SubjectModal 减 62 行;Settings 的 Provider 卡片改成「前往 AI 控制台 →」链接。CourseModal/SubjectModal 各加一个「配置 →」深链到 `/admin/ai-console?tab=prompt&course=:id`(或 `&subject=:id`)预选实体。Course 级 AI 开关(`ai_summary_enabled`/`ai_quiz_enabled`)仍留在 CourseModal —— 那是 Course 实体本身的属性,不是 AI 配置。
+
 ### Workflow: when to parallelize with subagents vs. do it inline
 
 Subagents (parallel `Agent` tool calls) are great for **low-coupling,
@@ -167,6 +171,22 @@ Rules, learned from that round:
   yourself once N > ~3 and the files are coupled. Two agents doing
   genuinely-independent halves is fine; five agents doing one coupled
   pipeline is not.
+- **Handoff docs can be wrong; verify with grep before planning.** The
+  "AI regenerate" handoff said "入队 UI 在 CourseTree/CoursesContent"
+  but `grep -r enqueueAiJobs frontend-admin/src` returned zero callers —
+  the SPA surface existed but was never wired. Plans built on stale
+  handoff descriptions over- or under-scope the work. Always re-verify
+  file/line claims in handoff docs against the current code before
+  treating them as ground truth.
+- **"形式 not null" fields are the worst kind of tech debt.**
+  `AIJob.EpisodeID uint gorm:"not null"` accepted 0 (SQLite treats 0
+  as a valid integer), so subject-scope advice jobs silently wrote
+  `episode_id=0` pointing at a non-existent episode. The constraint
+  looked protective but wasn't. When we tried to add a FK, the bug
+  surfaced immediately (FK would reject the 0 rows). Lesson: any `not
+  null` column where the code path can produce a "no real entity"
+  value should be `*uint` (nullable) from day one, with the nil case
+  explicitly handled. Discovered during this round's FK cascade work.
 
 The bias should be: **default to inline for anything that touches the
 contract between layers; reach for subagents when the work is genuinely

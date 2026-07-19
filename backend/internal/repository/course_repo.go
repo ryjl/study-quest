@@ -123,22 +123,19 @@ func (r *courseRepo) Delete(id uint) error {
 		//
 		// GORM's declared OnDelete:CASCADE relations (chapters, quizzes, tags,
 		// course_grades via Course, and the cascade chain course→episode→
-		// subtitle/user_progress/entertainment_progress) now fire automatically
+		// subtitle/user_progress/entertainment_progress, 加上 2026-07-19 这轮
+		// 加的 AI 表级联:AISummary/ContentChunk/Quiz→Question→Answer/
+		// KnowledgeMemory/AICourseSummary/AIRun-via-AIJob)now fire automatically
 		// because _foreign_keys=on lives in the DSN. The per-episode deletes
 		// below are kept as explicit defense-in-depth and to cover rows that
 		// predate the constraint.
 		//
-		// HOWEVER several AI/observability tables carry a bare course_id /
-		// episode_id column with NO GORM foreignKey relation, so the CASCADE
-		// never reaches them. They MUST be cleaned here by hand:
-		//   - watch_events        (episode_id, no FK)
-		//   - ai_jobs             (course_id + episode_id, no FK)
-		//   - ai_summaries        (episode_id, no FK)
-		//   - content_chunks      (episode_id, no FK)
-		//   - knowledge_memory    (episode_id, no FK)
-		//   - quizzes             (episode_id, no FK)
-		//   - study_advice scope=course  (polymorphic scope_id, no FK)
-		//   - ai_course_summaries (course_id, no FK)
+		// 剩下必须手清的:
+		//   - watch_events        (episode_id, 老的 episode 链路手清,沿用旧做法)
+		//   - ai_jobs             (course_id/episode_id 都是 *uint 无 FK,subject/
+		//                          user_report job 不属于任何 course/episode)
+		//   - study_advice        (scope_id 多态,无 FK;scope=episode 和 scope=course
+		//                          都要按 scope_id 手清)
 		var episodes []model.Episode
 		tx.Where("course_id = ?", id).Find(&episodes)
 		for _, ep := range episodes {
@@ -146,17 +143,12 @@ func (r *courseRepo) Delete(id uint) error {
 			tx.Delete(&model.UserProgress{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.EntertainmentProgress{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.WatchEvent{}, "episode_id = ?", ep.ID)
-			tx.Delete(&model.AISummary{}, "episode_id = ?", ep.ID)
-			tx.Delete(&model.ContentChunk{}, "episode_id = ?", ep.ID)
-			tx.Delete(&model.KnowledgeMemory{}, "episode_id = ?", ep.ID)
-			tx.Delete(&model.Quiz{}, "episode_id = ?", ep.ID)
 			tx.Delete(&model.StudyAdvice{}, "scope = ? AND scope_id = ?", "episode", ep.ID)
 		}
 		tx.Delete(&model.Episode{}, "course_id = ?", id)
 		tx.Delete(&model.UserCourseAccess{}, "course_id = ?", id)
 		tx.Delete(&model.CourseGrade{}, "course_id = ?", id)
 		tx.Delete(&model.AIJob{}, "course_id = ?", id)
-		tx.Delete(&model.AICourseSummary{}, "course_id = ?", id)
 		tx.Delete(&model.StudyAdvice{}, "scope = ? AND scope_id = ?", "course", id)
 		return tx.Delete(&model.Course{}, id).Error
 	})

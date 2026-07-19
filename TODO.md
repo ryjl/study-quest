@@ -1,13 +1,26 @@
 # TODO — StudyQuest 待办清单
 
 > 本文件记录所有"已识别但未实现"的 feature idea，按优先级分组。每次迭代从这里挑选。
-> 最后更新：2026-07-19（prompt 架构重构轮次：5 维度配置 + 学科级默认 + 可观测性）
+> 最后更新：2026-07-19（AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次：5 类产物 regen + DELETE、EnqueueSummary 去重、9 张 AI 表 FK CASCADE、AIJob nullable 修复、AIConsole 集中化、象棋升系统级）
 
 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、**工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
 
 ---
 
 ## 已完成
+
+### 2026-07-19 AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次
+
+本轮（尚未 commit，代码在 working tree）。AI 内容生命周期管理 + AI 配置集中化 + FK 级联：
+
+- **5 类产物 regen + DELETE 闭环**：Episode Summary / Quiz / Advice / Course Summary / User Study Report 每类都齐了两端点 —— 覆盖式重新生成（覆盖旧产物，保留 Upsert 语义）+ 物理 DELETE（idempotent，幂等删，删完再查返回 null）。覆盖式优先，DELETE 作为清理脏数据的兜底。新路由 8 条（`POST .../quizzes/regenerate`、`POST .../advice/regenerate`、`GET .../advice`、5 条 DELETEs）。Service：`RegenerateAdvice`（admin 可强制重算，跳过 mastery gate）、`RegenerateQuizForUser`（与客户端 `RegenerateQuiz` 共享 impl）、`Delete*`（幂等）、`ListUserAdvice`。
+- **EnqueueSummary 去重门**：照抄 `hasPendingJob("segment", id)` / `hasPendingQuizJob` 模式 —— 有 queued/processing summary job 直接返回不再入队。修了"admin 连点堆 job"的 bug。
+- **AI 表 FK CASCADE（9 张表）**：给 9 个 AI struct（AISummary/ContentChunk/Quiz/Question/Answer/KnowledgeMemory/AICourseSummary/UserStudyReport/AIRun）的 relation 字段加 `gorm:"foreignKey:XxxID;constraint:OnDelete:CASCADE"`。**单向声明**：只在 AI 侧加 FK，core Episode/Course/User 保持零感知（"AI 是 add-on 层"原则）。relation 字段全带 `json:"-"`。**简化 repo 级联**：episode/course/user repo 的 Delete 现在主要靠 CASCADE，只剩 AIJob（无 FK）和 StudyAdvice（polymorphic scope_id）还需要手动 `tx.Delete`。**修了 userRepo.Delete 完全不动 AI 数据的 bug** —— 之前清理 ZERO AI tables，现在补 AIJob + StudyAdvice 手动 + Quiz/Question/Answer/KnowledgeMemory/UserStudyReport 走 CASCADE。
+- **AIJob.EpisodeID/CourseID "形式 not null" bug 修复**：原来是 `uint gorm:"not null"`，但 subject-scope advice job 写 0（0 是合法 uint，SQLite 接受了，但语义上指向不存在的 episode）。改 `*uint`（nullable）+ 新增 `model.PtrVal(*uint) uint` helper + 更新 ~9 个 call site。**这是本轮 FK 工作中顺带发现的 bug** —— 加 FK 时立刻暴露（FK 会拒掉 0 行）。
+- **集中化：AIConsole 页**：新建 `pages/AIConsole.tsx`（5 tabs：重新生成 / Prompt 配置 / 任务队列 / 学生数据 / Provider）。URL `?tab=` 控 tab，`?course=`/`?subject=` 预选实体（CourseModal/SubjectModal 跳转用）。AIWorkflow 和 AIUserView 嵌进去（`embedded` prop）。**CourseModal 瘦身**：删 125 行 AI hint UI，改成「配置 →」链接到 `/admin/ai-console?tab=prompt&course=:id`；Course 级 AI 开关（`ai_summary_enabled`/`ai_quiz_enabled`）保留；save body 透传 `ai_config: course?.ai_config`（原样 roundtrip，PUT 不覆盖 5 个 hint 字段）。**SubjectModal 同样瘦身**（删 62 行，链接 `?tab=prompt&subject=:id`）。**Settings 移除 AiProvidersSection 渲染**，改成「前往 AI 控制台 →」卡片。抽公共组件 `PromptConfigTab` + `AIHintFields`（5 textarea，从 CourseModal+SubjectModal 的重复代码抽出）。**Layout/App 路由调整**：AI 运营 nav 2→1，老路由 `/admin/ai-workflow`、`/admin/ai-user` 重定向到 `?tab=jobs`/`?tab=users`。删 `lib/aiHintTemplates.ts`（集中化后 `getSubjectTemplate` 零调用方的死代码）。
+- **象棋升系统级 + AIConfig seed**：`xiangqi` 从自定义学科升为系统学科（`IsSystem=true`），在 `SeedDefaultSubjects` seed 5 字段 AIConfig（whisper/summary/quiz/advice/term_dict）。模板内容来自原前端 `aiHintTemplates.ts`（本轮删除）。注：math/english 之前就已有 seed，象棋是本轮新增。
+- **测试**：新增 `repository/user_repo_test.go`、`repository/ai_content_delete_test.go`；`repository/cleanup_orphans_test.go` 扩展；新增 `service/ai_service_test.go`（EnqueueSummary 去重）、`service/ai_service_advice_test.go`（RegenerateAdvice）、`service/subject_service_test.go`（新增 `TestSeedDefaultSubjects_XiangqiAIConfig` + 更新已有计数）；`lib/api.test.ts` +9 tests。
+- 验证：`go build` ✓ / `go test ./internal/service/ ./internal/repository/` ✓ / `tsc --noEmit` ✓ / `npm test` 55 passed ✓ / DB 删后重建 AutoMigrate 从零生成（FK 约束 baked in）+ 手动启动服务器 + sqlite 查询确认象棋 `is_system=1`、`ai_config_json` 489 字节、5 字段全在（含"车→居"纠错）。
 
 ### 2026-07-19 prompt 架构重构轮次
 
@@ -43,23 +56,6 @@
 ---
 
 ## P0 — 高价值，建议下一轮做
-
-### 🎯 AI 内容「删除 + 重新生成」闭环（用户钦点，下一轮做）
-
-让 admin 和用户能对每类 AI 产物做「重新生成」（覆盖式重跑），必要时能「删除」。**核心痛点不是删，是重新生成的入口分散/缺失**——机制大半都在（Upsert 覆盖式），缺入口和去重。
-
-- **场景**：prompt 调优后想立刻看新 prompt 出的东西好不好，但 summary/advice 既没重新生成入口、也不能删旧的；course/subject 级 advice 一旦生成就永远是那条（连 SQL 都没清的入口）；admin 想给某学生重出一套 quiz 做不到。
-- **价值**：补齐 AI 内容的生命周期管理。是验证 prompt 重构效果、调试单个学生问题、清理脏数据的必备能力。用户钦点需求，价值已被确认。
-- **现状差距**（详见 `docs/ai-regenerate-handoff.md`）：
-  | 产物 | 能删 | 重新生成 | 缺什么 |
-  |---|---|---|---|
-  | Episode Summary | ❌ | △ 隐式 | EnqueueSummary 没去重（连点堆 job）；admin SPA 无按钮；无删除端点 |
-  | Episode Quiz | △ archive | ✅ 客户端换题 | admin 端零入口 |
-  | Episode Advice | ❌ | △ 仅 episode 级（交卷链式） | course/subject 级**无任何途径**；客户端无刷新按钮 |
-  | Course Summary | ❌ | ✅ 端点有 | admin SPA 没接 API（`api.ts` 缺方法） |
-  | User Study Report | ❌ | ✅ 完整闭环 | 唯一完整的，可作模板 |
-- **工作量预估**：小到中。机制（Upsert 覆盖、archive、Trigger 端点）都在，主要是补入口 + 去重 + 删除端点。
-- **交付细节**：见 `docs/ai-regenerate-handoff.md`（下个会话直接读这份起步）。
 
 ### 错题本
 
@@ -229,7 +225,9 @@ agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
 - **工作量预估**：小。service 层加重算前检查（对比 `MasterySnapshotJSON` 和当前 mastery 的 diff）。
 - **触发条件**：观察到 advice 重算频率过高 / token 账单上涨。
 
-### 删 episode/course/user 时 AI 数据无级联
+### [已于 2026-07-19 解决] 删 episode/course/user 时 AI 数据无级联
+
+**已解决：FK CASCADE + userRepo 补全。** 9 张 AI 表加了 `foreignKey:XxxID;constraint:OnDelete:CASCADE`（单向 AI 侧声明，core 零感知），episode/course/user repo Delete 现在靠 CASCADE 自动清，仅 AIJob（无 FK）和 StudyAdvice（polymorphic scope_id）保留手动 `tx.Delete`；并修了 `userRepo.Delete` 之前清理 ZERO AI tables 的 bug。详见顶部「2026-07-19 AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次」。以下为历史记录，保留备查。
 
 `AISummary/Quiz/Question/Answer/StudyAdvice/AICourseSummary/UserStudyReport/ContentChunk/KnowledgeMemory/AIRun/AIJob` 这些表的 `EpisodeID/CourseID/UserID` 列都只有 `gorm:"index;not null"`，**没有 `gorm:"foreignKey:..."` 声明**。删 episode/course/user 时这些 AI 数据变孤儿残留。
 

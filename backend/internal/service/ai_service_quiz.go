@@ -360,7 +360,12 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "quiz job missing user_id", nil)
 		return
 	}
+	if job.EpisodeID == nil || job.CourseID == nil {
+		s.failJob(job, "quiz job missing episode_id/course_id")
+		return
+	}
 	userID := *job.UserID
+	episodeID, courseID := *job.EpisodeID, *job.CourseID
 
 	// Both providers are needed: chat for generation, embedding for search.
 	llm, err := s.resolver.ResolveChat()
@@ -376,12 +381,12 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	modelName := s.resolver.ChatModelName()
 
 	// Episode + course context for the prompt + chunk-id resolution.
-	ep, err := s.episodeRepo.FindByID(job.EpisodeID)
+	ep, err := s.episodeRepo.FindByID(episodeID)
 	if err != nil || ep == nil {
 		s.failJob(job, "load episode: "+err.Error())
 		return
 	}
-	course, _ := s.courseRepo.FindByID(job.CourseID)
+	course, _ := s.courseRepo.FindByID(courseID)
 	subject := ""
 	if course != nil {
 		subject = course.Subject.Label
@@ -390,7 +395,7 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	// Build the agent graph: deps adapter → memory → toolbox → agents → quizzer.
 	deps := &agentToolDeps{contentRepo: s.contentRepo, episodeRepo: s.episodeRepo, courseRepo: s.courseRepo}
 	memory := agent.NewMemoryStore(s.contentRepo) // contentRepo implements agent.MemoryRepo
-	toolbox := agent.NewQuizToolbox(deps, memory, emb, job.EpisodeID, userID, job.CourseID)
+	toolbox := agent.NewQuizToolbox(deps, memory, emb, episodeID, userID, courseID)
 	// MaxTokens is generous on the generation turn: the final answer is a
 	// multi-question quiz JSON with per-question explanations. Round 3 raised the
 	// question count to 8-12 and demands stronger distractors + reasoning-based
@@ -403,8 +408,8 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 
 	start := time.Now()
 	res, err := quizzer.Generate(ctx, agent.QuizzerRequest{
-		EpisodeID:    job.EpisodeID,
-		CourseID:     job.CourseID,
+		EpisodeID:    episodeID,
+		CourseID:     courseID,
 		UserID:       userID,
 		EpisodeTitle: ep.Title,
 		Subject:      subject,
@@ -433,7 +438,7 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	}
 
 	// Resolve chunk_index → chunk_id for persistence + attach start times.
-	chunks, _ := s.contentRepo.ListChunks(job.EpisodeID, "subtitle")
+	chunks, _ := s.contentRepo.ListChunks(episodeID, "subtitle")
 	chunkIDByIndex := agent.ResolveChunkIDs(res.Draft.Questions, chunks)
 	questions := make([]model.Question, 0, len(res.Draft.Questions))
 	for _, d := range res.Draft.Questions {
@@ -485,9 +490,9 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	}
 
 	quiz := &model.Quiz{
-		EpisodeID:     job.EpisodeID,
+		EpisodeID:     episodeID,
 		UserID:        userID,
-		CourseID:      job.CourseID,
+		CourseID:      courseID,
 		Difficulty:    "adaptive",
 		AgentFeedback: res.Draft.AgentFeedback,
 	}
@@ -576,10 +581,11 @@ func (s *aiService) GetOrEnqueueQuiz(userID, episodeID uint) (string, *model.Qui
 	if err != nil || ep == nil {
 		return quizStatusUnavailable, nil, nil
 	}
+	courseID := ep.CourseID
 	job := &model.AIJob{
 		JobType:   "quiz",
-		EpisodeID: episodeID,
-		CourseID:  ep.CourseID,
+		EpisodeID: &episodeID,
+		CourseID:  &courseID,
 		UserID:    &userID,
 		Status:    "queued",
 		// 学生正在客户端轮询等出题(每 3s 一次),quiz 必须排在 segment/summary
@@ -1028,7 +1034,24 @@ var ErrQuizAlreadySubmitted = fmt.Errorf("quiz already submitted")
 // RegenerateQuiz drops the user's current quiz and re-enqueues generation. The
 // agent will read the user's current memory (updated by prior answers) and
 // produce a fresh adaptive set. Returns "generating" so the client polls.
+//
+// quizPrerequisitesMet 这道门对客户端很重要(没 chunks 时直接 unavailable,避免白等);
+// admin 端用 RegenerateQuizForUser,走同一道门 —— 如果一个 episode 没 chunks,
+// admin 重出题也会失败,这时 admin 应该去检查字幕/segment 是否到位,而不是被骗说"重出成功"。
 func (s *aiService) RegenerateQuiz(userID, episodeID uint) (string, error) {
+	return s.regenerateQuiz(userID, episodeID)
+}
+
+// RegenerateQuizForUser 是 admin 端的"给某学生重出题"入口,和客户端 RegenerateQuiz
+// 走同一套实现(抽公共函数)。两者语义对齐:同样的 prerequisites check(没 chunks 时
+// unavailable)、同样的在途去重、同样优先级。差异只在调用方权限(handler 端处理)。
+func (s *aiService) RegenerateQuizForUser(userID, episodeID uint) (string, error) {
+	return s.regenerateQuiz(userID, episodeID)
+}
+
+// regenerateQuiz 是 RegenerateQuiz / RegenerateQuizForUser 的共享实现。
+// 抽出来避免两处重复,确保 admin 端重出题和学生自助换题走同一套规则。
+func (s *aiService) regenerateQuiz(userID, episodeID uint) (string, error) {
 	if !s.quizPrerequisitesMet(episodeID) {
 		return quizStatusUnavailable, nil
 	}
@@ -1042,10 +1065,11 @@ func (s *aiService) RegenerateQuiz(userID, episodeID uint) (string, error) {
 	if err != nil || ep == nil {
 		return quizStatusUnavailable, nil
 	}
+	courseID := ep.CourseID
 	job := &model.AIJob{
 		JobType:   "quiz",
-		EpisodeID: episodeID,
-		CourseID:  ep.CourseID,
+		EpisodeID: &episodeID,
+		CourseID:  &courseID,
 		UserID:    &userID,
 		Status:    "queued",
 		// 换题同样走高优先级:学生点了"换题"在等新题,和首次生成一样紧迫。

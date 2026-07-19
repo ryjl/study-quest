@@ -16,7 +16,9 @@ import { PageHeader } from '../components/PageHeader';
 // → next generation adapts. It complements the job-centric AIWorkflow page
 // (which shows generation jobs across all students).
 
-export function AIUserView() {
+// embedded=true 时不渲染自己的 PageHeader —— 由父页面(AIConsole 的 users tab)提供
+// 统一的"AI 控制台"标题。见 AIWorkflow 的 embedded 注释,同模式。
+export function AIUserView({ embedded = false }: { embedded?: boolean } = {}) {
   const [userId, setUserId] = useState<number | null>(null);
   const [query, setQuery] = useState(''); // filters the user dropdown by nickname
   const [openQuizId, setOpenQuizId] = useState<number | null>(null);
@@ -38,11 +40,13 @@ export function AIUserView() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="AI 用户视图"
-        breadcrumb={[{ label: 'AI 运营' }]}
-        description="按用户查看 AI 题库、答题历史与 agent 决策回放。"
-      />
+      {!embedded && (
+        <PageHeader
+          title="AI 用户视图"
+          breadcrumb={[{ label: 'AI 运营' }]}
+          description="按用户查看 AI 题库、答题历史与 agent 决策回放。"
+        />
+      )}
 
       {/* User picker — a searchable combobox over api.listUsers(). An <input>
           filters by nickname; a native <datalist> offers matches. Picking one

@@ -182,11 +182,15 @@ func (s *subjectService) Delete(id uint) error {
 // picks up newly-added defaults on the next boot without re-seeding the ones
 // it already has, and a fresh install gets the full set.
 //
-// AI seed 回填:对已存在的 math/english 系统学科,如果 AIConfigJSON 为空(老 install
-// 在引入学科级 AIConfig 之前就建过这两科),回填 docs/prompt-seed-content.md 起草的
-// 5 字段默认值,让 Effective*Hint 在课程级没配时也能拿到合理默认。**不覆盖 admin
-// 已经配过的**(AIConfigJSON 非空就不动)。象棋是自定义学科,不在这里 seed(保留前端
-// aiHintTemplates.ts 路径)。其余 8 个系统学科只建记录,AIConfigJSON 留空。
+// AI seed 回填:对已存在的 math/english/xiangqi 系统学科,如果 AIConfigJSON 为空
+// (老 install 在引入学科级 AIConfig 之前就建过这几科),回填 docs/prompt-seed-content.md
+// 起草的 5 字段默认值,让 Effective*Hint 在课程级没配时也能拿到合理默认。**不覆盖
+// admin 已经配过的**(AIConfigJSON 非空就不动)。其余 8 个系统学科只建记录,AIConfigJSON
+// 留空(给 admin 自己配)。
+//
+// 象棋(2026-07-19 升为系统学科):以前象棋是自定义学科,提示词模板存在前端
+// aiHintTemplates.ts(已经死代码,集中化后没人调用)。现在升系统级 + 后端 seed,
+// 统一所有 hint 配置走 Subject.AIConfig,DB 一处真源,前端模板彻底删除。
 func (s *subjectService) SeedDefaultSubjects() error {
 	defaults := []model.Subject{
 		{Key: "chinese", Label: "语文", Color: "#60a5fa", SortOrder: 1, IsSystem: true},
@@ -200,18 +204,25 @@ func (s *subjectService) SeedDefaultSubjects() error {
 		{Key: "geography", Label: "地理", Color: "#0ea5e9", SortOrder: 8, IsSystem: true},
 		{Key: "politics", Label: "道德与法治", Color: "#ef4444", SortOrder: 9, IsSystem: true},
 		{Key: "extra", Label: "课外百科", Color: "#f43f5e", SortOrder: 10, IsSystem: true},
+		// 象棋:2026-07-19 升为系统学科(以前是 admin 手建,提示词模板在前端)。典型用户
+		// 场景就是象棋课,系统级 + seed 让开箱即用。SortOrder 11 在课外百科后,主科前。
+		{Key: "xiangqi", Label: "象棋", Color: "#dc2626", SortOrder: 11, IsSystem: true},
 		// Entertainment: the implicit subject for fun videos (no learning stats,
 		// no badge). Entertainment courses point SubjectID here to satisfy the
 		// NOT NULL constraint. SortOrder 99 keeps it at the end of any list.
 		{Key: "entertainment", Label: "娱乐", Color: "#8b5cf6", SortOrder: 99, IsSystem: true},
 	}
 
-	// subjectAISeed 是 math/english 两科的默认 AIConfig seed。来源:
-	// docs/prompt-seed-content.md(主会话起草)。回填到 Subject.AIConfigJSON,让这俩
-	// 学科的课程在课程级没配 hint 时也有合理默认。其余系统学科本轮只建空记录。
+	// subjectAISeed 是 math/english/xiangqi 三科的默认 AIConfig seed。来源:
+	// docs/prompt-seed-content.md(主会话起草)+ 象棋模板(原前端 aiHintTemplates.ts)。
+	// 回填到 Subject.AIConfigJSON,让这几学科的课程在课程级没配 hint 时也有合理默认。
+	// 其余系统学科本轮只建空记录。
 	//
-	// 象棋是自定义学科(不是系统学科),admin 自己建,它的 seed 保留在前端
-	// aiHintTemplates.ts,不走后端 Subject.AIConfig 路径——所以这里没有 xiangqi。
+	// 注意:如果老 install 已经手动建过 key="xiangqi" 的非系统学科(Create 走
+	// ErrDuplicatedKey skip 分支),seed 仍会通过 FindByKey 拿到那一行,若其
+	// AIConfigJSON 为空就回填 seed。若 admin 用了别的 key(如 chess),那是另一条
+	// 孤立记录,这里不处理(避免覆盖 admin 自定义)。两条象棋学科并存的情况罕见,
+	// admin 可手动删旧的那条。
 	subjectAISeed := map[string]model.AIConfig{
 		"math": {
 			WhisperHint: "这是一节数学课。常见术语：通分、约分、公分母、异分母、倒数、绝对值、方程、函数、整数、分数、小数、乘除、积、商、倍。",
@@ -226,6 +237,13 @@ func (s *subjectService) SeedDefaultSubjects() error {
 			QuizHint:    "题型倾向：语法辨析、词义选择、完形填空为主（选择）；单词拼写、动词变形用填空。\n难度：中等。干扰项要是真实的语法错误（时态混用、单复数错误、介词搭配错误）。",
 			AdviceHint:  "侧重语法应用和词汇积累建议。语法弱点建议结合例句记忆 + 造句练习;词汇弱点建议在语境中记单词而非死背。",
 			TermDict:    "英文学科术语按需纠正;中文讲解部分的同音错字按常识纠正。",
+		},
+		"xiangqi": {
+			WhisperHint: "这是一节中国象棋课。常见术语：车马炮兵卒将帅士仕相象，屏风马、中炮、巡河炮、过宫炮、反宫马、盘头马、飞相局、仙人指路、将军、绝杀、和棋。",
+			SummaryHint: "侧重局面分析、走法原理和战术思路。如果讲了具体开局或中盘变化,把每步的目的(攻、守、牵制、诱敌)和该局面下的关键点拆解清楚。",
+			QuizHint:    "题型倾向：局面判断、走法辨析、战术识别、开局原理为主（选择/多选）；少出纯规则记忆题。\n难度：偏难。题干必须写明具体局面或本课讲到的位置，禁止孤立问\"为什么走某步\"——学生隔几天回来不记得指哪段。",
+			AdviceHint:  "侧重实战巩固。如果学生在某类局面(如开局定式、中盘战术)弱,建议回到视频重看对应变化 + 在实战对局中刻意练习该局面;多鼓励,象棋学习曲线长。",
+			TermDict:    "车 → 勿作\"居\"（如\"居二平七\"应为\"车二平七\"）\n和棋 → 勿作\"合棋\"\n马 → 勿作\"码\"\n炮 → 勿作\"跑\"\n另外注意区分:将/帅、士/仕、相/象（红黑两方叫法不同）",
 		},
 	}
 

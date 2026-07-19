@@ -768,3 +768,19 @@ export interface UserStudyReport {
   model_used?: string;
   generated_at?: string;
 }
+
+// raw StudyAdvice row from GET /admin/api/ai/users/:userID/advice. Mirrors the
+// backend model.StudyAdvice Go struct (models.go ~L1230). The struct marshals
+// with explicit snake_case json tags on the public fields; the rest are
+// `json:"-"` and therefore NOT present in the response — they're omitted here
+// too so the type matches what the server actually sends:
+//   - ID / UserID / MasterySnapshotJSON / CreatedAt / UpdatedAt → json:"-" (excluded)
+//   - scope / scope_id / advice_text / generated_at → required
+//   - model_used → json:"model_used,omitempty" (optional, absent when empty)
+export interface StudyAdviceRow {
+  scope: string;     // 'episode' | 'course' | 'subject'
+  scope_id: number;  // episode_id / course_id / subject_id (per scope)
+  advice_text: string;
+  model_used?: string;
+  generated_at: string;
+}

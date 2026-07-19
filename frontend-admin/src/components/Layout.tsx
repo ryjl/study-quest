@@ -14,7 +14,6 @@ import {
   Users,
   Calendar,
   Bot,
-  Brain,
   Tags,
   Medal,
   Package,
@@ -66,8 +65,9 @@ const NAV_GROUPS: NavGroup[] = [
   {
     group: 'AI 运营',
     items: [
-      { to: '/admin/ai-workflow', label: 'AI Workflow', icon: <Bot size={16} /> },
-      { to: '/admin/ai-user', label: 'AI 用户视图', icon: <Brain size={16} /> },
+      // 2026-07-19 集中化:原 AI Workflow + AI 用户视图 + CourseModal 里的 AI 配置 +
+      // Settings 里的 Provider 全部并入这个 AI 控制台。各功能用 ?tab= 切换。
+      { to: '/admin/ai-console', label: 'AI 控制台', icon: <Bot size={16} /> },
     ],
   },
   {

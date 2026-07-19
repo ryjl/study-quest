@@ -42,6 +42,7 @@ import type {
   AiQuizRow,
   AiQuizDetail,
   UserStudyReport,
+  StudyAdviceRow,
 } from './types';
 
 // Centralized API client. Same-origin cookies carry the admin session. All
@@ -614,5 +615,48 @@ export const api = {
   },
   async getUserReport(userId: number): Promise<UserStudyReport> {
     return request(`/admin/api/ai/users/${userId}/study-report`);
+  },
+
+  // 课程级总结(admin 触发一次,所有学生共享)。POST 入队生成,DELETE 清掉重跑。
+  async triggerCourseSummary(courseId: number): Promise<{ status: string }> {
+    return request(`/admin/api/ai/courses/${courseId}/course-summary`, { method: 'POST' });
+  },
+
+  // AI 控制台:重新生成 + 删除(2026-07-19 加)。
+  // regenerateUserQuiz:对某用户的某集重跑 quiz agent(替换旧 quiz)。
+  async regenerateUserQuiz(userId: number, episodeId: number): Promise<{ status: string }> {
+    return request(`/admin/api/ai/users/${userId}/quizzes/regenerate`, {
+      method: 'POST', body: JSON.stringify({ episode_id: episodeId }),
+    });
+  },
+  // regenerateUserAdvice:按 scope 重跑 advice agent(episode/course/subject)。
+  async regenerateUserAdvice(userId: number, scope: 'episode' | 'course' | 'subject', scopeId: number): Promise<{ status: string }> {
+    return request(`/admin/api/ai/users/${userId}/advice/regenerate`, {
+      method: 'POST', body: JSON.stringify({ scope, scope_id: scopeId }),
+    });
+  },
+  // listUserAdvice:取某用户所有 scope 的 advice 原始行(StudyAdvice PascalCase-free model)。
+  async listUserAdvice(userId: number): Promise<StudyAdviceRow[]> {
+    return request(`/admin/api/ai/users/${userId}/advice`);
+  },
+  // deleteSummary:删某集的 summary(让 worker 下次重跑)。
+  async deleteSummary(episodeId: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/summaries/${episodeId}`, { method: 'DELETE' });
+  },
+  // deleteAiQuiz:删某条 quiz(连同其 questions/answers/masteries/runs CASCADE)。
+  async deleteAiQuiz(quizId: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/quizzes/${quizId}`, { method: 'DELETE' });
+  },
+  // deleteUserAdvice:按 scope+scope_id 删某用户的一条 advice。
+  async deleteUserAdvice(userId: number, scope: 'episode' | 'course' | 'subject', scopeId: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/users/${userId}/advice${qs({ scope, scope_id: scopeId })}`, { method: 'DELETE' });
+  },
+  // deleteCourseSummary:删某课程的总总结(course-unique,删后下次重生成)。
+  async deleteCourseSummary(courseId: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/courses/${courseId}/course-summary`, { method: 'DELETE' });
+  },
+  // deleteUserStudyReport:删某用户的跨课程学习报告(让其重新生成)。
+  async deleteUserStudyReport(userId: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/users/${userId}/study-report`, { method: 'DELETE' });
   },
 };

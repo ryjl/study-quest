@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { Plus, Lock, AlertTriangle, Tags, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Plus, Lock, AlertTriangle, Tags } from 'lucide-react';
 import { api } from '../lib/api';
 import { useSubjects, useInvalidateSubjects } from '../lib/useSubjects';
 import { useDeleteConfirm } from '../lib/useDeleteConfirm';
@@ -127,21 +128,15 @@ export function Subjects() {
 function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClose: () => void }) {
   const isEdit = !!subject;
   const toast = useToast();
+  const navigate = useNavigate();
   const invalidate = useInvalidateSubjects();
 
   const [key, setKey] = useState('');
   const [label, setLabel] = useState('');
   const [color, setColor] = useState(COLOR_CHOICES[0]);
   const [sortOrder, setSortOrder] = useState(0);
-  // 学科级默认 AI 提示(5 字段)。课程级对应字段为空时回退到这里。默认折叠——
-  // 学科级配置不是每次都改,展开后填入即可。state 复用 SubjectMeta.ai_config
-  // 的 5 个 string。详见 backend model.Subject.AIConfig / Course.Effective*Hint。
-  const [aiOpen, setAiOpen] = useState(false);
-  const [whisperHint, setWhisperHint] = useState('');
-  const [summaryHint, setSummaryHint] = useState('');
-  const [quizHint, setQuizHint] = useState('');
-  const [adviceHint, setAdviceHint] = useState('');
-  const [termDict, setTermDict] = useState('');
+  // 学科级 AI 提示(5 字段 hint)已迁移到「AI 控制台 → Prompt 配置」tab。
+  // 这里只保留学科基本信息(key/label/color/sort_order)。save 时 ai_config 原值回传。
 
   useEffect(() => {
     if (subject) {
@@ -149,23 +144,11 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
       setLabel(subject.label);
       setColor(subject.color || COLOR_CHOICES[0]);
       setSortOrder(subject.sort_order ?? 0);
-      // 从 ai_config 回填 5 字段(后端 DTO 平铺回显,类型层主会话会加 ai_config)。
-      const cfg = subject.ai_config;
-      setWhisperHint(cfg?.whisper_hint ?? '');
-      setSummaryHint(cfg?.summary_hint ?? '');
-      setQuizHint(cfg?.quiz_hint ?? '');
-      setAdviceHint(cfg?.advice_hint ?? '');
-      setTermDict(cfg?.term_dict ?? '');
     } else {
       setKey('');
       setLabel('');
       setColor(COLOR_CHOICES[0]);
       setSortOrder(0);
-      setWhisperHint('');
-      setSummaryHint('');
-      setQuizHint('');
-      setAdviceHint('');
-      setTermDict('');
     }
   }, [subject]);
 
@@ -176,14 +159,9 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
         label: label.trim(),
         color,
         sort_order: sortOrder,
-        // 5 字段整体提交。后端 handler 看到 ai_config 非 nil 就覆盖;全空即清空。
-        ai_config: {
-          whisper_hint: whisperHint.trim(),
-          summary_hint: summaryHint.trim(),
-          quiz_hint: quizHint.trim(),
-          advice_hint: adviceHint.trim(),
-          term_dict: termDict.trim(),
-        },
+        // ai_config 原值回传 —— 本表单不再编辑 hint(已挪到 AI 控制台)。回传保证
+        // PUT 不把这 5 字段误清。新建学科时 subject 为 null,ai_config 为 undefined。
+        ai_config: subject?.ai_config,
       };
       if (!body.key) throw new Error('请填写科目 Key（小写英文）');
       if (!body.label) throw new Error('请填写科目名称');
@@ -285,68 +263,32 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
           />
         </div>
 
-        {/* 学科级默认 AI 提示:折叠区。该学科下所有课程未单独覆盖对应字段时回退到这里。
-            term_dict 特殊:课程级会"追加"到学科级后面(合并而非覆盖)。
-            默认折叠——不是每次都改,展开后填入即可。空字段 = 不设置默认。 */}
-        <div className="rounded-xl border border-border bg-card-2">
+        {/* 学科级 AI 提示已迁移到「AI 控制台 → Prompt 配置」tab。这里只留跳转入口,
+            让 admin 知道该去哪配;学科基本信息(key/label/color/sort_order)仍在这里编辑。 */}
+        <div className="flex items-center justify-between rounded-xl border border-border bg-card-2 p-3">
+          <div>
+            <div className="text-xs font-medium text-txt">学科默认 AI 提示</div>
+            <div className="mt-0.5 text-[11px] text-muted">5 字段 hint(Whisper/总结/出题/建议/术语字典),课程未覆盖时回退到这里。集中管理。</div>
+          </div>
           <button
             type="button"
-            onClick={() => setAiOpen((v) => !v)}
-            className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs font-medium text-muted hover:text-txt"
+            onClick={() => {
+              if (!isEdit || !subject) {
+                toast.info('请先创建学科,再配置 AI 提示');
+                return;
+              }
+              // 跳到 AI 控制台 Prompt 配置 tab,带 subject id 让目标页预选该学科。
+              // 用 navigate(SPA 内跳转,不刷页,保留 react-query 缓存)而不是
+              // window.location.assign(后者会全页重载,体验差且丢缓存)。
+              onClose();
+              const subjectParam = subject.id ? `&subject=${subject.id}` : '';
+              navigate(`/admin/ai-console?tab=prompt${subjectParam}`);
+            }}
+            className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
+            title="跳转到 AI 控制台 配置该学科的 AI 提示默认值"
           >
-            <span>学科默认 AI 提示（可选，课程未覆盖时回退到这里）</span>
-            <ChevronRight size={14} className={`transition-transform ${aiOpen ? 'rotate-90' : ''}`} />
+            配置 →
           </button>
-          {aiOpen && (
-            <div className="space-y-3 border-t border-border p-3">
-              <div>
-                <label className="mb-1 block text-[11px] text-muted">Whisper 提示（喂字幕转录，术语/口音，≤240 字）</label>
-                <textarea
-                  className="input min-h-[56px] resize-y"
-                  placeholder="如：象棋术语：车马炮兵卒将帅士仕相象，屏风马，中炮。老师带南方口音。"
-                  value={whisperHint}
-                  onChange={(e) => setWhisperHint(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11px] text-muted">总结提示（喂 AI 总结，风格/侧重点）</label>
-                <textarea
-                  className="input min-h-[56px] resize-y"
-                  placeholder="如：侧重开局原理，多举例题，避免堆砌术语。"
-                  value={summaryHint}
-                  onChange={(e) => setSummaryHint(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11px] text-muted">出题提示（喂出题 LLM，题型偏好/难度/出题指引）</label>
-                <textarea
-                  className="input min-h-[64px] resize-y"
-                  placeholder={'如：题型倾向：计算题 ≥50% 出填空；难度偏难。'}
-                  value={quizHint}
-                  onChange={(e) => setQuizHint(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11px] text-muted">建议提示（喂建议 LLM，建议侧重点/口吻）</label>
-                <textarea
-                  className="input min-h-[56px] resize-y"
-                  placeholder="如：象棋重实战练习，多鼓励；数学重计算巩固。"
-                  value={adviceHint}
-                  onChange={(e) => setAdviceHint(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-[11px] text-muted">术语字典（横切给总结/出题/建议，纠正字幕同音错字）</label>
-                <textarea
-                  className="input min-h-[56px] resize-y"
-                  placeholder={'如：车→居（勿作居）、通分→同分、和棋→合棋。'}
-                  value={termDict}
-                  onChange={(e) => setTermDict(e.target.value)}
-                />
-                <p className="mt-1 text-[11px] text-muted">课程级术语字典会追加到本学科级后面(合并生效,不是覆盖)。</p>
-              </div>
-            </div>
-          )}
         </div>
 
         <button type="submit" className="btn-primary w-full" disabled={saveMut.isPending}>

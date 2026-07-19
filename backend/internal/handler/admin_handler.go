@@ -151,6 +151,17 @@ type AdminHandler interface {
 	GetUserStudyReport(c *gin.Context)
 	// Prompt 预览:admin 调优 hint 后立刻看完整 prompt 拼装效果(不调 LLM)。
 	PreviewCoursePrompt(c *gin.Context)
+	// 重新生成 + 删除(2026-07-19 加):AI 控制台"重新生成中枢"和"删除"按钮的后端。
+	// regen:quiz(给某学生重出题)、advice(三档 scope 强制刷新)。
+	// delete:summary/quiz/advice/course-summary/user-report(物理删,不走 archive)。
+	RegenerateUserQuiz(c *gin.Context)
+	RegenerateUserAdvice(c *gin.Context)
+	DeleteAISummary(c *gin.Context)
+	DeleteAIQuiz(c *gin.Context)
+	DeleteUserAdvice(c *gin.Context)
+	DeleteCourseSummary(c *gin.Context)
+	DeleteUserStudyReport(c *gin.Context)
+	ListUserAdvice(c *gin.Context)
 }
 
 type adminHandler struct {

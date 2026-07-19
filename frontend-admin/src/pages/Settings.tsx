@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { Wrench, Radio } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import { StorageSourcesSection } from './StorageSourcesSection';
-import { AiProvidersSection } from './AiProvidersSection';
 import { PageHeader } from '../components/PageHeader';
 import { Section } from '../components/ui';
 
@@ -41,8 +41,21 @@ export function Settings() {
         <StorageSourcesSection />
       </div>
 
-      <div className="mb-5">
-        <AiProvidersSection />
+      {/* AI Provider 配置已迁移到「AI 控制台 → Provider」tab(AI 是附加层,
+          集中管理所有 AI 相关操作)。这里只留跳转入口,Settings 回归纯系统配置。 */}
+      <div className="mb-5 rounded-lg border border-border bg-card p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-txt">AI Provider</h2>
+            <p className="mt-0.5 text-sm text-muted">配置 chat / embedding 模型与 API Key。已迁移到 AI 控制台集中管理。</p>
+          </div>
+          <Link
+            to="/admin/ai-console?tab=providers"
+            className="rounded-md border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:border-primary hover:text-primary"
+          >
+            前往 AI 控制台 →
+          </Link>
+        </div>
       </div>
 
       <Section title="运维" icon={<Wrench size={14} />}>

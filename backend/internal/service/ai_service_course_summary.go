@@ -48,19 +48,20 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "AI not configured (no resolver)", nil)
 		return
 	}
-	if job.CourseID == 0 {
+	if job.CourseID == nil || *job.CourseID == 0 {
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "course_summary job missing course_id", nil)
 		return
 	}
+	courseID := *job.CourseID
 
 	// 反查课程拿标题/科目(供 prompt 引用)。课程不存在直接 fail。
-	course, err := s.courseRepo.FindByID(job.CourseID)
+	course, err := s.courseRepo.FindByID(courseID)
 	if err != nil {
 		s.failJob(job, "course_summary job: load course: "+err.Error())
 		return
 	}
 	if course == nil {
-		s.failJob(job, fmt.Sprintf("course_summary job: course %d not found", job.CourseID))
+		s.failJob(job, fmt.Sprintf("course_summary job: course %d not found", courseID))
 		return
 	}
 
@@ -194,11 +195,12 @@ func (s *aiService) EnqueueCourseSummary(courseID uint) (string, error) {
 }
 
 // enqueueCourseSummaryJob 构造并持久化一条 course_summary job。course-unique,不带 user_id
-// (course summary 不针对个人)。EpisodeID 留 0(course 级 job,不绑定具体 episode)。
+// (course summary 不针对个人)。EpisodeID 留 nil(course 级 job,不绑定具体 episode)。
 func (s *aiService) enqueueCourseSummaryJob(courseID uint) error {
+	courseIDCopy := courseID
 	job := &model.AIJob{
 		JobType:  "course_summary",
-		CourseID: courseID,
+		CourseID: &courseIDCopy,
 		Status:   "queued",
 		Priority: priorityCourseSummary,
 	}

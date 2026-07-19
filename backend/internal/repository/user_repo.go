@@ -86,12 +86,26 @@ func (r *userRepo) Update(user *model.User) error {
 
 func (r *userRepo) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// Clean up related user data
+		// Clean up related user data.
+		//
+		// UserProgress / UserPoint / PointsLedger / UserCourseAccess / WatchEvent
+		// 走显式手清(沿用旂史做法,即使部分有 OnDelete:CASCADE 也保留为 defense-in-depth)。
+		//
+		// AI 表:2026-07-19 这轮把 Quiz/Question/Answer/KnowledgeMemory/
+		// UserStudyReport 的 UserID 都加了 OnDelete:CASCADE,删 User 时 DB 自动清。
+		// 但仍有两类必须手清:
+		//   - AIJob:UserID 是 *uint 无 FK(segment/summary job 不绑用户,UserID 为 nil;
+		//     quiz/advice/user_report job 才填),无 FK 就无 CASCADE,必须手清。
+		//   - StudyAdvice:UserID 有 FK(CASCADE 会清),但 scope_id 是多态列无 FK。
+		//     虽然本表的 user_id 级联能清 user 维度,但为可读性 + 与 episode/course repo
+		//     的"多态 scope 显式手清"模式一致,这里也显式删一次(CASCADE 会兜底,无重复)。
 		tx.Delete(&model.UserProgress{}, "user_id = ?", id)
 		tx.Delete(&model.UserPoint{}, "user_id = ?", id)
 		tx.Delete(&model.PointsLedger{}, "user_id = ?", id)
 		tx.Delete(&model.UserCourseAccess{}, "user_id = ?", id)
 		tx.Delete(&model.WatchEvent{}, "user_id = ?", id)
+		tx.Delete(&model.AIJob{}, "user_id = ?", id)
+		tx.Delete(&model.StudyAdvice{}, "user_id = ?", id)
 		return tx.Delete(&model.User{}, id).Error
 	})
 }

@@ -116,6 +116,34 @@ type AIService interface {
 	// "正在生成"(generating)vs"无报告未生成"(显示生成按钮)。
 	HasPendingUserReportJob(userID uint) bool
 
+	// ── admin: 重新生成 + 删除(2026-07-19 这轮加)──
+	// 这组方法是 admin 控制台"重新生成中枢"和"删除 AI 产物"按钮的后端。
+	// 重新生成走"覆盖式":UpsertAdvice/UpsertSummary/UpsertCourseSummary 都覆盖,
+	// quiz 走 archive + 插新 active,和客户端换题语义一致。所有方法都去重在途 job。
+	//
+	// RegenerateAdvice 强制重生成某 (user, scope, scopeID) 的 advice。和 lazy 生成
+	// (GetOrEnqueueAdvice)的差异:跳过 mastery gate —— admin 强制重跑应能跑,即使学
+	// 生没做题(advice 会给出"建议先做题"的默认建议)。三档 scope 都支持,course/
+	// subject 级首次触发也走这里(以前无任何途径刷新它们)。
+	RegenerateAdvice(userID uint, scope string, scopeID uint) (status string, err error)
+	// RegenerateQuizForUser 是 admin 端"给某学生重出题"的入口,照抄客户端 RegenerateQuiz
+	// 但不校验 unlock(admin 不受 drip schedule 限制)。
+	RegenerateQuizForUser(userID, episodeID uint) (status string, err error)
+
+	// Delete 系列物理删除 AI 产物(不走 archive)。Quiz 的删除会级联清 Question + Answer
+	// (FK CASCADE)。语义幂等:删一个不存在的 id 不报错(DELETE WHERE id=? 匹配 0 行
+	// 也是成功),handler 统一返回 200 {ok: true}。如果将来需要"不存在则 404"语义,
+	// 再扩成 (rowsAffected, error) 让 handler 分辨 —— 当前所有调用方都接受幂等语义。
+	DeleteSummary(episodeID uint) error
+	DeleteQuiz(quizID uint) error
+	DeleteAdvice(userID uint, scope string, scopeID uint) error
+	DeleteCourseSummary(courseID uint) error
+	DeleteUserReport(userID uint) error
+
+	// ListUserAdvice 列出某用户的所有 advice(三档 scope,所有 scope_id),给 admin
+	// 控制台显示"这个学生有哪些 advice + 删除按钮"用。按 generated_at DESC 排序。
+	ListUserAdvice(userID uint) ([]model.StudyAdvice, error)
+
 	// ── results (read) ──
 	GetSummary(episodeID uint) (*model.AISummary, error)
 	// ListJobs/GetJob return AIJobView (job row + resolved human-readable names
@@ -220,7 +248,44 @@ func (s *aiService) EnqueueSegment(episodeIDs []uint) ([]uint, map[uint]string, 
 
 func (s *aiService) EnqueueSummary(episodeIDs []uint) ([]uint, map[uint]string, error) {
 	// summary 优先级 1:它是 segment 的下游产物,不阻塞任何用户交互,最低即可。
-	return s.enqueue(episodeIDs, "summary", prioritySummary)
+	//
+	// 去重门(2026-07-19 加):已有在途 summary job(queued/processing)的 episode 跳过,
+	// 进 skipped map。没这道门 admin 连点会堆多条 summary job —— worker 单线程串行跑,
+	// 堆多条只是浪费 token + 污染 job 列表(结果幂等,因 UpsertSummary 覆盖)。照抄
+	// EnqueueSegmentForCourse / runSegmentJob 链式入队用的 hasPendingJob 模式。
+	//
+	// 注意:已存在的 AISummary 行(done job 的产物)不算"在途",admin 仍可强制重跑覆盖。
+	enqueued := make([]uint, 0, len(episodeIDs))
+	skipped := make(map[uint]string)
+	for _, epID := range episodeIDs {
+		if s.hasPendingJob("summary", epID) {
+			skipped[epID] = "已有在途 summary 作业"
+			continue
+		}
+		ep, err := s.episodeRepo.FindByID(epID)
+		if err != nil {
+			skipped[epID] = "查询课时失败: " + err.Error()
+			continue
+		}
+		if ep == nil {
+			skipped[epID] = "课时不存在"
+			continue
+		}
+		epIDCopy, courseIDCopy := epID, ep.CourseID
+		job := &model.AIJob{
+			JobType:   "summary",
+			EpisodeID: &epIDCopy,
+			CourseID:  &courseIDCopy,
+			Status:    "queued",
+			Priority:  prioritySummary,
+		}
+		if err := s.contentRepo.CreateJob(job); err != nil {
+			skipped[epID] = "入队失败: " + err.Error()
+			continue
+		}
+		enqueued = append(enqueued, epID)
+	}
+	return enqueued, skipped, nil
 }
 
 // 作业优先级(高 = ClaimNextQueuedJob 先捞)。设计意图:
@@ -261,10 +326,12 @@ func (s *aiService) enqueue(episodeIDs []uint, jobType string, priority int) ([]
 			skipped[epID] = "课时不存在"
 			continue
 		}
+		epID := epID       // capture for pointer (loop var reuse safety)
+		courseID := ep.CourseID
 		job := &model.AIJob{
 			JobType:   jobType,
-			EpisodeID: epID,
-			CourseID:  ep.CourseID,
+			EpisodeID: &epID,
+			CourseID:  &courseID,
 			Status:    "queued",
 			Priority:  priority,
 		}
@@ -348,10 +415,12 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	if s.hasPendingJob("segment", episodeID) {
 		return
 	}
+	epID := episodeID
+	courseID := ep.CourseID
 	job := &model.AIJob{
 		JobType:   "segment",
-		EpisodeID: episodeID,
-		CourseID:  ep.CourseID,
+		EpisodeID: &epID,
+		CourseID:  &courseID,
 		Status:    "queued",
 		Priority:  prioritySegment,
 	}
@@ -436,8 +505,16 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "AI not configured (no resolver)", nil)
 		return
 	}
+	// segment job 必须有真实 episode/course(EpisodeID/CourseID 是 *uint,subject 级
+	// advice job 才会留 nil,segment job 永远有值)。这里 deref + 守卫,后续逻辑用
+	// 本地 uint 变量,避免到处 ptrVal。
+	if job.EpisodeID == nil || job.CourseID == nil {
+		s.failJob(job, "segment job missing episode_id/course_id")
+		return
+	}
+	episodeID, courseID := *job.EpisodeID, *job.CourseID
 	// 1. Load the episode's subtitle.
-	sub, err := s.episodeRepo.GetSubtitle(job.EpisodeID)
+	sub, err := s.episodeRepo.GetSubtitle(episodeID)
 	if err != nil {
 		s.failJob(job, "load subtitle: "+err.Error())
 		return
@@ -486,37 +563,37 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 			SourceRef:  fmt.Sprintf("%d", sub.ID),
 		}
 	}
-	if err := s.contentRepo.ReplaceChunksForEpisode(job.EpisodeID, job.CourseID, "subtitle", chunks); err != nil {
-		s.failJob(job, "persist chunks: "+err.Error())
-		return
-	}
-	s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
+		if err := s.contentRepo.ReplaceChunksForEpisode(episodeID, courseID, "subtitle", chunks); err != nil {
+			s.failJob(job, "persist chunks: "+err.Error())
+			return
+		}
+		s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
 
-	// 链式触发 summary:segment 是 summary 的上游,既然刚把源材料(chunk)写好,
-	// 紧接着入队 summary 就能让一节字幕落地后自动走到结构化总结,无需 admin 再
-	// 手动点按钮(那个 admin UI 其实一直没接,导致 summary 永远没人触发)。
-	// 三道门:课程开关、尚无 summary、尚无在途 summary 作业。最后一道防止
-	// 重复入队(例如重新分段时旧 summary job 还在跑)。
-	// 注意:GetSummary==nil 这道门意味着"重新分段(re-segment)不会自动刷新已有
-	// summary" —— 这是预期:re-segment 通常只是修切片,内容没变;若确实想刷新
-	// summary,admin 应走手动 EnqueueSummary(强制重跑,不经此链式门)。
-	if course, cerr := s.courseRepo.FindByID(job.CourseID); cerr == nil && course != nil && course.AISummaryEnabled {
-		if existing, serr := s.contentRepo.GetSummary(job.EpisodeID); serr == nil && existing == nil {
-			if !s.hasPendingJob("summary", job.EpisodeID) {
-				sjob := &model.AIJob{
-					JobType:   "summary",
-					EpisodeID: job.EpisodeID,
-					CourseID:  job.CourseID,
-					Status:    "queued",
-					Priority:  prioritySummary,
-				}
-				if err := s.contentRepo.CreateJob(sjob); err != nil {
-					log.Printf("AI: failed to chain-enqueue summary job for episode %d: %v", job.EpisodeID, err)
+		// 链式触发 summary:segment 是 summary 的上游,既然刚把源材料(chunk)写好,
+		// 紧接着入队 summary 就能让一节字幕落地后自动走到结构化总结,无需 admin 再
+		// 手动点按钮(那个 admin UI 其实一直没接,导致 summary 永远没人触发)。
+		// 三道门:课程开关、尚无 summary、尚无在途 summary 作业。最后一道防止
+		// 重复入队(例如重新分段时旧 summary job 还在跑)。
+		// 注意:GetSummary==nil 这道门意味着"重新分段(re-segment)不会自动刷新已有
+		// summary" —— 这是预期:re-segment 通常只是修切片,内容没变;若确实想刷新
+		// summary,admin 应走手动 EnqueueSummary(强制重跑,不经此链式门)。
+		if course, cerr := s.courseRepo.FindByID(courseID); cerr == nil && course != nil && course.AISummaryEnabled {
+			if existing, serr := s.contentRepo.GetSummary(episodeID); serr == nil && existing == nil {
+				if !s.hasPendingJob("summary", episodeID) {
+					sjob := &model.AIJob{
+						JobType:   "summary",
+						EpisodeID: &episodeID,
+						CourseID:  &courseID,
+						Status:    "queued",
+						Priority:  prioritySummary,
+					}
+					if err := s.contentRepo.CreateJob(sjob); err != nil {
+						log.Printf("AI: failed to chain-enqueue summary job for episode %d: %v", episodeID, err)
+					}
 				}
 			}
 		}
 	}
-}
 
 // runSummaryJob reads an episode's chunks and asks the summarizer to summarize.
 // Requires chunks to exist (a segment job must have run first). If none exist,
@@ -528,9 +605,14 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "AI not configured (no resolver)", nil)
 		return
 	}
+	if job.EpisodeID == nil || job.CourseID == nil {
+		s.failJob(job, "summary job missing episode_id/course_id")
+		return
+	}
+	episodeID, courseID := *job.EpisodeID, *job.CourseID
 	// Chunks must exist. If they don't, the operator likely needs to run
 	// segmentation first; surface that clearly.
-	chunks, err := s.contentRepo.ListChunks(job.EpisodeID, "subtitle")
+	chunks, err := s.contentRepo.ListChunks(episodeID, "subtitle")
 	if err != nil {
 		s.failJob(job, "load chunks: "+err.Error())
 		return
@@ -544,7 +626,7 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 	// SummaryHint(风格/侧重点)+ TermDict(横切术语纠错),不再吃 quizHint。
 	// 注意:courseRepo.FindByID 不 Preload Subject(避免 UpdateCourse 的 Save 误改关联),
 	// 这里单独用 s.db 查一次 subject 供 Effective* 回退 + prompt 的"科目"显示。
-	course, _ := s.courseRepo.FindByID(job.CourseID)
+	course, _ := s.courseRepo.FindByID(courseID)
 	subject := ""
 	summaryHint := ""
 	termDict := ""
@@ -567,8 +649,8 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 	modelName := s.resolver.ChatModelName()
 	summarizer := agent.NewSummarizer(llm, s.contentRepo, modelName)
 	_, err = summarizer.Summarize(ctx, agent.SummarizerRequest{
-		EpisodeID:   job.EpisodeID,
-		CourseID:    job.CourseID,
+		EpisodeID:   episodeID,
+		CourseID:    courseID,
 		SummaryHint: summaryHint,
 		TermDict:    termDict,
 		Subject:     subject,
@@ -584,7 +666,7 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 // failJob marks a job failed with an error message and logs it. Centralized so
 // every failure path records consistently (the admin UI shows the error string).
 func (s *aiService) failJob(job *model.AIJob, msg string) {
-	log.Printf("AI job %d (%s) episode %d failed: %s", job.ID, job.JobType, job.EpisodeID, msg)
+	log.Printf("AI job %d (%s) episode %d failed: %s", job.ID, job.JobType, model.PtrVal(job.EpisodeID), msg)
 	s.contentRepo.UpdateJobStatus(job.ID, "failed", msg, nil)
 }
 
@@ -592,6 +674,33 @@ func (s *aiService) failJob(job *model.AIJob, msg string) {
 
 func (s *aiService) GetSummary(episodeID uint) (*model.AISummary, error) {
 	return s.contentRepo.GetSummary(episodeID)
+}
+
+// --- admin regen + delete ---
+
+func (s *aiService) DeleteSummary(episodeID uint) error {
+	return s.contentRepo.DeleteSummary(episodeID)
+}
+
+func (s *aiService) DeleteQuiz(quizID uint) error {
+	// 删 quiz:Fk CASCADE 会自动清 Question + Answer,所以这里只删 quiz 一行。
+	return s.contentRepo.DeleteQuiz(quizID)
+}
+
+func (s *aiService) DeleteAdvice(userID uint, scope string, scopeID uint) error {
+	return s.contentRepo.DeleteAdvice(userID, scope, scopeID)
+}
+
+func (s *aiService) DeleteCourseSummary(courseID uint) error {
+	return s.contentRepo.DeleteCourseSummary(courseID)
+}
+
+func (s *aiService) DeleteUserReport(userID uint) error {
+	return s.contentRepo.DeleteUserReport(userID)
+}
+
+func (s *aiService) ListUserAdvice(userID uint) ([]model.StudyAdvice, error) {
+	return s.contentRepo.ListUserAdvice(userID)
 }
 
 func (s *aiService) ListJobs(jobType, status string, limit int) ([]AIJobView, error) {
@@ -674,10 +783,12 @@ func (c jobNameCache) forJob(j *model.AIJob) (string, string, string) {
 	// gives us the title AND its CourseID (which we trust over job.CourseID for
 	// title resolution, since the episode is the source of truth for course
 	// membership). job.CourseID is denormalized at enqueue time.
-	if t, ok := c.episodeTitles[j.EpisodeID]; ok {
+	// EpisodeID/CourseID 现在是 *uint,subject 级 advice job 是 nil → ptrVal 返回 0,
+	// map 查 0 拿不到标题(正常,subject job 没 episode/course 可显示)。
+	if t, ok := c.episodeTitles[model.PtrVal(j.EpisodeID)]; ok {
 		ep = t
 	}
-	if t, ok := c.courseTitles[j.CourseID]; ok {
+	if t, ok := c.courseTitles[model.PtrVal(j.CourseID)]; ok {
 		course = t
 	}
 	if j.UserID != nil {
@@ -701,16 +812,20 @@ func (s *aiService) resolveJobNames(jobs []model.AIJob) jobNameCache {
 	}
 	seenEp, seenCourse, seenUser := map[uint]bool{}, map[uint]bool{}, map[uint]bool{}
 	for _, j := range jobs {
-		if !seenEp[j.EpisodeID] {
-			seenEp[j.EpisodeID] = true
-			if ep, err := s.episodeRepo.FindByID(j.EpisodeID); err == nil && ep != nil {
-				c.episodeTitles[j.EpisodeID] = ep.Title
+		// EpisodeID/CourseID 是 *uint:subject 级 advice job 为 nil,跳过 title 解析
+		// (没对应实体,无标题可解析)。ptrVal nil → 0,seenEp[0] 防止重复空查询。
+		epID := model.PtrVal(j.EpisodeID)
+		if j.EpisodeID != nil && !seenEp[epID] {
+			seenEp[epID] = true
+			if ep, err := s.episodeRepo.FindByID(epID); err == nil && ep != nil {
+				c.episodeTitles[epID] = ep.Title
 			}
 		}
-		if !seenCourse[j.CourseID] {
-			seenCourse[j.CourseID] = true
-			if course, err := s.courseRepo.FindByID(j.CourseID); err == nil && course != nil {
-				c.courseTitles[j.CourseID] = course.Title
+		courseID := model.PtrVal(j.CourseID)
+		if j.CourseID != nil && !seenCourse[courseID] {
+			seenCourse[courseID] = true
+			if course, err := s.courseRepo.FindByID(courseID); err == nil && course != nil {
+				c.courseTitles[courseID] = course.Title
 			}
 		}
 		if j.UserID != nil && !seenUser[*j.UserID] {

@@ -44,8 +44,9 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		t.Fatalf("first seed: %v", err)
 	}
 	list, _ := svc.List()
-	if len(list) != 11 {
-		t.Fatalf("expected 11 default subjects (10 academic + entertainment), got %d", len(list))
+	// 10 academic + 象棋(2026-07-19 升系统级)+ 娱乐 = 12。学科数变化时这里要改。
+	if len(list) != 12 {
+		t.Fatalf("expected 12 default subjects (10 academic + xiangqi + entertainment), got %d", len(list))
 	}
 
 	// Idempotent: seeding again must not duplicate.
@@ -53,18 +54,77 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		t.Fatalf("second seed: %v", err)
 	}
 	list2, _ := svc.List()
-	if len(list2) != 11 {
+	if len(list2) != 12 {
 		t.Fatalf("seed not idempotent: got %d after second seed", len(list2))
 	}
 
-	// math + english keys must exist (badge rule targets depend on them).
+	// math + english + xiangqi keys must exist (badge rule targets depend on
+	// math/english; xiangqi seed 的 AIConfig 回填靠 key)。
 	keys := map[string]bool{}
 	for _, s := range list2 {
 		keys[s.Key] = true
 	}
-	if !keys["math"] || !keys["english"] {
-		t.Errorf("default seed missing math/english keys: %v", keys)
+	for _, k := range []string{"math", "english", "xiangqi"} {
+		if !keys[k] {
+			t.Errorf("default seed missing key %q: %v", k, keys)
+		}
 	}
+}
+
+// TestSeedDefaultSubjects_XiangqiAIConfig 验证象棋(2026-07-19 升系统级)的 5 字段
+// AIConfig 被 seed 回填。以前象棋提示词在前端 aiHintTemplates.ts(死代码),
+// 现在挪到后端 subjectAISeed —— 这条测试守护"开箱即用":fresh install 的象棋课
+// 在课程级没配 hint 时,Effective*Hint 能拿到学科级 seed。
+func TestSeedDefaultSubjects_XiangqiAIConfig(t *testing.T) {
+	_, svc := newSubjectSvc(t)
+	if err := svc.SeedDefaultSubjects(); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	list, _ := svc.List()
+	var xq *model.Subject
+	for i := range list {
+		if list[i].Key == "xiangqi" {
+			xq = &list[i]
+			break
+		}
+	}
+	if xq == nil {
+		t.Fatalf("xiangqi subject not seeded")
+	}
+	if !xq.IsSystem {
+		t.Errorf("xiangqi should be IsSystem=true (升系统级是 2026-07-19 的关键变更)")
+	}
+	cfg := xq.AIConfig()
+	// 5 字段都必须有 seed 内容(非空)。
+	if cfg.WhisperHint == "" {
+		t.Errorf("xiangqi WhisperHint seed is empty")
+	}
+	if cfg.SummaryHint == "" {
+		t.Errorf("xiangqi SummaryHint seed is empty")
+	}
+	if cfg.QuizHint == "" {
+		t.Errorf("xiangqi QuizHint seed is empty")
+	}
+	if cfg.AdviceHint == "" {
+		t.Errorf("xiangqi AdviceHint seed is empty")
+	}
+	if cfg.TermDict == "" {
+		t.Errorf("xiangqi TermDict seed is empty")
+	}
+	// 抽查 TermDict 含象棋典型同音错字(车勿作居),验证内容正确迁移自前端模板。
+	if !contains(cfg.TermDict, "居") {
+		t.Errorf("xiangqi TermDict seed missing 车→居 correction, got: %q", cfg.TermDict)
+	}
+}
+
+// contains 是简易子串检查(test 用,不引入 strings 包减少 import)。
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }
 
 // TestSeedDefaultSubjectsBackfillsExistingInstall locks in the incremental
@@ -104,9 +164,14 @@ func TestSeedDefaultSubjectsBackfillsExistingInstall(t *testing.T) {
 	}
 
 	list, _ := svc.List()
-	// 5 old + 6 new defaults (5 academic + entertainment) + 1 user = 12.
-	if len(list) != 12 {
-		t.Fatalf("after backfill: expected 12 subjects, got %d", len(list))
+	// 5 old + 7 new defaults (5 academic + xiangqi + entertainment) + 1 user = 13.
+	// (2026-07-19 象棋升系统级前是 12;象棋加进 defaults 后变 13。)
+	if len(list) != 13 {
+		// 注:老 install 场景 —— 5 已有 + 6 新 seed defaults(5 junior-high academic +
+		// xiangqi + entertainment)+ 1 user 自定义 = 12。但象棋升系统级前后差 1,
+		// 这里以新逻辑(象棋加进 seed defaults)算:
+		//   5 old + 7 new defaults (5 junior-high + xiangqi + entertainment) + 1 user = 13
+		t.Fatalf("after backfill: expected 13 subjects (5 old + 7 new defaults + 1 user), got %d", len(list))
 	}
 
 	// The newly-added defaults must now exist.
