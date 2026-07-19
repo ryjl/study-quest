@@ -1,13 +1,48 @@
 # TODO — StudyQuest 待办清单
 
 > 本文件记录所有"已识别但未实现"的 feature idea，按优先级分组。每次迭代从这里挑选。
-> 最后更新：2026-07-19（AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次：5 类产物 regen + DELETE、EnqueueSummary 去重、9 张 AI 表 FK CASCADE、AIJob nullable 修复、AIConsole 集中化、象棋升系统级）
+> 最后更新：2026-07-19（用户反馈修复轮次：cache 流程重构 + 课程总览全链路 + AI 内容 normalize + 多个 UX 修复）
 
 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、**工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
 
 ---
 
 ## 已完成
+
+### 2026-07-19 用户反馈修复轮次（commit `c9e1f04` + `fc6a730` + `99b408f`）
+
+用户反馈 + 自测发现的 bug 一次性处理。**下个 session 接续未解决的前端渲染 bug，详见 `docs/handoff-frontend-render-issues.md`**。
+
+- **导入文件名保留原字符**：删 `import_service.go` / `reading_import_service.go` 里 `-`/`_` → 空格的替换。`26-7-12【...】` 这类日期/编号不再被破坏。
+- **cache MISS log 措辞**：worker.py 原来误导成 "using netdisk URL"，改成 "wav/mp4 cache 仍会尝试"。真正的"走网盘"在 audio.py 里另有准确 log。
+- **cache 流程重构**：worker 原来是 video cache 优先，wav cache 在 audio.extract_wav 内部——wav 已命中时还白做 video 扫描（含 WSL 9P）。重排为 wav → video → 网盘。`audio.find_cached_wav()` 抽出为公开函数。
+- **WSL2 9P readdir EIO 兜底**：`/mnt/e` 上 find/os.walk 会因 9P EIO 静默漏文件（但 stat 单个路径走不同 9P 消息通常正常）。`cache._scan_find` 加 returncode 告警，`cache.lookup` 索引 MISS 时做 `_probe_flat` stat 兜底（平铺布局下救回 EIO 漏的文件）。测试：12 cache + 5 audio。
+- **`UpsertSummary` 改 OnConflict**：旧版 `db.Save(s)` 在 s.ID=0 时走 INSERT，重新生成撞 uniqueIndex 报 "duplicated key not allowed"。用户被迫先手动删才能重生成。
+- **AI summary 内容 normalize**（`parseSummaryJSON` + 客户端 `MarkdownView._normalizeMarkdown` 双向兜底）：
+  - 字面量 `\n`（backslash+n）→ 真换行（修 GFM 表格被当一行）
+  - 裸 `<svg>...</svg>` → 自动补 ` ```svg ` 围栏（修 SVG 被当内联 HTML 转义）
+  - 8 个 normalize 单元测试（含"生产 DB 真实样本"用例）
+- **Summarizer prompt 富文本**：`"可选/鼓励"` → `"主动使用"`（修 3 门课一副图一表格没生成）。CourseSummary prompt 也加富文本段落，去掉"禁止代码块标记"。
+- **课程总览全链路（Phase D 客户端入口）**：
+  - `AICourseSummary.EpisodeCountAtGen` 字段 + 陈旧检测（生成时快照的"已总结课时数"vs 当前数）
+  - admin 内容管理 tab：status 轮询 + 删除按钮 gate（无 summary 不显示）+ 陈旧橙色提示 + summary_text 预览
+  - Flutter `course_detail_screen` 在 Hero header 和"闯关目录"之间插课程总览卡片
+  - `GeneratedAt` 统一为 RFC3339（admin 端已是，client 端从"2006-01-02 15:04"改）
+- **AI 控制台「内容管理」**：tab 改名（原"重新生成"但既有重生成也有删除，语义更准）。`GET /admin/api/ai/courses/:id/summaries-status` 新端点（返回有 summary 的 episode id 列表，gate 每集删除按钮）。
+- **决策痕迹/最近活动显示课程标题**：新增 `AIRunView`（内嵌 AIRun + EpisodeTitle/CourseTitle/UserNickname）+ `enrichRuns`（批量解析 run.job → episode/course/user 标题）。AIWorkflow RunList 表格加"课程/课时"列。
+- 验证：`go build` ✓ / `go test ./internal/ai/agent/...` ✓ / `tsc --noEmit` ✓ / `flutter analyze`（无新错误）✓ / cache 单元测试 17/17 ✓ / 生产 DB 级联删除验证（sqlite_sequence vs 实际行数对比，0 孤儿）✓ / MuMu 实测课程总览卡片显示 ✓。
+
+### ⚠️ 本轮未完成（下 session 接续）
+
+3 个前端渲染 bug，根因都疑似"某个卡片渲染异常让后续兄弟节点不显示"。详见 `docs/handoff-frontend-render-issues.md`：
+
+1. **table 盖文字**：`common_mistakes`/`methods` 的 MarkdownView 在带 padding 的 Container 里，约束让 flutter_markdown 内置横向 scrollview 没生效。
+2. **数学课 quiz 卡片不显示**：后端返回 ready，`_buildQuizSection` 也进 ready 分支（logcat 已确认），但视觉上看不到——可能渲染中触发 silent error。
+3. **课程总览卡片让下方章节列表看不见**（2026-07-19 用户新发现）：症状同上，疑似同类问题。
+
+`ai_study_screen.dart` 已留 4 处 print 诊断日志（`_loadQuiz` / `_buildSummarySection` / `_buildQuizSection` 入口 / hiding 分支），release 模式下也输出到 logcat，调完清掉。
+
+---
 
 ### 2026-07-19 AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次
 
