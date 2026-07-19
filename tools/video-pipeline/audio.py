@@ -34,7 +34,14 @@ DEFAULT_WAV_CACHE_DIR = "~/.cache/sq-whisper/wav"
 
 
 def _cache_key(filename: str, file_size: int | None, source: str) -> str:
-    """Stable key for the WAV: prefer (filename, size); fall back to source hash."""
+    """Stable key for the WAV: prefer (filename, size); fall back to source hash.
+
+    The key is INDEPENDENT of source — when filename is known, two runs against
+    different sources (local cache path vs netdisk URL) produce the SAME key.
+    This is what lets the wav cache short-circuit the entire source resolution:
+    the worker can check for a cached wav BEFORE deciding where the video comes
+    from, and a HIT means none of that matters.
+    """
     if filename:
         ident = f"{filename}|{file_size or 'unknown'}"
     else:
@@ -46,6 +53,32 @@ def _wav_cache_dir(cfg_dir: str | None) -> Path:
     d = Path(os.path.expanduser(cfg_dir or DEFAULT_WAV_CACHE_DIR))
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def find_cached_wav(
+    *,
+    filename: str,
+    file_size: int | None,
+    source: str = "",
+    wav_cache_dir: str | None = None,
+) -> str | None:
+    """Return the path to a cached WAV for this (filename, file_size), or None.
+
+    This is the FAST PATH: if a previous run already extracted the wav for this
+    episode, we can skip EVERYTHING else — no video cache scan, no netdisk URL,
+    no download, no ffmpeg. Call this BEFORE resolving the video source.
+
+    The key derives from (filename, file_size) when filename is known, so it's
+    stable across local-cache vs netdisk source changes — exactly what makes
+    the early-return safe.
+    """
+    cache_dir = _wav_cache_dir(wav_cache_dir)
+    key = _cache_key(filename, file_size, source)
+    wav_path = cache_dir / f"{key}.wav"
+    if wav_path.exists() and wav_path.stat().st_size > 0:
+        log.info("wav cache HIT: %s (%d bytes)", wav_path.name, wav_path.stat().st_size)
+        return str(wav_path)
+    return None
 
 
 def extract_wav(
@@ -66,14 +99,23 @@ def extract_wav(
     Returns the path to the WAV (cached or fresh). The caller should NOT remove
     it (it's kept for retries); pass ``cleanup=False`` semantics by not calling
     cleanup() in the worker for cached WAVs.
+
+    Prefer calling find_cached_wav() FIRST in the worker — it lets you skip
+    source resolution entirely on a HIT. This function still checks the wav
+    cache itself (so callers that go straight here don't miss it), but the
+    early return in the worker is the real win because it avoids the video
+    cache lookup too.
     """
     cache_dir = _wav_cache_dir(wav_cache_dir)
     key = _cache_key(filename, file_size, source)
     wav_path = cache_dir / f"{key}.wav"
 
-    if wav_path.exists() and wav_path.stat().st_size > 0:
-        log.info("wav cache HIT: %s (%d bytes)", wav_path.name, wav_path.stat().st_size)
-        return str(wav_path)
+    cached = find_cached_wav(
+        filename=filename, file_size=file_size, source=source, wav_cache_dir=wav_cache_dir,
+    )
+    if cached is not None:
+        # find_cached_wav already logged the HIT.
+        return cached
 
     # For http(s) inputs, ffmpeg can't reliably stream-read an MP4: the moov
     # atom sits at the file tail, so ffmpeg must HTTP-range-seek to the end, but

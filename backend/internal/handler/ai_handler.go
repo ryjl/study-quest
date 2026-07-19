@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -522,11 +523,17 @@ func (h *aiHandler) GetSubjectAdvice(c *gin.Context) {
 //
 // 注意:这里没有 "generating"——客户端不触发生成(course summary 是 admin 触发的);客户端
 // 只读已生成的,无总结就 404。admin 触发生成走 admin 端点(POST /admin/api/ai/course-summary)。
+// courseSummaryResponse 是 ai_course_summary 的客户端 JSON 视图。比 admin 简化:
+//   - 没有 "generating" 态(客户端不触发,无总结直接 404 + unavailable)
+//   - 有陈旧信号字段(episode_count_at_gen/current_episode_count),让学生看到
+//     "内容基于 N 节生成,目前 M 节,可能未涵盖最新课时"的诚实提示
 type courseSummaryResponse struct {
-	Status      string `json:"status"`
-	SummaryText string `json:"summary_text,omitempty"`
-	ModelUsed   string `json:"model_used,omitempty"`
-	GeneratedAt string `json:"generated_at,omitempty"`
+	Status             string `json:"status"`
+	SummaryText        string `json:"summary_text,omitempty"`
+	ModelUsed          string `json:"model_used,omitempty"`
+	GeneratedAt        string `json:"generated_at,omitempty"`
+	EpisodeCountAtGen  int    `json:"episode_count_at_gen,omitempty"`
+	CurrentEpisodeCount int   `json:"current_episode_count,omitempty"`
 }
 
 // GetCourseSummary 返回某门课程的课程级总结(course-unique 纯内容总结)。
@@ -559,10 +566,16 @@ func (h *aiHandler) GetCourseSummary(c *gin.Context) {
 		c.JSON(http.StatusNotFound, courseSummaryResponse{Status: "unavailable"})
 		return
 	}
+	// 当前已总结课时数(用于陈旧检测)。best-effort,失败时省略。
+	currentCount, _ := h.aiService.CountEpisodesWithSummary(uint(id))
+	// GeneratedAt 用 RFC3339(与 admin 端一致),客户端 DateTime.parse 解析,
+	// 显示层再格式化。统一传输格式,避免同字段两套格式带来的歧义。
 	c.JSON(http.StatusOK, courseSummaryResponse{
-		Status:      "ready",
-		SummaryText: summary.SummaryText,
-		ModelUsed:   summary.ModelUsed,
-		GeneratedAt: summary.GeneratedAt.Format("2006-01-02 15:04"),
+		Status:              "ready",
+		SummaryText:         summary.SummaryText,
+		ModelUsed:           summary.ModelUsed,
+		GeneratedAt:         summary.GeneratedAt.Format(time.RFC3339),
+		EpisodeCountAtGen:   summary.EpisodeCountAtGen,
+		CurrentEpisodeCount: int(currentCount),
 	})
 }

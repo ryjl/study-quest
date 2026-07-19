@@ -256,6 +256,9 @@ func RegisterRoutes(
 		// Phase D — admin 课程级总结(course-unique 纯内容总结,agent 驱动)。
 		adm.POST("/api/ai/courses/:id/course-summary", admin.TriggerCourseSummary)
 		adm.GET("/api/ai/courses/:id/course-summary", admin.GetCourseSummary)
+		// 2026-07-19: 课程下"哪些 episode 已有 summary"——给内容管理 tab gate
+		// 每集"删除"按钮用(无 summary 的课时不应显示删除)。前缀 :id 与上面一致。
+		adm.GET("/api/ai/courses/:id/summaries-status", admin.ListEpisodeSummaryStatus)
 		// Prompt 预览:admin 调优 hint 后立刻看完整 prompt 拼装效果(不调 LLM,纯文本)。
 		adm.POST("/api/ai/courses/:id/preview-prompt", admin.PreviewCoursePrompt)
 		// Phase E — admin 用户学习报告(跨课程画像,agent 驱动)。

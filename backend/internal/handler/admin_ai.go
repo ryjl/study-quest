@@ -484,16 +484,19 @@ func (h *adminHandler) GetAIJob(c *gin.Context) {
 		return
 	}
 	// Include the decision runs for this job so the detail view can replay them.
-	runs, _ := h.aiService.ListRunsForJob(id)
+	// Enriched 携带 episode/course/user 标题,让详情页的 runs 列表也能看到"在哪节课"。
+	runs, _ := h.aiService.ListRunsForJobEnriched(id)
 	c.JSON(http.StatusOK, gin.H{"job": toAIJobDTO(*view), "runs": runs})
 }
 
 // ListAIRuns returns recent decision runs (across all jobs), newest first.
 // GET /admin/api/ai/runs?limit=50
 // This powers the "agent decision trace" panel — the observability centerpiece.
+// 返回 AIRunView(带 episode_title/course_title/user_nickname),让决策痕迹表
+// 和 Dashboard 最近活动能展示课程/课时,不只是 capability + #job_id。
 func (h *adminHandler) ListAIRuns(c *gin.Context) {
 	if h.aiService == nil {
-		c.JSON(http.StatusOK, []model.AIRun{})
+		c.JSON(http.StatusOK, []service.AIRunView{})
 		return
 	}
 	limit := 50
@@ -502,7 +505,7 @@ func (h *adminHandler) ListAIRuns(c *gin.Context) {
 			limit = n
 		}
 	}
-	runs, err := h.aiService.ListRecentRuns(limit)
+	runs, err := h.aiService.ListRecentRunsEnriched(limit)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -687,11 +690,16 @@ func (h *adminHandler) GetQuizDetail(c *gin.Context) {
 //   - ready:有总结(summary_text 字段非空)
 //   - generating:无总结 + 有在途 job(前端轮询)
 //   - 空 status + 无 summary:无总结也未生成(前端显示"生成总结"按钮)
+//
+// EpisodeCountAtGen / CurrentEpisodeCount 用于陈旧检测:前者是生成时快照的"已总结
+// 课时数"(存 DB),后者是读时现算(每次 GET 查 ai_summaries.count)。差值 > 0 = 陈旧。
 type courseSummaryAdminDTO struct {
-	Status      string `json:"status"` // ready | generating | ""(无总结未生成)
-	SummaryText string `json:"summary_text,omitempty"`
-	ModelUsed   string `json:"model_used,omitempty"`
-	GeneratedAt string `json:"generated_at,omitempty"`
+	Status             string `json:"status"` // ready | generating | ""(无总结未生成)
+	SummaryText        string `json:"summary_text,omitempty"`
+	ModelUsed          string `json:"model_used,omitempty"`
+	GeneratedAt        string `json:"generated_at,omitempty"`
+	EpisodeCountAtGen  int    `json:"episode_count_at_gen,omitempty"`
+	CurrentEpisodeCount int   `json:"current_episode_count,omitempty"`
 }
 
 // TriggerCourseSummary 触发为某课程生成课程级总结(异步入队 course_summary job)。
@@ -742,16 +750,45 @@ func (h *adminHandler) GetCourseSummary(c *gin.Context) {
 		return
 	}
 	dto := courseSummaryAdminDTO{}
+	// CurrentEpisodeCount 无论有没有 summary 都算——前端 ready 时用它跟 at_gen
+	// 比对(陈旧提示),无 summary 时无害(前端不显示这个字段)。
+	if currentCount, cerr := h.aiService.CountEpisodesWithSummary(courseID); cerr == nil {
+		dto.CurrentEpisodeCount = int(currentCount)
+	}
 	if summary != nil {
 		dto.Status = "ready"
 		dto.SummaryText = summary.SummaryText
 		dto.ModelUsed = summary.ModelUsed
 		dto.GeneratedAt = summary.GeneratedAt.Format(time.RFC3339)
+		dto.EpisodeCountAtGen = summary.EpisodeCountAtGen
 	} else if h.aiService.HasPendingCourseSummaryJob(courseID) {
 		// 无总结但正在生成——前端据此显示 spinner 并继续轮询。
 		dto.Status = "generating"
 	}
 	c.JSON(http.StatusOK, dto)
+}
+
+// ListEpisodeSummaryStatus 返回某课程下"已有 AI summary"的 episode id 列表。
+// GET /admin/api/ai/courses/:id/summaries-status
+//
+// 给 AI 控制台「内容管理」tab gate 每集"删除"按钮用:没有 summary 的课时不应显示
+// 删除按钮(删了也是无意义的幂等 no-op,反而误导 admin)。返回一个 id 数组,前端转 Set。
+func (h *adminHandler) ListEpisodeSummaryStatus(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusOK, gin.H{"episode_ids_with_summary": []uint{}})
+		return
+	}
+	courseID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的课程 id"})
+		return
+	}
+	ids, err := h.aiService.ListEpisodeSummaryStatus(courseID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"episode_ids_with_summary": ids})
 }
 
 // ---------------------------------------------------------------------------

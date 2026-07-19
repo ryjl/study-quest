@@ -84,3 +84,60 @@ def test_index_is_memoized(cache_tree: Path):
     assert idx.lookup("第3讲.mp4", None) is None  # still memoized
     idx.reset()
     assert idx.lookup("第3讲.mp4", None) is not None  # re-walked
+
+
+# --- stat-fallback (WSL2 9P readdir EIO recovery) ---
+# On WSL2 /mnt/, find/os.walk can silently drop files from the index due to
+# 9P EIO on readdir — but stat/open of a known full path still works (different
+# 9P message). The lookup-level stat fallback recovers these for flat layouts.
+# We monkeypatch _is_wsl_mount to True so the fallback runs under tmp_path.
+
+def test_stat_fallback_recovers_file_missing_from_index(tmp_path: Path, monkeypatch):
+    """Simulate 9P readdir EIO: index is empty but the file exists on disk.
+
+    The stat fallback should find <dir>/<filename> directly.
+    """
+    monkeypatch.setattr(cache, "_is_wsl_mount", lambda _p: True)
+    # Place a file on disk but DON'T let the index see it: build the index with
+    # an empty dir, then add the file afterward (memoization freezes the index).
+    idx = cache.CacheIndex([str(tmp_path)])
+    idx._ensure()  # builds empty index
+    (tmp_path / "26-7-12【复盘】.mp4").write_bytes(b"x" * 354171945)
+    hit = idx.lookup("26-7-12【复盘】.mp4", 354171945)
+    assert hit is not None
+    assert hit.name == "26-7-12【复盘】.mp4"
+
+
+def test_stat_fallback_respects_size_mismatch(tmp_path: Path, monkeypatch):
+    """Stat fallback finds the file but size differs → still MISS."""
+    monkeypatch.setattr(cache, "_is_wsl_mount", lambda _p: True)
+    idx = cache.CacheIndex([str(tmp_path)])
+    idx._ensure()
+    (tmp_path / "ep.mp4").write_bytes(b"x" * 1000)
+    # Index is empty (built before file existed), so only stat fallback can see it.
+    assert idx.lookup("ep.mp4", 9999) is None  # wrong size → MISS
+
+
+def test_stat_fallback_skipped_on_native_paths(tmp_path: Path, monkeypatch):
+    """On native ext4 paths (not /mnt/), stat fallback is skipped — a miss is real."""
+    # _is_wsl_mount not patched → returns False for tmp_path.
+    idx = cache.CacheIndex([str(tmp_path)])
+    idx._ensure()
+    (tmp_path / "ep.mp4").write_bytes(b"x" * 1000)
+    # Index is empty AND no fallback → genuine miss.
+    assert idx.lookup("ep.mp4", 1000) is None
+
+
+def test_stat_fallback_tries_multiple_dirs(tmp_path: Path, monkeypatch):
+    """File in the second configured dir is found by stat fallback."""
+    monkeypatch.setattr(cache, "_is_wsl_mount", lambda _p: True)
+    d1 = tmp_path / "d1"
+    d2 = tmp_path / "d2"
+    d1.mkdir()
+    d2.mkdir()
+    idx = cache.CacheIndex([str(d1), str(d2)])
+    idx._ensure()  # both empty
+    (d2 / "ep.mp4").write_bytes(b"x" * 500)
+    hit = idx.lookup("ep.mp4", 500)
+    assert hit is not None
+    assert hit.parent.name == "d2"

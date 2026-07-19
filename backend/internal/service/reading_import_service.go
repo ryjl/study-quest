@@ -137,10 +137,9 @@ func (s *readingImportService) scanReadingRecursive(provider storage.StorageProv
 			}
 		} else {
 			if isPdfFile(f.Name) {
+				// 标题直接用去扩展名的文件名,保留 `-`/`_`(与 video 导入保持一致)。
 				ext := filepath.Ext(f.Name)
 				title := strings.TrimSuffix(f.Name, ext)
-				title = strings.ReplaceAll(title, "_", " ")
-				title = strings.ReplaceAll(title, "-", " ")
 
 				node.Children = append(node.Children, &ReadingPreviewNode{
 					Name:  title,

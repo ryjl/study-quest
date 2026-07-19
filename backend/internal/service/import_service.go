@@ -161,10 +161,13 @@ func (s *importService) scanRecursive(provider storage.StorageProvider, path str
 			}
 		} else {
 			if isVideoFile(f.Name) {
+				// 标题直接用去扩展名的文件名,保留 `-`/`_` 等原始字符。
+				// 历史上这里会把 `_`/`-` 替换成空格(让 `lesson_01` 显示成 `lesson 01`),
+				// 但这会破坏 `26-7-12【...】` 这类日期/编号命名的可读性,而且 admin/
+				// 学生看到的标题跟磁盘上的文件名对不上,排查 cache/文件问题时容易混淆。
+				// 现在保留原样,需要美化由 admin 在导入预览树里手动改。
 				ext := filepath.Ext(f.Name)
 				title := strings.TrimSuffix(f.Name, ext)
-				title = strings.ReplaceAll(title, "_", " ")
-				title = strings.ReplaceAll(title, "-", " ")
 
 				childNode := &ImportPreviewNode{
 					Name:  title,

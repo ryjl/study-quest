@@ -1254,8 +1254,13 @@ type AICourseSummary struct {
 	SummaryText string    `gorm:"type:text;not null"` // agent 的自然语言 FinalText(整体脉络 + 学习路径)
 	ModelUsed   string    `gorm:"size:255"`
 	GeneratedAt time.Time `gorm:"not null"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// EpisodeCountAtGen 是生成时该课程"已有 AI summary"的课时数快照。读时跟当前
+	// CountEpisodesWithSummaryByCourse 对比,差值 > 0 = 字幕逐节补全后内容已变旧,
+	// 给 admin/学生端展示"建议刷新"提示。课程总览只 admin 手动触发重生成(不自动
+	// 跟着每集字幕补全跑——避免烧 API),这个快照让"陈旧"状态可观测。
+	EpisodeCountAtGen int `gorm:"default:0"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 	// FK 关系(AI 附加层,单向):删 course 时 DB CASCADE 清本表。
 	Course Course `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE" json:"-"`
 }

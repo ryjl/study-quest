@@ -131,33 +131,63 @@ def process_job(client: ApiClient, tr: transcriber.Transcriber, idx: cache.Cache
         job.job_id, job.episode.title or f"episode {job.episode_id}", job.language,
     )
 
-    # Source resolution: local video cache wins (skips the netdisk entirely).
-    source: str = job.download_url
-    headers = job.download_header
-    hit = idx.lookup(job.episode.filename, job.episode.file_size)
-    if hit is not None:
-        log.info("cache HIT: %s (skipping netdisk download)", hit)
-        source = str(hit)
-        headers = None  # local file, no netdisk headers needed
-    else:
-        log.info("cache MISS — using netdisk URL for %r", job.episode.filename)
+    # ── Cache priority (fast → slow) ──────────────────────────────────────
+    # 1. WAV cache: a previous run already extracted the 16kHz wav for this
+    #    (filename, file_size). HIT → transcribe directly, skip EVERYTHING
+    #    else (no video scan, no netdisk URL, no ffmpeg). This is the common
+    #    path for retries and re-enqueues.
+    # 2. Video cache: the .mp4 is already on disk locally. HIT → ffmpeg from
+    #    local file (no netdisk download).
+    # 3. Netdisk: download from the signed URL (slowest, may need mp4 cache).
+    #
+    # IMPORTANT: checking wav cache FIRST means that on a wav HIT we don't
+    # even touch the video cache — avoiding the WSL2 9P readdir scan entirely
+    # for the common retry case. Previously the video cache lookup ran on
+    # every job even when the wav was already cached.
+    wav_path = audio.find_cached_wav(
+        filename=job.episode.filename,
+        file_size=job.episode.file_size,
+        wav_cache_dir=cfg.audio.wav_cache_dir or None,
+    )
+
+    source: str | None = None
+    headers: dict[str, str] | None = None
+    if wav_path is None:
+        # Wav MISS → need a video source to extract from. Try the local video
+        # cache first; only fall back to the netdisk URL on a video MISS.
+        source = job.download_url
+        headers = job.download_header
+        hit = idx.lookup(job.episode.filename, job.episode.file_size)
+        if hit is not None:
+            log.info("video cache HIT: %s (skipping netdisk download)", hit)
+            source = str(hit)
+            headers = None  # local file, no netdisk headers needed
+        else:
+            # Video MISS too. Last resort is the netdisk URL — audio.extract_wav
+            # will try the mp4 download cache before actually hitting the network
+            # (its `downloading video: ...` log is the true "going to netdisk" signal).
+            log.info(
+                "video cache miss for %r — trying mp4 download cache, then netdisk",
+                job.episode.filename,
+            )
 
     hb = Heartbeat(client, job.job_id, cfg.worker.heartbeat_interval)
     hb.start()
-    wav_path: str | None = None
     try:
-        # The extracted WAV is cached by (filename, file_size): a retry won't
-        # re-download or re-extract. We do NOT delete it after transcription —
-        # it's the retry insurance. Stale ones get cleaned at worker startup.
-        wav_path = audio.extract_wav(
-            source,
-            sample_rate=cfg.audio.sample_rate,
-            channels=cfg.audio.channels,
-            headers=headers,
-            filename=job.episode.filename,
-            file_size=job.episode.file_size,
-            wav_cache_dir=cfg.audio.wav_cache_dir or None,
-        )
+        # If wav_path is still None here, extract it from `source` (local video
+        # or netdisk URL). find_cached_wav already checked the wav cache, but
+        # extract_wav re-checks internally too — harmless, and keeps the function
+        # safe for callers that don't pre-check.
+        if wav_path is None:
+            wav_path = audio.extract_wav(
+                source,
+                sample_rate=cfg.audio.sample_rate,
+                channels=cfg.audio.channels,
+                headers=headers,
+                filename=job.episode.filename,
+                file_size=job.episode.file_size,
+                wav_cache_dir=cfg.audio.wav_cache_dir or None,
+            )
         prompt = transcriber.build_prompt(job.episode, cfg.whisper.base_prompt)
         srt = tr.transcribe(wav_path, initial_prompt=prompt, on_progress=hb.set_ratio)
         try:

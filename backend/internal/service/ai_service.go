@@ -154,8 +154,21 @@ type AIService interface {
 	GetJob(id uint) (*AIJobView, error)
 	ListRunsForJob(jobID uint) ([]model.AIRun, error)
 	ListRecentRuns(limit int) ([]model.AIRun, error)
+	// ListRecentRunsEnriched / ListRunsForJobEnriched return AIRunView (run +
+	// resolved episode/course/user titles) for the admin UI. The plain variants
+	// above stay for internal callers (e.g. quiz history) that want raw runs.
+	ListRecentRunsEnriched(limit int) ([]AIRunView, error)
+	ListRunsForJobEnriched(jobID uint) ([]AIRunView, error)
 	GetRun(id uint) (*model.AIRun, error)
 	JobStats() (map[string]int, error)
+
+	// ── status / staleness helpers (内容管理 tab + 课程总览陈旧检测) ──
+	// ListEpisodeSummaryStatus 返回某课程下"已有 summary"的 episode id 列表,
+	// 给 admin 内容管理 tab gate 每集"删除"按钮用。
+	ListEpisodeSummaryStatus(courseID uint) ([]uint, error)
+	// CountEpisodesWithSummary 返回某课程下已有 summary 的 episode 数量。
+	// 课程总览的陈旧检测用:生成时快照,读时对比。
+	CountEpisodesWithSummary(courseID uint) (int64, error)
 
 	// ── maintenance ──
 	// ReapStaleJobs resets 'processing' AI jobs whose claimed_at is older than a
@@ -209,6 +222,24 @@ type AIJobView struct {
 	EpisodeTitle  string
 	CourseTitle   string
 	UserNickname  string
+}
+
+// AIRunView is one admin-facing run row WITH the episode/course/user titles
+// resolved from the run's job. The Run field embeds model.AIRun (so the JSON
+// shape is unchanged — every existing field stays where the frontend expects
+// it), and the three title fields are added alongside. The frontend's AiRun
+// type already declares episode_title?/course_title? — they were aspirational
+// until this type was added.
+//
+// Why a separate type instead of enriching model.AIRun: AIRun is a GORM model
+// shared with internal callers (e.g. ai_service_quiz.go's history builder);
+// adding title columns to it would imply a schema change and bleed display
+// concerns into the model. A view type keeps the model clean.
+type AIRunView struct {
+	model.AIRun
+	EpisodeTitle string `json:"episode_title,omitempty"`
+	CourseTitle  string `json:"course_title,omitempty"`
+	UserNickname string `json:"user_nickname,omitempty"`
 }
 
 // NewAIService constructs an AIService. resolver may be nil in degenerate
@@ -740,12 +771,91 @@ func (s *aiService) ListRecentRuns(limit int) ([]model.AIRun, error) {
 	return s.contentRepo.ListRecentRuns(limit)
 }
 
+// ListRecentRunsEnriched returns recent runs with episode/course/user titles
+// resolved via the run's job. Powers the admin "决策痕迹(最近运行)" list and
+// the Dashboard 最近活动 feed — both want to show WHAT (capability) plus WHERE
+// (course/episode), not just the capability.
+func (s *aiService) ListRecentRunsEnriched(limit int) ([]AIRunView, error) {
+	runs, err := s.contentRepo.ListRecentRuns(limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichRuns(runs), nil
+}
+
+// ListRunsForJobEnriched is the per-job variant, used by GetAIJob so the job
+// detail view's run list also shows episode/course context.
+func (s *aiService) ListRunsForJobEnriched(jobID uint) ([]AIRunView, error) {
+	runs, err := s.contentRepo.ListRunsForJob(jobID)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichRuns(runs), nil
+}
+
+// enrichRuns batch-resolves episode/course/user titles for a set of runs by
+// joining through AIRun.JobID → AIJob → EpisodeID/CourseID/UserID. The job
+// batch is loaded in one query (not per-run), then resolveJobNames does the
+// id→title fanout. Best-effort: any lookup failure leaves the title empty.
+func (s *aiService) enrichRuns(runs []model.AIRun) []AIRunView {
+	if len(runs) == 0 {
+		return []AIRunView{}
+	}
+	// Collect distinct job IDs the runs reference (JobID=0 means ad-hoc, skip).
+	seen := map[uint]bool{}
+	jobIDs := make([]uint, 0, len(runs))
+	for _, r := range runs {
+		if r.JobID != 0 && !seen[r.JobID] {
+			seen[r.JobID] = true
+			jobIDs = append(jobIDs, r.JobID)
+		}
+	}
+	// Load all referenced jobs in one query, then reuse the existing job-name
+	// resolver (it dedups episode/course/user id lookups internally).
+	nameByJobID := map[uint]struct{ ep, course, user string }{}
+	if len(jobIDs) > 0 {
+		var jobs []model.AIJob
+		if err := s.db.Where("id IN ?", jobIDs).Find(&jobs).Error; err == nil && len(jobs) > 0 {
+			cache := s.resolveJobNames(jobs)
+			for _, j := range jobs {
+				ep, course, user := cache.forJob(&j)
+				nameByJobID[j.ID] = struct{ ep, course, user string }{ep, course, user}
+			}
+		}
+	}
+	out := make([]AIRunView, len(runs))
+	for i, r := range runs {
+		v := AIRunView{AIRun: r}
+		if r.JobID != 0 {
+			if n, ok := nameByJobID[r.JobID]; ok {
+				v.EpisodeTitle = n.ep
+				v.CourseTitle = n.course
+				v.UserNickname = n.user
+			}
+		}
+		out[i] = v
+	}
+	return out
+}
+
 func (s *aiService) GetRun(id uint) (*model.AIRun, error) {
 	return s.contentRepo.GetRun(id)
 }
 
 func (s *aiService) JobStats() (map[string]int, error) {
 	return s.contentRepo.JobStats()
+}
+
+// ListEpisodeSummaryStatus 返回某课程下已有 summary 的 episode id 列表。
+// 给 admin 内容管理 tab gate 每集"删除"按钮:无 summary 不显示删除。
+func (s *aiService) ListEpisodeSummaryStatus(courseID uint) ([]uint, error) {
+	return s.contentRepo.ListEpisodeIDsWithSummaryByCourse(courseID)
+}
+
+// CountEpisodesWithSummary 课程总览陈旧检测用:跟 AICourseSummary.EpisodeCountAtGen
+// 对比,差值 > 0 = 已新增了 summary 的课时,建议刷新。
+func (s *aiService) CountEpisodesWithSummary(courseID uint) (int64, error) {
+	return s.contentRepo.CountEpisodesWithSummaryByCourse(courseID)
 }
 
 // ReapStaleJobs 委托给 repo,固定 30 分钟阈值。一个 LLM 调用最多 ~30s,加上

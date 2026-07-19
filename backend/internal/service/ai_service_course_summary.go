@@ -113,11 +113,14 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 	}
 
 	// 存课程总结(UpsertCourseSummary 替换旧记录,语义=当前课程导览)。
+	// 生成时快照当前"已总结课时数"——给陈旧检测用(下次读时跟当前数对比)。
+	episodeCountAtGen, _ := s.contentRepo.CountEpisodesWithSummaryByCourse(course.ID)
 	summary := &model.AICourseSummary{
-		CourseID:    course.ID,
-		SummaryText: res.SummaryText,
-		ModelUsed:   modelName,
-		GeneratedAt: time.Now(),
+		CourseID:          course.ID,
+		SummaryText:       res.SummaryText,
+		ModelUsed:         modelName,
+		GeneratedAt:       time.Now(),
+		EpisodeCountAtGen: int(episodeCountAtGen),
 	}
 	if err := s.contentRepo.UpsertCourseSummary(summary); err != nil {
 		s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.SummaryText, res.SystemPrompt, res.UserPrompt)

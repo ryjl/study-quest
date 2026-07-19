@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -296,7 +297,81 @@ func parseSummaryJSON(raw string) (SummaryResult, error) {
 	if err := json.Unmarshal([]byte(s), &result); err != nil {
 		return result, fmt.Errorf("invalid JSON: %w", err)
 	}
+	result.normalizeMarkdownInFields()
 	return result, nil
+}
+
+// normalizeMarkdownInFields 修两类模型常见的脏数据(在生产 DB 里已确认出现):
+//
+//  1. **字面量 `\n` 没解成真实换行**:LLM 在 JSON 字符串值里输出表格时,有时
+//     把 `\n` 当 2 字符字面量(backslash+n)而非换行转义。json.Unmarshal 不会
+//     再解一次,字面量 `\n` 留在字符串里 → GFM 表格 `| a |\n|---|` 在客户端
+//     是一行,markdown 不识别为表格 → 渲染成纯文字。
+//
+//  2. **裸 `<svg>...</svg>` 没加围栏**:prompt 要求 SVG 放 ``` ```svg ``` 围栏,
+//     但模型有时直接吐裸 SVG → markdown 把它当内联 HTML 转义掉 → 渲染成文本。
+//     这里自动补围栏,让客户端 _SvgCodeInterceptor 能拦截。
+//
+// 同时作用在所有承载 markdown 的字段:Headline / KeyPoints / Sections[*].Points /
+// Methods / CommonMistakes / Takeaway。
+func (r *SummaryResult) normalizeMarkdownInFields() {
+	r.Headline = normalizeOneMarkdownField(r.Headline)
+	r.Takeaway = normalizeOneMarkdownField(r.Takeaway)
+	for i := range r.KeyPoints {
+		r.KeyPoints[i] = normalizeOneMarkdownField(r.KeyPoints[i])
+	}
+	for i := range r.Methods {
+		r.Methods[i] = normalizeOneMarkdownField(r.Methods[i])
+	}
+	for i := range r.CommonMistakes {
+		r.CommonMistakes[i] = normalizeOneMarkdownField(r.CommonMistakes[i])
+	}
+	for i := range r.Sections {
+		r.Sections[i].Title = normalizeOneMarkdownField(r.Sections[i].Title)
+		for j := range r.Sections[i].Points {
+			r.Sections[i].Points[j] = normalizeOneMarkdownField(r.Sections[i].Points[j])
+		}
+	}
+}
+
+// normalizeOneMarkdownField 对单个字段做 normalize:字面量 \n→换行,裸 svg→加围栏。
+// 不碰已经在 ``` 围栏里的内容(避免破坏已正确的 SVG 块)。
+func normalizeOneMarkdownField(s string) string {
+	if s == "" {
+		return s
+	}
+	// 按 ``` 分段:奇数段(代码块内容)原样保留,偶数段(普通 markdown)做替换。
+	parts := strings.Split(s, "```")
+	var b strings.Builder
+	for i, p := range parts {
+		if i%2 == 1 {
+			b.WriteString("```")
+			b.WriteString(p)
+			b.WriteString("```")
+			continue
+		}
+		// 字面量 \n / \r / \t → 真实字符。
+		p = strings.ReplaceAll(p, "\\n", "\n")
+		p = strings.ReplaceAll(p, "\\r", "")
+		p = strings.ReplaceAll(p, "\\t", "\t")
+		// 裸 <svg ...>...</svg> 自动加围栏。
+		p = wrapBareSvg(p)
+		b.WriteString(p)
+	}
+	return b.String()
+}
+
+// wrapBareSvg 把段内所有裸 <svg ... </svg>(没有 ```svg 围栏包裹的)替换成
+// 围栏代码块。调用方已经把代码块段隔离掉了,所以这里只需要匹配裸 SVG。
+var bareSvgRe = regexp.MustCompile(`(?s)<svg\b.*?</svg>`)
+
+func wrapBareSvg(s string) string {
+	if !strings.Contains(strings.ToLower(s), "<svg") {
+		return s
+	}
+	return bareSvgRe.ReplaceAllStringFunc(s, func(m string) string {
+		return "\n```svg\n" + m + "\n```\n"
+	})
 }
 
 // mmss is duplicated from the segmenter package to keep the agent package

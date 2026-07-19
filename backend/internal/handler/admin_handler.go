@@ -143,9 +143,11 @@ type AdminHandler interface {
 	GetAISummary(c *gin.Context)
 	ListUserQuizzes(c *gin.Context)
 	GetQuizDetail(c *gin.Context)
-	// Phase D — 课程级总结(admin 触发生成 + 读取,course-unique 纯内容总结)。
-	TriggerCourseSummary(c *gin.Context)
-	GetCourseSummary(c *gin.Context)
+		// Phase D — 课程级总结(admin 触发生成 + 读取,course-unique 纯内容总结)。
+		TriggerCourseSummary(c *gin.Context)
+		GetCourseSummary(c *gin.Context)
+		// ListEpisodeSummaryStatus:某课程下哪些 episode 已有 summary(给内容管理 tab gate 删除按钮)。
+		ListEpisodeSummaryStatus(c *gin.Context)
 	// Phase E — admin 用户学习报告(agent 驱动,跨课程画像)。
 	TriggerUserStudyReport(c *gin.Context)
 	GetUserStudyReport(c *gin.Context)
