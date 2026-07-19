@@ -279,6 +279,7 @@ function RunList({ runs, loading }: { runs: AiRun[]; loading: boolean }) {
           <thead className="border-b border-border bg-card-2 text-xs uppercase tracking-wide text-muted">
             <tr>
               <th className="px-4 py-2.5 text-left font-medium">能力</th>
+              <th className="px-4 py-2.5 text-left font-medium">课程 / 课时</th>
               <th className="px-4 py-2.5 text-left font-medium">模型</th>
               <th className="px-4 py-2.5 text-left font-medium">Tokens (输入/输出)</th>
               <th className="px-4 py-2.5 text-left font-medium">耗时</th>
@@ -293,6 +294,13 @@ function RunList({ runs, loading }: { runs: AiRun[]; loading: boolean }) {
                 <td className="px-4 py-3">
                   <span className="font-medium">{r.capability}</span>
                   <span className="ml-1.5 text-[11px] text-muted">#{r.job_id}</span>
+                </td>
+                <td className="px-4 py-3">
+                  {/* 课程 / 课时:后端 AIRunView enrich 出来的标题(经 run.job →
+                      episode/course/user 解析)。subject-scope 的 advice job 没
+                      episode/course,这里两行都为空 → 显示 —。 */}
+                  <div className="text-xs text-txt">{r.course_title || <span className="text-muted">—</span>}</div>
+                  <div className="text-[11px] text-muted">{r.episode_title || (r.user_nickname ? `学生: ${r.user_nickname}` : '')}</div>
                 </td>
                 <td className="px-4 py-3 text-xs text-muted">{r.model_used || '—'}</td>
                 <td className="px-4 py-3 text-xs text-muted">

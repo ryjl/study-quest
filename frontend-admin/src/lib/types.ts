@@ -648,6 +648,8 @@ export interface AiRun {
   // show what each run was about without a client-side join).
   episode_title?: string;
   course_title?: string;
+  // subject-scope advice run 没 episode/course,但有 user——显示在第二行。
+  user_nickname?: string;
   response_text: string;
   // trace_json carries the ReAct step-by-step reasoning for quiz runs: an array
   // of {step, thought, action:{tool,args}, observation, is_final}. Empty for
@@ -767,6 +769,18 @@ export interface UserStudyReport {
   report?: string;
   model_used?: string;
   generated_at?: string;
+}
+
+// 课程总览(admin GET)。status 三态:ready / generating / ''(无总结未生成)。
+// episode_count_at_gen / current_episode_count 用于陈旧检测:生成时快照的"已总结
+// 课时数"vs现在,差值 > 0 说明字幕逐节补全后内容已变旧,提示 admin 刷新。
+export interface CourseSummaryAdmin {
+  status: 'ready' | 'generating' | '';
+  summary_text?: string;
+  model_used?: string;
+  generated_at?: string;
+  episode_count_at_gen?: number;
+  current_episode_count?: number;
 }
 
 // raw StudyAdvice row from GET /admin/api/ai/users/:userID/advice. Mirrors the

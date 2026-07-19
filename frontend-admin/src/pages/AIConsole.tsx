@@ -21,7 +21,8 @@ import { PromptConfigTab } from './ai-console/PromptConfigTab';
 // other tabs (it was originally a Settings card, hence the wrapper).
 
 const TABS = [
-  { key: 'regen', label: '重新生成' },
+  // 这个 tab 既有重新生成也有删除,叫"内容管理"比"重新生成"更准。
+  { key: 'regen', label: '内容管理' },
   { key: 'prompt', label: 'Prompt 配置' },
   { key: 'jobs', label: '任务队列' },
   { key: 'users', label: '学生数据' },

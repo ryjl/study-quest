@@ -68,15 +68,42 @@ function CourseRegenColumn() {
   const episodes = episodesQ.data ?? [];
   const selectedCourse = courses.find((c) => c.id === courseId);
 
+  // 课程总结状态(三态):ready / generating / ''(未生成)。
+  // 生成中自动轮询;ready 时 gate 删除按钮 + 显示文本预览 + 陈旧提示。
+  const summaryQ = useQuery({
+    queryKey: ['course-summary', courseId],
+    queryFn: () => api.getCourseSummary(courseId!),
+    enabled: courseId != null,
+    refetchInterval: (q) => (q.state.data?.status === 'generating' ? 3000 : false),
+    refetchIntervalInBackground: false,
+  });
+  const summaryData = summaryQ.data;
+  const summaryStatus = summaryData?.status ?? '';
+  const summaryStale =
+    summaryStatus === 'ready' &&
+    (summaryData?.current_episode_count ?? 0) > (summaryData?.episode_count_at_gen ?? 0);
+  const newSinceGen =
+    summaryStale ? (summaryData!.current_episode_count! - summaryData!.episode_count_at_gen!) : 0;
+
+  // 课程下"哪些 episode 已有 summary"——给每集的删除按钮做 gate。
+  // 一个课程一次批量查询,避免每集 N+1。
+  const summaryStatusQ = useQuery({
+    queryKey: ['episode-summary-status', courseId],
+    queryFn: () => api.listEpisodeSummaryStatus(courseId!),
+    enabled: courseId != null,
+  });
+  const episodesWithSummary = useMemo(
+    () => new Set(summaryStatusQ.data ?? []),
+    [summaryStatusQ.data],
+  );
+
   // Course summary: trigger enqueues a generation job (async), delete removes
-  // the existing summary so the next run regenerates it. NO status polling —
-  // the api.ts file has no GET course-summary endpoint, and the spec's
-  // escape hatch is to skip polling entirely. The jobs tab is where the
-  // admin watches progress.
+  // the existing summary so the next run regenerates it.
   const triggerSummaryMut = useMutation({
     mutationFn: () => api.triggerCourseSummary(courseId!),
     onSuccess: () => {
       toast.success('已入队课程总结,生成进度见「任务队列」标签');
+      qc.invalidateQueries({ queryKey: ['course-summary', courseId] });
     },
     onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '入队失败'),
   });
@@ -154,7 +181,7 @@ function CourseRegenColumn() {
 
       {courseId != null && (
         <>
-          {/* 课程总结:仅 trigger + delete,无 status 轮询(api.ts 无 GET course-summary) */}
+          {/* 课程总结:status 轮询(生成中)+ gate 删除(无总结不显示)+ 陈旧提示 */}
           <div className="rounded-md border border-border bg-card-2 p-3">
             <div className="mb-2 flex items-center justify-between gap-2">
               <h3 className="text-sm font-medium">课程总结</h3>
@@ -162,27 +189,59 @@ function CourseRegenColumn() {
                 <button
                   className="btn-ghost btn-sm"
                   onClick={() => triggerSummaryMut.mutate()}
-                  disabled={triggerSummaryMut.isPending}
-                  title="重新生成该课程的跨课时总结(异步入队)"
+                  disabled={triggerSummaryMut.isPending || summaryStatus === 'generating'}
+                  title={summaryStatus === 'ready' ? '重新生成(覆盖当前总结)' : '生成课程总结(异步入队)'}
                 >
-                  {triggerSummaryMut.isPending ? '提交中…' : '重新生成'}
+                  {triggerSummaryMut.isPending
+                    ? '提交中…'
+                    : summaryStatus === 'ready'
+                      ? '重新生成'
+                      : '生成总结'}
                 </button>
-                <button
-                  className="btn-ghost btn-sm text-bad hover:bg-bad/10"
-                  onClick={onDeleteCourseSummary}
-                  disabled={deleteSummaryMut.isPending}
-                  title="删除现有课程总结(下次重新生成会从零开始)"
-                >
-                  {deleteSummaryMut.isPending ? '删除中…' : '删除'}
-                </button>
+                {/* 删除只在有总结时显示。无总结时点删除是无效的幂等 no-op,显示出来反而误导。 */}
+                {summaryStatus === 'ready' && (
+                  <button
+                    className="btn-ghost btn-sm text-bad hover:bg-bad/10"
+                    onClick={onDeleteCourseSummary}
+                    disabled={deleteSummaryMut.isPending}
+                    title="删除现有课程总结(下次重新生成会从零开始)"
+                  >
+                    {deleteSummaryMut.isPending ? '删除中…' : '删除'}
+                  </button>
+                )}
               </div>
             </div>
-            <p className="text-[11px] text-muted">
-              课程总结是该课程所有课时汇总后的整体总结,所有学生共享。生成进度在「任务队列」标签查看。
-            </p>
+            {summaryStatus === 'generating' ? (
+              <div className="flex items-center gap-2 px-1 py-2 text-xs text-muted">
+                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent" />
+                正在生成课程总结…(agent 正在串起课时脉络,约需数十秒)
+              </div>
+            ) : summaryStatus === 'ready' ? (
+              <div className="space-y-1">
+                {summaryStale && (
+                  <div className="rounded border border-warn/40 bg-warn/5 px-2 py-1 text-[11px] text-warn">
+                    已新增 {newSinceGen} 节课时总结,当前总览内容已陈旧,建议重新生成。
+                  </div>
+                )}
+                <p className="line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-txt">
+                  {summaryData?.summary_text}
+                </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[10px] text-muted">
+                  {summaryData?.generated_at && (
+                    <span>生成于 {new Date(summaryData.generated_at).toLocaleString('zh-CN')}</span>
+                  )}
+                  {summaryData?.model_used && <span>模型: {summaryData.model_used}</span>}
+                  <span>基于 {summaryData?.episode_count_at_gen ?? 0} 节内容</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-muted">
+                暂无课程总结。点击「生成总结」由 agent 串起所有课时的知识脉络。所有学生共享。
+              </p>
+            )}
           </div>
 
-          {/* 课时总结列表:每行 trigger + delete,不做 per-episode status 轮询(开销过大) */}
+          {/* 课时总结列表:每集 trigger(总是可用)+ delete(只有 hasSummary 时显示) */}
           <div className="rounded-md border border-border bg-card-2 p-3">
             <div className="mb-2 flex items-center justify-between">
               <h3 className="text-sm font-medium">课时总结 ({episodes.length})</h3>
@@ -193,35 +252,43 @@ function CourseRegenColumn() {
               <div className="px-1 py-3 text-xs text-muted">该课程下暂无课时。</div>
             ) : (
               <ul className="space-y-1">
-                {episodes.map((ep) => (
-                  <li
-                    key={ep.id}
-                    className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-card px-2.5 py-1.5"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-txt">{ep.title}</div>
-                      <div className="text-[10px] text-muted">#{ep.id}</div>
-                    </div>
-                    <div className="flex flex-shrink-0 items-center gap-1">
-                      <button
-                        className="btn-ghost btn-sm"
-                        onClick={() => regenEpisodeMut.mutate(ep.id)}
-                        disabled={regenEpisodeMut.isPending}
-                        title="重新生成该课时总结(异步入队)"
-                      >
-                        重新生成
-                      </button>
-                      <button
-                        className="btn-ghost btn-sm text-bad hover:bg-bad/10"
-                        onClick={() => onDeleteEpisodeSummary(ep.id, ep.title)}
-                        disabled={deleteEpisodeSummaryMut.isPending}
-                        title="删除该课时总结"
-                      >
-                        删除
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                {episodes.map((ep) => {
+                  const hasSummary = episodesWithSummary.has(ep.id);
+                  return (
+                    <li
+                      key={ep.id}
+                      className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-card px-2.5 py-1.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm text-txt">{ep.title}</div>
+                        <div className="text-[10px] text-muted">
+                          #{ep.id}
+                          {hasSummary ? null : <span className="ml-1.5 text-muted/70">· 未生成</span>}
+                        </div>
+                      </div>
+                      <div className="flex flex-shrink-0 items-center gap-1">
+                        <button
+                          className="btn-ghost btn-sm"
+                          onClick={() => regenEpisodeMut.mutate(ep.id)}
+                          disabled={regenEpisodeMut.isPending}
+                          title={hasSummary ? '重新生成该课时总结(异步入队)' : '生成该课时总结(异步入队)'}
+                        >
+                          {hasSummary ? '重新生成' : '生成'}
+                        </button>
+                        {hasSummary && (
+                          <button
+                            className="btn-ghost btn-sm text-bad hover:bg-bad/10"
+                            onClick={() => onDeleteEpisodeSummary(ep.id, ep.title)}
+                            disabled={deleteEpisodeSummaryMut.isPending}
+                            title="删除该课时总结"
+                          >
+                            删除
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>

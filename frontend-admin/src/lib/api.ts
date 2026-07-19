@@ -42,6 +42,7 @@ import type {
   AiQuizRow,
   AiQuizDetail,
   UserStudyReport,
+  CourseSummaryAdmin,
   StudyAdviceRow,
 } from './types';
 
@@ -620,6 +621,20 @@ export const api = {
   // 课程级总结(admin 触发一次,所有学生共享)。POST 入队生成,DELETE 清掉重跑。
   async triggerCourseSummary(courseId: number): Promise<{ status: string }> {
     return request(`/admin/api/ai/courses/${courseId}/course-summary`, { method: 'POST' });
+  },
+  // getCourseSummary:GET 已生成的课程总结(三态 status + 文本 + 陈旧信号)。
+  // 给内容管理 tab:(a) gate 删除按钮(无 summary 不显示);(b) 预览已生成的文本;
+  // (c) 显示陈旧提示(current_episode_count > episode_count_at_gen)。
+  async getCourseSummary(courseId: number): Promise<CourseSummaryAdmin> {
+    return request(`/admin/api/ai/courses/${courseId}/course-summary`);
+  },
+  // listEpisodeSummaryStatus:某课程下哪些 episode 已有 summary。前端转 Set<number>
+  // 用来 gate 内容管理 tab 每集的"删除"按钮(无 summary 不显示)。
+  async listEpisodeSummaryStatus(courseId: number): Promise<number[]> {
+    const r = await request<{ episode_ids_with_summary: number[] }>(
+      `/admin/api/ai/courses/${courseId}/summaries-status`,
+    );
+    return r.episode_ids_with_summary ?? [];
   },
 
   // AI 控制台:重新生成 + 删除(2026-07-19 加)。
