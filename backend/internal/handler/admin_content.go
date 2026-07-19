@@ -93,22 +93,27 @@ func (h *adminHandler) GetCourseDetail(c *gin.Context) {
 // GetSettings returns the storage + (non-sensitive) admin config as JSON.
 func (h *adminHandler) CreateCourse(c *gin.Context) {
 	var req struct {
-		Title            string `json:"title" binding:"required"`
-		Grades           string `json:"grades"`
-		Subject          string `json:"subject" binding:"required"`
-		ContentType      string `json:"content_type"`
-		CoverURL         string `json:"cover_url"`
-		TagIDs           []uint `json:"tag_ids"`
-		AttachmentJSON   string `json:"attachment_json"`
-		// AIHint is deprecated: the admin form now writes WhisperHint + QuizHint
-		// (split per consumer). Kept on the request struct so an older admin SPA
-		// still posting ai_hint doesn't 400, but it's ignored — never reaches the
-		// service. Will be removed with model.Course.AIHint.
-		AIHint           string `json:"ai_hint"`
-		WhisperHint      string `json:"whisper_hint"`
-		QuizHint         string `json:"quiz_hint"`
-		AISummaryEnabled bool   `json:"ai_summary_enabled"`
-		AIQuizEnabled    bool   `json:"ai_quiz_enabled"`
+		Title            string            `json:"title" binding:"required"`
+		Grades           string            `json:"grades"`
+		Subject          string            `json:"subject" binding:"required"`
+		ContentType      string            `json:"content_type"`
+		CoverURL         string            `json:"cover_url"`
+		TagIDs           []uint            `json:"tag_ids"`
+		AttachmentJSON   string            `json:"attachment_json"`
+		// AIHint is deprecated: the admin form now writes ai_config(5 字段)。
+		// Kept on the request struct so an older admin SPA still posting ai_hint
+		// doesn't 400, but it's ignored — never reaches the service. Will be
+		// removed with model.Course.AIHint.
+		AIHint           string            `json:"ai_hint"`
+		// AIConfig 是 5 字段的课程级 AI 提示对象(替代老的 WhisperHint/QuizHint
+		// 双字段)。非 nil → 整体覆盖;nil → 走空配置(留待老客户端兼容,空表单提交)。
+		AIConfig         *aiConfigRequest  `json:"ai_config"`
+		// WhisperHint/QuizHint 顶层字段保留绑定:兼容老表单 POST,但服务层只看
+		// ai_config;若 ai_config 为 nil 而老字段非空,回退填充(平滑迁移)。
+		WhisperHint      string            `json:"whisper_hint"`
+		QuizHint         string            `json:"quiz_hint"`
+		AISummaryEnabled bool              `json:"ai_summary_enabled"`
+		AIQuizEnabled    bool              `json:"ai_quiz_enabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -128,7 +133,14 @@ func (h *adminHandler) CreateCourse(c *gin.Context) {
 		contentType = model.ContentLearning
 	}
 
-	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.WhisperHint, req.QuizHint, req.AISummaryEnabled, req.AIQuizEnabled)
+	// 解析 AI 配置:优先 ai_config 对象;若没带,回退到老的双字段(whisper/quiz),
+	// 兼容旧客户端/旧表单(其它 3 字段为空)。
+	aiCfg, hasCfg := req.AIConfig.toModel()
+	if !hasCfg {
+		aiCfg = model.AIConfig{WhisperHint: req.WhisperHint, QuizHint: req.QuizHint}
+	}
+
+	course, err := h.courseService.CreateCourse(req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, aiCfg, req.AISummaryEnabled, req.AIQuizEnabled)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -162,20 +174,23 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 	}
 
 	var req struct {
-		Title            string `json:"title" binding:"required"`
-		Grades           string `json:"grades"`
-		Subject          string `json:"subject" binding:"required"`
-		ContentType      string `json:"content_type"`
-		CoverURL         string `json:"cover_url"`
-		TagIDs           []uint `json:"tag_ids"`
-		AttachmentJSON   string `json:"attachment_json"`
+		Title            string            `json:"title" binding:"required"`
+		Grades           string            `json:"grades"`
+		Subject          string            `json:"subject" binding:"required"`
+		ContentType      string            `json:"content_type"`
+		CoverURL         string            `json:"cover_url"`
+		TagIDs           []uint            `json:"tag_ids"`
+		AttachmentJSON   string            `json:"attachment_json"`
 		// AIHint is deprecated (see CreateCourse above). Ignored; kept for
 		// backward-compatible request binding only.
-		AIHint           string `json:"ai_hint"`
-		WhisperHint      string `json:"whisper_hint"`
-		QuizHint         string `json:"quiz_hint"`
-		AISummaryEnabled bool   `json:"ai_summary_enabled"`
-		AIQuizEnabled    bool   `json:"ai_quiz_enabled"`
+		AIHint           string            `json:"ai_hint"`
+		// AIConfig 是 5 字段的课程级 AI 提示对象(替代老的 WhisperHint/QuizHint
+		// 双字段)。非 nil → 整体覆盖;nil → 回退到老双字段(兼容旧表单)。
+		AIConfig         *aiConfigRequest  `json:"ai_config"`
+		WhisperHint      string            `json:"whisper_hint"`
+		QuizHint         string            `json:"quiz_hint"`
+		AISummaryEnabled bool              `json:"ai_summary_enabled"`
+		AIQuizEnabled    bool              `json:"ai_quiz_enabled"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -201,7 +216,13 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 	// 读在 Update 之前,避免更新后的值污染比较。
 	oldCourse, _ := h.courseRepo.FindByID(id)
 
-	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, req.WhisperHint, req.QuizHint, req.AISummaryEnabled, req.AIQuizEnabled)
+	// 解析 AI 配置:优先 ai_config 对象;若没带,回退到老的双字段(whisper/quiz)。
+	aiCfg, hasCfg := req.AIConfig.toModel()
+	if !hasCfg {
+		aiCfg = model.AIConfig{WhisperHint: req.WhisperHint, QuizHint: req.QuizHint}
+	}
+
+	course, err := h.courseService.UpdateCourse(id, req.Title, grades, subjectID, contentType, req.CoverURL, req.TagIDs, req.AttachmentJSON, aiCfg, req.AISummaryEnabled, req.AIQuizEnabled)
 	if err != nil {
 		respondError(c, err)
 		return

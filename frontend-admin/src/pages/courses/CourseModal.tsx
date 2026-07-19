@@ -34,11 +34,18 @@ export function CreateEditCourseModal({
   const [contentType, setContentType] = useState<'learning' | 'entertainment'>('learning');
   const [coverUrl, setCoverUrl] = useState('');
   const [tagIDs, setTagIDs] = useState<number[]>([]);
-  // AI 提示拆成两部分：WhisperHint 喂字幕转录（术语/口音），QuizHint 喂出题/总结
-  // LLM（出题偏好 + 术语纠错字典）。后端存进单一 JSON 列 AIConfigJSON，这里拆开
-  // 两个 textarea 给 admin 编辑。详见 backend model.Course.AIConfig。
+  // AI 提示拆成 5 个独立维度(镜像后端 model.AIConfig),存进单一 JSON 列
+  // AIConfigJSON。详见 backend model.Course.AIConfig / Course.Effective*Hint。
+  //   - whisperHint 喂字幕转录(术语/口音)
+  //   - summaryHint 喂 AI 总结(风格/侧重点)
+  //   - quizHint    喂出题 LLM(题型偏好/难度)
+  //   - adviceHint  喂建议 LLM(建议侧重点)
+  //   - termDict    横切给总结/出题/建议的术语纠错字典
   const [whisperHint, setWhisperHint] = useState('');
+  const [summaryHint, setSummaryHint] = useState('');
   const [quizHint, setQuizHint] = useState('');
+  const [adviceHint, setAdviceHint] = useState('');
+  const [termDict, setTermDict] = useState('');
   const [aiSummaryEnabled, setAiSummaryEnabled] = useState(true);
   const [aiQuizEnabled, setAiQuizEnabled] = useState(true);
 
@@ -66,10 +73,14 @@ export function CreateEditCourseModal({
       setSubject(ct === 'entertainment' ? 'entertainment' : (course?.subject ?? subjects[0]?.key ?? ''));
       setCoverUrl(course?.cover_url ?? '');
       setTagIDs(course?.tag_ids ?? []);
-      // 优先读新的 whisper_hint/quiz_hint；老课程只有 ai_hint 时，把它整体放进
-      // whisperHint（保守：老字段语义偏 whisper），admin 重存后即迁移到 JSON。
-      setWhisperHint(course?.whisper_hint ?? (course?.ai_hint ?? ''));
-      setQuizHint(course?.quiz_hint ?? '');
+      // 优先读 5 字段的 ai_config;老课程只有顶层 whisper_hint/quiz_hint(或更老的
+      // ai_hint)时回退——admin 重存后即迁移到 ai_config JSON。
+      const cfg = course?.ai_config;
+      setWhisperHint(cfg?.whisper_hint ?? course?.whisper_hint ?? (course?.ai_hint ?? ''));
+      setSummaryHint(cfg?.summary_hint ?? '');
+      setQuizHint(cfg?.quiz_hint ?? course?.quiz_hint ?? '');
+      setAdviceHint(cfg?.advice_hint ?? '');
+      setTermDict(cfg?.term_dict ?? '');
       // AI switches default OFF when unset — AI is an opt-in add-on layer; a
       // course with no explicit setting behaves as plain video viewing (no AI
       // surfaces). Matches the backend gorm:"default:false".
@@ -99,9 +110,15 @@ export function CreateEditCourseModal({
         content_type: contentType,
         cover_url: coverUrl,
         tag_ids: tagIDs,
-        // 后端读 whisper_hint / quiz_hint（存进 AIConfigJSON 单列）。不再写老 ai_hint。
-        whisper_hint: whisperHint.trim(),
-        quiz_hint: quizHint.trim(),
+        // 后端读 ai_config 对象(5 字段,存进 AIConfigJSON 单列)。不再写老 ai_hint
+        // 或顶层 whisper_hint/quiz_hint(顶层仅老表单兼容绑定,新表单统一走 ai_config)。
+        ai_config: {
+          whisper_hint: whisperHint.trim(),
+          summary_hint: summaryHint.trim(),
+          quiz_hint: quizHint.trim(),
+          advice_hint: adviceHint.trim(),
+          term_dict: termDict.trim(),
+        },
         ai_summary_enabled: aiSummaryEnabled,
         ai_quiz_enabled: aiQuizEnabled,
       };
@@ -182,17 +199,41 @@ export function CreateEditCourseModal({
               <button
                 type="button"
                 onClick={() => {
+                  // 优先从后端读当前选中 Subject 的 ai_config(模板现在存 DB 学科级)。
+                  // subjects 来自 useSubjects() 的实时缓存。找不到 / 学科 ai_config
+                  // 全空时,回退到前端内置的 getSubjectTemplate(老 fallback,保留)。
+                  const subj = subjects.find((s) => s.key === subject);
+                  const dbCfg = subj?.ai_config;
+                  const hasDb =
+                    !!dbCfg &&
+                    (!!dbCfg.whisper_hint?.trim() ||
+                      !!dbCfg.summary_hint?.trim() ||
+                      !!dbCfg.quiz_hint?.trim() ||
+                      !!dbCfg.advice_hint?.trim() ||
+                      !!dbCfg.term_dict?.trim());
+                  if (hasDb) {
+                    setWhisperHint(dbCfg!.whisper_hint ?? '');
+                    setSummaryHint(dbCfg!.summary_hint ?? '');
+                    setQuizHint(dbCfg!.quiz_hint ?? '');
+                    setAdviceHint(dbCfg!.advice_hint ?? '');
+                    setTermDict(dbCfg!.term_dict ?? '');
+                    toast.success(`已套用「${selectedSubjectLabel}」学科默认模板，可继续微调`);
+                    return;
+                  }
+                  // 学科 ai_config 为空:回退到前端内置模板(只填 whisper/quiz 两字段)。
                   const tpl = getSubjectTemplate(selectedSubjectLabel);
                   if (!tpl) {
-                    toast.error(`「${selectedSubjectLabel}」暂无模板，请手动填写`);
+                    toast.error(
+                      `「${selectedSubjectLabel}」暂无默认模板，请手动填写或先到「学科管理」配置该学科的 AI 提示`,
+                    );
                     return;
                   }
                   setWhisperHint(tpl.whisperHint);
                   setQuizHint(tpl.quizHint);
-                  toast.success(`已套用「${selectedSubjectLabel}」模板，可继续微调`);
+                  toast.success(`已套用「${selectedSubjectLabel}」内置模板（学科未配置 DB 默认），可继续微调`);
                 }}
                 className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
-                title="按当前科目填入默认提示，可继续微调"
+                title="按当前科目填入学科默认 AI 提示（优先读后端学科配置，回退到内置模板）"
               >
                 <Wand2 size={12} /> 套用{selectedSubjectLabel || '科目'}模板
               </button>
@@ -211,14 +252,47 @@ export function CreateEditCourseModal({
           </div>
 
           <div>
-            <label className="mb-1 block text-[11px] text-muted">出题提示（喂总结/出题/建议 LLM：题型偏好 + 术语纠错字典）</label>
+            <label className="mb-1 block text-[11px] text-muted">总结提示（喂 AI 总结：风格/侧重点）</label>
             <textarea
-              className="input min-h-[80px] resize-y"
-              placeholder={'如：题型倾向：计算题 ≥50% 出填空；难度偏难。\n术语字典：车（勿作居）、和棋（勿作合棋）。'}
+              className="input min-h-[56px] resize-y"
+              placeholder="如：侧重开局原理，多举例题，避免堆砌术语。"
+              value={summaryHint}
+              onChange={(e) => setSummaryHint(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted">留空则回退到学科级默认（若学科也未配则为空，等同无指引）。</p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] text-muted">出题提示（喂出题 LLM：题型偏好/难度/出题指引）</label>
+            <textarea
+              className="input min-h-[64px] resize-y"
+              placeholder={'如：题型倾向：计算题 ≥50% 出填空；难度偏难。'}
               value={quizHint}
               onChange={(e) => setQuizHint(e.target.value)}
             />
-            <p className="mt-1 text-[11px] text-muted">LLM 会按这里的偏好出题，并在输出时按术语字典纠正字幕错字（只改输出，不改字幕本身）。</p>
+            <p className="mt-1 text-[11px] text-muted">LLM 会按这里的偏好出题。留空则回退到学科级默认。</p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] text-muted">建议提示（喂建议 LLM：建议侧重点/口吻）</label>
+            <textarea
+              className="input min-h-[56px] resize-y"
+              placeholder="如：象棋重实战练习，多鼓励；数学重计算巩固。"
+              value={adviceHint}
+              onChange={(e) => setAdviceHint(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted">留空则回退到学科级默认。</p>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-[11px] text-muted">术语字典（横切给总结/出题/建议：纠正字幕同音错字）</label>
+            <textarea
+              className="input min-h-[56px] resize-y"
+              placeholder={'如：车（勿作居）、和棋（勿作合棋）、通分（勿作同分）。'}
+              value={termDict}
+              onChange={(e) => setTermDict(e.target.value)}
+            />
+            <p className="mt-1 text-[11px] text-muted">LLM 输出时按此字典纠正字幕错字（只改输出，不改字幕本身）。课程级会追加到学科级后面合并生效。</p>
           </div>
         </div>
 

@@ -40,10 +40,21 @@ type courseDTO struct {
 	// form can repopulate. Sourced from Course.AIConfig().WhisperHint (the JSON
 	// blob), NOT a dedicated column — kept as a flat field here for form convenience.
 	WhisperHint         string   `json:"whisper_hint"`
+	// SummaryHint 喂 summary agent(总结风格/侧重点)。同样从 AIConfigJSON 解析。
+	SummaryHint         string   `json:"summary_hint"`
 	// QuizHint is the admin-authored hint fed to the summary/quiz/advice LLM
 	// agents (question style, difficulty, terminology correction dictionary).
 	// Echoed so the edit form can repopulate. Sourced from Course.AIConfig().QuizHint.
 	QuizHint            string   `json:"quiz_hint"`
+	// AdviceHint 喂 advice agent(建议侧重点/口吻)。
+	AdviceHint          string   `json:"advice_hint"`
+	// TermDict 横切给 summary/quiz/advice 三个 agent 的术语纠错字典(车→居)。
+	TermDict            string   `json:"term_dict"`
+	// AIConfig 是上面 5 个字段的**嵌套对象形式**,供前端 ai_config 读取路径
+	// 回显用(前端 SubjectModal/CourseModal 用 subject.ai_config?.whisper_hint 这种
+	// 嵌套读取)。平铺字段保留是为了向后兼容(老代码可能读顶层 whisper_hint)。
+	// 两边值相同,同时输出,谁方便谁用。
+	AIConfig            *aiConfigRequest `json:"ai_config"`
 	// AISummaryEnabled/AIQuizEnabled echo the per-course AI switches so the admin
 	// edit form (CourseModal) can repopulate the checkboxes. These previously
 	// existed on the model but were never projected here, so the form kept
@@ -83,6 +94,10 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		}
 	}
 
+	// 5 个 AI hint 都从单一 JSON 列(AIConfigJSON)解析出来,DTO 层平铺给前端
+	// 表单用。加新配置项时扩 model.AIConfig,这里跟着加字段即可。
+	aiCfg := c.AIConfig()
+
 	return courseDTO{
 		ID:                   c.ID,
 		Title:                c.Title,
@@ -97,10 +112,18 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		GradeDisplay:         c.GradeDisplay(),
 		AttachmentJSON:       c.AttachmentJSON,
 		AIHint:               c.AIHint,
-		// WhisperHint/QuizHint 从单一 JSON 列(AIConfigJSON)解析出来,DTO 层保持
-		// 双字段给前端表单用。加新配置项时扩 model.AIConfig,这里跟着加字段即可。
-		WhisperHint:          c.AIConfig().WhisperHint,
-		QuizHint:             c.AIConfig().QuizHint,
+		WhisperHint:          aiCfg.WhisperHint,
+		SummaryHint:          aiCfg.SummaryHint,
+		QuizHint:             aiCfg.QuizHint,
+		AdviceHint:           aiCfg.AdviceHint,
+		TermDict:             aiCfg.TermDict,
+		AIConfig: &aiConfigRequest{
+			WhisperHint: aiCfg.WhisperHint,
+			SummaryHint: aiCfg.SummaryHint,
+			QuizHint:    aiCfg.QuizHint,
+			AdviceHint:  aiCfg.AdviceHint,
+			TermDict:    aiCfg.TermDict,
+		},
 		AISummaryEnabled:     c.AISummaryEnabled,
 		AIQuizEnabled:        c.AIQuizEnabled,
 		EpisodeCount:         eps,
@@ -331,16 +354,40 @@ type subjectDTO struct {
 	Color     string `json:"color"`
 	SortOrder int    `json:"sort_order"`
 	IsSystem  bool   `json:"is_system"` // true = seeded default, protected from deletion
+	// 学科级默认 AI 提示。从 Subject.AIConfigJSON(单一 JSON blob)解析出来,DTO
+	// 层拆成 5 个平铺字段方便前端表单回显。课程级对应字段为空时回退到这里。详见
+	// model.Subject.AIConfig / Course.Effective*Hint。
+	WhisperHint string `json:"whisper_hint"`
+	SummaryHint string `json:"summary_hint"`
+	QuizHint    string `json:"quiz_hint"`
+	AdviceHint  string `json:"advice_hint"`
+	TermDict    string `json:"term_dict"`
+	// AIConfig 是上面 5 字段的嵌套对象形式,供前端 ai_config 读取路径回显用
+	// (SubjectModal 读 subject.ai_config?.whisper_hint)。平铺字段保留兼容。
+	AIConfig *aiConfigRequest `json:"ai_config"`
 }
 
 func toSubjectDTO(s model.Subject) subjectDTO {
+	cfg := s.AIConfig()
 	return subjectDTO{
-		ID:        s.ID,
-		Key:       s.Key,
-		Label:     s.Label,
-		Color:     s.Color,
-		SortOrder: s.SortOrder,
-		IsSystem:  s.IsSystem,
+		ID:          s.ID,
+		Key:         s.Key,
+		Label:       s.Label,
+		Color:       s.Color,
+		SortOrder:   s.SortOrder,
+		IsSystem:    s.IsSystem,
+		WhisperHint: cfg.WhisperHint,
+		SummaryHint: cfg.SummaryHint,
+		QuizHint:    cfg.QuizHint,
+		AdviceHint:  cfg.AdviceHint,
+		TermDict:    cfg.TermDict,
+		AIConfig: &aiConfigRequest{
+			WhisperHint: cfg.WhisperHint,
+			SummaryHint: cfg.SummaryHint,
+			QuizHint:    cfg.QuizHint,
+			AdviceHint:  cfg.AdviceHint,
+			TermDict:    cfg.TermDict,
+		},
 	}
 }
 
@@ -662,4 +709,31 @@ func formatTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// aiConfigRequest 是 admin 表单里 5 个 AI 提示 textarea 的请求体。Subject 和
+// Course 的 create/update handler 都复用它(handler 层把指针 *aiConfigRequest
+// 解析成 model.AIConfig 传给 service)。nil 表示"本次请求不动 AI 配置"(老
+// 客户端不传这个字段时保持原值);非 nil 但全空表示"清空 AI 配置"。
+type aiConfigRequest struct {
+	WhisperHint string `json:"whisper_hint"`
+	SummaryHint string `json:"summary_hint"`
+	QuizHint    string `json:"quiz_hint"`
+	AdviceHint  string `json:"advice_hint"`
+	TermDict    string `json:"term_dict"`
+}
+
+// toModel 转成 model.AIConfig。指针为 nil 时返回零值 + ok=false,调用方据此
+// 判断"本次不更新 AI 配置"。
+func (a *aiConfigRequest) toModel() (model.AIConfig, bool) {
+	if a == nil {
+		return model.AIConfig{}, false
+	}
+	return model.AIConfig{
+		WhisperHint: a.WhisperHint,
+		SummaryHint: a.SummaryHint,
+		QuizHint:    a.QuizHint,
+		AdviceHint:  a.AdviceHint,
+		TermDict:    a.TermDict,
+	}, true
 }

@@ -104,12 +104,73 @@ The contract is regression-tested by `release_integration_test.go` (TestOTA*).
 
 ### Flutter: bump `version_code` on every release
 
-`pubspec.yaml`'s `version: X.Y.Z+N` — the `+N` is the `version_code` (build
+`pubspec.yaml`'s version: X.Y.Z+N — the `+N` is the `version_code` (build
 number). The OTA check compares `serverVersionCode > installedVersionCode`, so
 **N must increment on every release** or clients won't see the new version.
 When publishing via the admin Releases page, set version_code = N matching the
 pubspec. Multi-ABI builds (`make build-apk --split-per-abi`) produce one APK
 per ABI; upload each under the matching ABI so all device types get served.
+
+### Workflow: when to parallelize with subagents vs. do it inline
+
+Subagents (parallel `Agent` tool calls) are great for **low-coupling,
+independently-verifiable** work: a self-contained widget, an isolated
+endpoint, one screen's TV adaptation. They isolate the main context from
+large file reads, which keeps the main session's attention focused. The
+earlier "experience polish" round (markdown renderer + TV mode + subtitle
+bug) used them well and shipped nearly bug-free.
+
+Subagents are ** actively harmful for high-coupling refactors**. The prompt
+rearchitecture round (5 agents touching model → prompts → services → tools →
+DTO → frontend types → admin UI → seed in one go) shipped 4 bugs, none of
+which any single agent could have caught because each agent's own files
+compiled and tested green. The bugs lived in the **contracts between agents**
+and the **completeness across branches** — exactly the seams no one owns.
+
+Rules, learned from that round:
+
+- **Before spawning agents, write the contract down.** Every field name,
+  JSON shape, type signature that crosses agent boundaries goes in a shared
+  block pasted into *each* agent's prompt. No "use an ai_config object"
+  vagueness — spell out `{ai_config: {whisper_hint, summary_hint, ...}}` and
+  require both the DTO writer and the type writer to match it verbatim. The
+  DTO-flat-vs-frontend-nested bug existed because the backend agent and the
+  main session each picked a reasonable shape with no coordination.
+- **List every consumer when splitting a concept.** When QuizHint was split
+  into QuizHint + TermDict, three call sites consumed it (summarizer
+  direct, advice direct, quiz tools.go tool return). The agent was told
+  about the first two; the third silently kept returning only the old
+  QuizHint, so quiz lost all term correction. If a name is touched in N
+  places, the agent's prompt must list all N and require confirmation.
+- **Never parallelize repo/model-layer changes with their callers.**
+  `courseRepo.FindByID` is called from dozens of sites; changing its behavior
+  (e.g., adding `Preload("Subject")`) ripples everywhere. Worse,
+  belongsTo + `db.Save` is a classic GORM trap: preloading Subject on the
+  read path makes `Save` rewrite `course.SubjectID` via FullSaveAssociations.
+  Read-path and write-path repo methods must be separate (`FindByID` vs
+  `FindByIDWithSubject`). When in doubt, the model layer is owned by the
+  main session, not a subagent.
+- **After *any* model/repo change, run `go test ./...` immediately, not just
+  `go build`.** Build-green is not behavior-green. The Preload regression
+  was caught only because a full test run hit `TestCourseUpdate`; `go build`
+  was silent. This is now a hard rule: model-layer change → full test,
+  every time, no exceptions.
+- **When adding a field, grep every constructor.** Adding `AdviceHint` to
+  `AdviceRequest` means walking every `case agent.ScopeXxx:` branch that
+  builds an `AdviceRequest` and confirming the field is set. The subject-
+  scope branch was missed; subject-scoped advice silently lost its hint.
+  Mechanical but effective: after the edit, `grep -n NewField` and check
+  every hit.
+- **For a refactor whose downstream reaches > 3 files and the changes
+  depend on each other, do it inline in the main session.** The
+  coordination cost of N agents exceeds the context cost of doing it
+  yourself once N > ~3 and the files are coupled. Two agents doing
+  genuinely-independent halves is fine; five agents doing one coupled
+  pipeline is not.
+
+The bias should be: **default to inline for anything that touches the
+contract between layers; reach for subagents when the work is genuinely
+parallel and each piece can be verified in isolation.**
 
 ## Where things live (quick map)
 
@@ -129,6 +190,34 @@ per ABI; upload each under the matching ABI so all device types get served.
   contract `/api/v1/app/latest` + `/api/v1/app/download`), `release_repo.go`,
   admin page `Releases.tsx`, Flutter `update_service.dart`. See the frozen-
   contract rule below.
+- **Local UI prefs (字幕/AI 字号):** `frontend/lib/service/ui_prefs.dart`.
+  `UiPrefs` singleton loaded once in `main.dart`; 字幕字号档位 + AI 页文字缩放
+  存 SharedPreferences,改一次全局生效、下次进 App 沿用。播放器字幕菜单和 AI
+  页右上角字号按钮都写回它。
+- **Android TV 检测:** `frontend/lib/service/tv_mode.dart`. `TvMode.isActive`
+  = 自动检测(systemFeatures 含 leanback)OR 设置页「预览 TV 模式」调试开关
+  (给 MuMu 模拟器开发用)。各屏 `if (TvMode.instance.isActive)` 分支:隐藏 quiz、
+  字号强制大、helper panel 默认展开、seek 步长 ±30s。
+- **AI 富文本渲染:** `frontend/lib/ui/widget/markdown_view.dart`. `MarkdownView`
+  渲染 GFM 表格/加粗/列表,并拦截 ```svg 代码块用 flutter_svg 渲染成图(失败降级
+  显示源码)。AI 页 summary/advice/quiz 的长文本字段都走它。后端 prompts.go 的
+  三个 system prompt 鼓励(非强制)输出 markdown + 约束式 SVG(只允许简单流程图/
+  柱状图,禁止时序/ER/甘特等复杂图型)。
+- **AI 配置(5 维度 + 学科默认):** `model.AIConfig`(WhisperHint/SummaryHint/
+  QuizHint/AdviceHint/TermDict)存 `Course.AIConfigJSON` 和 `Subject.AIConfigJSON`
+  两层。解析优先级:`Course.EffectiveXxxHint(subject)` Course 字段 > Subject 字段
+  > deprecated AIHint 列(Whisper/Quiz 才有 legacy fallback);TermDict 特殊:课程级
+  +学科级**合并**(`\n` 连接,学科在前),其余覆盖。admin 在 SubjectModal(学科默认)
+  和 CourseModal(课程覆盖)各配 5 字段。**system prompt 不再硬编码学科术语**(车→居
+  已清),改成 user prompt 里注入【术语字典】段(Summary/Advice 直传 Request;Quiz 走
+  `get_episode_info` 工具;TermDict 横切给三个 agent)。数学/英语两科 seed 在
+  `SeedDefaultSubjects` 回填,象棋等自定义学科走前端 `aiHintTemplates.ts` fallback。
+- **AI Prompt 可观测性:** `model.AIRun.SystemPromptText/UserPromptText` 记录每次 LLM
+  调用最终发出的完整 system+user prompt。`agent.Run`(quiz/advice/courseSummary/
+  userStudy 共同入口)和 `summarizer.recordRun` 写入。admin AI Workflow 页"查看回放"
+  展示。`POST /admin/api/ai/courses/:id/preview-prompt`(body `{agent}`)不调 LLM 拼
+  出完整 prompt 供调优预览,`agent/preview.go` 的 `BuildXxxPromptForPreview` 保证"预览
+  即真相"(调同一个 build*UserPrompt)。
 
 ## Deeper docs
 

@@ -11,7 +11,6 @@ import (
 	"studyquest/backend/internal/service"
 )
 
-
 // AdminHandler handles backend administrator views and control APIs.
 type AdminHandler interface {
 	// Auth (public)
@@ -150,36 +149,38 @@ type AdminHandler interface {
 	// Phase E — admin 用户学习报告(agent 驱动,跨课程画像)。
 	TriggerUserStudyReport(c *gin.Context)
 	GetUserStudyReport(c *gin.Context)
+	// Prompt 预览:admin 调优 hint 后立刻看完整 prompt 拼装效果(不调 LLM)。
+	PreviewCoursePrompt(c *gin.Context)
 }
 
 type adminHandler struct {
-	settingsRepo        repository.SettingsRepository
-	userRepo            repository.UserRepository
-	courseRepo          repository.CourseRepository
-	episodeRepo         repository.EpisodeRepository
-	chapterRepo         repository.ChapterRepository
-	progressRepo        repository.ProgressRepository
-	subjectRepo         repository.SubjectRepository
-	badgeRepo           repository.BadgeRepository
-	readingSeriesRepo   repository.ReadingSeriesRepository
-	readingBookRepo     repository.ReadingBookRepository
-	readingArticleRepo  repository.ReadingArticleRepository
-	userService         service.UserService
-	courseService       service.CourseService
-	importService       service.ImportService
-	episodeService      service.EpisodeService
-	chapterService      service.ChapterService
-	badgeService        service.BadgeService
-	readingSeriesService service.ReadingSeriesService
-	readingBookService   service.ReadingBookService
+	settingsRepo          repository.SettingsRepository
+	userRepo              repository.UserRepository
+	courseRepo            repository.CourseRepository
+	episodeRepo           repository.EpisodeRepository
+	chapterRepo           repository.ChapterRepository
+	progressRepo          repository.ProgressRepository
+	subjectRepo           repository.SubjectRepository
+	badgeRepo             repository.BadgeRepository
+	readingSeriesRepo     repository.ReadingSeriesRepository
+	readingBookRepo       repository.ReadingBookRepository
+	readingArticleRepo    repository.ReadingArticleRepository
+	userService           service.UserService
+	courseService         service.CourseService
+	importService         service.ImportService
+	episodeService        service.EpisodeService
+	chapterService        service.ChapterService
+	badgeService          service.BadgeService
+	readingSeriesService  service.ReadingSeriesService
+	readingBookService    service.ReadingBookService
 	readingArticleService service.ReadingArticleService
-	readingImportService service.ReadingImportService
-	probeWorker         *service.ProbeWorker
-	subtitleJobService  service.SubtitleJobService
-	sessionService      service.SessionService
-	watchEventRepo      repository.WatchEventRepository
-	storageSourceRepo   repository.StorageSourceRepository
-	storageResolver     *service.StorageProviderResolver
+	readingImportService  service.ReadingImportService
+	probeWorker           *service.ProbeWorker
+	subtitleJobService    service.SubtitleJobService
+	sessionService        service.SessionService
+	watchEventRepo        repository.WatchEventRepository
+	storageSourceRepo     repository.StorageSourceRepository
+	storageResolver       *service.StorageProviderResolver
 	// AI module (Step 3). nil-safe: when the AI subsystem isn't wired, these
 	// stay nil and the admin AI endpoints respond with 503 / empty, so the rest
 	// of the panel is unaffected.
@@ -208,25 +209,25 @@ type AdminHandlerDeps struct {
 	ReadingBookRepo    repository.ReadingBookRepository
 	ReadingArticleRepo repository.ReadingArticleRepository
 
-	UserService          service.UserService
-	CourseService        service.CourseService
-	ImportService        service.ImportService
-	EpisodeService       service.EpisodeService
-	ChapterService       service.ChapterService
-	BadgeService         service.BadgeService
-	ReadingSeriesService service.ReadingSeriesService
-	ReadingBookService   service.ReadingBookService
+	UserService           service.UserService
+	CourseService         service.CourseService
+	ImportService         service.ImportService
+	EpisodeService        service.EpisodeService
+	ChapterService        service.ChapterService
+	BadgeService          service.BadgeService
+	ReadingSeriesService  service.ReadingSeriesService
+	ReadingBookService    service.ReadingBookService
 	ReadingArticleService service.ReadingArticleService
-	ReadingImportService service.ReadingImportService
-	ProbeWorker          *service.ProbeWorker
-	SubtitleJobService   service.SubtitleJobService
-	SessionService       service.SessionService
-	WatchEventRepo       repository.WatchEventRepository
-	StorageSourceRepo    repository.StorageSourceRepository
-	StorageResolver      *service.StorageProviderResolver
-	AIProviderRepo       repository.AIProviderRepository
-	AIResolver           *ai.ProviderResolver
-	AIService            service.AIService
+	ReadingImportService  service.ReadingImportService
+	ProbeWorker           *service.ProbeWorker
+	SubtitleJobService    service.SubtitleJobService
+	SessionService        service.SessionService
+	WatchEventRepo        repository.WatchEventRepository
+	StorageSourceRepo     repository.StorageSourceRepository
+	StorageResolver       *service.StorageProviderResolver
+	AIProviderRepo        repository.AIProviderRepository
+	AIResolver            *ai.ProviderResolver
+	AIService             service.AIService
 }
 
 // NewAdminHandlerDeps is the entry point for the AdminHandler builder.
@@ -235,70 +236,160 @@ func NewAdminHandlerDeps() *AdminHandlerDeps { return &AdminHandlerDeps{} }
 // Fluent setters — each returns the deps pointer so calls chain. Named setters
 // make wiring self-documenting and swap-proof (vs the old positional args).
 
-func (d *AdminHandlerDeps) WithSettings(r repository.SettingsRepository) *AdminHandlerDeps        { d.SettingsRepo = r; return d }
-func (d *AdminHandlerDeps) WithUsers(r repository.UserRepository) *AdminHandlerDeps               { d.UserRepo = r; return d }
-func (d *AdminHandlerDeps) WithCourses(r repository.CourseRepository) *AdminHandlerDeps           { d.CourseRepo = r; return d }
-func (d *AdminHandlerDeps) WithEpisodes(r repository.EpisodeRepository) *AdminHandlerDeps          { d.EpisodeRepo = r; return d }
-func (d *AdminHandlerDeps) WithChapters(r repository.ChapterRepository) *AdminHandlerDeps          { d.ChapterRepo = r; return d }
-func (d *AdminHandlerDeps) WithProgress(r repository.ProgressRepository) *AdminHandlerDeps         { d.ProgressRepo = r; return d }
-func (d *AdminHandlerDeps) WithSubjects(r repository.SubjectRepository) *AdminHandlerDeps          { d.SubjectRepo = r; return d }
-func (d *AdminHandlerDeps) WithBadges(r repository.BadgeRepository) *AdminHandlerDeps              { d.BadgeRepo = r; return d }
-func (d *AdminHandlerDeps) WithReadingSeriesRepo(r repository.ReadingSeriesRepository) *AdminHandlerDeps  { d.ReadingSeriesRepo = r; return d }
-func (d *AdminHandlerDeps) WithReadingBookRepo(r repository.ReadingBookRepository) *AdminHandlerDeps      { d.ReadingBookRepo = r; return d }
-func (d *AdminHandlerDeps) WithReadingArticleRepo(r repository.ReadingArticleRepository) *AdminHandlerDeps { d.ReadingArticleRepo = r; return d }
-func (d *AdminHandlerDeps) WithUserService(s service.UserService) *AdminHandlerDeps                { d.UserService = s; return d }
-func (d *AdminHandlerDeps) WithCourseService(s service.CourseService) *AdminHandlerDeps            { d.CourseService = s; return d }
-func (d *AdminHandlerDeps) WithImportService(s service.ImportService) *AdminHandlerDeps            { d.ImportService = s; return d }
-func (d *AdminHandlerDeps) WithEpisodeService(s service.EpisodeService) *AdminHandlerDeps          { d.EpisodeService = s; return d }
-func (d *AdminHandlerDeps) WithChapterService(s service.ChapterService) *AdminHandlerDeps          { d.ChapterService = s; return d }
-func (d *AdminHandlerDeps) WithBadgeService(s service.BadgeService) *AdminHandlerDeps              { d.BadgeService = s; return d }
-func (d *AdminHandlerDeps) WithReadingSeriesService(s service.ReadingSeriesService) *AdminHandlerDeps   { d.ReadingSeriesService = s; return d }
-func (d *AdminHandlerDeps) WithReadingBookService(s service.ReadingBookService) *AdminHandlerDeps       { d.ReadingBookService = s; return d }
-func (d *AdminHandlerDeps) WithReadingArticleService(s service.ReadingArticleService) *AdminHandlerDeps { d.ReadingArticleService = s; return d }
-func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportService) *AdminHandlerDeps  { d.ReadingImportService = s; return d }
-func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps               { d.ProbeWorker = w; return d }
-func (d *AdminHandlerDeps) WithSubtitleJobService(s service.SubtitleJobService) *AdminHandlerDeps   { d.SubtitleJobService = s; return d }
-func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHandlerDeps          { d.SessionService = s; return d }
-func (d *AdminHandlerDeps) WithWatchEventRepo(r repository.WatchEventRepository) *AdminHandlerDeps { d.WatchEventRepo = r; return d }
-func (d *AdminHandlerDeps) WithStorageSources(r repository.StorageSourceRepository) *AdminHandlerDeps { d.StorageSourceRepo = r; return d }
-func (d *AdminHandlerDeps) WithStorageResolver(r *service.StorageProviderResolver) *AdminHandlerDeps { d.StorageResolver = r; return d }
-func (d *AdminHandlerDeps) WithAIProviderRepo(r repository.AIProviderRepository) *AdminHandlerDeps { d.AIProviderRepo = r; return d }
-func (d *AdminHandlerDeps) WithAIResolver(r *ai.ProviderResolver) *AdminHandlerDeps            { d.AIResolver = r; return d }
-func (d *AdminHandlerDeps) WithAIService(s service.AIService) *AdminHandlerDeps                 { d.AIService = s; return d }
+func (d *AdminHandlerDeps) WithSettings(r repository.SettingsRepository) *AdminHandlerDeps {
+	d.SettingsRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithUsers(r repository.UserRepository) *AdminHandlerDeps {
+	d.UserRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithCourses(r repository.CourseRepository) *AdminHandlerDeps {
+	d.CourseRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithEpisodes(r repository.EpisodeRepository) *AdminHandlerDeps {
+	d.EpisodeRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithChapters(r repository.ChapterRepository) *AdminHandlerDeps {
+	d.ChapterRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithProgress(r repository.ProgressRepository) *AdminHandlerDeps {
+	d.ProgressRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithSubjects(r repository.SubjectRepository) *AdminHandlerDeps {
+	d.SubjectRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithBadges(r repository.BadgeRepository) *AdminHandlerDeps {
+	d.BadgeRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingSeriesRepo(r repository.ReadingSeriesRepository) *AdminHandlerDeps {
+	d.ReadingSeriesRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingBookRepo(r repository.ReadingBookRepository) *AdminHandlerDeps {
+	d.ReadingBookRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingArticleRepo(r repository.ReadingArticleRepository) *AdminHandlerDeps {
+	d.ReadingArticleRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithUserService(s service.UserService) *AdminHandlerDeps {
+	d.UserService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithCourseService(s service.CourseService) *AdminHandlerDeps {
+	d.CourseService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithImportService(s service.ImportService) *AdminHandlerDeps {
+	d.ImportService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithEpisodeService(s service.EpisodeService) *AdminHandlerDeps {
+	d.EpisodeService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithChapterService(s service.ChapterService) *AdminHandlerDeps {
+	d.ChapterService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithBadgeService(s service.BadgeService) *AdminHandlerDeps {
+	d.BadgeService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingSeriesService(s service.ReadingSeriesService) *AdminHandlerDeps {
+	d.ReadingSeriesService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingBookService(s service.ReadingBookService) *AdminHandlerDeps {
+	d.ReadingBookService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingArticleService(s service.ReadingArticleService) *AdminHandlerDeps {
+	d.ReadingArticleService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithReadingImportService(s service.ReadingImportService) *AdminHandlerDeps {
+	d.ReadingImportService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithProbeWorker(w *service.ProbeWorker) *AdminHandlerDeps {
+	d.ProbeWorker = w
+	return d
+}
+func (d *AdminHandlerDeps) WithSubtitleJobService(s service.SubtitleJobService) *AdminHandlerDeps {
+	d.SubtitleJobService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithSessionService(s service.SessionService) *AdminHandlerDeps {
+	d.SessionService = s
+	return d
+}
+func (d *AdminHandlerDeps) WithWatchEventRepo(r repository.WatchEventRepository) *AdminHandlerDeps {
+	d.WatchEventRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithStorageSources(r repository.StorageSourceRepository) *AdminHandlerDeps {
+	d.StorageSourceRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithStorageResolver(r *service.StorageProviderResolver) *AdminHandlerDeps {
+	d.StorageResolver = r
+	return d
+}
+func (d *AdminHandlerDeps) WithAIProviderRepo(r repository.AIProviderRepository) *AdminHandlerDeps {
+	d.AIProviderRepo = r
+	return d
+}
+func (d *AdminHandlerDeps) WithAIResolver(r *ai.ProviderResolver) *AdminHandlerDeps {
+	d.AIResolver = r
+	return d
+}
+func (d *AdminHandlerDeps) WithAIService(s service.AIService) *AdminHandlerDeps {
+	d.AIService = s
+	return d
+}
 
 // Build assembles the AdminHandler from the configured deps. Call this last.
 func (d *AdminHandlerDeps) Build() AdminHandler {
 	return &adminHandler{
-		settingsRepo:         d.SettingsRepo,
-		userRepo:             d.UserRepo,
-		courseRepo:           d.CourseRepo,
-		episodeRepo:          d.EpisodeRepo,
-		chapterRepo:          d.ChapterRepo,
-		progressRepo:         d.ProgressRepo,
-		subjectRepo:          d.SubjectRepo,
-		badgeRepo:            d.BadgeRepo,
-		readingSeriesRepo:    d.ReadingSeriesRepo,
-		readingBookRepo:      d.ReadingBookRepo,
-		readingArticleRepo:   d.ReadingArticleRepo,
-		userService:          d.UserService,
-		courseService:        d.CourseService,
-		importService:        d.ImportService,
-		episodeService:       d.EpisodeService,
-		chapterService:       d.ChapterService,
-		badgeService:         d.BadgeService,
+		settingsRepo:          d.SettingsRepo,
+		userRepo:              d.UserRepo,
+		courseRepo:            d.CourseRepo,
+		episodeRepo:           d.EpisodeRepo,
+		chapterRepo:           d.ChapterRepo,
+		progressRepo:          d.ProgressRepo,
+		subjectRepo:           d.SubjectRepo,
+		badgeRepo:             d.BadgeRepo,
+		readingSeriesRepo:     d.ReadingSeriesRepo,
+		readingBookRepo:       d.ReadingBookRepo,
+		readingArticleRepo:    d.ReadingArticleRepo,
+		userService:           d.UserService,
+		courseService:         d.CourseService,
+		importService:         d.ImportService,
+		episodeService:        d.EpisodeService,
+		chapterService:        d.ChapterService,
+		badgeService:          d.BadgeService,
 		readingSeriesService:  d.ReadingSeriesService,
 		readingBookService:    d.ReadingBookService,
 		readingArticleService: d.ReadingArticleService,
-		readingImportService: d.ReadingImportService,
-		probeWorker:          d.ProbeWorker,
-		subtitleJobService:   d.SubtitleJobService,
-		sessionService:       d.SessionService,
-		watchEventRepo:       d.WatchEventRepo,
-		storageSourceRepo:    d.StorageSourceRepo,
-		storageResolver:      d.StorageResolver,
-		aiProviderRepo:       d.AIProviderRepo,
-		aiResolver:           d.AIResolver,
-		aiService:            d.AIService,
+		readingImportService:  d.ReadingImportService,
+		probeWorker:           d.ProbeWorker,
+		subtitleJobService:    d.SubtitleJobService,
+		sessionService:        d.SessionService,
+		watchEventRepo:        d.WatchEventRepo,
+		storageSourceRepo:     d.StorageSourceRepo,
+		storageResolver:       d.StorageResolver,
+		aiProviderRepo:        d.AIProviderRepo,
+		aiResolver:            d.AIResolver,
+		aiService:             d.AIService,
 	}
 }
 

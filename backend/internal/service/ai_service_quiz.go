@@ -60,12 +60,12 @@ func decodeMultiAnswer(stored string) []int {
 // (revealed post-submit); each carries a chunk_start_time for video-jump. The
 // agent_feedback (LLM's study advice) is included so the student sees it.
 type QuizView struct {
-	QuizID        uint                `json:"quiz_id"`
-	EpisodeID     uint                `json:"episode_id"`
-	Difficulty    string              `json:"difficulty"`
-	AgentFeedback string              `json:"agent_feedback,omitempty"`
-	Questions     []QuizViewQuestion  `json:"questions"`
-	AnsweredCount int                 `json:"answered_count"`
+	QuizID        uint               `json:"quiz_id"`
+	EpisodeID     uint               `json:"episode_id"`
+	Difficulty    string             `json:"difficulty"`
+	AgentFeedback string             `json:"agent_feedback,omitempty"`
+	Questions     []QuizViewQuestion `json:"questions"`
+	AnsweredCount int                `json:"answered_count"`
 	// Submitted 反映 quiz.SubmittedAt 是否非空(已交卷)。Phase B 改为统一提交后,
 	// 客户端据此切到"只读看结果"状态:已交卷就锁定所有题、逐题展示对错。
 	// 用专门字段而不是"answered_count==总数",因为单题 submit 兼容端点也会填 answer。
@@ -77,12 +77,12 @@ type QuizView struct {
 // result fields are filled so a student revisiting a submitted quiz sees their
 // verdict + the correct answer + explanation (not just a locked blank question).
 type QuizViewQuestion struct {
-	ID            uint     `json:"id"`
-	Type          string   `json:"type"`
-	Stem          string   `json:"stem"`
-	Options       []string `json:"options,omitempty"`        // choice only
-	ChunkStartTime *int    `json:"chunk_start_time,omitempty"` // seconds, for video-jump; nil if synthetic
-	Answered      bool     `json:"answered"`
+	ID             uint     `json:"id"`
+	Type           string   `json:"type"`
+	Stem           string   `json:"stem"`
+	Options        []string `json:"options,omitempty"`          // choice only
+	ChunkStartTime *int     `json:"chunk_start_time,omitempty"` // seconds, for video-jump; nil if synthetic
+	Answered       bool     `json:"answered"`
 	// HasJump 告诉前端这题是否可"跳转视频"。仅 has_jump=true 的题才渲染跳转按钮,
 	// 避免给综合性题(无单一锚点)放一个点了没用的按钮。老数据(无此字段)为 false。
 	HasJump bool `json:"has_jump"`
@@ -90,7 +90,7 @@ type QuizViewQuestion struct {
 	// ── 以下字段仅在 quiz 已交卷(submitted)时填充 ──
 	// 未交卷时为零值/omitempty,不暴露正确答案。交卷后从这里就能 review 当时的结果,
 	// 不必再调 submit(交卷后不能再提交)。
-	UserAnswerIndex *int   `json:"user_answer_index,omitempty"` // choice: 学生当时选的索引
+	UserAnswerIndex *int `json:"user_answer_index,omitempty"` // choice: 学生当时选的索引
 	// UserAnswerText 是填空题学生当时填的原文(交卷后回填,用于"你填的 X"回放)。
 	// 之前因 Answer 表只有 int 列存不下,现在补上 Answer.UserAnswerText 后可回放。
 	// 多选题也复用这一列:存用户选中索引的 JSON 数组(回放时解析成 user_answer_indices)。
@@ -98,17 +98,17 @@ type QuizViewQuestion struct {
 	// UserAnswerIndices 是多选题学生当时选中的索引数组(交卷后回填)。从 Answer.UserAnswerText
 	// 解析(JSON []int);解析失败/没存时为 nil。
 	UserAnswerIndices []int `json:"user_answer_indices,omitempty"` // multi_choice: 学生当时选的
-	Correct         bool   `json:"correct,omitempty"`           // 这题对不对(交卷后才有意义)
+	Correct           bool  `json:"correct,omitempty"`             // 这题对不对(交卷后才有意义)
 	// Partial 仅多选题部分对时为 true(漏选但没多选错项)。单选/填空恒 false(omitempty 不下发)。
-	Partial         bool   `json:"partial,omitempty"`
+	Partial bool `json:"partial,omitempty"`
 	// MissedCount/ExtraCount 仅多选题部分对/错时下发,供前端展示"漏选 X / 多选 Y"。
-	MissedCount     int    `json:"missed_count,omitempty"`
-	ExtraCount      int    `json:"extra_count,omitempty"`
-	CorrectIndex    *int   `json:"correct_index,omitempty"`     // choice: 正确选项索引
-	CorrectText     string `json:"correct_text,omitempty"`      // fill: 标准答案
+	MissedCount  int    `json:"missed_count,omitempty"`
+	ExtraCount   int    `json:"extra_count,omitempty"`
+	CorrectIndex *int   `json:"correct_index,omitempty"` // choice: 正确选项索引
+	CorrectText  string `json:"correct_text,omitempty"`  // fill: 标准答案
 	// CorrectIndices 是多选题的正确选项索引数组(交卷后回填)。choice 题为 nil。
-	CorrectIndices []int `json:"correct_indices,omitempty"`    // multi_choice: 正确索引
-	Explanation     string `json:"explanation,omitempty"`       // 解析
+	CorrectIndices []int  `json:"correct_indices,omitempty"` // multi_choice: 正确索引
+	Explanation    string `json:"explanation,omitempty"`     // 解析
 }
 
 // AnswerResult is the response to a submit. Reveals correctness, the correct
@@ -116,17 +116,17 @@ type QuizViewQuestion struct {
 type AnswerResult struct {
 	// QuestionID 让前端按 id 映射结果到题目,而不是依赖返回顺序与题序一致
 	// (位置映射是脆弱契约——并发删题或 DB 排序漂移会导致错位)。
-	QuestionID     uint   `json:"question_id"`
-	Correct        bool   `json:"correct"`
+	QuestionID uint `json:"question_id"`
+	Correct    bool `json:"correct"`
 	// Partial 仅多选题部分对时 true(漏选但没多选错项)。单选/填空恒 false(omitempty)。
-	Partial        bool   `json:"partial,omitempty"`
+	Partial bool `json:"partial,omitempty"`
 	// MissedCount/ExtraCount 仅多选题下发,供前端展示"漏选 X / 多选 Y"。
-	MissedCount    int    `json:"missed_count,omitempty"`
-	ExtraCount     int    `json:"extra_count,omitempty"`
-	CorrectIndex   *int   `json:"correct_index,omitempty"`    // choice: the right option index
+	MissedCount  int  `json:"missed_count,omitempty"`
+	ExtraCount   int  `json:"extra_count,omitempty"`
+	CorrectIndex *int `json:"correct_index,omitempty"` // choice: the right option index
 	// CorrectIndices 多选题的正确索引数组(交卷后揭示)。choice 题为 nil。
-	CorrectIndices []int `json:"correct_indices,omitempty"`   // multi_choice: 正确索引
-	CorrectText    string `json:"correct_text,omitempty"`     // fill: the canonical answer(s)
+	CorrectIndices []int  `json:"correct_indices,omitempty"` // multi_choice: 正确索引
+	CorrectText    string `json:"correct_text,omitempty"`    // fill: the canonical answer(s)
 	Explanation    string `json:"explanation"`
 	ChunkStartTime *int   `json:"chunk_start_time,omitempty"` // seconds, for "[跳转 12:38]"
 }
@@ -140,11 +140,11 @@ type AnswerResult struct {
 // (matching every other admin endpoint). The admin_ai handler wraps these into
 // the final JSON, so the contract is stable regardless of model tag changes.
 type QuizDetail struct {
-	Quiz      QuizDetailQuiz      `json:"quiz"`
+	Quiz      QuizDetailQuiz       `json:"quiz"`
 	Questions []QuizDetailQuestion `json:"questions"`
-	Answers   []QuizDetailAnswer  `json:"answers"`
-	Masteries []QuizDetailMastery `json:"masteries"`
-	Runs      []model.AIRun       `json:"runs"` // the ai_runs that generated this quiz (trace lives here). AIRun already has JSON tags? — no, but it's read directly by the existing AIWorkflow page which already tolerates PascalCase via the AiRun TS type mapping. Kept as-is for consistency with that page.
+	Answers   []QuizDetailAnswer   `json:"answers"`
+	Masteries []QuizDetailMastery  `json:"masteries"`
+	Runs      []model.AIRun        `json:"runs"` // the ai_runs that generated this quiz (trace lives here). AIRun already has JSON tags? — no, but it's read directly by the existing AIWorkflow page which already tolerates PascalCase via the AiRun TS type mapping. Kept as-is for consistency with that page.
 }
 
 // QuizDetailQuiz is the quiz row in admin-snake_case.
@@ -165,16 +165,16 @@ type QuizDetailQuiz struct {
 // QuizDetailQuestion is a question with its answer exposed (admin view only) +
 // the joined video-jump time.
 type QuizDetailQuestion struct {
-	ID             uint   `json:"id"`
-	Type           string `json:"type"`
-	ChunkID        uint   `json:"chunk_id"`
-	Stem           string `json:"stem"`
-	Options        string `json:"options"`         // JSON []string (choice/multi_choice)
-	Answer         int    `json:"answer"`          // DEPRECATED choice: 0-based index (multi_choice 恒 0,看 correct_indices)
-	AnswerText     string `json:"answer_text"`     // DEPRECATED fill: JSON []string (multi_choice 空,看 scoring)
+	ID         uint   `json:"id"`
+	Type       string `json:"type"`
+	ChunkID    uint   `json:"chunk_id"`
+	Stem       string `json:"stem"`
+	Options    string `json:"options"`     // JSON []string (choice/multi_choice)
+	Answer     int    `json:"answer"`      // DEPRECATED choice: 0-based index (multi_choice 恒 0,看 correct_indices)
+	AnswerText string `json:"answer_text"` // DEPRECATED fill: JSON []string (multi_choice 空,看 scoring)
 	// CorrectIndices 多选题的正确选项索引数组(choice/fill 为 nil)。admin 核对多选题答案用。
-	CorrectIndices []int  `json:"correct_indices,omitempty"` // multi_choice: 正确索引
-	PartialCredit  bool   `json:"partial_credit,omitempty"`  // multi_choice: 是否允许部分对
+	CorrectIndices []int `json:"correct_indices,omitempty"` // multi_choice: 正确索引
+	PartialCredit  bool  `json:"partial_credit,omitempty"`  // multi_choice: 是否允许部分对
 	// Scoring 透传原始判分元数据 JSON,供 admin 排查判分问题(按 type 解析)。
 	Scoring        string `json:"scoring,omitempty"`
 	Explanation    string `json:"explanation"`
@@ -186,8 +186,8 @@ type QuizDetailAnswer struct {
 	ID             int    `json:"id"`
 	QuestionID     uint   `json:"question_id"`
 	UserID         uint   `json:"user_id"`
-	UserAnswer     int    `json:"user_answer"`       // choice: 0-based index; fill: -1
-	UserAnswerText string `json:"user_answer_text"`  // fill: 学生原文(choice 题为空)
+	UserAnswer     int    `json:"user_answer"`      // choice: 0-based index; fill: -1
+	UserAnswerText string `json:"user_answer_text"` // fill: 学生原文(choice 题为空)
 	Correct        bool   `json:"correct"`
 	AnsweredAt     string `json:"answered_at"`
 }
@@ -211,29 +211,29 @@ type QuizDetailMastery struct {
 
 // QuizHistoryView is one archived quiz in the client history panel.
 type QuizHistoryView struct {
-	QuizID        uint                 `json:"quiz_id"`
-	EpisodeID     uint                 `json:"episode_id"`
-	GeneratedAt   string               `json:"generated_at"` // quiz.CreatedAt (when the set was generated)
-	ArchivedAt    string               `json:"archived_at"`  // when it was superseded; drives panel ordering
-	QuestionCount int                  `json:"question_count"`
-	WrongCount    int                  `json:"wrong_count"` // answers with Correct=false against this quiz
-	AgentFeedback string               `json:"agent_feedback,omitempty"`
+	QuizID        uint                  `json:"quiz_id"`
+	EpisodeID     uint                  `json:"episode_id"`
+	GeneratedAt   string                `json:"generated_at"` // quiz.CreatedAt (when the set was generated)
+	ArchivedAt    string                `json:"archived_at"`  // when it was superseded; drives panel ordering
+	QuestionCount int                   `json:"question_count"`
+	WrongCount    int                   `json:"wrong_count"` // answers with Correct=false against this quiz
+	AgentFeedback string                `json:"agent_feedback,omitempty"`
 	Questions     []QuizHistoryQuestion `json:"questions"`
 }
 
 // QuizHistoryQuestion is one question in a history quiz, WITH the correct
 // answer exposed (read-only review — no submit path).
 type QuizHistoryQuestion struct {
-	ID             uint     `json:"id"`
-	Type           string   `json:"type"`
-	Stem           string   `json:"stem"`
-	Options        []string `json:"options,omitempty"`
-	CorrectIndex   *int     `json:"correct_index,omitempty"`   // choice
+	ID           uint     `json:"id"`
+	Type         string   `json:"type"`
+	Stem         string   `json:"stem"`
+	Options      []string `json:"options,omitempty"`
+	CorrectIndex *int     `json:"correct_index,omitempty"` // choice
 	// CorrectIndices 多选题的正确索引数组(历史 review 也揭示)。choice 题为 nil。
-	CorrectIndices []int    `json:"correct_indices,omitempty"`  // multi_choice
-	CorrectText    string   `json:"correct_text,omitempty"`    // fill
-	Explanation    string   `json:"explanation"`
-	ChunkStartTime *int     `json:"chunk_start_time,omitempty"`
+	CorrectIndices []int  `json:"correct_indices,omitempty"` // multi_choice
+	CorrectText    string `json:"correct_text,omitempty"`    // fill
+	Explanation    string `json:"explanation"`
+	ChunkStartTime *int   `json:"chunk_start_time,omitempty"`
 	// Wrong is true if the student answered this question wrong at least once
 	// (the panel highlights mistakes). False if answered-correct or never
 	// answered. Computed from the archived quiz's answer rows.
@@ -289,6 +289,8 @@ type agentEpisodeLoader interface {
 }
 type agentCourseLoader interface {
 	FindByID(id uint) (*model.Course, error)
+	// FindByIDWithSubject 只读路径用(Preload Subject),供 Effective*Hint 学科级回退。
+	FindByIDWithSubject(id uint) (*model.Course, error)
 }
 
 func (d *agentToolDeps) ListChunks(episodeID uint) ([]model.ContentChunk, error) {
@@ -298,7 +300,10 @@ func (d *agentToolDeps) GetEpisode(episodeID uint) (*model.Episode, error) {
 	return d.episodeRepo.FindByID(episodeID)
 }
 func (d *agentToolDeps) GetCourse(courseID uint) (*model.Course, error) {
-	return d.courseRepo.FindByID(courseID)
+	// 用 FindByIDWithSubject(带 Subject 预加载):quiz agent 的 get_episode_info 工具
+	// 需要 course.Subject 做 EffectiveQuizHint/EffectiveTermDict 学科级回退。只读路径,
+	// Preload 安全(不经过 UpdateCourse 的 Save)。
+	return d.courseRepo.FindByIDWithSubject(courseID)
 }
 func (d *agentToolDeps) GetSummary(episodeID uint) (*model.AISummary, error) {
 	return d.contentRepo.GetSummary(episodeID)
@@ -515,6 +520,10 @@ func (s *aiService) recordQuizRun(jobID uint, modelName string, res *agent.QuizR
 		SelfCheckResult:  selfCheck,
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"
+		// 还原本次 prompt(原来只存精简 InputJSON 快照,调 prompt 是盲调)。
+		SystemPromptText: res.SystemPrompt,
+		UserPromptText:   res.UserPrompt,
 	}); err != nil {
 		log.Printf("AI: recordQuizRun failed for job %d: %v", jobID, err)
 	}
@@ -525,8 +534,8 @@ func (s *aiService) recordQuizRun(jobID uint, modelName string, res *agent.QuizR
 // human-readable preview for the admin list view).
 func truncateForRun(qs []agent.QuestionDraft, feedback string) string {
 	preview, _ := json.Marshal(map[string]any{
-		"question_count":  len(qs),
-		"agent_feedback":  feedback,
+		"question_count": len(qs),
+		"agent_feedback": feedback,
 	})
 	return string(preview)
 }
@@ -575,7 +584,7 @@ func (s *aiService) GetOrEnqueueQuiz(userID, episodeID uint) (string, *model.Qui
 		Status:    "queued",
 		// 学生正在客户端轮询等出题(每 3s 一次),quiz 必须排在 segment/summary
 		// 前面才能把可见延迟压到最低。priorityQuiz(10)远高于后台作业。
-		Priority:  priorityQuiz,
+		Priority: priorityQuiz,
 	}
 	if err := s.contentRepo.CreateJob(job); err != nil {
 		return quizStatusUnavailable, nil, err
@@ -823,9 +832,9 @@ func joinAcceptable(accept []string) string {
 // AnswerText,多选题填 AnswerIndices;其余字段留空。与单题 submit 的 request 字段名
 // 保持一致,方便前端复用。
 type QuizAnswerInput struct {
-	QuestionID    uint   `json:"question_id"`
-	AnswerIndex   *int   `json:"answer_index,omitempty"`
-	AnswerText    string `json:"answer_text,omitempty"`
+	QuestionID  uint   `json:"question_id"`
+	AnswerIndex *int   `json:"answer_index,omitempty"`
+	AnswerText  string `json:"answer_text,omitempty"`
 	// AnswerIndices 是多选题学生选中的选项索引数组(无序)。仅 multi_choice 题有意义。
 	AnswerIndices []int `json:"answer_indices,omitempty"`
 }
@@ -1040,7 +1049,7 @@ func (s *aiService) RegenerateQuiz(userID, episodeID uint) (string, error) {
 		UserID:    &userID,
 		Status:    "queued",
 		// 换题同样走高优先级:学生点了"换题"在等新题,和首次生成一样紧迫。
-		Priority:  priorityQuiz,
+		Priority: priorityQuiz,
 	}
 	if err := s.contentRepo.CreateJob(job); err != nil {
 		return quizStatusUnavailable, err

@@ -346,6 +346,9 @@ function RunDetail({ run }: { run: AiRun }) {
   } catch {
     /* malformed — leave null */
   }
+  // 完整 Prompt 折叠区:展示本次 Run 发给 LLM 的 system+user prompt。老 run 没有这俩
+  // 字段(主会话引入前的历史数据),兜底显示"(本次 run 未记录 prompt)"。
+  const hasPrompt = !!(run.system_prompt_text || run.user_prompt_text);
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
@@ -381,6 +384,27 @@ function RunDetail({ run }: { run: AiRun }) {
             ))}
           </ol>
         </div>
+      )}
+
+      {/* 完整 Prompt 折叠区:默认展开(老 run 没数据时隐藏整段)。
+          system_prompt 是代码常量(冗余存一份);user_prompt 是拼装结果(含 hint/TermDict 注入)。
+          让 admin 看到"这次到底发了什么给 LLM",告别盲调 prompt。 */}
+      {hasPrompt && (
+        <details open className="rounded-xl border border-border bg-card-2">
+          <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-txt">
+            完整 Prompt (system + user)
+          </summary>
+          <div className="space-y-3 border-t border-border p-3">
+            <div>
+              <div className="mb-1 text-[11px] font-medium text-muted">System Prompt</div>
+              <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-card p-3 text-[11px] text-txt">{run.system_prompt_text || '(空)'}</pre>
+            </div>
+            <div>
+              <div className="mb-1 text-[11px] font-medium text-muted">User Prompt</div>
+              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-card p-3 text-[11px] text-txt">{run.user_prompt_text || '(空)'}</pre>
+            </div>
+          </div>
+        </details>
       )}
 
       <div>

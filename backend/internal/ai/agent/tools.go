@@ -315,12 +315,17 @@ func (t *Toolbox) runGetEpisodeInfo(ctx context.Context, episodeID uint) (string
 		if len(course.Grades) > 0 {
 			fmt.Fprintf(&b, "- 适用年级: %s\n", gradesLabel(course.Grades))
 		}
-		// QuizHint consumer: EffectiveQuizHint() prefers the new QuizHint field
-		// (question style + difficulty + terminology correction dictionary) and
-		// falls back to the deprecated AIHint for un-migrated rows. The label
-		// spells out both purposes so the model knows it's more than terminology.
-		if eff := course.EffectiveQuizHint(); eff != "" {
-			fmt.Fprintf(&b, "- 出题指引（含术语纠错字典）: %s\n", eff)
+		// QuizHint consumer: EffectiveQuizHint(subject) 在课程 AIConfig 空时回退到学科级
+		// AIConfig,最后兜底 deprecated AIHint 列。注意 QuizHint 现在只含出题指引(题型/
+		// 难度),术语字典已拆到 TermDict 字段(见下)。course.Subject 由 courseRepo.FindByID
+		// 走 belongs-to 加载。
+		if eff := course.EffectiveQuizHint(course.Subject); eff != "" {
+			fmt.Fprintf(&b, "- 出题指引: %s\n", eff)
+		}
+		// TermDict consumer: 横切术语纠错字典(课程级+学科级合并)。quiz 的题干/选项/
+		// 解析都可能含术语,必须注入。EffectiveTermDict 内部做了课程级+学科级合并。
+		if td := course.EffectiveTermDict(course.Subject); td != "" {
+			fmt.Fprintf(&b, "- 术语字典（题干/选项/解析输出时按此纠正字幕同音错字）: %s\n", td)
 		}
 	}
 

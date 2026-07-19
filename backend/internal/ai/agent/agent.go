@@ -86,6 +86,13 @@ type AgentResult struct {
 	Trace     []TraceStep // every loop iteration, for observability
 	Usage     ai.Usage    // summed across all Chat turns in this run
 	Turns     int         // number of Chat calls made
+	// SystemPrompt / UserPrompt 是本次 Run 发给 LLM 的开场消息(即入参本身)。
+	// ReAct 循环内部可能多次调 LLM(每步重发完整历史),但 system+user 这对 seed
+	// 只记一次——它就是最终发给 LLM 的首条 system + 首条 user 消息。透传给 service
+	// 层写进 ai_runs.system_prompt_text / user_prompt_text,供 admin "查看回放"
+	// 时还原本次到底发了什么 prompt(原来这两段不存,调 prompt 是盲调)。
+	SystemPrompt string // 最终发给 LLM 的 system prompt(= Run 入参)
+	UserPrompt   string // 最终拼好的 user prompt(= Run 入参)
 }
 
 // Agent runs a ReAct loop over an LLMProvider with a set of tools. It is the
@@ -129,7 +136,12 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userPrompt string) (*Agen
 		{Role: ai.RoleUser, Content: userPrompt},
 	}
 
-	result := &AgentResult{}
+	// 记下本次 seed(system+user prompt),透传到返回值供 service 层落 ai_runs。
+	// Run 内部 ReAct 循环可能多次调 LLM,但 seed 就是开场消息,这里一次记全。
+	result := &AgentResult{
+		SystemPrompt: systemPrompt,
+		UserPrompt:   userPrompt,
+	}
 	trace := []TraceStep{}
 
 	for step := 1; step <= a.maxSteps; step++ {
@@ -156,9 +168,9 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userPrompt string) (*Agen
 		if resp.FinishReason != "tool_calls" || len(resp.ToolCalls) == 0 {
 			// FINAL ANSWER. The model is done reasoning (or it ignored tools).
 			trace = append(trace, TraceStep{
-				Step:     step,
-				Thought:  "给出最终答案",
-				IsFinal:  true,
+				Step:        step,
+				Thought:     "给出最终答案",
+				IsFinal:     true,
 				Observation: truncate(resp.Content, 600),
 			})
 			result.FinalText = resp.Content
@@ -184,7 +196,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userPrompt string) (*Agen
 				return result, fmt.Errorf("agent: tool %q failed: %w", tc.Function.Name, execErr)
 			}
 			trace = append(trace, TraceStep{
-				Step: step,
+				Step:    step,
 				Thought: summarizeThought(tc),
 				Action: &TraceAction{
 					Tool: tc.Function.Name,

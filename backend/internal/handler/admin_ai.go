@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"studyquest/backend/internal/ai"
+	"studyquest/backend/internal/ai/agent"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
@@ -361,8 +362,8 @@ type aiEnqueueRequest struct {
 // aiEnqueueResponse reports per-episode outcomes so the admin UI can show
 // "X enqueued, Y skipped (reason)" after a bulk trigger.
 type aiEnqueueResponse struct {
-	Enqueued []uint            `json:"enqueued"`
-	Skipped  map[uint]string   `json:"skipped"`
+	Enqueued []uint          `json:"enqueued"`
+	Skipped  map[uint]string `json:"skipped"`
 }
 
 // EnqueueAIJobs creates segment or summary jobs for a batch of episodes.
@@ -425,7 +426,7 @@ func toAIJobDTO(v service.AIJobView) aiJobDTO {
 	d := aiJobDTO{
 		ID: j.ID, JobType: j.JobType, EpisodeID: j.EpisodeID, CourseID: j.CourseID,
 		Status: j.Status, Attempt: j.Attempt, Error: j.Error, Progress: j.Progress,
-		CreatedAt: j.CreatedAt.Format(time.RFC3339),
+		CreatedAt:    j.CreatedAt.Format(time.RFC3339),
 		EpisodeTitle: v.EpisodeTitle, CourseTitle: v.CourseTitle, UserNickname: v.UserNickname,
 	}
 	if j.CompletedAt != nil {
@@ -683,7 +684,7 @@ func (h *adminHandler) GetQuizDetail(c *gin.Context) {
 //   - generating:无总结 + 有在途 job(前端轮询)
 //   - 空 status + 无 summary:无总结也未生成(前端显示"生成总结"按钮)
 type courseSummaryAdminDTO struct {
-	Status      string `json:"status"`             // ready | generating | ""(无总结未生成)
+	Status      string `json:"status"` // ready | generating | ""(无总结未生成)
 	SummaryText string `json:"summary_text,omitempty"`
 	ModelUsed   string `json:"model_used,omitempty"`
 	GeneratedAt string `json:"generated_at,omitempty"`
@@ -758,8 +759,8 @@ func (h *adminHandler) GetCourseSummary(c *gin.Context) {
 //   - generating:无报告 + 有在途 job(前端轮询)
 //   - 空 status + 无 report:无报告也未生成(前端显示"生成报告"按钮)
 type userStudyReportDTO struct {
-	Status      string `json:"status"`             // ready | generating | ""(无报告未生成)
-	Report      string `json:"report,omitempty"`   // 报告文本(ready 时有)
+	Status      string `json:"status"`           // ready | generating | ""(无报告未生成)
+	Report      string `json:"report,omitempty"` // 报告文本(ready 时有)
 	ModelUsed   string `json:"model_used,omitempty"`
 	GeneratedAt string `json:"generated_at,omitempty"`
 }
@@ -821,4 +822,145 @@ func (h *adminHandler) GetUserStudyReport(c *gin.Context) {
 		dto.Status = "generating"
 	}
 	c.JSON(http.StatusOK, dto)
+}
+
+// ---------------------------------------------------------------------------
+// Prompt 预览(admin 调优 hint 时实时看效果)
+// ---------------------------------------------------------------------------
+
+// previewPromptRequest 是 POST /admin/api/ai/courses/:id/preview-prompt 的 body。
+// agent 三选一,对应 summary / quiz / advice 三个 agent 的 prompt 构造。
+type previewPromptRequest struct {
+	Agent string `json:"agent"` // summary | quiz | advice
+}
+
+// resolvedHintsDTO 展示"这个课程最终解析出的 5 个 hint 来源"。让 admin 直观看到
+// 当前用的是学科默认还是课程覆盖的(Effective*Hint 会从课程级回退到学科级)。
+type resolvedHintsDTO struct {
+	WhisperHint string `json:"whisper_hint"`
+	SummaryHint string `json:"summary_hint"`
+	QuizHint    string `json:"quiz_hint"`
+	AdviceHint  string `json:"advice_hint"`
+	TermDict    string `json:"term_dict"`
+}
+
+// previewPromptResponse 是预览端点的完整响应。system_prompt + user_prompt 就是
+// 这个课程+agent 最终会发给 LLM 的开场消息(预览即真相);resolved_hints 帮 admin
+// 判断"我改的 hint 真的生效了吗"。
+type previewPromptResponse struct {
+	SystemPrompt  string           `json:"system_prompt"`
+	UserPrompt    string           `json:"user_prompt"`
+	ResolvedHints resolvedHintsDTO `json:"resolved_hints"`
+}
+
+// PreviewCoursePrompt 拼出某课程 + 某 agent 最终会发给 LLM 的完整 prompt,**不调 LLM**。
+// 纯文本拼接,响应快(<10ms)。用于 admin 调优 hint 后立刻看效果,不用等真生成。
+//
+// POST /admin/api/ai/courses/:id/preview-prompt  body: {"agent": "summary"|"quiz"|"advice"}
+//
+// 工作流:
+//  1. 加载 course + 预加载 subject(courseRepo.FindByID 不预加载 Subject,这里单独取一次)。
+//  2. 用 Course.EffectiveXxxHint(subject) 解析出最终生效的 5 个 hint(课程级覆盖学科级)。
+//  3. 根据 agent 类型构造对应 Request(填入 hint/TermDict,episode/user/mastery 等运行时字段
+//     填占位值——预览不针对具体学生,重点看 hint/TermDict 的解析结果),调 agent 包的导出
+//     preview 函数拿到 (system, user)。
+//  4. 返回 system_prompt + user_prompt + resolved_hints。
+func (h *adminHandler) PreviewCoursePrompt(c *gin.Context) {
+	courseID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的课程 id"})
+		return
+	}
+	var req previewPromptRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
+		return
+	}
+	// 校验 agent 字段(白名单),防 injection / 笔误。
+	switch req.Agent {
+	case "summary", "quiz", "advice":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "agent 必须是 summary / quiz / advice"})
+		return
+	}
+
+	course, err := h.courseRepo.FindByID(courseID)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	if course == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "课程不存在"})
+		return
+	}
+	// courseRepo.FindByID 不预加载 Subject,单独取一次。subject 可能被删(course 仍残留
+	// 旧 SubjectID),取不到时退化为零值 Subject(hint 全空,prompt 仍可拼出来,只是没 hint 注入)。
+	var subject model.Subject
+	if course.SubjectID != 0 {
+		if subj, _ := h.subjectRepo.FindByID(course.SubjectID); subj != nil {
+			subject = *subj
+		}
+	}
+
+	// 解析最终生效的 5 个 hint(课程级覆盖学科级)。展示给 admin 看"现在生效的是哪个值"。
+	resolved := resolvedHintsDTO{
+		WhisperHint: course.EffectiveWhisperHint(subject),
+		SummaryHint: course.EffectiveSummaryHint(subject),
+		QuizHint:    course.EffectiveQuizHint(subject),
+		AdviceHint:  course.EffectiveAdviceHint(subject),
+		TermDict:    course.EffectiveTermDict(subject),
+	}
+
+	// 取课程下任意一集填进 Request 的 EpisodeID/EpisodeTitle 等字段。
+	// 预览不针对具体学生/课时,但 prompt 模板需要这些占位字段(如 quiz prompt 显示"课时: xxx")。
+	// 没有课时就填占位值,prompt 仍能拼出来(只是显示"#0"或空标题)。
+	var episodeID uint
+	var episodeTitle string
+	if h.episodeRepo != nil {
+		if eps, eErr := h.episodeRepo.ListByCourse(courseID); eErr == nil && len(eps) > 0 {
+			episodeID = eps[0].ID
+			episodeTitle = eps[0].Title
+		}
+	}
+	subjectLabel := subject.Label // 学科中文名(如"数学"),prompt 里用
+
+	var systemPrompt, userPrompt string
+	switch req.Agent {
+	case "summary":
+		// summary 不需要 episode/user 信息,只需 Subject + SummaryHint + TermDict + Chunks。
+		// Chunks 留空(prompt 显示空字幕段);admin 看的是 hint/TermDict 的注入位置和效果。
+		systemPrompt, userPrompt = agent.BuildSummaryPromptForPreview(agent.SummarizerRequest{
+			CourseID:    courseID,
+			Subject:     subjectLabel,
+			SummaryHint: resolved.SummaryHint,
+			TermDict:    resolved.TermDict,
+		})
+	case "quiz":
+		// quiz 的 user prompt 需要 EpisodeTitle/Subject 作为上下文;mastery 留空
+		// (预览不针对具体学生,prompt 会显示"新学生,暂无答题记录")。
+		systemPrompt, userPrompt = agent.BuildQuizPromptForPreview(agent.QuizzerRequest{
+			EpisodeID:    episodeID,
+			CourseID:     courseID,
+			EpisodeTitle: episodeTitle,
+			Subject:      subjectLabel,
+		})
+	case "advice":
+		// advice 选 course scope(和课程级 preview 最匹配)。填 Subject + AdviceHint + TermDict;
+		// mastery/ExtraContext 留空(prompt 显示"当前无答题记录")。
+		systemPrompt, userPrompt = agent.BuildAdvicePromptForPreview(agent.AdviceRequest{
+			Scope:      agent.ScopeCourse,
+			ScopeID:    courseID,
+			ScopeTitle: course.Title,
+			Subject:    subjectLabel,
+			CourseID:   courseID,
+			AdviceHint: resolved.AdviceHint,
+			TermDict:   resolved.TermDict,
+		})
+	}
+
+	c.JSON(http.StatusOK, previewPromptResponse{
+		SystemPrompt:  systemPrompt,
+		UserPrompt:    userPrompt,
+		ResolvedHints: resolved,
+	})
 }

@@ -36,15 +36,22 @@ const (
 // (episode/course/subject);ScopeID 是对应实体的 id。其它字段是给 prompt 的上下文,
 // 让 agent 不用每次都调工具拿标题/科目。
 type AdviceRequest struct {
-	UserID      uint
-	Scope       string // ScopeEpisode | ScopeCourse | ScopeSubject
-	ScopeID     uint   // episode_id / course_id / subject_id
-	ScopeTitle  string // 课时/课程/科目标题(供 prompt 引用)
-	Subject     string // 科目名(如"数学"),episode/course 级有,subject 级就是自身
-	EpisodeID   uint   // episode 级必备;course/subject 级可为 0(用不到 get_episode_summary)
-	CourseID    uint   // course/episode 级必备;subject 级可为 0(用不到 get_course_mastery)
-	SubjectID   uint   // subject 级必备;episode/course 级可填(供 get_subject_mastery 深入)
+	UserID       uint
+	Scope        string // ScopeEpisode | ScopeCourse | ScopeSubject
+	ScopeID      uint   // episode_id / course_id / subject_id
+	ScopeTitle   string // 课时/课程/科目标题(供 prompt 引用)
+	Subject      string // 科目名(如"数学"),episode/course 级有,subject 级就是自身
+	EpisodeID    uint   // episode 级必备;course/subject 级可为 0(用不到 get_episode_summary)
+	CourseID     uint   // course/episode 级必备;subject 级可为 0(用不到 get_course_mastery)
+	SubjectID    uint   // subject 级必备;episode/course 级可填(供 get_subject_mastery 深入)
 	ExtraContext string // 额外上下文(如"刚交卷,错了 3 题"),可选
+	// AdviceHint 喂 advice agent 的风格/侧重点(如"象棋重实战练习""数学重计算巩固")。
+	// 来自 Course.EffectiveAdviceHint(subject) —— 课程级 AIConfig 空时回退学科级。
+	// episode/course scope 时有值;subject scope 没有 course 留空。
+	AdviceHint string
+	// TermDict 是横切的术语纠错字典(Course.EffectiveTermDict(subject) —— 课程级+学科级合并)。
+	// 注入到 user 消息的【术语字典】段,advice 输出时按此纠正字幕同音错字。
+	TermDict string
 }
 
 // AdviceResult 是 Generate 的返回:建议文本 + agent trace(供 ai_runs 记录)+ usage。
@@ -57,6 +64,12 @@ type AdviceResult struct {
 	Trace           []TraceStep
 	Usage           ai.Usage
 	Turns           int
+	// SystemPrompt / UserPrompt 透传自 AgentResult:本次建议生成发给 LLM 的开场
+	// system+user prompt(即 Generate 入口拼好的那对 seed)。供 service 层写进
+	// ai_runs.system_prompt_text / user_prompt_text,让 admin "查看回放"能看到
+	// 这次到底发了什么 prompt(原来这两段不存,调 prompt 是盲调)。
+	SystemPrompt string
+	UserPrompt   string
 }
 
 // AdviceAgent 用 ReAct loop 生成自然语言学习建议。持有一个带 advice 工具集的 agent。
@@ -100,6 +113,9 @@ func (a *AdviceAgent) Generate(ctx context.Context, req AdviceRequest) (*AdviceR
 		Trace:           res.Trace,
 		Usage:           res.Usage,
 		Turns:           res.Turns,
+		// 透传 seed prompt 供 service 层落 ai_runs(诊断时能看到这次发了什么)。
+		SystemPrompt: res.SystemPrompt,
+		UserPrompt:   res.UserPrompt,
 	}, nil
 }
 

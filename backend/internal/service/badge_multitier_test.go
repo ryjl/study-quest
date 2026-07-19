@@ -203,7 +203,7 @@ func TestSubjectCreateGeneratesBadge(t *testing.T) {
 	db, svc := newSubjectSvc(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 
-	subj, err := svc.Create("coding", "编程", "#000", 99)
+	subj, err := svc.Create("coding", "编程", "#000", 99, model.AIConfig{})
 	if err != nil {
 		t.Fatalf("create subject: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSubjectDeleteCleansBadge(t *testing.T) {
 	db, svc := newSubjectSvc(t)
 	badgeRepo := repository.NewBadgeRepository(db)
 
-	subj, _ := svc.Create("typing", "打字", "#000", 99)
+	subj, _ := svc.Create("typing", "打字", "#000", 99, model.AIConfig{})
 	code := SubjectBadgeCode(subj.Key)
 	if b, _ := badgeRepo.FindByCode(code); b == nil {
 		t.Fatal("badge should exist after create")

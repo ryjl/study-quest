@@ -14,7 +14,10 @@ import (
 type SubjectService interface {
 	List() ([]model.Subject, error)
 	FindByID(id uint) (*model.Subject, error)
-	Create(key, label, color string, sortOrder int) (*model.Subject, error)
+	// Create 新建学科。aiConfig 是学科级默认 AI 提示(5 字段),序列化进
+	// Subject.AIConfigJSON;课程级对应字段为空时回退到这里。handler 层从
+	// *aiConfigRequest 解析得到,这里走 model.AIConfig 类型更安全。
+	Create(key, label, color string, sortOrder int, aiConfig model.AIConfig) (*model.Subject, error)
 	// Update applies the (already-loaded) subject's new fields. If the Key
 	// changed, badges.rule_target is cascaded in the same transaction.
 	Update(s *model.Subject, oldKey string) error
@@ -44,7 +47,7 @@ func (s *subjectService) FindByID(id uint) (*model.Subject, error) {
 	return s.repo.FindByID(id)
 }
 
-func (s *subjectService) Create(key, label, color string, sortOrder int) (*model.Subject, error) {
+func (s *subjectService) Create(key, label, color string, sortOrder int, aiConfig model.AIConfig) (*model.Subject, error) {
 	key = strings.TrimSpace(strings.ToLower(key))
 	if key == "" {
 		return nil, errors.New("subject key is required")
@@ -58,6 +61,8 @@ func (s *subjectService) Create(key, label, color string, sortOrder int) (*model
 		Color:     color,
 		SortOrder: sortOrder,
 	}
+	// 学科级默认 AI 提示。空 AIConfig → SetAIConfig 写入空串(等同没配)。
+	subj.SetAIConfig(aiConfig)
 	if err := s.repo.Create(subj); err != nil {
 		return nil, err
 	}
@@ -176,6 +181,12 @@ func (s *subjectService) Delete(id uint) error {
 // already exists (unique index collision) is skipped. So an existing install
 // picks up newly-added defaults on the next boot without re-seeding the ones
 // it already has, and a fresh install gets the full set.
+//
+// AI seed 回填:对已存在的 math/english 系统学科,如果 AIConfigJSON 为空(老 install
+// 在引入学科级 AIConfig 之前就建过这两科),回填 docs/prompt-seed-content.md 起草的
+// 5 字段默认值,让 Effective*Hint 在课程级没配时也能拿到合理默认。**不覆盖 admin
+// 已经配过的**(AIConfigJSON 非空就不动)。象棋是自定义学科,不在这里 seed(保留前端
+// aiHintTemplates.ts 路径)。其余 8 个系统学科只建记录,AIConfigJSON 留空。
 func (s *subjectService) SeedDefaultSubjects() error {
 	defaults := []model.Subject{
 		{Key: "chinese", Label: "语文", Color: "#60a5fa", SortOrder: 1, IsSystem: true},
@@ -193,6 +204,29 @@ func (s *subjectService) SeedDefaultSubjects() error {
 		// no badge). Entertainment courses point SubjectID here to satisfy the
 		// NOT NULL constraint. SortOrder 99 keeps it at the end of any list.
 		{Key: "entertainment", Label: "娱乐", Color: "#8b5cf6", SortOrder: 99, IsSystem: true},
+	}
+
+	// subjectAISeed 是 math/english 两科的默认 AIConfig seed。来源:
+	// docs/prompt-seed-content.md(主会话起草)。回填到 Subject.AIConfigJSON,让这俩
+	// 学科的课程在课程级没配 hint 时也有合理默认。其余系统学科本轮只建空记录。
+	//
+	// 象棋是自定义学科(不是系统学科),admin 自己建,它的 seed 保留在前端
+	// aiHintTemplates.ts,不走后端 Subject.AIConfig 路径——所以这里没有 xiangqi。
+	subjectAISeed := map[string]model.AIConfig{
+		"math": {
+			WhisperHint: "这是一节数学课。常见术语：通分、约分、公分母、异分母、倒数、绝对值、方程、函数、整数、分数、小数、乘除、积、商、倍。",
+			SummaryHint: "侧重讲解的解题思路和方法推导过程。如果讲了例题,把例题的解题步骤拆解清楚(第一步做什么、为什么这么做)。公式/定理要写明适用条件和易错前提。",
+			QuizHint:    "题型倾向：计算题、事实性知识点（公式、定义、定理）≥50% 出填空（答案必须唯一，如 [\"12\",\"十二\"]）；辨析、应用、证明题出选择或多选。\n难度：中等偏难。干扰项要基于学生真实的错算理（如通分时分子没乘、符号搞反、小数点错位）。",
+			AdviceHint:  "侧重计算类知识点的巩固建议。如果学生在计算类知识点弱,建议回到视频重看推导过程 + 做同类计算题巩固;概念类弱点建议结合具体例题理解。",
+			TermDict:    "通分 → 勿作\"同分\"\n约分 → 勿作\"月分\"\n公分母 → 勿作\"工分母\"\n倒数 → 勿作\"道数\"\n绝对值 → 勿作\"决对值\"",
+		},
+		"english": {
+			WhisperHint: "这是一节英语课，老师用中文讲解，音频里会夹带英文单词和句子。常见语法术语：时态、语态、从句、分词、动名词、虚拟语气。",
+			SummaryHint: "侧重语法规则和用法辨析。如果讲了语法点,把规则、适用场景、和易混语法的区别讲清楚。例句要保留(英中对照)。",
+			QuizHint:    "题型倾向：语法辨析、词义选择、完形填空为主（选择）；单词拼写、动词变形用填空。\n难度：中等。干扰项要是真实的语法错误（时态混用、单复数错误、介词搭配错误）。",
+			AdviceHint:  "侧重语法应用和词汇积累建议。语法弱点建议结合例句记忆 + 造句练习;词汇弱点建议在语境中记单词而非死背。",
+			TermDict:    "英文学科术语按需纠正;中文讲解部分的同音错字按常识纠正。",
+		},
 	}
 
 	for i := range defaults {
@@ -214,6 +248,27 @@ func (s *subjectService) SeedDefaultSubjects() error {
 			if err := s.badgeService.SeedSubjectBadge(defaults[i].ID, defaults[i].Key, defaults[i].Label); err != nil {
 				log.Printf("Warning: failed to seed badge for subject %s: %v", defaults[i].Key, err)
 			}
+		}
+
+		// AI seed 回填:对 math/english 系统学科,如果 AIConfigJSON 为空(新建的或老
+		// install 残留的),回填 seed 内容。**不覆盖** admin 已配的(AIConfigJSON 非空
+		// 就跳过)。新建时 Create 已经把行写进去了,AIConfigJSON 也是空——这里同样要
+		// 回填,所以不区分 created。fresh install 的 math/english 也能拿到默认 seed。
+		if seed, ok := subjectAISeed[defaults[i].Key]; ok {
+			// 重新加载一次:Create 后 defaults[i].AIConfigJSON 已经是空,但 collision
+			// 分支下 defaults[i] 是入参副本(不是 DB 里的实际行),需要查 DB 才知道 admin
+			// 是否已经配过。Find by key 拿到真实行。
+			existing, ferr := s.repo.FindByKey(defaults[i].Key)
+			if ferr != nil {
+				log.Printf("Warning: failed to reload subject %s for AI seed: %v", defaults[i].Key, ferr)
+			} else if existing != nil && strings.TrimSpace(existing.AIConfigJSON) == "" {
+				// AIConfigJSON 为空 → admin 没配过(或新建的),回填 seed。
+				existing.SetAIConfig(seed)
+				if uErr := s.repo.Update(existing); uErr != nil {
+					log.Printf("Warning: failed to backfill AI seed for subject %s: %v", defaults[i].Key, uErr)
+				}
+			}
+			// AIConfigJSON 非空 → admin 配过了,跳过(不覆盖)。
 		}
 		_ = created
 	}

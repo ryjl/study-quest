@@ -47,13 +47,18 @@ type CourseSummaryResult struct {
 	Trace       []TraceStep
 	Usage       ai.Usage
 	Turns       int
+	// SystemPrompt / UserPrompt 透传自 AgentResult:本次课程总结发给 LLM 的开场
+	// system+user prompt。供 service 层写进 ai_runs.system_prompt_text /
+	// user_prompt_text,让 admin "查看回放"能看到这次到底发了什么 prompt。
+	SystemPrompt string
+	UserPrompt   string
 }
 
 // CourseSummaryAgent 用 ReAct loop 生成课程级总结。持有一个带 course summary 工具集的 agent。
 // 没有 self-check agent(同 advice:开放文本,无客观正误,只做非空 + 长度合理性检查)。
 type CourseSummaryAgent struct {
-	agent *Agent       // 带 NewCourseSummaryToolbox 的 ReAct 引擎
-	deps  ToolDeps     // pre-seed 用:遍历 course 的 episodes + 读 summary
+	agent *Agent   // 带 NewCourseSummaryToolbox 的 ReAct 引擎
+	deps  ToolDeps // pre-seed 用:遍历 course 的 episodes + 读 summary
 }
 
 // NewCourseSummaryAgent 构造一个 CourseSummaryAgent。agentLoop 必须已经注入
@@ -90,6 +95,9 @@ func (a *CourseSummaryAgent) Generate(ctx context.Context, req CourseSummaryRequ
 		Trace:       res.Trace,
 		Usage:       res.Usage,
 		Turns:       res.Turns,
+		// 透传 seed prompt 供 service 层落 ai_runs(诊断时能看到这次发了什么)。
+		SystemPrompt: res.SystemPrompt,
+		UserPrompt:   res.UserPrompt,
 	}, nil
 }
 

@@ -304,11 +304,14 @@ func (s *subtitleJobService) ClaimNext(workerID, userAgent string) (*ClaimResult
 		filename = filepath.Base(path)
 		if course, cerr := s.courseRepo.FindByID(ep.CourseID); cerr == nil && course != nil {
 			courseTitle = course.Title
-			// Whisper consumer: EffectiveWhisperHint() prefers the new WhisperHint
-			// field and falls back to the deprecated AIHint for un-migrated rows.
-			whisperHint = course.EffectiveWhisperHint()
+			// Whisper consumer: EffectiveWhisperHint(subject) 在课程 AIConfig 空时回退到
+			// 学科级 AIConfig,最后兜底 deprecated AIHint 列。必须先拿到 subj 再喂给它。
 			if subj, serr := s.subjectRepo.FindByID(course.SubjectID); serr == nil && subj != nil {
 				subject = subj.Key
+				whisperHint = course.EffectiveWhisperHint(*subj)
+			} else {
+				// 学科查不到时也调一次(传零值 Subject,Effective* 会优雅降级)。
+				whisperHint = course.EffectiveWhisperHint(model.Subject{})
 			}
 		}
 		if ep.ChapterID != nil {

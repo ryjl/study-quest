@@ -25,8 +25,8 @@ import (
 // mastery、最弱知识点(按 mastery 最低取一条 + chunk 文本线索)。UserStudyAgent.buildSeed
 // 遍历用户所有课程填这个切片,塞进 prompt,让 agent 不用第一轮调工具也能开写。
 type UserStudyCourse struct {
-	CourseID      uint
-	Title         string // 课程标题,若 caller 已知则填(更友好);未知留空
+	CourseID       uint
+	Title          string // 课程标题,若 caller 已知则填(更友好);未知留空
 	AverageMastery float64
 	// WeakestPoint 是该课程 mastery 最低知识点的摘要文本(含 chunk.text 线索),
 	// 让 prompt 直接能说"X 课程最弱的是通分"。空表示该课程无答题记录(新课)。
@@ -37,9 +37,9 @@ type UserStudyCourse struct {
 // prompt 称呼该学生(报告里"小明同学"比"#42"友好);Courses 是该学生所有课程的
 // pre-seed 概要(由 runUserReportJob 预先填好,见 ai_service_user_report.go)。
 type UserStudyRequest struct {
-	UserID      uint
+	UserID       uint
 	UserNickname string
-	Courses     []UserStudyCourse
+	Courses      []UserStudyCourse
 }
 
 // UserStudyResult 是 Generate 的返回:报告文本 + agent trace(供 ai_runs 记录)+ usage。
@@ -50,15 +50,20 @@ type UserStudyResult struct {
 	Trace      []TraceStep
 	Usage      ai.Usage
 	Turns      int
+	// SystemPrompt / UserPrompt 透传自 AgentResult:本次用户学习报告发给 LLM 的
+	// 开场 system+user prompt。供 service 层写进 ai_runs.system_prompt_text /
+	// user_prompt_text,让 admin "查看回放"能看到这次到底发了什么 prompt。
+	SystemPrompt string
+	UserPrompt   string
 }
 
 // UserStudyAgent 用 ReAct loop 生成 admin 用户学习报告。持有一个带 user_study 工具集的
 // agent + memory(读跨课程 mastery 做 pre-seed)。和 AdviceAgent 一样无 self-check
 // (开放文本报告,无客观正误)。
 type UserStudyAgent struct {
-	agent  *Agent        // 带 NewUserStudyToolbox 的 ReAct 引擎
-	memory *MemoryStore  // buildUserStudySeed 用(若需现场读 mastery)
-	deps   ToolDeps      // buildUserStudySeed 用(若需反查课程标题)
+	agent  *Agent       // 带 NewUserStudyToolbox 的 ReAct 引擎
+	memory *MemoryStore // buildUserStudySeed 用(若需现场读 mastery)
+	deps   ToolDeps     // buildUserStudySeed 用(若需反查课程标题)
 }
 
 // NewUserStudyAgent 构造一个 UserStudyAgent。agentLoop 必须已经注入
@@ -91,6 +96,9 @@ func (a *UserStudyAgent) Generate(ctx context.Context, req UserStudyRequest) (*U
 		Trace:      res.Trace,
 		Usage:      res.Usage,
 		Turns:      res.Turns,
+		// 透传 seed prompt 供 service 层落 ai_runs(诊断时能看到这次发了什么)。
+		SystemPrompt: res.SystemPrompt,
+		UserPrompt:   res.UserPrompt,
 	}, nil
 }
 

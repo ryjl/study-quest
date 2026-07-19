@@ -76,11 +76,16 @@ func (s *SummaryResult) normalize() {
 
 // SummarizerRequest carries the inputs to one summary generation.
 type SummarizerRequest struct {
-	EpisodeID  uint
-	CourseID   uint
-	CourseHint string           // Course.AIHint — domain terminology to guide the model
-	Subject    string           // e.g. "数学"
-	Chunks     []model.ContentChunk // the lesson's text, already segmented
+	EpisodeID   uint
+	CourseID    uint
+	// SummaryHint 喂 summary agent 的风格/侧重点(如"侧重开局原理""多举例题")。
+	// 来自 Course.EffectiveSummaryHint(subject) —— 课程级 AIConfig 空时回退学科级。
+	SummaryHint string
+	// TermDict 是横切的术语纠错字典(Course.EffectiveTermDict(subject) —— 课程级+学科级合并)。
+	// 注入到 user 消息的【术语字典】段,summary 输出时按此纠正字幕同音错字。
+	TermDict string
+	Subject  string               // e.g. "数学"
+	Chunks   []model.ContentChunk // the lesson's text, already segmented
 }
 
 // Summarizer generates one structured summary for a lesson by sending the
@@ -91,9 +96,9 @@ type SummarizerRequest struct {
 // observability — the admin Workflow page can replay exactly what went in and
 // came out, which is how you debug a bad summary.
 type Summarizer struct {
-	llm    ai.LLMProvider
-	repo   repository.AIContentRepository
-	model  string // model name to request (from the chat provider config)
+	llm   ai.LLMProvider
+	repo  repository.AIContentRepository
+	model string // model name to request (from the chat provider config)
 }
 
 // NewSummarizer builds a Summarizer. llm must be a working chat provider;
@@ -140,12 +145,13 @@ func (s *Summarizer) Summarize(ctx context.Context, req SummarizerRequest, jobID
 
 	// Always record the run, even on error — a failed generation is just as
 	// interesting to debug as a successful one. Best-effort: a logging failure
-	// must not mask the real result.
+	// must not mask the real result. 把 system+user prompt 一并传入,写进
+	// ai_runs.system_prompt_text / user_prompt_text 供 admin "查看回放"。
 	runInput := buildRunInput(req)
 	if chatResp != nil {
-		s.recordRun(jobID, runInput, chatResp, elapsed, "")
+		s.recordRun(jobID, runInput, chatResp, elapsed, "", SummarizerSystemPrompt, userPrompt)
 	} else {
-		s.recordRunErr(jobID, runInput, err, elapsed)
+		s.recordRunErr(jobID, runInput, err, elapsed, SummarizerSystemPrompt, userPrompt)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("summarizer: chat call failed: %w", err)
@@ -186,10 +192,19 @@ func buildSummaryUserPrompt(req SummarizerRequest) string {
 	if req.Subject != "" {
 		b.WriteString("科目:" + req.Subject + "\n")
 	}
-	if req.CourseHint != "" {
-		b.WriteString("提示:" + req.CourseHint + "\n")
+	// SummaryHint 喂 summary agent 的风格/侧重点(可选)。
+	if req.SummaryHint != "" {
+		b.WriteString("【总结提示】\n")
+		b.WriteString(req.SummaryHint)
+		b.WriteString("\n\n")
 	}
-	b.WriteString("\n字幕内容(按时间顺序,带时间标记):\n\n")
+	// TermDict 注入横切术语字典,让 summary 输出时按此纠正字幕同音错字(可选)。
+	if req.TermDict != "" {
+		b.WriteString("【术语字典】(输出时按此纠正字幕同音错字)\n")
+		b.WriteString(req.TermDict)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("字幕内容(按时间顺序,带时间标记):\n\n")
 	for _, ch := range req.Chunks {
 		startSec := 0
 		if ch.StartTime != nil {
@@ -221,7 +236,9 @@ func buildRunInput(req SummarizerRequest) string {
 	return string(in)
 }
 
-func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatResponse, elapsed time.Duration, selfCheck string) {
+// recordRun 写一条成功的 summary ai_run。systemPrompt/userPrompt 是本次发给 LLM 的
+// 开场 prompt,写进 ai_runs.system_prompt_text / user_prompt_text 供 admin "查看回放"。
+func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatResponse, elapsed time.Duration, selfCheck, systemPrompt, userPrompt string) {
 	s.repo.CreateRun(&model.AIRun{
 		JobID:            jobID,
 		Capability:       "summary",
@@ -232,18 +249,27 @@ func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatRespon
 		ResponseText:     resp.Content,
 		SelfCheckResult:  "skipped", // summarizer has no self-check; quizzer (Phase C) does
 		DurationMs:       int(elapsed.Milliseconds()),
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt
+		// (原来只存精简 InputJSON 快照,调 prompt 是盲调)。失败时也记——看是哪个 prompt
+		// 导致的失败同样有价值。
+		SystemPromptText: systemPrompt,
+		UserPromptText:   userPrompt,
 	})
 }
 
-func (s *Summarizer) recordRunErr(jobID uint, inputJSON string, err error, elapsed time.Duration) {
+// recordRunErr 写一条失败的 summary ai_run(call 没拿到响应)。systemPrompt/userPrompt
+// 同样传入:失败时 prompt 也有诊断价值(可能是某个 prompt 触发了失败)。
+func (s *Summarizer) recordRunErr(jobID uint, inputJSON string, err error, elapsed time.Duration, systemPrompt, userPrompt string) {
 	s.repo.CreateRun(&model.AIRun{
-		JobID:           jobID,
-		Capability:      "summary",
-		InputJSON:       inputJSON,
-		ModelUsed:       s.model,
-		ResponseText:    "(call failed) " + err.Error(),
-		SelfCheckResult: "skipped",
-		DurationMs:      int(elapsed.Milliseconds()),
+		JobID:            jobID,
+		Capability:       "summary",
+		InputJSON:        inputJSON,
+		ModelUsed:        s.model,
+		ResponseText:     "(call failed) " + err.Error(),
+		SelfCheckResult:  "skipped",
+		DurationMs:       int(elapsed.Milliseconds()),
+		SystemPromptText: systemPrompt,
+		UserPromptText:   userPrompt,
 	})
 }
 

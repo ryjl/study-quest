@@ -1,6 +1,25 @@
 // API types — mirror the snake_case DTOs served by /admin/api/*. All fields
 // are optional-tolerant where the backend may omit them.
 
+/**
+ * AIConfig — 5 个独立配置维度,镜像后端 model.AIConfig(存 Course/Subject 的
+ * AIConfigJSON blob)。每个字段喂给不同的 AI 能力:
+ *   - whisper_hint:Whisper 字幕转录(术语/口音,≤240 字)
+ *   - summary_hint:summary agent(总结风格/侧重点)
+ *   - quiz_hint:quiz agent(题型偏好/难度/出题指引)
+ *   - advice_hint:advice agent(建议侧重点/口吻)
+ *   - term_dict:横切给 summary/quiz/advice 的术语纠错字典(车→居)
+ * Course 和 Subject 都用这个结构。解析优先级:Course > Subject(课程覆盖学科);
+ * term_dict 特殊:课程级 + 学科级合并。
+ */
+export interface AiConfig {
+  whisper_hint?: string;
+  summary_hint?: string;
+  quiz_hint?: string;
+  advice_hint?: string;
+  term_dict?: string;
+}
+
 export interface SubjectMeta {
   id?: number;
   key: string;
@@ -8,6 +27,8 @@ export interface SubjectMeta {
   color: string;
   sort_order?: number;
   is_system?: boolean; // true = seeded default, protected from deletion (still editable)
+  /** 学科级默认 AI 配置。课程级对应字段为空时回退到这里。见 AiConfig。 */
+  ai_config?: AiConfig;
 }
 
 // Subject catalog cache. The admin SPA used to ship a hardcoded SUBJECTS
@@ -148,6 +169,9 @@ export interface Course {
    * (terms Whisper mishears that the LLM must output correctly). Longer text.
    * Sourced from the backend's AIConfigJSON blob. Empty when unset. */
   quiz_hint?: string;
+  /** 课程级 AI 配置(5 字段,见 AiConfig)。提交时整体发送;whisper_hint/quiz_hint
+   * 字段保留仅为回显老数据兼容。新增/编辑课程时应优先用 ai_config 整体提交。 */
+  ai_config?: AiConfig;
   /** Course-level switches for AI post-processing of its episodes. When false,
    * the worker skips summary / quiz generation for this course even if the AI
    * pipeline is globally configured. Optional (absent = disabled, the model
@@ -634,6 +658,11 @@ export interface AiRun {
   self_check_note?: string;
   duration_ms: number;
   created_at: string;
+  /** 最终发给 LLM 的完整 system prompt(= 代码常量,冗余存一份供 admin 查看)。
+   * 新增字段(可观测性);老 run 没有,展示时兜底空串。 */
+  system_prompt_text?: string;
+  /** 最终拼好的 user prompt(含注入的 hint/TermDict)。新增字段。 */
+  user_prompt_text?: string;
 }
 
 // One step in an agent's ReAct trace (parsed from AiRun.trace_json).

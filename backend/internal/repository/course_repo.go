@@ -13,6 +13,11 @@ type CourseRepository interface {
 	WithTx(tx *gorm.DB) CourseRepository
 	List(grade string, subjectID uint, contentType model.ContentType, allowedIDs []uint) ([]model.Course, error)
 	FindByID(id uint) (*model.Course, error)
+	// FindByIDWithSubject 同 FindByID 但额外 Preload Subject。**只读路径用**
+	// (agent 工具取 course 上下文、Effective*Hint 学科级回退);写路径(UpdateCourse
+	// 的 db.Save)禁用 —— Save 遇到预加载的 belongsTo 关联会 FullSaveAssociations
+	// 误改 course.SubjectID(回归见 TestCourseUpdate)。
+	FindByIDWithSubject(id uint) (*model.Course, error)
 	Create(course *model.Course) error
 	Update(course *model.Course) error
 	Delete(id uint) error
@@ -77,7 +82,25 @@ func (r *courseRepo) List(grade string, subjectID uint, contentType model.Conten
 
 func (r *courseRepo) FindByID(id uint) (*model.Course, error) {
 	var course model.Course
+	// 注意:这里**不** Preload("Subject")。原因:UpdateCourse 调 FindByID 拿到 c
+	// 后用 db.Save(c) 写回,若 c.Subject 被预加载(非零值),GORM 的 FullSaveAssociations
+	// 会错误地改写 subjects 表 / course.SubjectID 关系(回归:TestCourseUpdate 改
+	// subject 后回读仍是旧值)。EffectiveXxxHint 需要学科级回退的调用方,应单独
+	// subjectRepo.FindByID(course.SubjectID) 取 subject 再传入(见 ai_service*.go)。
 	if err := r.db.Preload("Tags").Preload("Grades").First(&course, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &course, nil
+}
+
+func (r *courseRepo) FindByIDWithSubject(id uint) (*model.Course, error) {
+	var course model.Course
+	// 只读路径专用:带 Subject 预加载,供 Effective*Hint 学科级回退 + prompt 显示科目名。
+	// 写路径禁用(见 FindByID 注释)。
+	if err := r.db.Preload("Tags").Preload("Grades").Preload("Subject").First(&course, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

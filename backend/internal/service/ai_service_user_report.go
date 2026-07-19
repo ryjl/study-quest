@@ -113,7 +113,7 @@ func (s *aiService) runUserReportJob(job *model.AIJob) {
 
 	if err != nil {
 		if res != nil {
-			s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", err.Error(), "")
+			s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", err.Error(), "", res.SystemPrompt, res.UserPrompt)
 		}
 		s.failJob(job, "user report generation: "+err.Error())
 		return
@@ -127,12 +127,12 @@ func (s *aiService) runUserReportJob(job *model.AIJob) {
 		GeneratedAt: time.Now(),
 	}
 	if err := s.contentRepo.UpsertUserStudyReport(report); err != nil {
-		s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.ReportText)
+		s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.ReportText, res.SystemPrompt, res.UserPrompt)
 		s.failJob(job, "persist user report: "+err.Error())
 		return
 	}
 
-	s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "pass", "", res.ReportText)
+	s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "pass", "", res.ReportText, res.SystemPrompt, res.UserPrompt)
 	s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
 }
 
@@ -203,8 +203,10 @@ func (s *aiService) buildUserStudyCourses(ctx context.Context, userID uint) []ag
 }
 
 // recordUserReportRun 写 ai_run(供 admin 观测 user_report 生成)。和 recordAdviceRun
-// 平行,capability="user_report",response_text 存报告文本预览(截断)。
-func (s *aiService) recordUserReportRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, reportText string) {
+// 平行,capability="user_report",response_text 存报告文本预览(截断)。systemPrompt/
+// userPrompt 是本次发给 LLM 的开场 prompt,写进 ai_runs.system_prompt_text /
+// user_prompt_text 供 admin "查看回放"。
+func (s *aiService) recordUserReportRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, reportText, systemPrompt, userPrompt string) {
 	preview := truncateAdvicePreview(reportText)
 	s.contentRepo.CreateRun(&model.AIRun{
 		JobID:            jobID,
@@ -218,6 +220,9 @@ func (s *aiService) recordUserReportRun(jobID uint, modelName string, trace []ag
 		SelfCheckResult:  result, // 复用字段存 pass/fail(报告无 self-check)
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
+		SystemPromptText: systemPrompt,
+		UserPromptText:   userPrompt,
 	})
 }
 

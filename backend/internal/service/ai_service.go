@@ -539,17 +539,25 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 		s.failJob(job, "no content chunks — run segmentation first")
 		return
 	}
-	// Build course context for the prompt.
+	// Build course context for the prompt. EffectiveXxxHint(subject) 在课程 AIConfig
+	// 空时回退到学科级 AIConfig(最后兜底 deprecated AIHint 列)。summary agent 吃的是
+	// SummaryHint(风格/侧重点)+ TermDict(横切术语纠错),不再吃 quizHint。
+	// 注意:courseRepo.FindByID 不 Preload Subject(避免 UpdateCourse 的 Save 误改关联),
+	// 这里单独用 s.db 查一次 subject 供 Effective* 回退 + prompt 的"科目"显示。
 	course, _ := s.courseRepo.FindByID(job.CourseID)
-	// QuizHint consumer: EffectiveQuizHint() prefers the new QuizHint field and
-	// falls back to the deprecated AIHint for un-migrated rows.
-	quizHint := ""
 	subject := ""
+	summaryHint := ""
+	termDict := ""
 	if course != nil {
-		quizHint = course.EffectiveQuizHint()
-		if course.Subject.Label != "" {
-			subject = course.Subject.Label
+		var subj model.Subject
+		if course.SubjectID != 0 {
+			s.db.First(&subj, course.SubjectID) // 取不到 subj 保持零值,Effective 兜底
 		}
+		if subj.Label != "" {
+			subject = subj.Label
+		}
+		summaryHint = course.EffectiveSummaryHint(subj)
+		termDict = course.EffectiveTermDict(subj)
 	}
 	llm, err := s.resolver.ResolveChat()
 	if err != nil {
@@ -559,11 +567,12 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 	modelName := s.resolver.ChatModelName()
 	summarizer := agent.NewSummarizer(llm, s.contentRepo, modelName)
 	_, err = summarizer.Summarize(ctx, agent.SummarizerRequest{
-		EpisodeID:  job.EpisodeID,
-		CourseID:   job.CourseID,
-		CourseHint: quizHint,
-		Subject:    subject,
-		Chunks:     chunks,
+		EpisodeID:   job.EpisodeID,
+		CourseID:    job.CourseID,
+		SummaryHint: summaryHint,
+		TermDict:    termDict,
+		Subject:     subject,
+		Chunks:      chunks,
 	}, job.ID)
 	if err != nil {
 		s.failJob(job, err.Error())

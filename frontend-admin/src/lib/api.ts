@@ -568,6 +568,30 @@ export const api = {
   async getAiRun(id: number): Promise<AiRun> {
     return request(`/admin/api/ai/runs/${id}`);
   },
+  /**
+   * 预览某课程 + 某 agent 最终会拼出的完整 prompt(不调 LLM,纯文本拼接)。
+   * 用于 admin 调优 hint 后立刻看效果,不用等真生成。返回 system_prompt +
+   * user_prompt + resolved_hints(展示解析后的 5 个 hint 来源)。
+   */
+  async previewCoursePrompt(
+    courseId: number,
+    agent: 'summary' | 'quiz' | 'advice',
+  ): Promise<{
+    system_prompt: string;
+    user_prompt: string;
+    resolved_hints: {
+      whisper_hint: string;
+      summary_hint: string;
+      quiz_hint: string;
+      advice_hint: string;
+      term_dict: string;
+    };
+  }> {
+    return request(`/admin/api/ai/courses/${courseId}/preview-prompt`, {
+      method: 'POST',
+      body: JSON.stringify({ agent }),
+    });
+  },
 
   // Phase C — quiz observability. The admin reads a generated summary, lists a
   // user's quizzes, and drills into one quiz's full detail (questions + answers

@@ -1,9 +1,26 @@
 # TODO — StudyQuest 待办清单
 
 > 本文件记录所有"已识别但未实现"的 feature idea，按优先级分组。每次迭代从这里挑选。
-> 最后更新：2026-07-18（AI workflow 质量优化轮次）
+> 最后更新：2026-07-18（体验优化轮次：AI 富文本 + 字号配置 + Android TV 适配）
 
 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、**工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
+
+---
+
+## 已完成（2026-07-18 体验优化轮次）
+
+本轮交付（8 条用户反馈），代码已落地、`make test` + `flutter analyze` 全绿：
+
+- **AI 富文本（表格 + SVG 图）**：前端 `MarkdownView`（`flutter_markdown` + `flutter_svg`），
+  后端 `prompts.go` 三处 prompt 鼓励约束式 SVG（只允许简单流程图/柱状图）+ GFM 表格。
+  AI 页 summary / advice / quiz 的 stem / explanation 全部支持 markdown 渲染。
+- **字幕按钮重复 bug**：`_nativeSubtitleIds` 改 Set 去重 + `_getSubtitleOptions` label 层去重。
+- **全局字号配置**：`UiPrefs`（SharedPreferences）—— 字幕字号（小中大超大）和 AI 页字号
+  （紧凑/标准/大/超大）各自独立，改一次全局沿用。AI 页右上角加字号调整按钮。
+- **跳转 AI 未暂停**：helper panel 常驻 AI 入口补 `_player.pause()`。
+- **Android TV 适配**：`TvMode` 检测 + 设置页「预览 TV 模式」调试开关（MuMu 可验证）；
+  搜索框 D-pad 焦点陷阱修复；播放器 TV 下 seek ±30s + helper panel 默认展开；
+  AI 页 TV 下隐藏 quiz、字号强制大。
 
 ---
 

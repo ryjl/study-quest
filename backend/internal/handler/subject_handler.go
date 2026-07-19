@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -60,17 +61,20 @@ func (h *subjectHandler) ClientListSubjects(c *gin.Context) {
 // AdminCreateSubject POST /admin/api/subjects
 func (h *subjectHandler) AdminCreateSubject(c *gin.Context) {
 	var req struct {
-		Key       string `json:"key" binding:"required"`
-		Label     string `json:"label" binding:"required"`
-		Color     string `json:"color"`
-		SortOrder int    `json:"sort_order"`
+		Key       string            `json:"key" binding:"required"`
+		Label     string            `json:"label" binding:"required"`
+		Color     string            `json:"color"`
+		SortOrder int               `json:"sort_order"`
+		// AIConfig 是学科级默认 AI 提示(5 字段)。可选:不传(nil)→ 走空配置。
+		AIConfig  *aiConfigRequest `json:"ai_config"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
 		return
 	}
 
-	subj, err := h.svc.Create(req.Key, req.Label, req.Color, req.SortOrder)
+	aiCfg, _ := req.AIConfig.toModel()
+	subj, err := h.svc.Create(req.Key, req.Label, req.Color, req.SortOrder, aiCfg)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -89,10 +93,13 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 	}
 
 	var req struct {
-		Key       string `json:"key" binding:"required"`
-		Label     string `json:"label" binding:"required"`
-		Color     string `json:"color"`
-		SortOrder int    `json:"sort_order"`
+		Key       string            `json:"key" binding:"required"`
+		Label     string            `json:"label" binding:"required"`
+		Color     string            `json:"color"`
+		SortOrder int               `json:"sort_order"`
+		// AIConfig 是学科级默认 AI 提示(5 字段)。可选:nil → 保留原值(不动
+		// AIConfigJSON);非 nil → 用请求体的 5 字段整体覆盖(全空即清空)。
+		AIConfig  *aiConfigRequest `json:"ai_config"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
@@ -114,6 +121,16 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 	subj.Label = req.Label
 	subj.Color = req.Color
 	subj.SortOrder = req.SortOrder
+	// 仅当请求显式带 ai_config 时才覆盖;老客户端不传 → 保留已有配置。
+	if req.AIConfig != nil {
+		subj.SetAIConfig(model.AIConfig{
+			WhisperHint: req.AIConfig.WhisperHint,
+			SummaryHint: req.AIConfig.SummaryHint,
+			QuizHint:    req.AIConfig.QuizHint,
+			AdviceHint:  req.AIConfig.AdviceHint,
+			TermDict:    req.AIConfig.TermDict,
+		})
+	}
 
 	if err := h.svc.Update(subj, oldKey); err != nil {
 		respondError(c, err)

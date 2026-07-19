@@ -105,7 +105,7 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 	if err != nil {
 		// 仍记录尝试(部分 trace 对调试生成失败有价值)。
 		if res != nil {
-			s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", err.Error(), "")
+			s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", err.Error(), "", res.SystemPrompt, res.UserPrompt)
 		}
 		s.failJob(job, "course summary generation: "+err.Error())
 		return
@@ -119,19 +119,20 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 		GeneratedAt: time.Now(),
 	}
 	if err := s.contentRepo.UpsertCourseSummary(summary); err != nil {
-		s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.SummaryText)
+		s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.SummaryText, res.SystemPrompt, res.UserPrompt)
 		s.failJob(job, "persist course summary: "+err.Error())
 		return
 	}
 
-	s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "pass", "", res.SummaryText)
+	s.recordCourseSummaryRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "pass", "", res.SummaryText, res.SystemPrompt, res.UserPrompt)
 	s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
 }
 
 // recordCourseSummaryRun 写 ai_run(供 admin 观测 course summary 生成)。和 recordAdviceRun
 // 平行,但 capability="course_summary",response_text 存总结文本预览(截断,避免 ai_run
-// 行过大)。
-func (s *aiService) recordCourseSummaryRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, summaryText string) {
+// 行过大)。systemPrompt/userPrompt 是本次发给 LLM 的开场 prompt,写进 ai_runs.system_prompt_text /
+// user_prompt_text 供 admin "查看回放"。
+func (s *aiService) recordCourseSummaryRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, summaryText, systemPrompt, userPrompt string) {
 	preview := truncateCourseSummaryPreview(summaryText)
 	s.contentRepo.CreateRun(&model.AIRun{
 		JobID:            jobID,
@@ -145,6 +146,9 @@ func (s *aiService) recordCourseSummaryRun(jobID uint, modelName string, trace [
 		SelfCheckResult:  result, // 复用字段存 course summary 的 pass/fail(无 self-check,这里记生成结果)
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
+		SystemPromptText: systemPrompt,
+		UserPromptText:   userPrompt,
 	})
 }
 

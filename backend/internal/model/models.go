@@ -192,8 +192,12 @@ type Subject struct {
 	Color     string    `gorm:"size:32"`                       // hex e.g. "#f59e0b"
 	SortOrder int       `gorm:"default:0"`
 	IsSystem  bool      `gorm:"default:false"` // true = seeded default, protected from deletion
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// AIConfigJSON 存学科级默认 AI 配置(同 Course.AIConfigJSON 的模式)。课程级
+	// AIConfig 对应字段为空时,Effective* 方法回退到这里,让自定义学科也有默认 prompt。
+	// 解析/序列化走 AIConfig()/SetAIConfig()。
+	AIConfigJSON string `gorm:"column:ai_config_json;type:text"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // Tag represents a user-editable course tag (标签), e.g. 必修/思维训练/拓展.
@@ -1135,7 +1139,12 @@ type AIRun struct {
 	SelfCheckResult string `gorm:"size:20;default:'skipped'" json:"self_check_result"` // pass | fail | skipped
 	SelfCheckNote   string `gorm:"type:text" json:"self_check_note"`
 	DurationMs      int    `json:"duration_ms"`
-	CreatedAt       time.Time `json:"created_at"`
+	// SystemPromptText/UserPromptText 记录最终发给 LLM 的完整 prompt(可观测性)。
+	// system prompt 是代码常量(此处冗余存一份供 admin 查看);user prompt 是拼装结果。
+	// 让 admin 在 AI Workflow 页"查看回放"能看到这次到底发了什么给 LLM,告别盲调。
+	SystemPromptText string `gorm:"column:system_prompt_text;type:text"`
+	UserPromptText   string `gorm:"column:user_prompt_text;type:text"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // ChatSession / ChatMessage hold the multi-turn chat (Phase D capability) so a
@@ -1305,16 +1314,18 @@ func migrateQuizActiveUniqueIndex(db *gorm.DB) error {
 // Question.Scoring). Each field maps to a real config knob consumed by some AI
 // capability (Whisper, summary, quiz, advice).
 type AIConfig struct {
-	// WhisperHint is fed to the subtitle worker's Whisper initial_prompt:
-	// terminology list, teacher accent notes, a domain style sentence. Kept
-	// short by the consumer (transcriber.py truncates to 240 chars, Whisper's
-	// prompt budget is ~244 tokens).
+	// WhisperHint 喂 Whisper 字幕转录的 initial_prompt(术语列表、口音、学科风格句)。
+	// transcriber.py 会截断到 240 字。
 	WhisperHint string `json:"whisper_hint,omitempty"`
-	// QuizHint is fed to the summary/quiz/advice LLM agents: question-style
-	// preferences, difficulty bias, AND a terminology correction dictionary
-	// (terms Whisper mishears — 车→居, 和棋→合棋 — that the LLM must output as
-	// the correct term even if the subtitle has the wrong one).
+	// SummaryHint 喂 summary agent:总结的风格/侧重点(如"侧重开局原理""多举例题")。
+	SummaryHint string `json:"summary_hint,omitempty"`
+	// QuizHint 喂 quiz agent:题型偏好/难度/出题指引(只留出题相关,术语移到 TermDict)。
 	QuizHint string `json:"quiz_hint,omitempty"`
+	// AdviceHint 喂 advice agent:建议的风格/侧重点(如"象棋重实战练习""数学重计算巩固")。
+	AdviceHint string `json:"advice_hint,omitempty"`
+	// TermDict 横切给 summary/quiz/advice 三个 agent:术语纠错字典(车→居、通分→同分)。
+	// 输出时按此纠正字幕同音错字。横切属性:课程级 + 学科级合并(课程可能有学科通用之外的术语)。
+	TermDict string `json:"term_dict,omitempty"`
 	// Future knobs go here, e.g.:
 	//   DifficultyBias  string  `json:"difficulty_bias,omitempty"`  // easy|medium|hard
 	//   QuestionTypeMix map[string]float64 `json:"question_type_mix,omitempty"`
@@ -1352,22 +1363,85 @@ func (c *Course) SetAIConfig(cfg AIConfig) {
 	c.AIConfigJSON = string(out)
 }
 
-// EffectiveWhisperHint returns the hint text to feed Whisper's initial_prompt.
-// Reads from AIConfigJSON (parsed); falls back to the deprecated AIHint column
-// for any pre-migration row. Empty when neither is set.
-func (c Course) EffectiveWhisperHint() string {
+// AIConfig parses Subject.AIConfigJSON into an AIConfig. Returns the zero value
+// on parse error or empty storage (callers treat zero-value fields as "unset").
+// Mirrors Course.AIConfig() — same forward-compatible JSON-blob pattern, so a
+// custom subject can carry the same default prompts (whisper/summary/quiz/advice/
+// term-dict) that its courses fall back to when they don't override a field.
+func (s Subject) AIConfig() AIConfig {
+	if strings.TrimSpace(s.AIConfigJSON) == "" {
+		return AIConfig{}
+	}
+	var cfg AIConfig
+	if err := json.Unmarshal([]byte(s.AIConfigJSON), &cfg); err != nil {
+		return AIConfig{} // malformed → treat as unset; admin can re-save to fix
+	}
+	return cfg
+}
+
+// SetAIConfig serializes cfg into Subject.AIConfigJSON. Used by the service
+// layer when saving a subject (admin form → service builds an AIConfig → calls
+// this). Kept on the struct so the encoding rule lives next to the field.
+func (s *Subject) SetAIConfig(cfg AIConfig) {
+	if cfg == (AIConfig{}) {
+		s.AIConfigJSON = "" // empty config → empty storage (not "{}")
+		return
+	}
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return // unreachable for this struct (only strings)
+	}
+	s.AIConfigJSON = string(out)
+}
+
+// EffectiveWhisperHint: Course.AIConfig().WhisperHint 优先 → Subject.AIConfig().WhisperHint → deprecated AIHint 列。
+func (c Course) EffectiveWhisperHint(subject Subject) string {
 	if h := strings.TrimSpace(c.AIConfig().WhisperHint); h != "" {
 		return h
 	}
-	return c.AIHint // legacy fall-back; may also be ""
+	if h := strings.TrimSpace(subject.AIConfig().WhisperHint); h != "" {
+		return h
+	}
+	return c.AIHint // legacy
 }
 
-// EffectiveQuizHint returns the hint text to feed the summary/quiz/advice LLM
-// agents. Reads from AIConfigJSON (parsed); falls back to the deprecated AIHint
-// column for any pre-migration row. Empty when neither is set.
-func (c Course) EffectiveQuizHint() string {
+// EffectiveSummaryHint: Course > Subject > ""
+func (c Course) EffectiveSummaryHint(subject Subject) string {
+	if h := strings.TrimSpace(c.AIConfig().SummaryHint); h != "" {
+		return h
+	}
+	return strings.TrimSpace(subject.AIConfig().SummaryHint)
+}
+
+// EffectiveQuizHint: Course > Subject > deprecated AIHint
+func (c Course) EffectiveQuizHint(subject Subject) string {
 	if h := strings.TrimSpace(c.AIConfig().QuizHint); h != "" {
 		return h
 	}
-	return c.AIHint // legacy fall-back; may also be ""
+	if h := strings.TrimSpace(subject.AIConfig().QuizHint); h != "" {
+		return h
+	}
+	return c.AIHint
+}
+
+// EffectiveAdviceHint: Course > Subject > ""
+func (c Course) EffectiveAdviceHint(subject Subject) string {
+	if h := strings.TrimSpace(c.AIConfig().AdviceHint); h != "" {
+		return h
+	}
+	return strings.TrimSpace(subject.AIConfig().AdviceHint)
+}
+
+// EffectiveTermDict: Course + Subject 合并(课程级追加到学科级后面),不是覆盖。
+// 课程可能有学科通用之外的专有术语,合并让两者都生效。
+func (c Course) EffectiveTermDict(subject Subject) string {
+	subjDict := strings.TrimSpace(subject.AIConfig().TermDict)
+	courseDict := strings.TrimSpace(c.AIConfig().TermDict)
+	if courseDict == "" {
+		return subjDict
+	}
+	if subjDict == "" {
+		return courseDict
+	}
+	return subjDict + "\n" + courseDict
 }

@@ -4,12 +4,12 @@ import (
 	"io/fs"
 	"net/http"
 	"strings"
-	"time"
 	"studyquest/backend/internal/admin/spa"
 	"studyquest/backend/internal/handler"
 	"studyquest/backend/internal/middleware"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -256,6 +256,8 @@ func RegisterRoutes(
 		// Phase D — admin 课程级总结(course-unique 纯内容总结,agent 驱动)。
 		adm.POST("/api/ai/courses/:id/course-summary", admin.TriggerCourseSummary)
 		adm.GET("/api/ai/courses/:id/course-summary", admin.GetCourseSummary)
+		// Prompt 预览:admin 调优 hint 后立刻看完整 prompt 拼装效果(不调 LLM,纯文本)。
+		adm.POST("/api/ai/courses/:id/preview-prompt", admin.PreviewCoursePrompt)
 		// Phase E — admin 用户学习报告(跨课程画像,agent 驱动)。
 		// 参数名用 :userID 和同前缀的 :userID/quizzes 对齐(gin 要求同路径前缀
 		// wildcard 名字一致,用 :id 会和 :userID 冲突 panic)。

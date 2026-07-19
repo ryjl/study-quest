@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"studyquest/backend/internal/ai"
@@ -37,6 +38,7 @@ const (
 //   - episode 级:job.EpisodeID 就是 scopeID,scope="episode"。
 //   - course 级:job.CourseID 就是 scopeID,scope="course"。
 //   - subject 级:scopeID 存在 PayloadJSON.subject_id 里。
+//
 // 这样 episode/course 级可以直接用 job 已有字段,subject 级才需要 PayloadJSON。
 func (s *aiService) runAdviceJob(job *model.AIJob) {
 	ctx := context.Background()
@@ -88,7 +90,7 @@ func (s *aiService) runAdviceJob(job *model.AIJob) {
 	if err != nil {
 		// 仍记录尝试(部分 trace 对调试生成失败有价值)。
 		if res != nil {
-			s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", err.Error(), "")
+			s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", err.Error(), "", res.SystemPrompt, res.UserPrompt)
 		}
 		s.failJob(job, "advice generation: "+err.Error())
 		return
@@ -105,12 +107,12 @@ func (s *aiService) runAdviceJob(job *model.AIJob) {
 		GeneratedAt:         time.Now(),
 	}
 	if err := s.contentRepo.UpsertAdvice(advice); err != nil {
-		s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.AdviceText)
+		s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.AdviceText, res.SystemPrompt, res.UserPrompt)
 		s.failJob(job, "persist advice: "+err.Error())
 		return
 	}
 
-	s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "pass", "", res.AdviceText)
+	s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "pass", "", res.AdviceText, res.SystemPrompt, res.UserPrompt)
 	s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
 }
 
@@ -151,7 +153,8 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		SubjectID: subjectID,
 	}
 
-	// 按 scope 补元数据(标题、科目名),让 prompt 有素材。
+	// 按 scope 补元数据(标题、科目名),让 prompt 有素材。同时在能拿到 course 的
+	// scope(episode/course)注入 AdviceHint + TermDict;subject scope 没有 course,留空。
 	switch scope {
 	case agent.ScopeEpisode:
 		ep, err := s.episodeRepo.FindByID(scopeID)
@@ -164,10 +167,18 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		req.EpisodeID = ep.ID
 		req.CourseID = ep.CourseID
 		req.ScopeTitle = ep.Title
-		// 顺便反查 course 拿 subject_id + 科目名(供 subject 工具 + prompt)。
+		// 顺便反查 course 拿 subject_id + 科目名(供 subject 工具 + prompt)+ advice hint + 术语字典。
+		// courseRepo.FindByID 不 Preload Subject(避免 UpdateCourse 的 Save 误改关联),
+		// 这里单独 s.db.First 查 subject。
 		if course, cerr := s.courseRepo.FindByID(ep.CourseID); cerr == nil && course != nil {
 			req.SubjectID = course.SubjectID
-			req.Subject = course.Subject.Label
+			var subj model.Subject
+			if course.SubjectID != 0 {
+				s.db.First(&subj, course.SubjectID)
+			}
+			req.Subject = subj.Label
+			req.AdviceHint = course.EffectiveAdviceHint(subj)
+			req.TermDict = course.EffectiveTermDict(subj)
 		}
 	case agent.ScopeCourse:
 		course, err := s.courseRepo.FindByID(scopeID)
@@ -179,8 +190,14 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		}
 		req.CourseID = course.ID
 		req.SubjectID = course.SubjectID
-		req.Subject = course.Subject.Label
+		var subj model.Subject
+		if course.SubjectID != 0 {
+			s.db.First(&subj, course.SubjectID)
+		}
+		req.Subject = subj.Label
 		req.ScopeTitle = course.Title
+		req.AdviceHint = course.EffectiveAdviceHint(subj)
+		req.TermDict = course.EffectiveTermDict(subj)
 	case agent.ScopeSubject:
 		// 科目标题由 handler/job 入队时放进 PayloadJSON.subject_title(或留空,prompt
 		// 会用"这个科目"占位)。subject_id 必须有(scopeID 即是);payload 里的 subject_id
@@ -188,6 +205,16 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		req.SubjectID = scopeID
 		if subjectID != 0 {
 			req.SubjectID = subjectID
+		}
+		// subject scope 没有 course,直接读学科级 AIConfig 的 AdviceHint/TermDict。
+		// EffectiveXxxHint 是 Course 方法(做课程>学科回退),subject scope 没课程层级,
+		// 直接取 subject.AIConfig() 的对应字段。
+		var subj model.Subject
+		if s.db.First(&subj, req.SubjectID).Error == nil && subj.ID != 0 {
+			req.Subject = subj.Label
+			cfg := subj.AIConfig()
+			req.AdviceHint = cfg.AdviceHint
+			req.TermDict = strings.TrimSpace(cfg.TermDict)
 		}
 	default:
 		return req, fmt.Errorf("unknown advice scope: %s", scope)
@@ -197,7 +224,9 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 
 // recordAdviceRun 写 ai_run(供 admin 观测 advice 生成)。和 recordQuizRun 平行,但
 // capability="advice",response_text 存 advice 文本预览(截断,避免 ai_run 行过大)。
-func (s *aiService) recordAdviceRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, adviceText string) {
+// systemPrompt/userPrompt 是本次发给 LLM 的开场 prompt,写进 ai_runs.system_prompt_text /
+// user_prompt_text 供 admin "查看回放"。
+func (s *aiService) recordAdviceRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, adviceText, systemPrompt, userPrompt string) {
 	preview := truncateAdvicePreview(adviceText)
 	if err := s.contentRepo.CreateRun(&model.AIRun{
 		JobID:            jobID,
@@ -211,6 +240,9 @@ func (s *aiService) recordAdviceRun(jobID uint, modelName string, trace []agent.
 		SelfCheckResult:  result, // 复用字段存 advice 的 pass/fail(advice 无 self-check,这里记生成结果)
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
+		SystemPromptText: systemPrompt,
+		UserPromptText:   userPrompt,
 	}); err != nil {
 		log.Printf("AI: recordAdviceRun failed for job %d: %v", jobID, err)
 	}
@@ -320,8 +352,8 @@ func (s *aiService) enqueueAdviceJob(userID uint, scope string, scopeID uint) er
 		// subject 级两者都 0(不属于具体 episode/course)。
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"scope":     scope,
-		"scope_id":  scopeID,
+		"scope":      scope,
+		"scope_id":   scopeID,
 		"subject_id": 0, // buildAdviceRequest 会从 course 反查填上
 	})
 	job := &model.AIJob{

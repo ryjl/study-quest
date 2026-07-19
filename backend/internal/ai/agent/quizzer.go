@@ -42,13 +42,13 @@ type QuizzerRequest struct {
 // it's persisted as a model.Question. Normalized so the repo layer can't
 // receive a half-formed question.
 type QuestionDraft struct {
-	Type        string   `json:"type"`         // "choice" | "multi_choice" | "fill"; defaults to choice
-	ChunkIndex  int      `json:"chunk_index"`  // resolved to a ChunkID at persist time; 0/absent = synthetic
-	Stem        string   `json:"stem"`         // required
-	Options     []string `json:"options"`      // choice / multi_choice only
-	Answer      int      `json:"answer"`       // choice: 0-based index
-	AnswerText  []string `json:"answer_text"`  // fill: acceptable answers
-	Explanation string   `json:"explanation"`  // shown after answering
+	Type        string   `json:"type"`        // "choice" | "multi_choice" | "fill"; defaults to choice
+	ChunkIndex  int      `json:"chunk_index"` // resolved to a ChunkID at persist time; 0/absent = synthetic
+	Stem        string   `json:"stem"`        // required
+	Options     []string `json:"options"`     // choice / multi_choice only
+	Answer      int      `json:"answer"`      // choice: 0-based index
+	AnswerText  []string `json:"answer_text"` // fill: acceptable answers
+	Explanation string   `json:"explanation"` // shown after answering
 	// HasJump 来自 agent 的判断(见 QuizzerSystemPrompt):true = 这题锚定到具体
 	// chunk,答错可跳视频复习;false = 综合/贯穿全文题,无单一跳转点。
 	HasJump bool `json:"has_jump"`
@@ -57,8 +57,8 @@ type QuestionDraft struct {
 	// PartialCredit 控制是否允许"部分对"(漏选但没多选错项)给半分。缺省 false。
 	// MinCorrectForHalf 是拿半分需要的最少正确项数。缺省 1。
 	// service 层持久化时这三项序列化进 Question.Scoring 的 multi_choice schema。
-	CorrectIndices    []int `json:"correct_indices"`              // multi_choice
-	PartialCredit     bool   `json:"partial_credit"`              // multi_choice
+	CorrectIndices    []int `json:"correct_indices"`                // multi_choice
+	PartialCredit     bool  `json:"partial_credit"`                 // multi_choice
 	MinCorrectForHalf int   `json:"min_correct_for_half,omitempty"` // multi_choice
 }
 
@@ -79,12 +79,12 @@ type quizGenerationResponse struct {
 
 // Quizzer generates one adaptive quiz for a student using the ReAct agent loop.
 type Quizzer struct {
-	agent     *Agent            // the ReAct engine (with quiz tools)
-	selfCheck *Agent            // tool-free judge (same LLM, no tools)
-	memory    *MemoryStore      // to pre-seed the prompt with weak points
-	deps      ToolDeps          // for mastery summary + episode title
-	llm       ai.LLMProvider    // raw access for the self-check pass
-	model     string            // model name
+	agent     *Agent         // the ReAct engine (with quiz tools)
+	selfCheck *Agent         // tool-free judge (same LLM, no tools)
+	memory    *MemoryStore   // to pre-seed the prompt with weak points
+	deps      ToolDeps       // for mastery summary + episode title
+	llm       ai.LLMProvider // raw access for the self-check pass
+	model     string         // model name
 }
 
 // NewQuizzer builds a Quizzer. agentLoop must have the quiz Toolbox wired;
@@ -101,6 +101,14 @@ type QuizResult struct {
 	Usage        ai.Usage // summed across generation + any self-check calls
 	Turns        int
 	RawFinalText string // the unparsed final answer when parsing failed (diagnostics); empty on success
+	// SystemPrompt / UserPrompt 透传自 AgentResult:本次出题发给 LLM 的开场
+	// system+user prompt。Generate 内可能因 self-check 失败重跑一次 regenerate,
+	// 这里记的是首次 seed(regenerate 用同一 system + 同一 user 基底,只在 user 末尾
+	// 追加审核反馈,差别对 admin 调 prompt 不关键,故只记首次 seed)。供 service
+	// 层写进 ai_runs.system_prompt_text / user_prompt_text,让 admin "查看回放"
+	// 能看到这次到底发了什么 prompt(原来这两段不存)。
+	SystemPrompt string
+	UserPrompt   string
 }
 
 // Generate runs the full quiz-generation flow for one (user, episode).
@@ -118,6 +126,9 @@ func (q *Quizzer) Generate(ctx context.Context, req QuizzerRequest) (*QuizResult
 	}
 	trace := agentRes.Trace
 	usage := agentRes.Usage
+	// 透传 seed prompt 供 service 层落 ai_runs(诊断时能看到这次发了什么)。
+	systemPromptText := agentRes.SystemPrompt
+	userPromptText := agentRes.UserPrompt
 
 	// ── 2. Parse the final answer ──
 	draft, err := parseQuizGeneration(agentRes.FinalText)
@@ -125,7 +136,8 @@ func (q *Quizzer) Generate(ctx context.Context, req QuizzerRequest) (*QuizResult
 		// Capture the raw final text on the result so the caller can log it for
 		// debugging (a parse failure usually means the model truncated or wrapped
 		// the JSON — seeing the tail is essential to diagnose).
-		return &QuizResult{Trace: trace, Usage: usage, Turns: agentRes.Turns, RawFinalText: agentRes.FinalText},
+		return &QuizResult{Trace: trace, Usage: usage, Turns: agentRes.Turns, RawFinalText: agentRes.FinalText,
+				SystemPrompt: systemPromptText, UserPrompt: userPromptText},
 			fmt.Errorf("quizzer: parse generation: %w", err)
 	}
 
@@ -163,7 +175,8 @@ func (q *Quizzer) Generate(ctx context.Context, req QuizzerRequest) (*QuizResult
 		}
 	}
 
-	return &QuizResult{Draft: draft, Trace: trace, Usage: usage, Turns: agentRes.Turns}, nil
+	return &QuizResult{Draft: draft, Trace: trace, Usage: usage, Turns: agentRes.Turns,
+		SystemPrompt: systemPromptText, UserPrompt: userPromptText}, nil
 }
 
 // buildMasterySummary produces a short text describing the student's weak points
