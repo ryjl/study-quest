@@ -117,6 +117,8 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     try {
       final resp = await ApiService.fetchEpisodeQuiz(widget.activeUserId, widget.episode.id);
       if (!mounted) return;
+      // ignore: avoid_print — 临时诊断,release 模式下 print 仍输出到 logcat
+      print('[ai-study] _loadQuiz ep=${widget.episode.id} → status=${resp.status} quiz=${resp.quiz == null ? "null" : "${resp.quiz!.questions.length}q"}');
       setState(() {
         _quizStatus = resp.status;
         _quiz = resp.quiz;
@@ -557,6 +559,8 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
 
   // --- Summary card ---
   Widget _buildSummarySection(double textScale) {
+    // ignore: avoid_print
+    print('[ai-study] _buildSummarySection ep=${widget.episode.id} loading=$_summaryLoading summaryNull=${_summary == null} isEmpty=${_summary?.isEmpty}');
     if (_summaryLoading) {
       return const _Card(child: Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())));
     }
@@ -584,37 +588,21 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(sec.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6D28D9))),
                   const SizedBox(height: 4),
-                  // 每个知识点要点可能含 markdown 表格/SVG 图,用 MarkdownView 渲染。
-                  // 外层保留 bullet Row(让小节视觉一致),MarkdownView 放 Expanded 里(表格可能宽)。
-                  ...sec.points.map((p) => Padding(
-                        padding: const EdgeInsets.only(bottom: 3, left: 10),
-                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
-                          Expanded(
-                            child: MarkdownView(
-                              data: p,
-                              textScale: textScale,
-                              baseTextColor: const Color(0xFF334155),
-                            ),
-                          ),
-                        ]),
+                  // 每个知识点要点可能含 markdown 表格/SVG 图,用 _PointItem 渲染:
+                  // 纯文本走 bullet+Expanded,含 block(表格/图)走整行宽度避免盖到相邻文字。
+                  ...sec.points.map((p) => _PointItem(
+                        data: p,
+                        textScale: textScale,
+                        textColor: const Color(0xFF334155),
                       )),
                 ]),
               )),
         ] else if (s.keyPoints.isNotEmpty) ...[
           const SizedBox(height: 10),
-          ...s.keyPoints.map((p) => Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
-                  Expanded(
-                    child: MarkdownView(
-                      data: p,
-                      textScale: textScale,
-                      baseTextColor: const Color(0xFF334155),
-                    ),
-                  ),
-                ]),
+          ...s.keyPoints.map((p) => _PointItem(
+                data: p,
+                textScale: textScale,
+                textColor: const Color(0xFF334155),
               )),
         ],
         // 方法/技巧/公式(Phase F):单独拎出来便于速查。
@@ -745,6 +733,10 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   Widget _buildQuizSection(double textScale) {
     // TV 模式不做题(需求 #10):练习 section 直接返回空,TV 用户只看 summary/advice。
     if (TvMode.instance.isActive) return const SizedBox.shrink();
+    // [诊断] quiz 消失 bug:记录每次重建走到哪个分支。用 print 不是 debugPrint——
+    // debugPrint 在 release 模式被吞,print 会输出到 logcat。
+    // ignore: avoid_print
+    print('[ai-study] _buildQuizSection ep=${widget.episode.id} loading=$_quizLoading status=$_quizStatus quizNull=${_quiz == null}');
     if (_quizLoading) {
       return const _Card(child: Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())));
     }
@@ -764,6 +756,8 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     }
     if (_quizStatus != QuizStatus.ready || _quiz == null) {
       // unavailable — AI off or no source material. Hide quietly (add-on layer).
+      // ignore: avoid_print
+      print('[ai-study] ⚠️ quiz section HIDING: status=$_quizStatus quizNull=${_quiz == null}');
       return const SizedBox.shrink();
     }
     final questions = _quiz!.questions;
@@ -1489,5 +1483,69 @@ class _HistoryQuestionTile extends StatelessWidget {
         child: Text('正确答案: ${q.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669))),
       ),
     ]);
+  }
+}
+
+/// 渲染单个"要点"字符串:文本就走 bullet + Expanded 的紧凑布局;
+/// 含 block 元素(GFM 表格 / SVG 图 / 代码块)就走整行宽度,避免表格在
+/// Row+Expanded 的窄约束里溢出盖到相邻文字。
+///
+/// 问题根因:`IntrinsicColumnWidth` 表格在 Row+Expanded(给子节点 tight maxWidth
+/// 约束、但 Table 需要 unbounded 宽度去量每列 intrinsic 宽度)里,flutter_markdown
+/// 的横向 SingleChildScrollView 仍可能算出错误的外部尺寸,Android pad 上尤其明显
+/// (用户实测:表格直接盖在文字上)。把表格放到 Row 外、占满父容器宽度就好。
+class _PointItem extends StatelessWidget {
+  final String data;
+  final double textScale;
+  final Color textColor;
+
+  const _PointItem({
+    required this.data,
+    required this.textScale,
+    required this.textColor,
+  });
+
+  /// GFM 表格至少两行:数据行 `| ... |` 和分隔行 `| --- |`。检测分隔行即可
+  /// 覆盖所有表格(分隔行是表格语法的强标志)。
+  bool get _hasBlockElement {
+    for (final line in data.split('\n')) {
+      final t = line.trim();
+      // 表格分隔行:| --- | :---: | ---: 之类
+      if (t.startsWith('|') && RegExp(r'^\|[\s:|-]+\|?\s*$').hasMatch(t) && t.contains('-')) {
+        return true;
+      }
+      // SVG 围栏代码块开头
+      if (t.startsWith('```')) return true;
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_hasBlockElement) {
+      // 整行宽度渲染,带左缩进让视觉上仍在 bullet 列里。
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 3, left: 10),
+        child: MarkdownView(
+          data: data,
+          textScale: textScale,
+          baseTextColor: textColor,
+        ),
+      );
+    }
+    // 纯文本/内联 markdown:紧凑布局,bullet + Expanded。
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3, left: 10),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
+        Expanded(
+          child: MarkdownView(
+            data: data,
+            textScale: textScale,
+            baseTextColor: textColor,
+          ),
+        ),
+      ]),
+    );
   }
 }

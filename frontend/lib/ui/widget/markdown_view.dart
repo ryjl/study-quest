@@ -63,7 +63,7 @@ class MarkdownView extends StatelessWidget {
     final MarkdownStyleSheet sheet = _buildStyleSheet(context, textColor);
 
     return MarkdownBody(
-      data: data,
+      data: _normalizeMarkdown(data),
       extensionSet: md.ExtensionSet.gitHubFlavored,
       softLineBreak: true,
       styleSheet: sheet,
@@ -75,10 +75,60 @@ class MarkdownView extends StatelessWidget {
     );
   }
 
+  /// 预处理模型返回的 markdown,修两类常见脏数据(已确认在生产 DB 里出现):
+  ///
+  /// 1. **字面量 `\n` 没转成真实换行**:LLM 在 JSON 字符串值里输出表格时,
+  ///    有时会把 `\n` 当成 2 字符的字面量(backslash + n)而不是换行转义。
+  ///    后端 json.Unmarshal 不会"再解一次"——它把 `\n` 当普通字符留在字符串里。
+  ///    结果:GFM 表格语法 `| a |\n|---|` 在客户端是一行,markdown 不识别为表格。
+  ///    修法:把字面量 `\n`(以及 `\r`)替换成真实换行。只针对**未被围栏代码块包裹**
+  ///    的区域——代码块里的 `\n` 应该保留(虽然 SVG 里通常也没字面量 \n)。
+  ///
+  /// 2. **裸 `<svg>...</svg>` 没加围栏**:prompt 要求模型把 SVG 放在 ``` ```svg ```
+  ///    围栏里,但模型有时直接吐裸 SVG。markdown 把裸 SVG 当内联 HTML,绝大多数
+  ///    markdown 解析器(含 GFM)会转义掉 `<` `>`,渲染成 `<svg ...>` 文本。
+  ///    修法:检测裸 SVG(没被 ``` ```svg ``` 包裹的 `<svg ... </svg>`),自动补上
+  ///    围栏,让 _SvgCodeInterceptor 能正常拦截渲染。
+  static String _normalizeMarkdown(String input) {
+    if (input.isEmpty) return input;
+    String s = input;
+
+    // 先把已有的 ``` ... ``` 围栏代码块整体保护起来(不修改里面的字面量 \n)。
+    // 简化处理:按 ``` 分段,奇数段(代码块内容)跳过,偶数段(普通 markdown)做 normalize。
+    final parts = s.split('```');
+    final buf = StringBuffer();
+    for (var i = 0; i < parts.length; i++) {
+      if (i.isOdd) {
+        // 代码块内容:原样保留(前后补回 ```)。注意 SVG 围栏块本身就在这里,
+        // 不需要再处理。
+        buf.write('```');
+        buf.write(parts[i]);
+        buf.write('```');
+      } else {
+        // 普通 markdown 区段:做两步 normalize。
+        String section = parts[i];
+        // (a) 字面量 \n / \r / \t → 真实字符
+        section = section.replaceAll('\\n', '\n').replaceAll('\\r', '').replaceAll('\\t', '\t');
+        // (b) 裸 <svg ...>...</svg> 补围栏。非贪婪匹配跨行 SVG。
+        //     注意:Dart RegExp(ES 风格)不支持 (?s) 内联 flag——会抛 FormatException。
+        //     要用命名参数 dotAll: true。这个 bug 之前的版本让整页 markdown 渲染失败
+        //     (build() 抛异常被框架吞,UI 显示空白)。
+        final svgPattern = RegExp(r'<svg\b.*?</svg>', dotAll: true);
+        section = section.replaceAllMapped(svgPattern, (m) {
+          final svg = m.group(0)!;
+          // 已经在围栏里的(理论上不会到这里,因为我们跳过了代码块段)不重复包。
+          return '\n```svg\n$svg\n```\n';
+        });
+        buf.write(section);
+      }
+    }
+    return buf.toString();
+  }
+
   /// 构造 [MarkdownStyleSheet]。以当前 Theme 为底,叠加项目设计 token 与
-  /// [textScale] 缩放。表格统一设为 [IntrinsicColumnWidth]——这样窄屏下 flutter
-  /// _markdown_ 0.7 会自动给表格套一层横向 [SingleChildScrollView],避免表格
-  /// 被挤扁或文字溢出(见 flutter_markdown builder.dart 514-534 行)。
+  /// [textScale] 缩放。表格用 [IntrinsicColumnWidth](每列按内容自适应宽度),
+  /// 配合 build() 里注册的 _TableScrollWrapper——超宽表格会横向滚动,而不是
+  /// 溢出盖到相邻文字。
   MarkdownStyleSheet _buildStyleSheet(BuildContext context, Color textColor) {
     final double scale = textScale <= 0 ? 1.0 : textScale;
     final base = MarkdownStyleSheet.fromTheme(Theme.of(context));
@@ -167,6 +217,10 @@ class MarkdownView extends StatelessWidget {
         fontSize: 14 * scale,
       ),
       tableCellsPadding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      // IntrinsicColumnWidth:每列按内容自适应宽度。flutter_markdown 0.7 会对
+      // IntrinsicColumnWidth 的表格自动套一层横向 SingleChildScrollView(见
+      // builder.dart 515-535),所以理论上不该盖字。如果仍盖字,问题在调用方给的
+      // maxWidth 约束——见 _PointItem 的分流修复。
       tableColumnWidth: const IntrinsicColumnWidth(),
       // TableBorder.all 没有 borderRadius 参数(Flutter 的 Table 边线本身不
       // 支持圆角),这里按默认 markdown 表格风格,留细灰边框即可。

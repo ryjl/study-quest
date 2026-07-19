@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../../model/course.dart';
+import '../../model/course_summary.dart';
 import '../../model/progress.dart';
 import '../../model/quiz.dart';
 import '../../model/subject.dart';
@@ -10,6 +11,7 @@ import '../ai/ai_availability.dart';
 import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
+import '../widget/markdown_view.dart';
 import '../widget/state_widgets.dart';
 import '../widget/subject_icon.dart';
 import '../responsive.dart';
@@ -34,6 +36,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   late Future<List<Episode>> _episodesFuture;
   late Future<List<UserProgress>> _progressFuture;
   late Future<List<Chapter>> _chaptersFuture;
+  // 课程总览(跨课时汇总导览)future。单独管理 + 单独 FutureBuilder 渲染,不混进
+  // _combinedFuture——后者索引被 episodes/progress/chapters 占用,且总览加载失败
+  // 不应拖累整页(无总览 → 隐藏卡片)。
+  late Future<CourseSummary?> _courseSummaryFuture;
   // Cached combined future — FutureBuilder must see a STABLE future reference
   // across rebuilds, otherwise each setState (e.g. enrichment prefetch filling
   // the AI/attachment caches) makes FutureBuilder re-subscribe, flip to
@@ -70,6 +76,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     _episodesFuture = ApiService.fetchEpisodes(widget.activeUserId, widget.course.id);
     _progressFuture = ApiService.fetchProgressOverview(widget.activeUserId);
     _chaptersFuture = ApiService.fetchChapters(widget.activeUserId, widget.course.id);
+    _courseSummaryFuture = ApiService.fetchCourseSummary(widget.activeUserId, widget.course.id);
     // Compose the combined future ONCE here so FutureBuilder sees a stable
     // reference across rebuilds (see _combinedFuture comment above).
     _combinedFuture = Future.wait([_episodesFuture, _progressFuture, _chaptersFuture]);
@@ -222,6 +229,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ),
                         const SizedBox(height: 40),
 
+                        // 课程总览卡片(跨课时整体导览)。无总结/加载失败 → 不显示,
+                        // 避免空白卡片打断章节列表的浏览体验。
+                        _buildCourseSummaryCard(context),
+
+                        const SizedBox(height: 40),
+
                         // Chapter Directory Panel
                         Container(
                           padding: EdgeInsets.all(isPortrait(context) ? 16 : 32),
@@ -329,6 +342,124 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         ),
       ),
     );
+  }
+
+  /// 课程总览卡片(跨课时整体导览 + 学习路径)。
+  ///
+  /// 设计取舍:
+  ///   - 无总览 / 加载失败 → 返回 SizedBox.shrink()(不占位),让章节列表紧跟
+  ///     Hero 后面,避免空白卡片打断浏览。
+  ///   - 总览文本里可能有 markdown 表格/SVG(后端 prompt 鼓励富文本),统一用
+  ///     MarkdownView 渲染(它内置 GFM 表格 + SVG 围栏块支持)。
+  ///   - 陈旧提示:生成后又有新课时补进来,诚实告诉学生"可能未涵盖最新内容"。
+  ///     学生端不能触发刷新(课程总览是 admin 手动维护的 course-unique 内容)。
+  Widget _buildCourseSummaryCard(BuildContext context) {
+    return FutureBuilder<CourseSummary?>(
+      future: _courseSummaryFuture,
+      builder: (context, snapshot) {
+        // 加载中 / 失败 / 无数据 都不显示卡片(避免占位空白)。
+        if (snapshot.connectionState == ConnectionState.waiting) return const SizedBox.shrink();
+        if (snapshot.hasError) return const SizedBox.shrink();
+        final summary = snapshot.data;
+        if (summary == null || !summary.isReady || (summary.summaryText ?? '').isEmpty) {
+          return const SizedBox.shrink();
+        }
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 0),
+          padding: EdgeInsets.all(isPortrait(context) ? 16 : 28),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(28),
+            border: Border.all(color: const Color(0xFFE2E8F0), width: 2.0),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0F172A).withOpacity(0.02),
+                blurRadius: 20,
+                offset: const Offset(0, 4),
+              )
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFEF3C7),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.auto_stories_outlined, color: Color(0xFFD97706), size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    '课程总览',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              // 陈旧提示:字幕逐节补全后内容可能未涵盖最新课时。
+              if (summary.isStale)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFFFBEB),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: const Color(0xFFFCD34D), width: 1),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.info_outline, size: 15, color: Color(0xFFD97706)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '本总览基于 ${summary.episodeCountAtGen} 节内容生成,目前已有 ${summary.currentEpisodeCount} 节'
+                          '${summary.newEpisodesSinceGen > 0 ? '(新增 ${summary.newEpisodesSinceGen} 节)' : ''},'
+                          '可能未涵盖最新课时。',
+                          style: const TextStyle(fontSize: 12, color: Color(0xFF92400E), height: 1.4),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              MarkdownView(
+                data: summary.summaryText!,
+                textScale: 1.0,
+              ),
+              const SizedBox(height: 12),
+              // 底部元信息:生成时间 + 模型。RFC3339 解析后本地化展示。
+              if (summary.generatedAt != null || (summary.modelUsed ?? '').isNotEmpty)
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  children: [
+                    if (summary.generatedAt != null)
+                      Text(
+                        '生成于 ${_formatSummaryDate(summary.generatedAt!)}',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                      ),
+                    if ((summary.modelUsed ?? '').isNotEmpty)
+                      Text(
+                        '模型 ${summary.modelUsed}',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                      ),
+                  ],
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatSummaryDate(DateTime dt) {
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}';
   }
 
   /// Hero card content: course details + progress card. Wide: side-by-side

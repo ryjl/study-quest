@@ -10,6 +10,7 @@ import '../model/progress.dart';
 import '../model/badge.dart';
 import '../model/reading.dart';
 import '../model/quiz.dart';
+import '../model/course_summary.dart';
 
 class ApiService {
   /// Opaque session token issued by the backend at login. Carried in the
@@ -212,6 +213,21 @@ class ApiService {
     }
     if (response.statusCode == 404) return null; // no summary yet / AI off
     _fail(response.statusCode, '获取总结失败: ${response.statusCode}');
+  }
+
+  // 课程总览(跨课时的整体导览,所有学生共享)。客户端只读——生成是 admin 手动
+  // 触发的(course-unique,不应让任一学生触发)。无总结时 404 → 返回 null,
+  // 调用方隐藏卡片。失败/AI 未配置也是 404 + status=unavailable,语义相同。
+  static Future<CourseSummary?> fetchCourseSummary(int activeUserId, int courseId) async {
+    final response = await _httpClient.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/$courseId/ai-summary'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      return CourseSummary.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 404) return null; // 无总结 / AI 未配置
+    _fail(response.statusCode, '获取课程总览失败: ${response.statusCode}');
   }
 
   static Future<QuizResponse> fetchEpisodeQuiz(int activeUserId, int episodeId) async {
