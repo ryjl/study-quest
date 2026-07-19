@@ -1,15 +1,33 @@
 # TODO — StudyQuest 待办清单
 
 > 本文件记录所有"已识别但未实现"的 feature idea，按优先级分组。每次迭代从这里挑选。
-> 最后更新：2026-07-18（体验优化轮次：AI 富文本 + 字号配置 + Android TV 适配）
+> 最后更新：2026-07-19（prompt 架构重构轮次：5 维度配置 + 学科级默认 + 可观测性）
 
 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、**工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
 
 ---
 
-## 已完成（2026-07-18 体验优化轮次）
+## 已完成
 
-本轮交付（8 条用户反馈），代码已落地、`make test` + `flutter analyze` 全绿：
+### 2026-07-19 prompt 架构重构轮次
+
+代码已 push（commit `bb53dac`）。5 维度配置 + 学科级默认 + 完整可观测性：
+
+- **5 个 AIConfig 维度**：`whisper_hint` / `summary_hint` / `quiz_hint` / `advice_hint` / `term_dict`（前 3 个原有，后 2 个新拆/新增）。存 `Course.AIConfigJSON` + `Subject.AIConfigJSON` 两层。
+- **两层解析**：`Course.EffectiveXxxHint(subject)` Course > Subject > legacy AIHint；`term_dict` 特殊——课程级+学科级**合并**（学科在前，课程追加）。
+- **system prompt 5 处硬编码学科术语全清**（车→居、通分→同分），改成注入式 TermDict（user prompt 的【术语字典】段）。英语课 prompt 不再带象棋术语。
+- **Advice agent 终于拿到 hint**（之前 AdviceRequest 完全没 hint 字段）。
+- **TermDict 直传 Request**（summary/advice），不走 ReAct 工具路径，术语纠错每次必生效。Quiz 走 `get_episode_info` 工具返回。
+- **可观测性**：`AIRun.SystemPromptText/UserPromptText` 记录每次 LLM 调用的完整 prompt；`agent.Run`（4 个 agent 共同入口）+ `summarizer.recordRun` 写入；admin AI Workflow「查看回放」展示。
+- **预览端点** `POST /admin/api/ai/courses/:id/preview-prompt`（不调 LLM 拼出完整 prompt 供调优）；`agent/preview.go` 的 `BuildXxxPromptForPreview` 调同一个 build 函数保证"预览即真相"。
+- **学科级默认**：SubjectModal 加 5 字段配置；CourseModal "套用模板"改为优先读 DB 学科 `ai_config`（回退前端 `aiHintTemplates.ts`）；数学/英语两科 seed 在 `SeedDefaultSubjects` 回填。
+- **CourseModal/CourseService 签名重构**：从 `(whisperHint, quizHint string, ...)` 改成传 `model.AIConfig` struct。
+- **经验教训**：写进 `CLAUDE.md`「Workflow: when to parallelize with subagents」——高耦合重构主会话串行做，跨 agent 契约先定死贴进每个 agent 指令，model 改动后必须跑全量 test 不能只 build。
+- 验证：`go build` ✓ / `go test` ✓（全过）/ `tsc --noEmit` ✓ / `npm test` ✓（46 passed）
+
+### 2026-07-18 体验优化轮次
+
+代码已 push（commit `e367503`）。8 条用户反馈一次性交付：
 
 - **AI 富文本（表格 + SVG 图）**：前端 `MarkdownView`（`flutter_markdown` + `flutter_svg`），
   后端 `prompts.go` 三处 prompt 鼓励约束式 SVG（只允许简单流程图/柱状图）+ GFM 表格。
@@ -25,6 +43,23 @@
 ---
 
 ## P0 — 高价值，建议下一轮做
+
+### 🎯 AI 内容「删除 + 重新生成」闭环（用户钦点，下一轮做）
+
+让 admin 和用户能对每类 AI 产物做「重新生成」（覆盖式重跑），必要时能「删除」。**核心痛点不是删，是重新生成的入口分散/缺失**——机制大半都在（Upsert 覆盖式），缺入口和去重。
+
+- **场景**：prompt 调优后想立刻看新 prompt 出的东西好不好，但 summary/advice 既没重新生成入口、也不能删旧的；course/subject 级 advice 一旦生成就永远是那条（连 SQL 都没清的入口）；admin 想给某学生重出一套 quiz 做不到。
+- **价值**：补齐 AI 内容的生命周期管理。是验证 prompt 重构效果、调试单个学生问题、清理脏数据的必备能力。用户钦点需求，价值已被确认。
+- **现状差距**（详见 `docs/ai-regenerate-handoff.md`）：
+  | 产物 | 能删 | 重新生成 | 缺什么 |
+  |---|---|---|---|
+  | Episode Summary | ❌ | △ 隐式 | EnqueueSummary 没去重（连点堆 job）；admin SPA 无按钮；无删除端点 |
+  | Episode Quiz | △ archive | ✅ 客户端换题 | admin 端零入口 |
+  | Episode Advice | ❌ | △ 仅 episode 级（交卷链式） | course/subject 级**无任何途径**；客户端无刷新按钮 |
+  | Course Summary | ❌ | ✅ 端点有 | admin SPA 没接 API（`api.ts` 缺方法） |
+  | User Study Report | ❌ | ✅ 完整闭环 | 唯一完整的，可作模板 |
+- **工作量预估**：小到中。机制（Upsert 覆盖、archive、Trigger 端点）都在，主要是补入口 + 去重 + 删除端点。
+- **交付细节**：见 `docs/ai-regenerate-handoff.md`（下个会话直接读这份起步）。
 
 ### 错题本
 
@@ -52,6 +87,15 @@
 
 ## P1 — 中等价值
 
+### streaming 输出（SSE）
+
+agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
+
+- **场景**：当前 AI 能力是同步等结果（quiz/advice 生成几十秒，学生盯着"generating..."转圈）。
+- **价值**：体验提升，尤其是 chat（每条消息等几秒太长）。**是 chat 多轮对话的硬前置**——没有 SSE，多轮每条等 5-10s 不可用。
+- **工作量预估**：中。`LLMProvider` 加 `ChatStream(ctx, req) (<-chan ChatChunk, error)`；`OpenAICompatProvider` 改 SSE reader；SSE handler + Flutter `StreamBuilder` UI。波及所有 `Chat()` 调用点。
+- **依赖**：无硬依赖，但建议作为 chat 的前置。
+
 ### chat 多轮对话能力（原 Phase D）
 
 学生在 AI tab 里和 agent 多轮对话讨论一节课，答案带视频时间戳跳转（"你说的通分在 12:38 讲过"）。
@@ -59,7 +103,7 @@
 - **场景**：当前 AI 能力是单向的——出题、总结、建议，没有"学生提问"的入口。chat 补上"问答"维度。
 - **价值**：从"被动接收 AI 内容"升级到"主动提问"。复用 Phase C 的 RAG（content_chunks）+ memory。
 - **工作量预估**：大。`ChatSession`/`ChatMessage` 表骨架已建（字段未定，按当时需求加列，零风险）；agent 逻辑、流式 UX、上下文窗口管理都要从头做。
-- **依赖**：无硬依赖，但建议 streaming（见下）先做以改善等待体验。
+- **依赖**：建议 streaming（见上）先做以改善等待体验。
 
 ### memory 衰减曲线（艾宾浩斯）
 
@@ -67,21 +111,21 @@
 
 - **场景**：学生一个月前答对的"通分"现在可能已经忘了，但 mastery 还是 0.9，agent 不会再出这题。衰减让"过时掌握"自动浮现。
 - **价值**：让系统更接近真实学习规律，自适应更准。
-- **工作量预估**：小到中。`KnowledgeMemory` 加 `decay_*` 列（加列，零风险），读时算衰减、不需要后台 cron。
+- **工作量预估**：小到中。`KnowledgeMemory` 加 `decay_*` 列（加列，零风险），读时算衰减、不需要后台 cron。`LastReviewed` 字段已存在可直接用。
 - **依赖**：无。属于 §18 forward-safe 表里的"加列"项。
 
-### streaming 输出（SSE）
+### AI 输出质量仪表盘
 
-agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
+`QuizSelfCheck` 已经在跑（出题后第二轮 LLM 审题，pass/fail/regenerated 写 `AIRun.SelfCheckResult`），但没有聚合视图。
 
-- **场景**：quiz/advice 生成几十秒，学生盯着"generating..."转圈。
-- **价值**：体验提升，尤其是 chat（每条消息等几秒太长）。
-- **工作量预估**：中。OpenAI 兼容协议支持 stream，后端 SSE pipe + 前端 StreamBuilder。
-- **依赖**：建议和 chat 一起做。
+- **场景**：admin 想发现"某个学科的 quiz fail-rate 突然升高"或"换模型后质量下降"，现在只能逐条 run 看。
+- **价值**：质量治理。能及时发现 prompt/模型/prompt 版本的输出质量回归。
+- **工作量预估**：中。数据全在 `ai_runs` 表（self_check_result + capability + model_used + system_prompt_text），缺聚合 UI：按学科/题型/self-check 结果分组的 fail-rate 趋势图。杠杆在 UI 不在数据采集。
+- **依赖**：无。
 
 ### 知识点命名标准化（chunk 打标签 / 本体库）
 
-目前 agent 靠 LLM 推理关联 `chunk.text` 描述知识点（advice 之所以能说"通分掌握不好"，是因为工具把 chunk.text 注入了 observation）。未来给 chunk 打标签 / 建本体库，让知识点有稳定 ID 而非靠文本相似。
+目前 agent 靠 LLM 推理关联 `chunk.text` 描述知识点。未来给 chunk 打标签 / 建本体库，让知识点有稳定 ID 而非靠文本相似。
 
 - **场景**：当前 chunk 是文本切片，"通分"在不同课里是不同 chunk_id，agent 靠文本语义关联。本体库让"通分"有一个稳定全局 ID，跨课程聚合更准。
 - **价值**：跨课程的知识点 mastery 聚合、错题本的知识点维度、课程考试的抽题覆盖都能更准。
@@ -135,16 +179,14 @@ agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
 - **场景**：考"过程类"知识（历史顺序、实验步骤、算法流程），比选择/填空更能检验结构性理解。
 - **价值**：题型丰富度，覆盖一类当前题型考不好的知识点。
 - **工作量预估**：中。prompt + grading + 前端拖拽 UI（拖拽 UX 在 PAD 上要打磨）。
-- **依赖**：无。
 
 ### 简答题（short_answer 题型）
 
-LLM 判分，质量最高但成本/延迟/不确定性大。Scoring 列承载 `{"rubric":"...","keywords":[...]}`，需要 rubric + 半对评分 + 重判逻辑。
+开放式问答，LLM 判分。
 
-- **场景**：考"表述类"知识（作文思路、解题说理），选择/填空考不好。
-- **价值**：题型丰富度的天花板，但 LLM 判分的不确定性（同一答案两次判分可能不同）是真实风险。
-- **工作量预估**：大。LLM 判分 pipeline + rubric 设计 + 半对评分规则 + 重判逻辑（学生申诉时） + 前端主观题输入 UX。
-- **依赖**：建议先有足够的 quiz 历史数据评估 LLM 判分稳定性再上线。streaming 输出先做以改善等待体验（简答题判分慢）。
+- **场景**：考论述/表达/推理过程，选择填空考不了的维度。
+- **价值**：题型丰富度，最接近真实考试。但判分难（要 LLM），且 PAD 输入长文本体验差。
+- **工作量预估**：中偏大。LLM 判分 prompt + 边界 case 处理（学生答得"接近但不够准"怎么判）。
 
 ---
 
@@ -160,7 +202,7 @@ LLM 判分，质量最高但成本/延迟/不确定性大。Scoring 列承载 `{
 
 ### AIConfig 扩展新配置项（JSON 化的收益兑现）
 
-`Course.AIConfigJSON` 单 JSON 列设计成前向兼容——加新配置项不必改 schema。当出现新需求时（举例如下），只需：扩 `model.AIConfig` struct 加字段 → admin 表单加输入 → service 层 `SetAIConfig` 自然带上 → 消费方按需读。
+`Course.AIConfigJSON` / `Subject.AIConfigJSON` 单 JSON 列设计成前向兼容——加新配置项不必改 schema。当出现新需求时（举例如下），只需：扩 `model.AIConfig` struct 加字段 → admin 表单加输入 → service 层 `SetAIConfig` 自然带上 → 消费方按需读。
 
 - **难度系数**：`DifficultyBias string`（easy/medium/hard），出题 prompt 读它调难度配比。
 - **题型配比**：`QuestionTypeMix map[string]float64`（如 `{"fill":0.5,"choice":0.3,"multi_choice":0.2}`），覆盖 prompt 默认题型倾向。
@@ -186,3 +228,12 @@ LLM 判分，质量最高但成本/延迟/不确定性大。Scoring 列承载 `{
 - **价值**：省 token（advice 是低优先级 job，但积少成多）。
 - **工作量预估**：小。service 层加重算前检查（对比 `MasterySnapshotJSON` 和当前 mastery 的 diff）。
 - **触发条件**：观察到 advice 重算频率过高 / token 账单上涨。
+
+### 删 episode/course/user 时 AI 数据无级联
+
+`AISummary/Quiz/Question/Answer/StudyAdvice/AICourseSummary/UserStudyReport/ContentChunk/KnowledgeMemory/AIRun/AIJob` 这些表的 `EpisodeID/CourseID/UserID` 列都只有 `gorm:"index;not null"`，**没有 `gorm:"foreignKey:..."` 声明**。删 episode/course/user 时这些 AI 数据变孤儿残留。
+
+- **要做什么**：要么加 FK 声明 + OnDelete 策略（CASCADE 或 RESTRICT），要么在 service 层的 Delete 方法里显式清理 AI 数据。
+- **价值**：避免 DB 长期积累孤儿数据；也让「重新生成闭环」P0 项里的"删除 AI 产物"语义更干净。
+- **工作量预估**：小到中。主要是决策（CASCADE 还是 service 层手动清）+ 改 Delete 方法。
+- **触发条件**：和「重新生成闭环」一起做最合理（都是 AI 内容生命周期管理）。
