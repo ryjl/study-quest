@@ -1,0 +1,378 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
+import 'package:flutter_svg/flutter_svg.dart';
+
+/// MarkdownView —— AI 文本统一渲染入口。
+///
+/// ## 用途
+/// 把后端 / 模型返回的 markdown 文本渲染成 Flutter widget 树,覆盖:
+///   - 普通 markdown:加粗 / 列表 / GFM 表格 / 代码块 / 引用块
+///   - 字号缩放:[textScale] 会乘到所有段落、列表、表头、表格单元格的 fontSize
+///     上(AI 页传入全局的 [textScale],用户可在设置里调大调小)。
+///   - 允许覆盖基础文字颜色(卡片背景不同时,深底卡可以用 [baseTextColor])。
+///
+/// ## SVG 渲染策略
+/// 模型生成的 markdown 里可能包含形如:
+///   ```svg
+///   <svg>...</svg>
+///   ```
+/// 的围栏代码块。我们在 [MarkdownBody.builders] 里注册一个针对 `'pre'` 元素的
+/// [MarkdownElementBuilder]([_SvgCodeInterceptor]):
+///   - 当 `pre > code` 的 class 为 `language-svg` 时,取出 SVG 源码,用
+///     [SvgPicture.string] 渲染成图(带 padding、居中、宽度撑满父容器)。
+///   - 其它语言的代码块(```bash / ```dart / …)以及无语言标记的代码块,
+///     一律返回 null,交给 flutter_markdown 默认渲染(等宽字体 + 灰底圆角框)。
+///
+/// ## 降级方案
+/// 模型有时输出的 SVG 带语法错误(标签未闭合、用了非 SVG 的元素等)。本组件用
+/// flutter_svg 2.x 的 [SvgPicture.errorBuilder] 回调做优雅降级:
+///   - 解析失败时,在等宽字体的代码块里直接显示原始 SVG 源码,
+///   - 并在上方加一行小灰字「(图表渲染失败,显示源码)」,
+///   这样用户至少能看到内容、且布局不会塌。我们不会做额外的预校验(同步 parse
+///   两次成本高、收益小),onError 回调足够覆盖真实失败场景。
+class MarkdownView extends StatelessWidget {
+  /// markdown 文本。
+  final String data;
+
+  /// 字号缩放系数,默认 1.0。AI 页一般传 [UiPrefs.instance.aiTextScale]。
+  final double textScale;
+
+  /// 基础正文颜色,默认 slate-700 (#334155)。卡片背景不同时调用方可覆盖。
+  final Color? baseTextColor;
+
+  const MarkdownView({
+    super.key,
+    required this.data,
+    this.textScale = 1.0,
+    this.baseTextColor,
+  });
+
+  // 设计 token。提到 widget 顶层 const 是为了 styleSheet 闭包里方便引用。
+  static const Color _defaultTextColor = Color(0xFF334155); // Slate-700
+  static const Color _tableHeadBg = Color(0xFFF1F5F9); // Slate-100
+  static const Color _tableBorder = Color(0xFFE2E8F0); // Slate-200
+  static const Color _codeBlockBg = Color(0xFFF1F5F9); // Slate-100
+  static const Color _codeBlockText = Color(0xFF0F172A); // Slate-900
+  static const Color _mutedText = Color(0xFF64748B); // Slate-500
+  static const Color _inlineCodeBg = Color(0xFFE2E8F0); // Slate-200
+
+  @override
+  Widget build(BuildContext context) {
+    final Color textColor = baseTextColor ?? _defaultTextColor;
+    final MarkdownStyleSheet sheet = _buildStyleSheet(context, textColor);
+
+    return MarkdownBody(
+      data: data,
+      extensionSet: md.ExtensionSet.gitHubFlavored,
+      softLineBreak: true,
+      styleSheet: sheet,
+      builders: {
+        // pre 元素是围栏代码块的块级容器。在此拦截 ```svg 块;
+        // 非语言的代码块返回 null 走默认渲染。
+        'pre': _SvgCodeInterceptor(textColor: textColor),
+      },
+    );
+  }
+
+  /// 构造 [MarkdownStyleSheet]。以当前 Theme 为底,叠加项目设计 token 与
+  /// [textScale] 缩放。表格统一设为 [IntrinsicColumnWidth]——这样窄屏下 flutter
+  /// _markdown_ 0.7 会自动给表格套一层横向 [SingleChildScrollView],避免表格
+  /// 被挤扁或文字溢出(见 flutter_markdown builder.dart 514-534 行)。
+  MarkdownStyleSheet _buildStyleSheet(BuildContext context, Color textColor) {
+    final double scale = textScale <= 0 ? 1.0 : textScale;
+    final base = MarkdownStyleSheet.fromTheme(Theme.of(context));
+
+    return base.copyWith(
+      p: base.p?.copyWith(
+        fontSize: (base.p?.fontSize ?? 16) * scale,
+        height: 1.55,
+        color: textColor,
+      ),
+      pPadding: const EdgeInsets.symmetric(vertical: 4),
+      h1: base.h1?.copyWith(
+        fontSize: (base.h1?.fontSize ?? 26) * scale,
+        color: textColor,
+        fontWeight: FontWeight.w700,
+      ),
+      h2: base.h2?.copyWith(
+        fontSize: (base.h2?.fontSize ?? 22) * scale,
+        color: textColor,
+        fontWeight: FontWeight.w700,
+      ),
+      h3: base.h3?.copyWith(
+        fontSize: (base.h3?.fontSize ?? 20) * scale,
+        color: textColor,
+        fontWeight: FontWeight.w600,
+      ),
+      h4: base.h4?.copyWith(
+        fontSize: (base.h4?.fontSize ?? 18) * scale,
+        color: textColor,
+        fontWeight: FontWeight.w600,
+      ),
+      h5: base.h5?.copyWith(
+        fontSize: (base.h5?.fontSize ?? 16) * scale,
+        color: textColor,
+        fontWeight: FontWeight.w600,
+      ),
+      h6: base.h6?.copyWith(
+        fontSize: (base.h6?.fontSize ?? 14) * scale,
+        color: _mutedText,
+        fontWeight: FontWeight.w600,
+      ),
+      strong: base.strong?.copyWith(
+        color: textColor,
+        fontWeight: FontWeight.w700,
+      ),
+      em: base.em?.copyWith(color: textColor),
+      a: const TextStyle(color: Color(0xFF2563EB)), // Blue-600
+      listBullet: TextStyle(
+        fontSize: 16 * scale,
+        color: _mutedText,
+      ),
+      blockquote: TextStyle(
+        color: _mutedText,
+        fontSize: (base.blockquote?.fontSize ?? 15) * scale,
+      ),
+      blockquoteDecoration: BoxDecoration(
+        color: _tableHeadBg,
+        borderRadius: const BorderRadius.all(Radius.circular(6)),
+        border: Border(
+          left: BorderSide(color: _tableBorder, width: 3),
+        ),
+      ),
+      blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      code: TextStyle(
+        fontFamily: 'monospace',
+        fontFamilyFallback: const ['RobotoMono', 'Courier New'],
+        fontSize: (base.code?.fontSize ?? 14) * scale,
+        color: _codeBlockText,
+        backgroundColor: _inlineCodeBg,
+      ),
+      codeblockDecoration: BoxDecoration(
+        color: _codeBlockBg,
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        border: Border.all(color: _tableBorder, width: 1),
+      ),
+      codeblockPadding: const EdgeInsets.all(12),
+      // —— 表格 ——
+      tableHead: TextStyle(
+        fontWeight: FontWeight.w600,
+        color: textColor,
+        fontSize: 14 * scale,
+      ),
+      tableHeadAlign: TextAlign.left,
+      tableBody: TextStyle(
+        color: textColor,
+        fontSize: 14 * scale,
+      ),
+      tableCellsPadding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+      tableColumnWidth: const IntrinsicColumnWidth(),
+      // TableBorder.all 没有 borderRadius 参数(Flutter 的 Table 边线本身不
+      // 支持圆角),这里按默认 markdown 表格风格,留细灰边框即可。
+      tableBorder: TableBorder.all(color: _tableBorder, width: 1),
+      tablePadding: const EdgeInsets.only(top: 4, bottom: 4),
+    );
+  }
+}
+
+/// 拦截 `'pre'` 元素:仅当内部 code 块的语言是 svg 时把它渲染成图,
+/// 其它代码块自己渲染成带 codeblockDecoration 样式的代码块。
+///
+/// 注意:不能对非 svg 返回 null 期望"走默认渲染"。flutter_markdown 0.7 的
+/// builder.dart 在 visitElementAfterWithContext 返回 null 时,只用 defaultChild()
+/// 把已渲染的 inline code 子节点塞进一个裸 Column —— 它**不会**重新套上
+/// styleSheet 的 codeblockDecoration(背景/边框/padding),因为注册了 'pre' builder
+/// 后,默认的 pre 装饰逻辑被绕过了。结果是非 svg 代码块会丢掉背景色和边框。
+/// 所以这里非 svg 时自己构造一个和 styleSheet 一致的装饰容器。
+class _SvgCodeInterceptor extends MarkdownElementBuilder {
+  _SvgCodeInterceptor({required this.textColor});
+
+  /// 解析失败降级时显示源码用的文字颜色。
+  final Color textColor;
+
+  @override
+  bool isBlockElement() => true;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final svgSource = _extractSvg(element);
+    if (svgSource != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: _SvgView(
+          svgSource: svgSource,
+          textColor: textColor,
+        ),
+      );
+    }
+
+    // 非 svg 代码块:自己渲染成带样式的代码块(复用 MarkdownView 的设计 token)。
+    // 取 code 元素的纯文本作为代码内容。
+    final code = _extractCodeText(element);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: MarkdownView._codeBlockBg,
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        border: Border.all(color: MarkdownView._tableBorder, width: 1),
+      ),
+      child: SelectableText(
+        code,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontFamilyFallback: const ['RobotoMono', 'Courier New'],
+          fontSize: 14,
+          color: MarkdownView._codeBlockText,
+          height: 1.4,
+        ),
+      ),
+    );
+  }
+
+  /// 取 pre > code 的纯文本内容(用于非 svg 代码块渲染)。
+  String _extractCodeText(md.Element element) {
+    md.Element? codeEl;
+    if (element.tag == 'code') {
+      codeEl = element;
+    } else {
+      for (final child in element.children ?? const <md.Node>[]) {
+        if (child is md.Element && child.tag == 'code') {
+          codeEl = child;
+          break;
+        }
+      }
+    }
+    return codeEl?.textContent ?? '';
+  }
+
+  /// 判断 [element](应为 `pre > code`)是否是 svg 代码块,是则返回其文本内容。
+  /// markdown 包把围栏语言写到 code 元素的 `class="language-svg"` 上(见
+  /// markdown-7.x fenced_code_block_syntax.dart:50)。返回 null 表示非 svg。
+  String? _extractSvg(md.Element element) {
+    // pre 直接子级应为单个 code 元素。容错:遍历找第一个 code 元素。
+    md.Element? codeEl;
+    if (element.tag == 'code') {
+      codeEl = element;
+    } else {
+      for (final child in element.children ?? const <md.Node>[]) {
+        if (child is md.Element && child.tag == 'code') {
+          codeEl = child;
+          break;
+        }
+      }
+    }
+    if (codeEl == null) return null;
+
+    final langClass = codeEl.attributes['class'] ?? '';
+    // 形如 "language-svg";也兼容手写的 "language-svg " / 大小写差异。
+    final lang = langClass
+        .split(' ')
+        .map((s) => s.trim())
+        .firstWhere(
+          (s) => s.isNotEmpty,
+          orElse: () => '',
+        );
+    final normalized =
+        lang.toLowerCase().replaceAll('language-', '').trim();
+    if (normalized != 'svg' && lang.toLowerCase() != 'language-svg') {
+      return null;
+    }
+
+    final src = codeEl.textContent;
+    // 简单校验一下确实像 svg(模型偶尔会把空代码块或纯文本标成 svg)。
+    if (!src.contains('<svg') && !src.contains('<SVG')) {
+      return null;
+    }
+    return src;
+  }
+}
+
+/// 渲染单张 SVG 图,带错误降级。
+///
+/// flutter_svg 2.x 的 [SvgPicture.errorBuilder] 在解析失败时被调用——我们用它
+/// 返回一个等宽源码块 + 一行小灰字提示。同时这层包成 StatefulWidget,方便在
+/// 解析异常(异步解析阶段被 swallow 的特殊情况)时也能 setState 切到降级态。
+class _SvgView extends StatefulWidget {
+  const _SvgView({required this.svgSource, required this.textColor});
+
+  final String svgSource;
+  final Color textColor;
+
+  @override
+  State<_SvgView> createState() => _SvgViewState();
+}
+
+class _SvgViewState extends State<_SvgView> {
+  bool _failed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return _fallback();
+    }
+
+    return ClipRect(
+      child: SvgPicture.string(
+        widget.svgSource,
+        // 宽度撑满父容器,等比缩放;SVG 自带 viewBox 时按比例 fit。
+        width: double.infinity,
+        fit: BoxFit.contain,
+        alignment: Alignment.center,
+        errorBuilder: (context, error, stackTrace) {
+          // 渲染失败:切到降级态(下一帧重建)。
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && !_failed) {
+              setState(() => _failed = true);
+            }
+          });
+          return _fallback();
+        },
+      ),
+    );
+  }
+
+  /// 降级视图:一行小灰字提示 + 等宽源码块。
+  Widget _fallback() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F5F9), // Slate-100
+        borderRadius: const BorderRadius.all(Radius.circular(8)),
+        border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '(图表渲染失败,显示源码)',
+            style: TextStyle(
+              fontSize: 12,
+              color: const Color(0xFF64748B), // Slate-500
+            ),
+          ),
+          const SizedBox(height: 6),
+          SelectableText(
+            widget.svgSource,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontFamilyFallback: const ['RobotoMono', 'Courier New'],
+              fontSize: 12,
+              color: const Color(0xFF0F172A), // Slate-900
+              height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

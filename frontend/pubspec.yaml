@@ -55,6 +55,13 @@ dependencies:
   # room's "print PDF" button (试卷/绘本 → 纸质).
   printing: ^5.11.0
 
+  # Markdown rendering for AI-generated content (讲解/反馈等). flutter_markdown
+  # renders GFM (加粗/列表/表格/代码块/引用), and the MarkdownView widget
+  # registers a custom 'pre' builder that intercepts ```svg fenced code blocks
+  # and rasterizes them via flutter_svg instead of showing source.
+  flutter_markdown: ^0.7.0
+  flutter_svg: ^2.0.9
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

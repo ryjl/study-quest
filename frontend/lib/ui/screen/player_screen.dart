@@ -12,6 +12,8 @@ import '../../config.dart';
 import '../../model/course.dart';
 import '../../model/quiz.dart';
 import '../../service/api_service.dart';
+import '../../service/ui_prefs.dart';
+import '../../service/tv_mode.dart';
 import '../ai/ai_availability.dart';
 import 'ai_study_screen.dart';
 import '../../theme.dart';
@@ -103,10 +105,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isFullscreen = false;
   bool _controlsLocked = false;
   double _rate = 1.0;
-  String _subtitleSizeLabel = '中';
   double _volumeBeforeMute = 50.0;
   String _activeMenu = '';
-  final List<String> _nativeSubtitleIds = [];
+  // native(libmpv 内置)字幕轨 id 集合。用 Set 去重 —— 修复字幕按钮重复 bug(需求 #4):
+  // 之前用 List,tracks 事件多次触发时会重复 add 同一个 id,导致字幕菜单里出现多个
+  // 同名「中文」按钮,点一个又触发新事件再 add,越点越多。
+  final Set<String> _nativeSubtitleIds = {};
   bool _nativeSubtitlesCaptured = false;
   // Drag-to-seek transient state. While the user is dragging the seek bar we
   // only update a local preview position (no seek); a single seek is committed
@@ -497,7 +501,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     if (!_helperPanelInitialized) {
-      _showHelperPanel = MediaQuery.of(context).size.width >= 900;
+      // TV 模式下强制展开 helper panel(需求 #9)—— TV 屏幕大、交互靠 D-pad,
+      // 隐藏式 chevron 入口反而难发现,直接常驻右侧随堂助手更顺手。
+      _showHelperPanel =
+          TvMode.instance.isActive || MediaQuery.of(context).size.width >= 900;
       _isFullscreen = !_showHelperPanel;
       _helperPanelInitialized = true;
     }
@@ -568,17 +575,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _togglePlayPause();
       return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.arrowLeft) {
-      _seekRelative(const Duration(seconds: -10));
+      // TV 模式下遥控器左右键 seek 步长加大到 30s(需求 #9)—— 10s 在 TV 上太小,
+      // 长视频快进/后退体验差。触屏双击手势保持 ±10s 不变(那是近距离精确跳)。
+      final step = TvMode.instance.isActive ? 30 : 10;
+      _seekRelative(Duration(seconds: -step));
       return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.arrowRight) {
-      _seekRelative(const Duration(seconds: 10));
+      final step = TvMode.instance.isActive ? 30 : 10;
+      _seekRelative(Duration(seconds: step));
       return KeyEventResult.handled;
     } else if (key == LogicalKeyboardKey.arrowUp) {
-      _player.setVolume((_player.state.volume + 5).clamp(0, 100));
-      return KeyEventResult.handled;
+      // 非 TV:上下键调音量(PAD/手机无独立音量键的便捷操作)。
+      // TV:不处理 —— 交给焦点遍历系统,让 D-pad 上下能在视频区和 helper panel
+      // 之间移动焦点(TV 遥控器通常有独立音量键,不需要 App 内再占用上下键)。
+      if (!TvMode.instance.isActive) {
+        _player.setVolume((_player.state.volume + 5).clamp(0, 100));
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
     } else if (key == LogicalKeyboardKey.arrowDown) {
-      _player.setVolume((_player.state.volume - 5).clamp(0, 100));
-      return KeyEventResult.handled;
+      if (!TvMode.instance.isActive) {
+        _player.setVolume((_player.state.volume - 5).clamp(0, 100));
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
     } else if (key == LogicalKeyboardKey.escape ||
         key == LogicalKeyboardKey.browserBack) {
       Navigator.maybePop(context);
@@ -710,9 +730,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   controls: NoVideoControls,
                   subtitleViewConfiguration: SubtitleViewConfiguration(
                     style: TextStyle(
-                      fontSize: _subtitleSizeLabel == '小'
-                          ? 16.0
-                          : (_subtitleSizeLabel == '大' ? 26.0 : 20.0),
+                      // 字号直接读全局 UiPrefs —— 用户在字幕菜单里改档位会
+                      // setSubtitleSizeIndex 写回并 setState,这里随之重建拿到新值。
+                      fontSize: UiPrefs.instance.subtitleSize,
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                       backgroundColor: Colors.black38,
@@ -1167,25 +1187,52 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   List<Map<String, dynamic>> _getSubtitleOptions() {
     final list = <Map<String, dynamic>>[];
+    // 修复字幕按钮重复 bug(需求 #4):native(libmpv 内置)轨和 backend 轨可能
+    // 同名(都叫「中文」),直接拼接会让菜单里出现两个「中文」按钮,点第二个触发
+    // setSubtitleTrack → 新 tracks 事件 → 历史上再次 add id,越点越多。
+    // 用 seenLabels 在最终列表的 label 层做去重:同一个 label 只保留一个来源,
+    // 优先保留 native(切换更可靠,直接走 libmpv 的内置轨),backend 的同名 label
+    // 跳过。「关闭字幕」label 唯一,自然不会被去重掉。
+    final seenLabels = <String>{};
+
     list.add({'label': '关闭字幕', 'type': 'off'});
+    seenLabels.add('关闭字幕');
 
     final cleanNativeSubs = _player.state.tracks.subtitle
         .where((t) => _nativeSubtitleIds.contains(t.id))
         .toList();
     for (var track in cleanNativeSubs) {
       final label = track.title ?? track.language ?? '内置字幕 ${track.id}';
-      list.add({
-        'label': label,
-        'type': 'native',
-        'track': track,
-      });
+      if (!seenLabels.contains(label)) {
+        seenLabels.add(label);
+        list.add({
+          'label': label,
+          'type': 'native',
+          'track': track,
+        });
+      }
     }
 
-    // Backend subtitles
+    // Backend 字幕(Whisper 转录/校对版)。和 native 重名时不直接跳过 —— backend
+    // 版本可能是经过术语纠错的优质翻译,直接去重会让用户选不到。改成给重名的加
+    // 「(校对版)」后缀,既避免菜单出现两个一模一样的「中文」,又保留可选项。
+    // 不重名的正常加入。
     final backendSubs = _playInfo?.subtitles ?? const [];
     for (var sub in backendSubs) {
+      final label = seenLabels.contains(sub.label)
+          ? '${sub.label}(校对版)'
+          : sub.label;
+      // 后缀后的 label 理论上仍可能撞名(极端情况:已有 native 叫「中文(校对版)」),
+      // 用 while 兜底直到不重名。正常场景一次就够。
+      var finalLabel = label;
+      var n = 2;
+      while (seenLabels.contains(finalLabel)) {
+        finalLabel = '${sub.label}(校对版$n)';
+        n++;
+      }
+      seenLabels.add(finalLabel);
       list.add({
-        'label': sub.label,
+        'label': finalLabel,
         'type': 'backend',
         'track': sub,
       });
@@ -1386,18 +1433,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
               ),
               const SizedBox(width: 8),
+              // 字号档位接全局 UiPrefs(需求 #5 + #7):四档「小/中/大/超大」,
+              // 选中态读 UiPrefs.subtitleSizeIndex,点击写回 SharedPreferences,
+              // 下次进播放器沿用上次选择。改档位后 setState 重建,上面的
+              // SubtitleViewConfiguration 会读最新的 UiPrefs.subtitleSize 生效。
               Row(
-                children: ['小', '中', '大'].map((size) {
-                  final isSelected = _subtitleSizeLabel == size;
+                children: UiPrefs.subtitleSizeLabels
+                    .asMap()
+                    .entries
+                    .map((entry) {
+                  final index = entry.key;
+                  final label = entry.value;
+                  final isSelected =
+                      UiPrefs.instance.subtitleSizeIndex == index;
                   return Padding(
                     padding: const EdgeInsets.only(right: 8.0),
                     child: _buildCustomChip(
-                      label: size,
+                      label: label,
                       selected: isSelected,
-                      onTap: () {
-                        setState(() {
-                          _subtitleSizeLabel = size;
-                        });
+                      onTap: () async {
+                        await UiPrefs.instance.setSubtitleSizeIndex(index);
+                        setState(() {});
                       },
                     ),
                   );
@@ -1591,6 +1647,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Helper panel (right ~30%)
   // ---------------------------------------------------------------------------
 
+  /// TV 模式下随堂助手/附属资料/任务卡等所有文字统一放大 ×1.3(需求 #9)。
+  /// 提成实例方法(而非 _buildHelperPanel 的局部闭包)是为了让 _buildAttachmentsSection /
+  /// _buildPreAdventureSection / _buildAiStudyEntry / _taskCard / _placeholderTile
+  /// 这些子方法也能用同一套缩放 —— 否则 TV 下标题放大了但子卡片文字没放大,字号不一致。
+  /// 非 TV 时 textScale=1.0,返回值与传入的 base 相同(roundToDouble 不改变整数值)。
+  double _tvScaled(double base) {
+    final textScale = TvMode.instance.isActive ? 1.3 : 1.0;
+    return (base * textScale).roundToDouble();
+  }
+
   Widget _buildHelperPanel() {
     return Container(
       width: 360,
@@ -1617,9 +1683,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       color: Color(0xFF2563EB), size: 24),
                 ),
                 const SizedBox(width: 12),
-                const Text('随堂助手',
+                Text('随堂助手',
                     style: TextStyle(
-                        fontSize: 20,
+                        fontSize: _tvScaled(20),
                         fontWeight: FontWeight.w900,
                         color: AppTheme.textWhite)),
                 const Spacer(),
@@ -1638,16 +1704,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
             // Episode title context
             Text(widget.episode.title,
-                style: const TextStyle(
+                style: TextStyle(
                     fontWeight: FontWeight.w900,
-                    fontSize: 15,
+                    fontSize: _tvScaled(15),
                     color: AppTheme.textWhite)),
             const SizedBox(height: 28),
 
             // Attachments section
-            const Text('附属资料',
+            Text('附属资料',
                 style: TextStyle(
-                    fontSize: 12,
+                    fontSize: _tvScaled(12),
                     fontWeight: FontWeight.w900,
                     letterSpacing: 1.5,
                     color: AppTheme.textMuted)),
@@ -1659,9 +1725,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('本节探索任务',
+                Text('本节探索任务',
                     style: TextStyle(
-                        fontSize: 12,
+                        fontSize: _tvScaled(12),
                         fontWeight: FontWeight.w900,
                         letterSpacing: 1.5,
                         color: AppTheme.textMuted)),
@@ -1672,11 +1738,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     color: const Color(0xFFEFF6FF),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: const Text('带着问题看',
+                  child: Text('带着问题看',
                       style: TextStyle(
-                          fontSize: 10,
+                          fontSize: _tvScaled(10),
                           fontWeight: FontWeight.bold,
-                          color: Color(0xFF2563EB))),
+                          color: const Color(0xFF2563EB))),
                 ),
               ],
             ),
@@ -1711,6 +1777,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
           );
           return;
         }
+        // 进 AI 学习页前暂停视频,避免在后台继续播放(含音频)。
+        // 与顶栏 AI 入口行为一致 —— 之前 helper panel 这个常驻入口漏了 pause,
+        // 导致从卡片进 AI 页后视频还在后台放(需求 #1)。
+        _player.pause();
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => AiStudyScreen(
@@ -1735,18 +1805,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
           child: Row(
             children: [
-              const Icon(Icons.auto_awesome_rounded,
-                  color: Colors.white, size: 20),
+              Icon(Icons.auto_awesome_rounded,
+                  color: Colors.white, size: _tvScaled(20)),
               const SizedBox(width: 10),
-              const Expanded(
+              Expanded(
                 child: Text('AI 学习',
                     style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.w800,
-                        fontSize: 14)),
+                        fontSize: _tvScaled(14))),
               ),
-              const Icon(Icons.chevron_right_rounded,
-                  color: Colors.white70, size: 20),
+              Icon(Icons.chevron_right_rounded,
+                  color: Colors.white70, size: _tvScaled(20)),
             ],
           ),
         ),
@@ -1791,18 +1861,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
             child: Row(
               children: [
                 Icon(isPdf ? Icons.picture_as_pdf_rounded : Icons.attach_file,
-                    color: accent, size: 18),
+                    color: accent, size: _tvScaled(18)),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(att.fileName.isEmpty ? '配套资料' : att.fileName,
                       style: TextStyle(
                           color: accent,
                           fontWeight: FontWeight.w800,
-                          fontSize: 13),
+                          fontSize: _tvScaled(13)),
                       overflow: TextOverflow.ellipsis),
                 ),
-                const Icon(Icons.chevron_right_rounded,
-                    color: Color(0xFF94A3B8), size: 18),
+                Icon(Icons.chevron_right_rounded,
+                    color: Color(0xFF94A3B8), size: _tvScaled(18)),
               ],
             ),
           ),
@@ -1849,11 +1919,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
       ),
       child: Row(
         children: [
-          Icon(icon, color: accent.withOpacity(0.5), size: 18),
+          Icon(icon, color: accent.withOpacity(0.5), size: _tvScaled(18)),
           const SizedBox(width: 10),
           Text(title,
-              style: const TextStyle(
-                  color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+              style: TextStyle(
+                  color: AppTheme.textMuted,
+                  fontWeight: FontWeight.bold,
+                  fontSize: _tvScaled(13))),
         ],
       ),
     );
@@ -1879,18 +1951,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
               shape: BoxShape.circle,
             ),
             child: Text('$index',
-                style: const TextStyle(
+                style: TextStyle(
                     fontWeight: FontWeight.w900,
                     color: Color(0xFF2563EB),
-                    fontSize: 11)),
+                    fontSize: _tvScaled(11))),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(text,
-                style: const TextStyle(
+                style: TextStyle(
                     color: Color(0xFF475569),
                     fontWeight: FontWeight.bold,
-                    fontSize: 13,
+                    fontSize: _tvScaled(13),
                     height: 1.4)),
           ),
         ],

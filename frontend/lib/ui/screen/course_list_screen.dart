@@ -1,10 +1,15 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+// services.dart 暴露 LogicalKeyboardKey / KeyDownEvent / KeyEventResult /
+// FocusManager,用于修复 Android TV 上搜索框的 D-pad 焦点陷阱(详见 build 中
+// 搜索区 Focus widget 的 onKeyEvent)。
+import 'package:flutter/services.dart';
 import '../../model/course.dart';
 import '../../model/progress.dart';
 import '../../model/subject.dart';
 import '../../model/tag.dart';
 import '../../service/api_service.dart';
+import '../../service/tv_mode.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
 import '../widget/button_3d.dart';
@@ -45,6 +50,36 @@ class _CourseListScreenState extends State<CourseListScreen> {
   String _selectedSubject = '全部';
   String _selectedGrade = '全部';
   String _searchQuery = '';
+
+  // 搜索框专属 FocusNode。关键:这个节点是 TextField 自己的焦点节点,它的
+  // onKeyEvent 会在 EditableText 的默认按键处理(光标移动/多行导航)**之前**
+  // 运行。把 D-pad 方向键在 onKeyEvent 里截掉并返回 handled,EditableText 就
+  // 收不到方向键,无法把光标移动消费掉 —— 焦点就能 nextFocus/previousFocus
+  // 跳出搜索框。用外层 Focus widget 包裹是拦不住的(TextField 自己消费在前)。
+  late final FocusNode _searchFocusNode = FocusNode(
+    onKeyEvent: (node, event) {
+      if (event is! KeyDownEvent) {
+        return KeyEventResult.ignored;
+      }
+      final k = event.logicalKey;
+      final next = k == LogicalKeyboardKey.arrowDown ||
+          k == LogicalKeyboardKey.arrowRight;
+      final prev = k == LogicalKeyboardKey.arrowUp ||
+          k == LogicalKeyboardKey.arrowLeft;
+      if (!next && !prev) {
+        // 字母/数字/回车/退格等一律放行给 TextField 输入。
+        return KeyEventResult.ignored;
+      }
+      next ? node.nextFocus() : node.previousFocus();
+      return KeyEventResult.handled;
+    },
+  );
+
+  @override
+  void dispose() {
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
 
   // Subject catalog fetched from /api/v1/subjects. Drives the filter chips and
   // the key→label/color lookups on each card. Empty until loaded; the
@@ -104,6 +139,8 @@ class _CourseListScreenState extends State<CourseListScreen> {
 
           final courses = snapshot.data![0] as List<Course>;
           final progressList = snapshot.data![1] as List<UserProgress>;
+          // TV 大字模式开关:只在字号上生效,不改布局结构。各处 Text 用三元放大。
+          final tv = TvMode.instance.isActive;
           // Keep progressList referenced for future per-course resume logic;
           // it intentionally influences the "继续学习" target choice below.
 
@@ -129,12 +166,17 @@ class _CourseListScreenState extends State<CourseListScreen> {
 
           return Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
-            // Wrap the whole layout in a vertical scroller. Without this the
-            // fixed-height Column overflows ("bottom overflowed by N pixels")
-            // whenever the course grid + filters exceed the viewport (e.g.
-            // many subjects/tags, large font, smaller window).
-            child: SingleChildScrollView(
-              child: Column(
+            // 整页内容包一层 FocusTraversalGroup:让搜索框、筛选按钮、课程卡片
+            // 共享同一个遍历顺序。搜索框的 onKeyEvent 调 nextFocus() 时,能沿
+            // 视觉顺序自然跳到下方第一个课程卡片(D-pad 下)或旁边筛选按钮(右),
+            // 而不会被限制在某个子分组里。
+            child: FocusTraversalGroup(
+              child: SingleChildScrollView(
+                // Wrap the whole layout in a vertical scroller. Without this the
+                // fixed-height Column overflows ("bottom overflowed by N pixels")
+                // whenever the course grid + filters exceed the viewport (e.g.
+                // many subjects/tags, large font, smaller window).
+                child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                 // Header Area
@@ -237,76 +279,102 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 ),
                 const SizedBox(height: 24),
 
-                // Mainstream App Layout: Top Search + Filter Button, and Text Tab Subjects
+                // Mainstream App Layout: Top Search + Filter Button, and Text Tab Subjects.
+                //
+                // 【Android TV 焦点陷阱修复】
+                // 原来的搜索 TextField 是裸的 —— 它一旦获得焦点,EditableText 就会
+                // 消费 D-pad 上下(用于光标移动/多行导航),导致方向键永远传不到焦点
+                // 遍历系统,用户被困在搜索框里出不来。旁边的筛选按钮还是
+                // GestureDetector(不可聚焦),默认遍历也没有可跳转的目标。
+                //
+                // 方案(双层):
+                //   1. 整页内容用 FocusTraversalGroup 包住(见外层 Padding),让
+                //      nextFocus/previousFocus 沿视觉顺序遍历到筛选按钮或下方网格;
+                //   2. 给 TextField 一个专属 FocusNode(_searchFocusNode),在它的
+                //      onKeyEvent 里拦截四个方向键,返回 handled 并手动 nextFocus/
+                //      previousFocus 弹出。关键点:这个 onKeyEvent 跑在 EditableText
+                //      的默认按键处理之前 —— 必须用「TextField 自己的 FocusNode」
+                //      才拦得住,用外层 Focus widget 包裹是没用的(TextField 自己
+                //      消费在前,事件不会冒泡到祖先)。
+                //   字母/数字/回车/退格等一律放行,留给 TextField 正常输入。
                 Row(
                   children: [
                     Expanded(
                       child: Container(
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.03),
-                              blurRadius: 10,
-                              offset: const Offset(0, 2),
-                            )
-                          ],
-                        ),
-                        child: TextField(
-                          onChanged: (val) => setState(() => _searchQuery = val),
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
-                          decoration: const InputDecoration(
-                            hintText: '搜索课程名称...',
-                            hintStyle: TextStyle(color: AppTheme.textMuted, fontSize: 14),
-                            prefixIcon: Icon(Icons.search_rounded, color: AppTheme.textMuted, size: 20),
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        height: tv ? 56 : 48,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.03),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              )
+                            ],
+                          ),
+                          // 焦点陷阱修复见 _searchFocusNode 的 onKeyEvent(它在
+                          // EditableText 默认处理之前截断方向键)。这里只把节点接上。
+                          child: TextField(
+                            focusNode: _searchFocusNode,
+                            onChanged: (val) => setState(() => _searchQuery = val),
+                            style: TextStyle(
+                              fontSize: tv ? 18 : 14,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textWhite,
+                            ),
+                            decoration: InputDecoration(
+                              hintText: '搜索课程名称...',
+                              hintStyle: TextStyle(
+                                color: AppTheme.textMuted,
+                                fontSize: tv ? 18 : 14,
+                              ),
+                              prefixIcon: Icon(Icons.search_rounded,
+                                  color: AppTheme.textMuted, size: tv ? 24 : 20),
+                              border: InputBorder.none,
+                              contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 16, vertical: 14),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    GestureDetector(
-                      onTap: _showFilterBottomSheet,
-                      child: Container(
-                        height: 48,
-                        width: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(24),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.03),
-                              blurRadius: 10,
-                              offset: const Offset(0, 2),
-                            )
-                          ],
-                        ),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            const Icon(Icons.tune_rounded, color: AppTheme.textMuted),
-                            if (_selectedGrade != '全部' || _selectedTagIDs.isNotEmpty)
-                              Positioned(
-                                top: 12,
-                                right: 12,
-                                child: Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: const BoxDecoration(
-                                    color: Colors.redAccent,
-                                    shape: BoxShape.circle,
+                      const SizedBox(width: 12),
+                      // 筛选按钮改成可聚焦的 FocusButton:原本是 GestureDetector(D-pad
+                      // 永远跳不过来),现在成为合法焦点目标,能从搜索框 D-pad 右跳到这。
+                      FocusButton(
+                        onPressed: _showFilterBottomSheet,
+                        borderRadius: 24,
+                        baseColor: Colors.white,
+                        borderColor: const Color(0xFFE2E8F0),
+                        padding: EdgeInsets.zero,
+                        child: SizedBox(
+                          height: tv ? 56 : 48,
+                          width: tv ? 56 : 48,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              Icon(Icons.tune_rounded,
+                                  color: AppTheme.textMuted, size: tv ? 26 : 24),
+                              if (_selectedGrade != '全部' ||
+                                  _selectedTagIDs.isNotEmpty)
+                                Positioned(
+                                  top: 12,
+                                  right: 12,
+                                  child: Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.redAccent,
+                                      shape: BoxShape.circle,
+                                    ),
                                   ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
                 const SizedBox(height: 24),
 
                 // Subject Tabs (Sleek text-based)
@@ -411,6 +479,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
               ],
             ),
           ),
+            ),
         );
         },
       ),
@@ -470,6 +539,8 @@ class _CourseListScreenState extends State<CourseListScreen> {
     final tag = tags.isNotEmpty ? tags.first : '';
     final gradeLabel = gradeLabelOf(course.grade);
     final cardLabel = tag.isEmpty ? gradeLabel : '$tag | $gradeLabel';
+    // TV 大字模式:卡片各处字号放大,提升远距离可读性。
+    final tv = TvMode.instance.isActive;
 
     return FocusButton(
       padding: EdgeInsets.zero,
@@ -537,7 +608,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       ),
                       child: Text(
                         cardLabel,
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w900),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: tv ? 13 : 10,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
                     ),
                   ),
@@ -572,7 +647,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     ),
                     child: Text(
                       _getSubjectName(course.subject),
-                      style: const TextStyle(fontSize: 9, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                      style: TextStyle(
+                        fontSize: tv ? 12 : 9,
+                        color: AppTheme.textMuted,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 6),
@@ -580,7 +659,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     course.title,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 13, color: AppTheme.textWhite),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: tv ? 17 : 13,
+                      color: AppTheme.textWhite,
+                    ),
                   ),
                   const Spacer(),
 
@@ -599,7 +682,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                           style: TextStyle(
                             color: AppTheme.primaryColor,
                             fontWeight: FontWeight.w900,
-                            fontSize: 10,
+                            fontSize: tv ? 13 : 10,
                           ),
                         ),
                         const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 14),

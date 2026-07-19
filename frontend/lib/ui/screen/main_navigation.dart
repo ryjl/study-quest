@@ -8,6 +8,7 @@ import '../../model/progress.dart';
 import '../../model/badge.dart';
 import '../../service/api_service.dart';
 import '../../service/auth_service.dart';
+import '../../service/tv_mode.dart';
 import '../../service/update_service.dart';
 import '../../theme.dart';
 import '../widget/focus_button.dart';
@@ -1476,6 +1477,27 @@ class _MainNavigationState extends State<MainNavigation> {
                           setState(() {});
                         },
                       );
+                    },
+                  ),
+                  const Divider(color: Color(0xFFE2E8F0), height: 32),
+                  // TV 模式预览(调试):给 MuMu 模拟器(PAD 形态)开发用,
+                  // 打开后强制走 TV 分支布局,这样不用真机 TV 也能验证 TV 页面。
+                  // 真机 TV 走自动检测,本开关对其无影响(本来就走 TV)。
+                  // 需要 App 重启后全局生效 —— TvMode 在启动时只读一次。
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('预览 TV 模式(调试)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
+                    subtitle: const Text('打开后 App 强制使用 TV 布局,用于在模拟器上验证 TV 体验。重启 App 后生效。', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                    value: TvMode.instance.forceEnabled,
+                    activeColor: AppTheme.primaryColor,
+                    onChanged: (val) async {
+                      await TvMode.instance.setForceEnabled(val);
+                      setState(() {});
+                      if (val) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('已开启 TV 模式预览。请重启 App(或热重启)使全部页面切换到 TV 布局。')),
+                        );
+                      }
                     },
                   ),
                   const Divider(color: Color(0xFFE2E8F0), height: 32),

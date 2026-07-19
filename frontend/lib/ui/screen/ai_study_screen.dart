@@ -4,6 +4,9 @@ import '../../model/course.dart';
 import '../../model/quiz.dart';
 import '../../service/api_service.dart';
 import '../../service/quiz_draft_store.dart';
+import '../../service/ui_prefs.dart';
+import '../../service/tv_mode.dart';
+import '../widget/markdown_view.dart';
 import 'player_screen.dart';
 
 // AiStudyScreen — the Phase C AI learning page. Three sections:
@@ -406,6 +409,10 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // TV 模式强制最大档(1.4)——TV 上靠远距离观看,且 TV 不渲染字号调整按钮,
+    // 用一个 effectiveScale 统一覆盖所有 MarkdownView / Text 的缩放,避免读 UiPrefs。
+    final double effectiveScale =
+        TvMode.instance.isActive ? 1.4 : UiPrefs.instance.aiTextScale;
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -419,19 +426,88 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           widget.episode.title,
           style: const TextStyle(color: Color(0xFF0F172A), fontSize: 16, fontWeight: FontWeight.w600),
         ),
+        // 字号调整按钮(需求 #6)。TV 模式下隐藏——TV 永远走最大档,调了也没用。
+        actions: [
+          if (!TvMode.instance.isActive)
+            IconButton(
+              icon: const Icon(Icons.format_size_rounded, color: Color(0xFF64748B)),
+              tooltip: '字号',
+              onPressed: () => _showTextScaleMenu(context),
+            ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildSummarySection(),
+          _buildSummarySection(effectiveScale),
           const SizedBox(height: 16),
-          _buildAdviceCard(),
+          _buildAdviceCard(effectiveScale),
           const SizedBox(height: 16),
-          _buildQuizSection(),
+          _buildQuizSection(effectiveScale),
           const SizedBox(height: 16),
-          _buildHistorySection(),
+          _buildHistorySection(effectiveScale),
         ],
       ),
+    );
+  }
+
+  // 字号菜单(需求 #6):ModalBottomSheet 里 4 档 ListTile,当前档打勾。
+  // 选中后写 SharedPreferences 持久化 + setState 触发整页重建,所有 MarkdownView
+  // 的 textScale 跟着更新。沿用 _showFilterBottomSheet 的风格(圆角顶部 + 白底)。
+  void _showTextScaleMenu(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) {
+        return Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                child: Row(children: [
+                  const Icon(Icons.format_size_rounded, size: 18, color: Color(0xFF0F172A)),
+                  const SizedBox(width: 8),
+                  const Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+                ]),
+              ),
+              for (int i = 0; i < UiPrefs.aiScaleLabels.length; i++)
+                ListTile(
+                  leading: Icon(
+                    // 4 档依次给个大小递增的字号图标,直观表达档位语义。
+                    [Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded][i],
+                    size: [16, 20, 24, 28][i].toDouble(),
+                    color: UiPrefs.instance.aiTextScaleIndex == i ? const Color(0xFF8B5CF6) : const Color(0xFF94A3B8),
+                  ),
+                  title: Text(
+                    UiPrefs.aiScaleLabels[i],
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: UiPrefs.instance.aiTextScaleIndex == i ? FontWeight.w700 : FontWeight.w500,
+                      color: UiPrefs.instance.aiTextScaleIndex == i ? const Color(0xFF8B5CF6) : const Color(0xFF334155),
+                    ),
+                  ),
+                  trailing: UiPrefs.instance.aiTextScaleIndex == i
+                      ? const Icon(Icons.check_rounded, color: Color(0xFF8B5CF6))
+                      : null,
+                  onTap: () async {
+                    await UiPrefs.instance.setAiTextScaleIndex(i);
+                    if (!mounted) return;
+                    setState(() {}); // 触发重建,MarkdownView 的 textScale 更新
+                    if (sheetCtx.mounted) Navigator.pop(sheetCtx);
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -440,7 +516,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // Collapsible. Hidden entirely while there's no history and none loading
   // (the common case before the first regenerate), so the panel never shows an
   // empty "history" block on a fresh lesson.
-  Widget _buildHistorySection() {
+  Widget _buildHistorySection(double textScale) {
+    // TV 模式不做题,历史练习也是练习相关,一并隐藏。
+    if (TvMode.instance.isActive) return const SizedBox.shrink();
     if (!_historyLoading && _history.isEmpty) {
       return const SizedBox.shrink();
     }
@@ -469,6 +547,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
               expanded: _historyExpanded[h.quizId] ?? false,
               onToggle: () => setState(() => _historyExpanded[h.quizId] = !(_historyExpanded[h.quizId] ?? false)),
               onJump: (seconds) => _jumpTo(seconds),
+              textScale: textScale,
             ),
           ],
         ),
@@ -477,7 +556,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   }
 
   // --- Summary card ---
-  Widget _buildSummarySection() {
+  Widget _buildSummarySection(double textScale) {
     if (_summaryLoading) {
       return const _Card(child: Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())));
     }
@@ -505,11 +584,19 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(sec.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Color(0xFF6D28D9))),
                   const SizedBox(height: 4),
+                  // 每个知识点要点可能含 markdown 表格/SVG 图,用 MarkdownView 渲染。
+                  // 外层保留 bullet Row(让小节视觉一致),MarkdownView 放 Expanded 里(表格可能宽)。
                   ...sec.points.map((p) => Padding(
                         padding: const EdgeInsets.only(bottom: 3, left: 10),
                         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                           const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
-                          Expanded(child: Text(p, style: const TextStyle(fontSize: 12.5, color: Color(0xFF334155)))),
+                          Expanded(
+                            child: MarkdownView(
+                              data: p,
+                              textScale: textScale,
+                              baseTextColor: const Color(0xFF334155),
+                            ),
+                          ),
                         ]),
                       )),
                 ]),
@@ -520,7 +607,13 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
-                  Expanded(child: Text(p, style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
+                  Expanded(
+                    child: MarkdownView(
+                      data: p,
+                      textScale: textScale,
+                      baseTextColor: const Color(0xFF334155),
+                    ),
+                  ),
                 ]),
               )),
         ],
@@ -537,9 +630,14 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                 Text('方法技巧', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF15803D))),
               ]),
               const SizedBox(height: 4),
+              // 方法技巧每条含公式/表格时 markdown 渲染;绿色保留。
               ...s.methods.map((m) => Padding(
                     padding: const EdgeInsets.only(bottom: 2),
-                    child: Text(m, style: const TextStyle(fontSize: 12, color: Color(0xFF166534))),
+                    child: MarkdownView(
+                      data: m,
+                      textScale: textScale,
+                      baseTextColor: const Color(0xFF166534),
+                    ),
                   )),
             ]),
           ),
@@ -557,9 +655,14 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                 Text('易错点', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFFB91C1C))),
               ]),
               const SizedBox(height: 4),
+              // 易错点可能含对比表格,markdown 渲染;红色保留。
               ...s.commonMistakes.map((m) => Padding(
                     padding: const EdgeInsets.only(bottom: 2),
-                    child: Text(m, style: const TextStyle(fontSize: 12, color: Color(0xFF991B1B))),
+                    child: MarkdownView(
+                      data: m,
+                      textScale: textScale,
+                      baseTextColor: const Color(0xFF991B1B),
+                    ),
                   )),
             ]),
           ),
@@ -583,7 +686,12 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(color: const Color(0xFFFFFBEB), borderRadius: BorderRadius.circular(8)),
-            child: Text(s.takeaway, style: const TextStyle(fontSize: 12, color: Color(0xFF92400E))),
+            // 总结 takeaway 可能用 markdown 加粗关键词;琥珀色保留。
+            child: MarkdownView(
+              data: s.takeaway,
+              textScale: textScale,
+              baseTextColor: const Color(0xFF92400E),
+            ),
           ),
         ],
       ]),
@@ -595,7 +703,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // 唯一来源是 advice agent(跨知识点读 mastery 后的综合分析)。advice 不可用或为空
   // 时直接隐藏卡片——不做任何降级(quiz 的 agent_feedback 副产品不再在这里展示,
   // 避免和 advice 语义重复)。
-  Widget _buildAdviceCard() {
+  Widget _buildAdviceCard(double textScale) {
     // generating 态:advice 正在生成,展示占位卡片(比直接隐藏更连贯)。
     if (_adviceStatus == AdviceStatus.generating) {
       return const _Card(
@@ -622,13 +730,21 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
         ]),
         const SizedBox(height: 8),
-        Text(advice, style: const TextStyle(fontSize: 13, color: Color(0xFF334155), height: 1.5)),
+        // 学习建议正文是 agent 跨知识点综合分析,鼓励输出 markdown 列表/加粗/对比表格。
+        // 用 MarkdownView 渲染,字号跟随 AI 页全局缩放(textScale)。
+        MarkdownView(
+          data: advice,
+          textScale: textScale,
+          baseTextColor: const Color(0xFF334155),
+        ),
       ]),
     );
   }
 
   // --- Quiz section ---
-  Widget _buildQuizSection() {
+  Widget _buildQuizSection(double textScale) {
+    // TV 模式不做题(需求 #10):练习 section 直接返回空,TV 用户只看 summary/advice。
+    if (TvMode.instance.isActive) return const SizedBox.shrink();
     if (_quizLoading) {
       return const _Card(child: Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())));
     }
@@ -701,6 +817,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
               fillController: e.value.isFill ? (_fillControllers[e.value.id] ??= TextEditingController()) : null,
               result: result,
               submitted: submitted,
+              textScale: textScale,
               onPick: (i) {
                 setState(() => _choicePicks[e.value.id] = i);
                 _persistDraft();
@@ -812,6 +929,8 @@ class _QuestionCard extends StatelessWidget {
   // 统一提交后整张卷子锁定。submitted=true 时所有题只读,
   // 逐题展示 result(若 result 还没到——比如重进已交卷的卷子而 fetch 没带结果——则不展示判分)。
   final bool submitted;
+  // AI 页全局文字缩放因子,传给 MarkdownView(stem / explanation)。
+  final double textScale;
 
   const _QuestionCard({
     required this.index,
@@ -825,6 +944,7 @@ class _QuestionCard extends StatelessWidget {
     required this.onFillChanged,
     required this.onJump,
     required this.submitted,
+    required this.textScale,
   });
 
   @override
@@ -869,7 +989,13 @@ class _QuestionCard extends StatelessWidget {
           ),
         ]),
         const SizedBox(height: 8),
-        Text(question.stem, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF0F172A))),
+        // 题干可能含 markdown(表格题、加粗关键词、代码块/SVG 图),用 MarkdownView 渲染。
+        // 原本 w600 的加粗语义交给模型用 ** 控制;MarkdownView 文字色保持深 slate-900。
+        MarkdownView(
+          data: question.stem,
+          textScale: textScale,
+          baseTextColor: const Color(0xFF0F172A),
+        ),
         const SizedBox(height: 10),
         // 按题型分派选项渲染:填空 → 输入框;多选 → checkbox 风(可多选);单选 → radio 风。
         if (question.isFill)
@@ -1086,7 +1212,12 @@ class _QuestionCard extends StatelessWidget {
         ],
         if (r.explanation.isNotEmpty) ...[
           const SizedBox(height: 4),
-          Text(r.explanation, style: const TextStyle(fontSize: 12, color: Color(0xFF64748B), height: 1.4)),
+          // 解析正文含 markdown(对比表格/公式),用 MarkdownView 渲染;灰色保留。
+          MarkdownView(
+            data: r.explanation,
+            textScale: textScale,
+            baseTextColor: const Color(0xFF64748B),
+          ),
         ],
       ]),
     );
@@ -1126,12 +1257,15 @@ class _HistoryQuizCard extends StatelessWidget {
   final bool expanded;
   final VoidCallback onToggle;
   final ValueChanged<int> onJump; // seconds → seek the player
+  // AI 页全局文字缩放,透传给历史题的 MarkdownView(stem / explanation)。
+  final double textScale;
 
   const _HistoryQuizCard({
     required this.quiz,
     required this.expanded,
     required this.onToggle,
     required this.onJump,
+    required this.textScale,
   });
 
   @override
@@ -1186,7 +1320,7 @@ class _HistoryQuizCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 for (int i = 0; i < quiz.questions.length; i++)
-                  _HistoryQuestionTile(index: i, q: quiz.questions[i], onJump: onJump),
+                  _HistoryQuestionTile(index: i, q: quiz.questions[i], onJump: onJump, textScale: textScale),
               ],
             ),
           ),
@@ -1201,8 +1335,10 @@ class _HistoryQuestionTile extends StatelessWidget {
   final int index;
   final ArchivedQuizQuestion q;
   final ValueChanged<int> onJump;
+  // AI 页全局文字缩放,透传给 stem / explanation 的 MarkdownView。
+  final double textScale;
 
-  const _HistoryQuestionTile({required this.index, required this.q, required this.onJump});
+  const _HistoryQuestionTile({required this.index, required this.q, required this.onJump, required this.textScale});
 
   @override
   Widget build(BuildContext context) {
@@ -1226,7 +1362,12 @@ class _HistoryQuestionTile extends StatelessWidget {
             const Text('已掌握', style: TextStyle(fontSize: 10, color: Color(0xFF059669))),
         ]),
         const SizedBox(height: 6),
-        Text(q.stem, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF0F172A))),
+        // 历史题干含 markdown(表格题/加粗关键词),用 MarkdownView 渲染;深色保留。
+        MarkdownView(
+          data: q.stem,
+          textScale: textScale,
+          baseTextColor: const Color(0xFF0F172A),
+        ),
         const SizedBox(height: 8),
         // 按题型分派:填空 → 文本回放;多选 → correctIndices 高亮所有正确项 + 学生错选项标红;
         // 单选 → correctIndex 高亮单个正确项。
@@ -1238,7 +1379,12 @@ class _HistoryQuestionTile extends StatelessWidget {
           _buildChoiceOptions(),
         if (q.explanation.isNotEmpty) ...[
           const SizedBox(height: 6),
-          Text(q.explanation, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), height: 1.4)),
+          // 历史解析含 markdown,用 MarkdownView 渲染;灰色保留。
+          MarkdownView(
+            data: q.explanation,
+            textScale: textScale,
+            baseTextColor: const Color(0xFF64748B),
+          ),
         ],
         if (q.chunkStartTime != null)
           Align(
