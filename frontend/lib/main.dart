@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
@@ -27,14 +28,34 @@ void main() async {
   final authService = AuthService();
   await authService.init();
 
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider<AuthService>.value(value: authService),
-      ],
-      child: const StudyQuestApp(),
-    ),
-  );
+  // 全局异常捕获(长期保留):Flutter 渲染阶段(build/layout/paint)的 silent
+  // exception 默认在 release 模式下无输出。重写 onError 让它 print 到 logcat,
+  // 用于诊断 MarkdownView 渲染表格/SVG 时可能抛的隐性异常。
+  // 用 print 不是 debugPrint——release 模式 debugPrint 被吞。
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    // ignore: avoid_print
+    print('🔥 FlutterError: ${details.exception}');
+    // ignore: avoid_print
+    print(details.stack.toString());
+  };
+
+  // runZonedGuarded 兜底异步未处理异常(Timer/Future 里抛的),补全 onError 覆盖不到的。
+  runZonedGuarded(() {
+    runApp(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider<AuthService>.value(value: authService),
+        ],
+        child: const StudyQuestApp(),
+      ),
+    );
+  }, (error, stack) {
+    // ignore: avoid_print
+    print('🔥 Uncaught: $error');
+    // ignore: avoid_print
+    print(stack.toString());
+  });
 }
 
 class StudyQuestApp extends StatelessWidget {

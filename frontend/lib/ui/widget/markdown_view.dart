@@ -51,7 +51,7 @@ class MarkdownView extends StatelessWidget {
   // 设计 token。提到 widget 顶层 const 是为了 styleSheet 闭包里方便引用。
   static const Color _defaultTextColor = Color(0xFF334155); // Slate-700
   static const Color _tableHeadBg = Color(0xFFF1F5F9); // Slate-100
-  static const Color _tableBorder = Color(0xFFE2E8F0); // Slate-200
+  static const Color _tableBorder = Color(0xFFCBD5E1); // Slate-300
   static const Color _codeBlockBg = Color(0xFFF1F5F9); // Slate-100
   static const Color _codeBlockText = Color(0xFF0F172A); // Slate-900
   static const Color _mutedText = Color(0xFF64748B); // Slate-500
@@ -376,8 +376,8 @@ class _SvgViewState extends State<_SvgView> {
     return ClipRect(
       child: SvgPicture.string(
         widget.svgSource,
-        // 宽度撑满父容器,等比缩放;SVG 自带 viewBox 时按比例 fit。
-        width: double.infinity,
+        // Remove width: double.infinity to allow SVG to size intrinsically.
+        // Unbounded width causes infinite intrinsic width exceptions in tables.
         fit: BoxFit.contain,
         alignment: Alignment.center,
         errorBuilder: (context, error, stackTrace) {

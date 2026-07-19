@@ -43,6 +43,7 @@ tools/video-pipeline/config.yaml
 .pytest_cache/
 
 # Private AI docs (handoff notes, design seeds, PRD) — never committed.
+docs/handoff-*
 docs/handoff-ai-*.md
 docs/handoff-admin-*.md
 docs/ai-step3-seed.md

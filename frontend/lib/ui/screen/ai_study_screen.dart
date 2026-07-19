@@ -117,8 +117,6 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     try {
       final resp = await ApiService.fetchEpisodeQuiz(widget.activeUserId, widget.episode.id);
       if (!mounted) return;
-      // ignore: avoid_print — 临时诊断,release 模式下 print 仍输出到 logcat
-      print('[ai-study] _loadQuiz ep=${widget.episode.id} → status=${resp.status} quiz=${resp.quiz == null ? "null" : "${resp.quiz!.questions.length}q"}');
       setState(() {
         _quizStatus = resp.status;
         _quiz = resp.quiz;
@@ -559,8 +557,6 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
 
   // --- Summary card ---
   Widget _buildSummarySection(double textScale) {
-    // ignore: avoid_print
-    print('[ai-study] _buildSummarySection ep=${widget.episode.id} loading=$_summaryLoading summaryNull=${_summary == null} isEmpty=${_summary?.isEmpty}');
     if (_summaryLoading) {
       return const _Card(child: Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())));
     }
@@ -609,8 +605,10 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         if (s.methods.isNotEmpty) ...[
           const SizedBox(height: 10),
           Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: const Color(0xFFF0FDF4), borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.only(left: 12, right: 4, top: 2, bottom: 2),
+            decoration: const BoxDecoration(
+              border: Border(left: BorderSide(color: Color(0xFF10B981), width: 3)),
+            ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Row(children: [
                 Icon(Icons.flag_outlined, size: 14, color: Color(0xFF16A34A)),
@@ -634,8 +632,10 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         if (s.commonMistakes.isNotEmpty) ...[
           const SizedBox(height: 8),
           Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: const Color(0xFFFEF2F2), borderRadius: BorderRadius.circular(8)),
+            padding: const EdgeInsets.only(left: 12, right: 4, top: 2, bottom: 2),
+            decoration: const BoxDecoration(
+              border: Border(left: BorderSide(color: Color(0xFFEF4444), width: 3)),
+            ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Row(children: [
                 Icon(Icons.warning_amber_rounded, size: 14, color: Color(0xFFDC2626)),
@@ -733,10 +733,6 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   Widget _buildQuizSection(double textScale) {
     // TV 模式不做题(需求 #10):练习 section 直接返回空,TV 用户只看 summary/advice。
     if (TvMode.instance.isActive) return const SizedBox.shrink();
-    // [诊断] quiz 消失 bug:记录每次重建走到哪个分支。用 print 不是 debugPrint——
-    // debugPrint 在 release 模式被吞,print 会输出到 logcat。
-    // ignore: avoid_print
-    print('[ai-study] _buildQuizSection ep=${widget.episode.id} loading=$_quizLoading status=$_quizStatus quizNull=${_quiz == null}');
     if (_quizLoading) {
       return const _Card(child: Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())));
     }
@@ -756,8 +752,6 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     }
     if (_quizStatus != QuizStatus.ready || _quiz == null) {
       // unavailable — AI off or no source material. Hide quietly (add-on layer).
-      // ignore: avoid_print
-      print('[ai-study] ⚠️ quiz section HIDING: status=$_quizStatus quizNull=${_quiz == null}');
       return const SizedBox.shrink();
     }
     final questions = _quiz!.questions;
