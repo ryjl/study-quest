@@ -27,6 +27,10 @@ type CourseRepository interface {
 	// SetGrades replaces a course's applicable-grade set (syncs the
 	// course_grades join table). Pass nil/empty to clear all grades.
 	SetGrades(courseID uint, grades []model.Grade) error
+	// ListDistinctGrades returns every distinct grade value currently used by
+	// any course. Used to populate the admin/Flutter grade filter dropdown —
+	// returns custom tags users added (not just the preset list).
+	ListDistinctGrades() ([]model.Grade, error)
 }
 
 type courseRepo struct {
@@ -191,6 +195,24 @@ func (r *courseRepo) SetGrades(courseID uint, grades []model.Grade) error {
 		}
 		return nil
 	})
+}
+
+// ListDistinctGrades returns every distinct grade value currently in use by
+// any course (sorted alphabetically). Used to populate the filter dropdown so
+// admin/Flutter see custom tags beyond the 5 presets.
+func (r *courseRepo) ListDistinctGrades() ([]model.Grade, error) {
+	var rows []string
+	if err := r.db.Model(&model.CourseGrade{}).
+		Distinct("grade").
+		Order("grade asc").
+		Pluck("grade", &rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.Grade, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, model.Grade(s))
+	}
+	return out, nil
 }
 
 // dedupUint returns ids with duplicates removed, preserving order.

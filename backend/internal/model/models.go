@@ -132,29 +132,63 @@ type UserCourseAccess struct {
 	Course    Course    `gorm:"foreignKey:CourseID;constraint:OnDelete:CASCADE"`
 }
 
-// Grade represents the grade enum.
+// Grade 是课程/阅读资源的适用人群 tag。历史上是 1-9 年级硬编码 enum,2026-07-20
+// 改成开放 tag 体系:GradeValid 不再校验具体值,admin 可以填任意自定义 tag
+// (如 "小学""初中""成人""考研""职场")。
+//
+// 兼容性:旧 Grade1-Grade9 常量保留(已有 DB 数据可能含 "1"-"9" 字面值),但
+// 不再用于校验。新增的语义化预设常量 GradePrimary/Junior/Senior/Adult/Universal
+// 是推荐的 5 个预设值,admin 表单默认显示这 5 个 + 允许自定义补充。
 type Grade string
 
 const (
-	Grade1         Grade = "1"
-	Grade2         Grade = "2"
-	Grade3         Grade = "3"
-	Grade4         Grade = "4"
-	Grade5         Grade = "5"
-	Grade6         Grade = "6"
-	Grade7         Grade = "7"
-	Grade8         Grade = "8"
-	Grade9         Grade = "9"
-	GradeUniversal Grade = "universal"
+	// 历史 1-9 年级常量(保留向后兼容,不再用于 Valid 校验)。
+	Grade1 Grade = "1"
+	Grade2 Grade = "2"
+	Grade3 Grade = "3"
+	Grade4 Grade = "4"
+	Grade5 Grade = "5"
+	Grade6 Grade = "6"
+	Grade7 Grade = "7"
+	Grade8 Grade = "8"
+	Grade9 Grade = "9"
+
+	// 2026-07-20 新预设(推荐值)。这 5 个 + admin 自定义组成实际可用 tag 集。
+	GradePrimary   Grade = "primary"   // 小学
+	GradeJunior    Grade = "junior"    // 初中
+	GradeSenior    Grade = "senior"    // 高中
+	GradeAdult     Grade = "adult"     // 成人
+	GradeUniversal Grade = "universal" // 通用(匹配任何过滤)
 )
 
-// Valid checks if the grade matches one of the enum values.
-func (g Grade) Valid() bool {
+// PresetGrades 是 admin 表单默认显示的预设 tag(顺序即展示顺序)。
+// 老的 Grade1-9 不在这里 —— 仅供向后兼容,DB 里若有这些值会以"自定义 tag"
+// 形式回显在 admin 表单上,可删可改。
+var PresetGrades = []Grade{GradePrimary, GradeJunior, GradeSenior, GradeAdult, GradeUniversal}
+
+// PresetGradeLabel 返回预设 grade 的中文 label。非预设值(自定义 tag)返回空串
+// —— 调用方应该 fallback 到原样展示。
+func PresetGradeLabel(g Grade) string {
 	switch g {
-	case Grade1, Grade2, Grade3, Grade4, Grade5, Grade6, Grade7, Grade8, Grade9, GradeUniversal:
-		return true
+	case GradePrimary:
+		return "小学"
+	case GradeJunior:
+		return "初中"
+	case GradeSenior:
+		return "高中"
+	case GradeAdult:
+		return "成人"
+	case GradeUniversal:
+		return "通用"
 	}
-	return false
+	return ""
+}
+
+// Valid 报告 grade 值是否合法。2026-07-20 改成开放 tag 后,任何非空 trim 字符串
+// 都合法 —— 不再限制具体枚举值。空串返回 false(调用方 parseGrades 会把空串
+// 当作"未指定" → 默认 Universal)。
+func (g Grade) Valid() bool {
+	return strings.TrimSpace(string(g)) != ""
 }
 
 // ContentType distinguishes learning content (counts towards watch time,
@@ -171,6 +205,21 @@ const (
 func (c ContentType) Valid() bool {
 	return c == ContentLearning || c == ContentEntertainment
 }
+
+// SubjectCategory 标记 Subject 是学术学科还是娱乐子类。
+//   - academic: 语数英象棋物理化学等(配合 ContentType=learning)
+//   - entertainment: 动画片/电影/纪录片/综艺等(配合 ContentType=entertainment)
+//
+// 注意:Category 只是 UI 分组/过滤标签,真正的"是否计时长/badge/AI"开关仍是
+// Course.ContentType。Category 和 ContentType 应该一致(学术 subject 配 learning
+// content,娱乐 subject 配 entertainment content),这个一致性由 admin UI 和
+// import_service 维持,不在 DB 层强制。
+type SubjectCategory string
+
+const (
+	SubjectCategoryAcademic      SubjectCategory = "academic"
+	SubjectCategoryEntertainment SubjectCategory = "entertainment"
+)
 
 // Subject represents a user-editable course subject (科目), e.g. 语文/数学/英语.
 // Stored as its own table so it can be renamed or deleted independently of
@@ -192,6 +241,13 @@ type Subject struct {
 	Color     string    `gorm:"size:32"`                       // hex e.g. "#f59e0b"
 	SortOrder int       `gorm:"default:0"`
 	IsSystem  bool      `gorm:"default:false"` // true = seeded default, protected from deletion
+	// Category 区分 subject 用途:"academic"(学术学科,默认)或"entertainment"
+	// (娱乐子类如动画片/电影/纪录片/综艺)。让 admin CourseModal 按 content type
+	// 过滤科目下拉(学习课只选学术科目,娱乐课只选娱乐子类),也避免"动画片"这种
+	// 娱乐子类出现在学习大厅的科目过滤里。Course.ContentType 仍是功能开关
+	// (是否计时长/badge/AI),Category 只是分类标签。default 'academic' 让
+	// schema 迁移时老行自动归到学术类。
+	Category string `gorm:"size:20;default:'academic'"`
 	// AIConfigJSON 存学科级默认 AI 配置(同 Course.AIConfigJSON 的模式)。课程级
 	// AIConfig 对应字段为空时,Effective* 方法回退到这里,让自定义学科也有默认 prompt。
 	// 解析/序列化走 AIConfig()/SetAIConfig()。
@@ -282,7 +338,10 @@ func (c Course) GradeDisplay() string {
 	return courseGradeDisplay(c.Grades)
 }
 
-// courseGradeDisplay formats a grade set for the UI. Universal → "全学段通用".
+// courseGradeDisplay formats a grade set for the UI. 2026-07-20 grade 改开放
+// tag 后:预设值用 PresetGradeLabel 本地化(如 primary→"小学"),自定义 tag
+// 原样输出。Universal 单独处理为"全学段通用"。历史上 "1"-"9" 这种纯数字
+// 兼容值仍走数字+年级拼接(向后兼容已有 DB 数据)。
 func courseGradeDisplay(gs []CourseGrade) string {
 	for _, g := range gs {
 		if g.Grade == GradeUniversal {
@@ -291,9 +350,24 @@ func courseGradeDisplay(gs []CourseGrade) string {
 	}
 	parts := make([]string, 0, len(gs))
 	for _, g := range gs {
-		parts = append(parts, string(g.Grade)+"年级")
+		parts = append(parts, gradeLabelForDisplay(string(g.Grade)))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// gradeLabelForDisplay renders a single grade tag value for the UI:
+//   - Preset values (primary/junior/senior/adult) → localized Chinese label.
+//   - Pure-digit values (1-9 legacy) → "<n>年级" for backward compat.
+//   - Universal → "通用".
+//   - Anything else (custom tags like "考研","职场") → as-is.
+func gradeLabelForDisplay(s string) string {
+	if label := PresetGradeLabel(Grade(s)); label != "" {
+		return label
+	}
+	if len(s) > 0 && strings.Trim(s, "0123456789") == "" {
+		return s + "年级"
+	}
+	return s
 }
 
 // Chapter represents a chapter/module within a course.
@@ -674,6 +748,8 @@ type ReadingSeriesGrade struct {
 
 // readingGradeDisplay formats a grade set for the reading-room UI. Shared by
 // all three reading models; each delegates its loaded grade rows here.
+// 2026-07-20: 改开放 tag 后调用 gradeLabelForDisplay —— 预设值本地化、
+// 自定义 tag 原样输出、legacy 数字按"N年级"格式。
 func readingGradeDisplay(gs []Grade) string {
 	for _, g := range gs {
 		if g == GradeUniversal {
@@ -682,7 +758,7 @@ func readingGradeDisplay(gs []Grade) string {
 	}
 	parts := make([]string, 0, len(gs))
 	for _, g := range gs {
-		parts = append(parts, string(g)+"年级")
+		parts = append(parts, gradeLabelForDisplay(string(g)))
 	}
 	return strings.Join(parts, ", ")
 }

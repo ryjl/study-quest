@@ -69,6 +69,7 @@ func RegisterRoutes(
 	v1Restricted.Use(middleware.UserAuthMiddleware(sessionService, userRepo))
 	{
 		v1Restricted.GET("/courses", course.GetCourses)
+		v1Restricted.GET("/courses/grade-tags", course.GetGradeTags)
 		v1Restricted.GET("/courses/:id", course.GetCourseByID)
 		v1Restricted.GET("/courses/:id/episodes", course.GetEpisodesByCourse)
 		v1Restricted.GET("/courses/:id/chapters", course.GetChaptersByCourse)
@@ -171,6 +172,7 @@ func RegisterRoutes(
 
 		// Courses
 		adm.GET("/api/courses", admin.ListCourses)
+		adm.GET("/api/courses/grade-tags", course.GetGradeTags)
 		adm.GET("/api/courses/:id/detail", admin.GetCourseDetail)
 		adm.POST("/api/courses", admin.CreateCourse)
 		adm.PUT("/api/courses/:id", admin.UpdateCourse)

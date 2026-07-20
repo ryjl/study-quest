@@ -160,7 +160,12 @@ function SourceModal({ source, pending, onCancel, onSubmit }: {
         {type === 'alist' && (
           <div>
             <label className="mb-1 block text-xs text-muted">AList Token</label>
-            <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder={source ? '留空保持原 Token 不变' : 'AList 授权令牌'} />
+            <input className="input font-mono" value={token} onChange={(e) => setToken(e.target.value)} placeholder={source ? '留空保持原 Token 不变' : '可选 — 留空则用账号密码自动登录'} />
+            <p className="mt-1 text-xs text-muted leading-relaxed">
+              可选。留空将使用上方的用户名/密码自动登录（token 过期时也会自动续期）。
+              <br />
+              获取方式：AList Web UI → 个人资料 → Token 字段。
+            </p>
           </div>
         )}
         <div className="flex justify-end gap-2 pt-2">

@@ -13,8 +13,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// parseGrades splits a comma-separated grade string (e.g. "3,4,5" or "universal")
-// into a []model.Grade. Whitespace is trimmed; invalid values are dropped.
+// parseGrades splits a comma-separated grade tag string (e.g. "primary,junior"
+// or "universal" or any custom tag like "考研") into a []model.Grade.
+// Whitespace is trimmed; empty values are dropped. As of 2026-07-20 grade is
+// an open tag system — any non-empty trimmed value is accepted (preset values
+// primary/junior/senior/adult/universal + any admin-defined custom tag).
+// Empty input → defaults to [universal].
 func parseGrades(s string) []model.Grade {
 	if s == "" {
 		return []model.Grade{model.GradeUniversal}
@@ -23,10 +27,10 @@ func parseGrades(s string) []model.Grade {
 	out := make([]model.Grade, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		g := model.Grade(p)
-		if g.Valid() {
-			out = append(out, g)
+		if p == "" {
+			continue
 		}
+		out = append(out, model.Grade(p))
 	}
 	if len(out) == 0 {
 		return []model.Grade{model.GradeUniversal}

@@ -12,12 +12,17 @@ package service
 
 // SystemSubjectKeys are the keys of the seeded-default subjects. These rows
 // carry IsSystem=true and are delete-protected (see ErrSystemProtected).
-// "entertainment" is the implicit subject for entertainment courses (which
-// carry no learning stats); it does NOT get an auto-generated badge.
+//
+// 2026-07-20:entertainment 单行已删除,换成 4 个具体娱乐子类(animation/movie/
+// documentary/variety)。注意:这份列表目前是死代码(grep 全仓无引用方,原本是给
+// 不存在的 markSystemDefaults 函数用的),保留仅供参考,真正的 seed 真源在
+// subject_service.go 的 defaults slice。
 var SystemSubjectKeys = []string{
 	"chinese", "math", "english", "physics",
 	"chemistry", "biology", "history", "geography", "politics",
-	"extra", "entertainment",
+	"extra",
+	// 娱乐子类(Category=entertainment,不 seed badge):
+	"animation", "movie", "documentary", "variety",
 }
 
 // SystemTagKeys are the keys of the seeded-default tags.

@@ -56,6 +56,7 @@ export function SubjectsTable() {
               <tr className="border-b border-border text-left text-xs text-muted">
                 <th className="px-4 py-3 font-medium">科目</th>
                 <th className="px-4 py-3 font-medium">Key</th>
+                <th className="px-4 py-3 font-medium">分类</th>
                 <th className="px-4 py-3 font-medium">颜色</th>
                 <th className="px-4 py-3 font-medium">排序</th>
                 <th className="px-4 py-3 text-right font-medium">操作</th>
@@ -75,6 +76,19 @@ export function SubjectsTable() {
                   </td>
                   <td className="px-4 py-3">
                     <code className="rounded bg-card-2 px-1.5 py-0.5 text-xs text-muted">{s.key}</code>
+                  </td>
+                  <td className="px-4 py-3">
+                    {/* 分类:academic=学术学科(学习课用),entertainment=娱乐子类(娱乐课用)。
+                        没标 category 的老数据按 academic 显示(后端 default)。 */}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-xs ${
+                        s.category === 'entertainment'
+                          ? 'bg-purple-100 text-purple-700'
+                          : 'bg-blue-100 text-blue-700'
+                      }`}
+                    >
+                      {s.category === 'entertainment' ? '娱乐' : '学术'}
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     <span className="inline-flex items-center gap-2">

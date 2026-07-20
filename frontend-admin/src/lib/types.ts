@@ -27,6 +27,10 @@ export interface SubjectMeta {
   color: string;
   sort_order?: number;
   is_system?: boolean; // true = seeded default, protected from deletion (still editable)
+  /** 科目用途分类:"academic"(学术学科,默认)或"entertainment"(娱乐子类)。
+   * CourseModal 按课程 content type 过滤可选 subject:学习课选 academic,
+   * 娱乐课选 entertainment。后端 Subject.Category 字段。 */
+  category?: 'academic' | 'entertainment';
   /** 学科级默认 AI 配置。课程级对应字段为空时回退到这里。见 AiConfig。 */
   ai_config?: AiConfig;
 }
@@ -74,31 +78,44 @@ export function tagMetaByID(id: number): TagMeta | undefined {
   return tagCache.find((t) => t.id === id);
 }
 
-export const GRADES: { key: string; name: string }[] = [
-  { key: '1', name: '一年级' },
-  { key: '2', name: '二年级' },
-  { key: '3', name: '三年级' },
-  { key: '4', name: '四年级' },
-  { key: '5', name: '五年级' },
-  { key: '6', name: '六年级' },
-  { key: '7', name: '七年级/初一' },
-  { key: '8', name: '八年级/初二' },
-  { key: '9', name: '九年级/初三' },
-  { key: 'universal', name: '全学段通用' },
+// 2026-07-20: grade 改开放 tag 体系,不再硬编码 1-9 年级。
+// PRESET_GRADES 是 admin 表单默认显示的 5 个预设 tag + 中文 label。
+// 历史的 "1"-"9" 不在预设里 —— 若 DB 已有这些值,会以自定义 chip 形式回显。
+// admin 还可以在表单里追加任意自定义 tag(如"考研""职场""幼小衔接")。
+export const PRESET_GRADES: { key: string; name: string }[] = [
+  { key: 'primary', name: '小学' },
+  { key: 'junior', name: '初中' },
+  { key: 'senior', name: '高中' },
+  { key: 'adult', name: '成人' },
+  { key: 'universal', name: '通用' },
 ];
 
-export function gradeName(key: string): string {
-  return GRADES.find((g) => g.key === key)?.name ?? key;
+// GRADES 保留为 PRESET_GRADES 的别名,向后兼容老引用(避免大面积改名)。
+// 新代码请直接用 PRESET_GRADES。
+export const GRADES = PRESET_GRADES;
+
+// gradeLabel 把单个 grade key 渲染成展示文字。
+//   - 预设值(primary/junior/senior/adult/universal) → 中文 label
+//   - 纯数字(legacy "1"-"9") → "<n>年级"(向后兼容老 DB 数据)
+//   - 其它(自定义 tag 如"考研") → 原样
+export function gradeLabel(key: string): string {
+  const preset = PRESET_GRADES.find((g) => g.key === key);
+  if (preset) return preset.name;
+  if (/^\d+$/.test(key)) return `${key}年级`;
+  return key;
 }
 
+export function gradeName(key: string): string {
+  return gradeLabel(key);
+}
+
+// gradeDisplay 把后端 grade 字段(逗号分隔的 key 列表)渲染成展示文字。
+// universal 单独显示为"全学段通用";多个值用逗号连接各自的 gradeLabel。
 export function gradeDisplay(grade: string): string {
   if (!grade) return '';
-  if (grade === 'universal') return '全学段通用';
-  return grade
-    .split(',')
-    .map((g) => g.trim())
-    .map((g) => (g === 'universal' ? '通用' : `${g}年级`))
-    .join(', ');
+  const parts = grade.split(',').map((g) => g.trim()).filter((g) => g.length > 0);
+  if (parts.length === 1 && parts[0] === 'universal') return '全学段通用';
+  return parts.map(gradeLabel).join(', ');
 }
 
 export interface MediaMeta {

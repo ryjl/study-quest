@@ -265,16 +265,24 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 			}
 			// Resolve the subject key to its ID. Fall back to the first subject
 			// when the key is missing/unknown so import never fails on this.
+			// Keep the resolved subj pointer around so we can read its Category
+			// below (decides ContentType:娱乐子类 → entertainment,学术 → learning)。
 			var subjectID uint
-			if subj, _ := s.subjectRepo.FindByKey(req.NewCourse.Subject); subj != nil {
-				subjectID = subj.ID
+			var subj *model.Subject
+			if found, _ := s.subjectRepo.FindByKey(req.NewCourse.Subject); found != nil {
+				subjectID = found.ID
+				subj = found
 			} else if list, err := s.subjectRepo.List(); err == nil && len(list) > 0 {
 				subjectID = list[0].ID
+				subj = &list[0]
 			} else {
 				return errors.New("no subject available; create a subject first")
 			}
+			// 2026-07-20:以前用 subject key=="entertainment" 字面量判定 ContentType,
+			// 现在改成查 subject.Category —— 选任何娱乐子类(animation/movie/...)都会
+			// 自动设 ContentType=entertainment,不再依赖单行 entertainment 占位。
 			contentType := model.ContentLearning
-			if req.NewCourse.Subject == "entertainment" {
+			if subj != nil && subj.Category == string(model.SubjectCategoryEntertainment) {
 				contentType = model.ContentEntertainment
 			}
 			c := &model.Course{

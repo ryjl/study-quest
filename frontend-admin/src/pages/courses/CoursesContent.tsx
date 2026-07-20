@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
-import { GRADES, subjectMeta, type Course } from '../../lib/types';
+import { subjectMeta, type Course } from '../../lib/types';
 import { useSubjects } from '../../lib/useSubjects';
+import { useGradeTags } from '../../lib/useGradeTags';
 import { useUnlockTemplate, strategyLabel } from '../../lib/useUnlock';
 import { EmptyState, LoadingState, Modal, SubjectBadge, SubjectIcon, Tag } from '../../components/ui';
 import { CourseUnlockTemplateModal } from '../../components/CourseUnlockTemplateModal';
@@ -49,6 +50,9 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
   const toast = useToast();
   const subjectsQ = useSubjects();
   const subjects = subjectsQ.data ?? [];
+  // gradeTags 动态拉取(预设 + admin 已用的自定义 tag),替代旧的硬编码 GRADES。
+  const gradeTagsQ = useGradeTags();
+  const gradeTags = gradeTagsQ.data ?? [];
   const confirm = useConfirm();
 
   const coursesQ = useQuery({ queryKey: ['courses'], queryFn: api.listCourses });
@@ -130,14 +134,14 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
         </div>
         {/* Row 2 */}
         <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-border/60 pt-2.5">
-          {/* Grade filter chips */}
+          {/* Grade filter chips —— 动态拉取,含自定义 tag */}
           <div className="flex flex-wrap items-center gap-1">
             <FilterChip active={gradeFilter === 'all'} onClick={() => setGradeFilter('all')}>
               全部学段
             </FilterChip>
-            {GRADES.map((g) => (
+            {gradeTags.map((g) => (
               <FilterChip key={g.key} active={gradeFilter === g.key} onClick={() => setGradeFilter(g.key)}>
-                {g.name}
+                {g.label}
               </FilterChip>
             ))}
           </div>

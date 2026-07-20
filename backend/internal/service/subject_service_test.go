@@ -38,15 +38,16 @@ func newSubjectSvc(t *testing.T) (*gorm.DB, SubjectService) {
 }
 
 func TestSeedDefaultSubjects(t *testing.T) {
-	_, svc := newSubjectSvc(t)
+	db, svc := newSubjectSvc(t)
 
 	if err := svc.SeedDefaultSubjects(); err != nil {
 		t.Fatalf("first seed: %v", err)
 	}
 	list, _ := svc.List()
-	// 10 academic + 象棋(2026-07-19 升系统级)+ 娱乐 = 12。学科数变化时这里要改。
-	if len(list) != 12 {
-		t.Fatalf("expected 12 default subjects (10 academic + xiangqi + entertainment), got %d", len(list))
+	// 11 academic(语数英象棋课外百科+理化生史地政)+ 4 entertainment(动画/电影/纪录片/综艺) = 15。
+	// 2026-07-20 重构:把单行 entertainment 占位换成 4 个具体娱乐子类。
+	if len(list) != 15 {
+		t.Fatalf("expected 15 default subjects (11 academic + 4 entertainment), got %d", len(list))
 	}
 
 	// Idempotent: seeding again must not duplicate.
@@ -54,7 +55,7 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		t.Fatalf("second seed: %v", err)
 	}
 	list2, _ := svc.List()
-	if len(list2) != 12 {
+	if len(list2) != 15 {
 		t.Fatalf("seed not idempotent: got %d after second seed", len(list2))
 	}
 
@@ -68,6 +69,44 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		if !keys[k] {
 			t.Errorf("default seed missing key %q: %v", k, keys)
 		}
+	}
+
+	// 2026-07-20 新增:Category 字段 + 娱乐子类 seed。
+	// 11 个学术 subject 必须 Category=academic,4 个娱乐子类(animation/movie/
+	// documentary/variety)必须 Category=entertainment。
+	categories := map[string]string{}
+	for _, s := range list2 {
+		categories[s.Key] = s.Category
+	}
+	academicKeys := []string{"chinese", "math", "english", "xiangqi", "extra",
+		"physics", "chemistry", "biology", "history", "geography", "politics"}
+	for _, k := range academicKeys {
+		if categories[k] != string(model.SubjectCategoryAcademic) {
+			t.Errorf("subject %q should have Category=academic, got %q", k, categories[k])
+		}
+	}
+	entertainmentKeys := []string{"animation", "movie", "documentary", "variety"}
+	for _, k := range entertainmentKeys {
+		if categories[k] != string(model.SubjectCategoryEntertainment) {
+			t.Errorf("subject %q should have Category=entertainment, got %q", k, categories[k])
+		}
+	}
+	// 老的单行 "entertainment" 应该不存在了(被 4 个子类替换)。
+	if _, ok := categories["entertainment"]; ok {
+		t.Errorf("legacy 'entertainment' subject row should be removed (replaced by 4 subclasses)")
+	}
+
+	// 娱乐子类不应该 seed badge —— badge 是学术 mastery 的产物,娱乐不计 mastery。
+	badgeRepo := repository.NewBadgeRepository(db)
+	for _, k := range entertainmentKeys {
+		code := "subject_" + k
+		if b, _ := badgeRepo.FindByCode(code); b != nil {
+			t.Errorf("entertainment subject %q should NOT have an auto-seeded badge (code=%s)", k, code)
+		}
+	}
+	// 数学(学术)应该有 badge 作为对照。
+	if b, _ := badgeRepo.FindByCode("subject_math"); b == nil {
+		t.Errorf("academic subject 'math' should have an auto-seeded badge")
 	}
 }
 
@@ -164,14 +203,11 @@ func TestSeedDefaultSubjectsBackfillsExistingInstall(t *testing.T) {
 	}
 
 	list, _ := svc.List()
-	// 5 old + 7 new defaults (5 academic + xiangqi + entertainment) + 1 user = 13.
-	// (2026-07-19 象棋升系统级前是 12;象棋加进 defaults 后变 13。)
-	if len(list) != 13 {
-		// 注:老 install 场景 —— 5 已有 + 6 新 seed defaults(5 junior-high academic +
-		// xiangqi + entertainment)+ 1 user 自定义 = 12。但象棋升系统级前后差 1,
-		// 这里以新逻辑(象棋加进 seed defaults)算:
-		//   5 old + 7 new defaults (5 junior-high + xiangqi + entertainment) + 1 user = 13
-		t.Fatalf("after backfill: expected 13 subjects (5 old + 7 new defaults + 1 user), got %d", len(list))
+	// 5 old + 10 new defaults (xiangqi + chemistry/biology/history/geography/politics
+	// 6 个 academic + animation/movie/documentary/variety 4 个 entertainment) + 1 user = 16。
+	// 2026-07-20 重构:entertainment 单行换成 4 个具体娱乐子类。
+	if len(list) != 16 {
+		t.Fatalf("after backfill: expected 16 subjects (5 old + 10 new defaults + 1 user), got %d", len(list))
 	}
 
 	// The newly-added defaults must now exist.

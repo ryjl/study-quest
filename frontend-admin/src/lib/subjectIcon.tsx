@@ -16,6 +16,9 @@ import {
   Trophy,
   Code,
   Film,
+  Clapperboard,
+  Tv,
+  Video,
   GraduationCap,
   type LucideProps,
 } from 'lucide-react';
@@ -45,6 +48,11 @@ const SUBJECT_ICONS: Record<string, ComponentType<LucideProps>> = {
   politics: Scale, // 道德与法治 — scale
   extra: Compass, // 课外百科 — compass
   entertainment: Film, // 娱乐 — film
+  // 2026-07-20 新增娱乐子类(配合 Subject.Category=entertainment)。
+  animation: Clapperboard, // 动画片
+  movie: Film, // 电影
+  documentary: Video, // 纪录片
+  variety: Tv, // 综艺
   // Common aliases a custom subject might use:
   music: Music,
   art: Palette,

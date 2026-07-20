@@ -67,13 +67,11 @@ func TestSubtitleJobEnqueueGate(t *testing.T) {
 
 	svc := env.newSubtitleJobService()
 
-	// 1. Entertainment episode → skipped with reason.
-	_, skipped, reason, err := svc.Enqueue(entEp, 0, "")
-	if err != nil {
-		t.Fatalf("entertainment enqueue errored: %v", err)
-	}
-	if !skipped || reason != service.SkipReasonEntertainment {
-		t.Fatalf("entertainment episode should be skipped as entertainment, got skipped=%v reason=%q", skipped, reason)
+	// 1. Entertainment episode → 2026-07-20 放开后,娱乐课也走正常字幕流程
+	// (不再 skip),让 AI 链能跑起来。之前这里断言 skip,现在断言入队成功。
+	entJob, skipped, reason, err := svc.Enqueue(entEp, 0, "")
+	if err != nil || skipped || reason != "" {
+		t.Fatalf("entertainment episode should enqueue (not skip) after 2026-07-20 refactor, got job=%v skipped=%v reason=%q err=%v", entJob, skipped, reason, err)
 	}
 
 	// 2. Clean learning episode → enqueued.
@@ -96,10 +94,31 @@ func TestSubtitleJobEnqueueGate(t *testing.T) {
 	env.giveSubtitle(t, learnEp, "1\n00:00:01,000 --> 00:00:02,000\nhi\n")
 	// Mark the queued job terminal so it's no longer active. MarkDone requires
 	// the job to be processing (state guard), so claim it first.
-	if claimed, cerr := env.newSubtitleJobRepo().ClaimNext("test-worker"); cerr != nil || claimed == nil || claimed.ID != job.ID {
-		t.Fatalf("claim before mark-done: claimed=%v err=%v", claimed, cerr)
+	// 2026-07-20:entEp 现在也入了队,ClaimNext 可能拿到 entJob 或 learnEp 的 job
+	// (按 created_at 排序)。需要循环 claim 直到拿到 learnEp 的 job,然后 mark done。
+	jobRepo := env.newSubtitleJobRepo()
+	var claimedID uint
+	for i := 0; i < 5; i++ {
+		c, cerr := jobRepo.ClaimNext("test-worker")
+		if cerr != nil {
+			t.Fatalf("claim before mark-done err: %v", cerr)
+		}
+		if c == nil {
+			t.Fatalf("claim before mark-done: ran out of queued jobs, learnEp job id=%d never claimed", job.ID)
+		}
+		if c.ID == job.ID {
+			claimedID = c.ID
+			break
+		}
+		// 拿到的是 entJob,mark done 跳过它,下一轮再 claim。
+		if err := jobRepo.MarkDone(c.ID); err != nil {
+			t.Fatalf("mark done ent job: %v", err)
+		}
 	}
-	if err := env.newSubtitleJobRepo().MarkDone(job.ID); err != nil {
+	if claimedID != job.ID {
+		t.Fatalf("failed to claim learnEp job id=%d (last claimed=%d)", job.ID, claimedID)
+	}
+	if err := jobRepo.MarkDone(job.ID); err != nil {
 		t.Fatal(err)
 	}
 	_, skipped3, reason3, err := svc.Enqueue(learnEp, 0, "")
@@ -127,11 +146,16 @@ func TestSubtitleJobEnqueueBatchReturnsSkippedReasons(t *testing.T) {
 	if err != nil {
 		t.Fatalf("batch errored: %v", err)
 	}
-	if len(enqueued) != 2 || len(skipped) != 3 {
-		t.Fatalf("enqueued=%v skipped=%v, want 2 enqueued / 3 skipped", enqueued, skipped)
+	// 2026-07-20:娱乐课(entEp)现在也入队(放开 AI 链),所以 3 enqueued
+	// (good1/good2/entEp) + 2 skipped(alreadySubbed + 99999)。
+	if len(enqueued) != 3 || len(skipped) != 2 {
+		t.Fatalf("enqueued=%v skipped=%v, want 3 enqueued / 2 skipped", enqueued, skipped)
 	}
-	if reasons[entEp] != service.SkipReasonEntertainment {
-		t.Errorf("ent episode reason = %q, want %q", reasons[entEp], service.SkipReasonEntertainment)
+	// 娱乐课不应该在 skipped 集合里(改回正常入队)。
+	for _, id := range skipped {
+		if id == entEp {
+			t.Errorf("entertainment episode should NOT be skipped after 2026-07-20 refactor, but was in skipped list", )
+		}
 	}
 	if reasons[alreadySubbed] != service.SkipReasonHasSubtitle {
 		t.Errorf("subbed episode reason = %q, want %q", reasons[alreadySubbed], service.SkipReasonHasSubtitle)
@@ -440,11 +464,17 @@ func TestSubtitleJobAdminHTTPEndpoints(t *testing.T) {
 		Reasons  map[uint]string `json:"reasons"`
 	}
 	json.Unmarshal(resp.Body.Bytes(), &enq)
-	if len(enq.Enqueued) != 1 || enq.Enqueued[0] != ep {
-		t.Fatalf("enqueued = %v, want [%d]", enq.Enqueued, ep)
+	// 2026-07-20:娱乐课(entEp)也入队 → 2 enqueued (ep + entEp), 0 skipped。
+	if len(enq.Enqueued) != 2 {
+		t.Fatalf("enqueued = %v, want 2 (learning ep + entertainment ep)", enq.Enqueued)
 	}
-	if len(enq.Skipped) != 1 || enq.Reasons[entEp] != service.SkipReasonEntertainment {
-		t.Fatalf("skipped = %v reasons = %v, want ent episode skipped as entertainment", enq.Skipped, enq.Reasons)
+	for _, id := range enq.Enqueued {
+		if id != ep && id != entEp {
+			t.Fatalf("unexpected enqueued id %d (want %d or %d)", id, ep, entEp)
+		}
+	}
+	if len(enq.Skipped) != 0 {
+		t.Fatalf("skipped = %v reasons = %v, want empty (entertainment no longer skipped)", enq.Skipped, enq.Reasons)
 	}
 
 	// List shows the queued job with the joined episode title.
@@ -470,15 +500,16 @@ func TestSubtitleJobAdminHTTPEndpoints(t *testing.T) {
 		t.Fatalf("list did not contain the queued job with joined title: %s", resp.Body.String())
 	}
 
-	// Stats reflects one queued.
+	// Stats reflects queued count. 2026-07-20:娱乐课也入队,所以 Queued=2
+	// (learnEp + entEp)。
 	resp = env.do(t, http.MethodGet, "/admin/api/subtitle-jobs/stats", nil)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("stats: %d %s", resp.Code, resp.Body.String())
 	}
 	var stats service.SubtitleJobStats
 	json.Unmarshal(resp.Body.Bytes(), &stats)
-	if stats.Queued != 1 {
-		t.Fatalf("stats.Queued = %d, want 1 (body %s)", stats.Queued, resp.Body.String())
+	if stats.Queued != 2 {
+		t.Fatalf("stats.Queued = %d, want 2 (learnEp + entEp, body %s)", stats.Queued, resp.Body.String())
 	}
 
 	// Find the job id, fail it via repo, then retry via HTTP → back to queued.

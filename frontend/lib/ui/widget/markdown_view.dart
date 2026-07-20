@@ -376,9 +376,14 @@ class _SvgViewState extends State<_SvgView> {
     return ClipRect(
       child: SvgPicture.string(
         widget.svgSource,
-        // Remove width: double.infinity to allow SVG to size intrinsically.
-        // Unbounded width causes infinite intrinsic width exceptions in tables.
-        fit: BoxFit.contain,
+        // 保持无 width/height 约束 —— SVG 自身必须带 width/height/viewBox 属性
+        // (prompt 已强制),让 flutter_svg 按 intrinsic size 测量。曾经试过加
+        // width: double.infinity,被 markdown 表格的 IntrinsicColumnWidth 测出
+        // 无限大 → 布局 NaN → 子节点被 ListView 丢弃甚至 C++ 崩溃(详见
+        // docs/frontend_render_fix_summary.md),绝不能回退。
+        // BoxFit.fitWidth:按父容器宽度等比缩放(比 contain 更适合"全宽图表"),
+        // 仍依赖 SVG 自身的 width/viewBox 做 intrinsic 测量。
+        fit: BoxFit.fitWidth,
         alignment: Alignment.center,
         errorBuilder: (context, error, stackTrace) {
           // 渲染失败:切到降级态(下一帧重建)。

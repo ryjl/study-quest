@@ -21,6 +21,11 @@ type CourseHandler interface {
 	GetEpisodesByCourse(c *gin.Context)
 	GetChaptersByCourse(c *gin.Context)
 	GetUnlockStatus(c *gin.Context)
+	// GetGradeTags returns the merged set of grade tags available for filtering:
+	// the 5 presets (primary/junior/senior/adult/universal) + any custom tags
+	// actually used by courses in the DB. Powers the admin + Flutter filter UI
+	// so custom tags are visible without code changes.
+	GetGradeTags(c *gin.Context)
 }
 
 type courseHandler struct {
@@ -109,7 +114,61 @@ func (h *courseHandler) GetCourses(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
-// annotateWithUnlock fills the Unlock* fields on a course DTO by resolving the
+// gradeTagDTO is one entry in the grade-tag list. Preset tags carry a stable
+// key + localized label; custom tags carry the raw value as both key and label.
+type gradeTagDTO struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Preset is true for the 5 built-in tags (primary/junior/senior/adult/
+	// universal). Custom tags added via admin form have Preset=false so the
+	// UI can visually distinguish them (e.g. show a chip with a delete affordance).
+	Preset bool `json:"preset"`
+}
+
+// GetGradeTags returns the union of preset grades + every distinct grade value
+// currently used by any course. Order: presets first (in canonical order),
+// then custom tags (alphabetical). Lets the admin/Flutter filter dropdown show
+// user-added tags without code changes.
+func (h *courseHandler) GetGradeTags(c *gin.Context) {
+	used, err := h.courseRepo.ListDistinctGrades()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list grade tags: " + err.Error()})
+		return
+	}
+	usedSet := make(map[model.Grade]bool, len(used))
+	for _, g := range used {
+		usedSet[g] = true
+	}
+
+	out := make([]gradeTagDTO, 0, len(model.PresetGrades)+len(used))
+	// Presets first, in canonical order.
+	for _, g := range model.PresetGrades {
+		out = append(out, gradeTagDTO{
+			Key:    string(g),
+			Label:  model.PresetGradeLabel(g),
+			Preset: true,
+		})
+		delete(usedSet, g)
+	}
+	// Remaining used values are custom tags. Sort alphabetically for stability.
+	custom := make([]model.Grade, 0, len(usedSet))
+	for g := range usedSet {
+		custom = append(custom, g)
+	}
+	for i := 1; i < len(custom); i++ {
+		for j := i; j > 0 && custom[j-1] > custom[j]; j-- {
+			custom[j-1], custom[j] = custom[j], custom[j-1]
+		}
+	}
+	for _, g := range custom {
+		out = append(out, gradeTagDTO{
+			Key:    string(g),
+			Label:  string(g), // custom tag: label = raw value
+			Preset: false,
+		})
+	}
+	c.JSON(http.StatusOK, out)
+}
 // per-(user, course) visibility. all_open / empty-strategy courses are left
 // unannotated (zero values) so the client can hide the badge — there's nothing
 // to tell the student. Errors degrade silently to no-annotation (the card just

@@ -192,25 +192,36 @@ func (s *subjectService) Delete(id uint) error {
 // aiHintTemplates.ts(已经死代码,集中化后没人调用)。现在升系统级 + 后端 seed,
 // 统一所有 hint 配置走 Subject.AIConfig,DB 一处真源,前端模板彻底删除。
 func (s *subjectService) SeedDefaultSubjects() error {
+	// defaults 按 Category 分两大组,每组内再按使用频率排:
+	//   academic       学术学科 —— SortOrder 1-12,小学常用(语数英象棋课外百科)
+	//                  排前 5,初中分科排后 7。
+	//   entertainment  娱乐子类 —— SortOrder 20+,动画片/电影/纪录片/综艺。
+	//                  配合 ContentType=entertainment(不计时长/badge,但可生成
+	//                  字幕 + AI)。
+	// 历史上的 "entertainment" 单行已删除,直接换成 4 个具体子类(用户删库
+	// 重建,不做兼容兜底)。Category 字段让 admin UI 按 content type 过滤
+	// 科目下拉(学习课选学术,娱乐课选娱乐子类)。
 	defaults := []model.Subject{
-		{Key: "chinese", Label: "语文", Color: "#60a5fa", SortOrder: 1, IsSystem: true},
-		{Key: "math", Label: "数学", Color: "#f59e0b", SortOrder: 2, IsSystem: true},
-		{Key: "english", Label: "英语", Color: "#34d399", SortOrder: 3, IsSystem: true},
-		{Key: "physics", Label: "物理/科学", Color: "#a78bfa", SortOrder: 4, IsSystem: true},
-		// 初中分科（对齐全学段学校课程）
-		{Key: "chemistry", Label: "化学", Color: "#22d3ee", SortOrder: 5, IsSystem: true},
-		{Key: "biology", Label: "生物", Color: "#84cc16", SortOrder: 6, IsSystem: true},
-		{Key: "history", Label: "历史", Color: "#d97706", SortOrder: 7, IsSystem: true},
-		{Key: "geography", Label: "地理", Color: "#0ea5e9", SortOrder: 8, IsSystem: true},
-		{Key: "politics", Label: "道德与法治", Color: "#ef4444", SortOrder: 9, IsSystem: true},
-		{Key: "extra", Label: "课外百科", Color: "#f43f5e", SortOrder: 10, IsSystem: true},
-		// 象棋:2026-07-19 升为系统学科(以前是 admin 手建,提示词模板在前端)。典型用户
-		// 场景就是象棋课,系统级 + seed 让开箱即用。SortOrder 11 在课外百科后,主科前。
-		{Key: "xiangqi", Label: "象棋", Color: "#dc2626", SortOrder: 11, IsSystem: true},
-		// Entertainment: the implicit subject for fun videos (no learning stats,
-		// no badge). Entertainment courses point SubjectID here to satisfy the
-		// NOT NULL constraint. SortOrder 99 keeps it at the end of any list.
-		{Key: "entertainment", Label: "娱乐", Color: "#8b5cf6", SortOrder: 99, IsSystem: true},
+		// —— 学术学科(Category=academic)——
+		// 小学+通用常用 SortOrder 1-5
+		{Key: "chinese", Label: "语文", Color: "#60a5fa", SortOrder: 1, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "math", Label: "数学", Color: "#f59e0b", SortOrder: 2, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "english", Label: "英语", Color: "#34d399", SortOrder: 3, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "xiangqi", Label: "象棋", Color: "#dc2626", SortOrder: 4, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "extra", Label: "课外百科", Color: "#f43f5e", SortOrder: 5, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		// 初中分科 SortOrder 7-12(留 6 空位做视觉分隔)
+		{Key: "physics", Label: "物理/科学", Color: "#a78bfa", SortOrder: 7, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "chemistry", Label: "化学", Color: "#22d3ee", SortOrder: 8, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "biology", Label: "生物", Color: "#84cc16", SortOrder: 9, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "history", Label: "历史", Color: "#d97706", SortOrder: 10, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "geography", Label: "地理", Color: "#0ea5e9", SortOrder: 11, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		{Key: "politics", Label: "道德与法治", Color: "#ef4444", SortOrder: 12, IsSystem: true, Category: string(model.SubjectCategoryAcademic)},
+		// —— 娱乐子类(Category=entertainment,SortOrder 20+)——
+		// 配合 ContentType=entertainment 使用:不计时长/badge,但支持字幕 + AI。
+		{Key: "animation", Label: "动画片", Color: "#f472b6", SortOrder: 20, IsSystem: true, Category: string(model.SubjectCategoryEntertainment)},
+		{Key: "movie", Label: "电影", Color: "#8b5cf6", SortOrder: 21, IsSystem: true, Category: string(model.SubjectCategoryEntertainment)},
+		{Key: "documentary", Label: "纪录片", Color: "#0ea5e9", SortOrder: 22, IsSystem: true, Category: string(model.SubjectCategoryEntertainment)},
+		{Key: "variety", Label: "综艺", Color: "#f59e0b", SortOrder: 23, IsSystem: true, Category: string(model.SubjectCategoryEntertainment)},
 	}
 
 	// subjectAISeed 是 math/english/xiangqi 三科的默认 AIConfig seed。来源:
@@ -259,10 +270,12 @@ func (s *subjectService) SeedDefaultSubjects() error {
 				continue
 			}
 		}
-		// Ensure each default subject has its auto-generated badge (idempotent),
-		// EXCEPT entertainment (fun videos carry no badge). Run for both
-		// newly-created and already-present subjects so an old install converges.
-		if defaults[i].Key != "entertainment" && s.badgeService != nil {
+		// Ensure each ACADEMIC subject has its auto-generated badge (idempotent).
+		// Entertainment-category subjects (animation/movie/documentary/variety)
+		// carry no badge — fun content doesn't track learning mastery. Run for
+		// both newly-created and already-present subjects so an old install
+		// converges.
+		if defaults[i].Category != string(model.SubjectCategoryEntertainment) && s.badgeService != nil {
 			if err := s.badgeService.SeedSubjectBadge(defaults[i].ID, defaults[i].Key, defaults[i].Label); err != nil {
 				log.Printf("Warning: failed to seed badge for subject %s: %v", defaults[i].Key, err)
 			}

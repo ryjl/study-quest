@@ -78,7 +78,7 @@ func (h *adminHandler) CreateReadingSeries(c *gin.Context) {
 	var req struct {
 		Title       string `json:"title" binding:"required"`
 		Description string `json:"description"`
-		Grade       string `json:"grade" binding:"required"`
+		Grade       string `json:"grade"`
 		Subject     string `json:"subject" binding:"required"`
 		CoverURL    string `json:"cover_url"`
 		SortOrder   int    `json:"sort_order"`
@@ -110,7 +110,7 @@ func (h *adminHandler) UpdateReadingSeries(c *gin.Context) {
 	var req struct {
 		Title       string `json:"title" binding:"required"`
 		Description string `json:"description"`
-		Grade       string `json:"grade" binding:"required"`
+		Grade       string `json:"grade"`
 		Subject     string `json:"subject" binding:"required"`
 		CoverURL    string `json:"cover_url"`
 		SortOrder   int    `json:"sort_order"`
@@ -172,7 +172,7 @@ func (h *adminHandler) CreateReadingBook(c *gin.Context) {
 		Title            string `json:"title" binding:"required"`
 		FileRelativePath string `json:"file_relative_path" binding:"required"`
 		CoverURL         string `json:"cover_url"`
-		Grade            string `json:"grade" binding:"required"`
+		Grade            string `json:"grade"`
 		Subject          string `json:"subject" binding:"required"`
 		TagIDs           []uint `json:"tag_ids"`
 	}
@@ -205,7 +205,7 @@ func (h *adminHandler) UpdateReadingBook(c *gin.Context) {
 		Title            string `json:"title" binding:"required"`
 		FileRelativePath string `json:"file_relative_path" binding:"required"`
 		CoverURL         string `json:"cover_url"`
-		Grade            string `json:"grade" binding:"required"`
+		Grade            string `json:"grade"`
 		Subject          string `json:"subject" binding:"required"`
 		TagIDs           []uint `json:"tag_ids"`
 	}
@@ -266,7 +266,7 @@ func (h *adminHandler) CreateReadingArticle(c *gin.Context) {
 		SourceURL        string `json:"source_url" binding:"required"`
 		WhitelistDomains string `json:"whitelist_domains"`
 		CoverURL         string `json:"cover_url"`
-		Grade            string `json:"grade" binding:"required"`
+		Grade            string `json:"grade"`
 		Subject          string `json:"subject" binding:"required"`
 		TagIDs           []uint `json:"tag_ids"`
 	}
@@ -300,7 +300,7 @@ func (h *adminHandler) UpdateReadingArticle(c *gin.Context) {
 		SourceURL        string `json:"source_url" binding:"required"`
 		WhitelistDomains string `json:"whitelist_domains"`
 		CoverURL         string `json:"cover_url"`
-		Grade            string `json:"grade" binding:"required"`
+		Grade            string `json:"grade"`
 		Subject          string `json:"subject" binding:"required"`
 		TagIDs           []uint `json:"tag_ids"`
 	}

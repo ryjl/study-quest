@@ -1,13 +1,37 @@
 # TODO — StudyQuest 待办清单
 
 > 本文件记录所有"已识别但未实现"的 feature idea，按优先级分组。每次迭代从这里挑选。
-> 最后更新：2026-07-19（用户反馈修复轮次：cache 流程重构 + 课程总览全链路 + AI 内容 normalize + 多个 UX 修复）
+> 最后更新：2026-07-20（SVG 美化 + 卡片折叠 + 年级 tag 化 + 娱乐分类重构 + 放开娱乐 AI）
 
 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、**工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
 
 ---
 
 ## 已完成
+
+### 2026-07-20 用户反馈轮次（SVG 美化 + 卡片折叠 + 年级 tag 化 + 娱乐分类重构）
+
+用户 5 个反馈 + 调研后衍生的娱乐分类重构，一次性交付。**本轮新识别的 4 个技术债见文末「2026-07-20 新识别」段**。
+
+- **SVG 美化（适度放开）**：后端 4 个 prompt（`prompts.go` Summarizer/Quizzer/Advice/CourseSummary）放开图型（流程图/柱状图/饼图/思维导图/对比卡）+ 元素（circle/ellipse/path/marker/渐变）+ 协调色板。客户端 `markdown_view.dart` 只改 `BoxFit.contain → fitWidth`，**严守前一轮 NaN bug 红线**（不加 width/height/clip）。prompt 强制 SVG 带 `width/height/viewBox` 让客户端稳定测量 intrinsic size。
+- **课程总览卡片默认收起**：`course_detail_screen.dart` 加 `_summaryExpanded` state（默认 false），标题行 InkWell + 切换箭头，MarkdownView 用 `if (_summaryExpanded)` 包（**纯布尔显隐无动画**，避免 AnimatedSize 过渡帧触发同类渲染崩溃）。对齐 `_HistoryQuizCard` 模式。
+- **Alist Token UI 引导**：`StorageSourcesSection.tsx` token 输入框下加说明"可选，留空用账号密码自动登录"+ 获取方式。后端逻辑本就支持 token/userpass 二选一。
+- **科目 SortOrder 重排**：`subject_service.go` 12 个科目重排，小学常用（语数英象棋课外百科）排 1-5，初中分科排 7-12。**不删任何科目**（用户后续决定把娱乐拆出来，见下条）。
+- **年级开放 tag 化（预设 + 自定义）**：保留 grade 维度（不合并到 tag 系统），把硬编码 1-9 enum 改成 5 预设（primary/junior/senior/adult/universal）+ admin 自定义输入。后端：`Grade.Valid()` 改成只校验非空、新增 `GET /api/v1/courses/grade-tags` 端点（合并预设 + DB 实际用过的自定义 tag）、`parseGrades` 接受任意非空值、reading 6 处去掉 `binding:"required"`。admin：`GradePicker` 重构成 5 预设 checkbox + 自定义输入框 + chip 回显、`CoursesContent` 过滤栏动态拉取。Flutter：删 `_gradeLabels` 硬编码，改用 `fetchGradeTags` API + `kPresetGradeTags` fallback。
+- **娱乐分类重构 + 放开 AI**（用户洞察"Subject 里 entertainment 是误导的占位符"后衍生）：
+  - 纠正错位：`Subject.Category` 新字段（`academic`/`entertainment`），把单行 `entertainment` 占位 subject 删除，换成 4 个具体娱乐子类（`animation`/`movie`/`documentary`/`variety`）。用户删库重建，不做兼容兜底。
+  - 拆开 `subject`/`content_type` 硬绑定：`CourseModal` 不再强制 entertainment 课程用 'entertainment' subject，改成按 Category 过滤下拉（学习选 academic，娱乐选 entertainment 子类）。
+  - 放开娱乐 AI：删 `subtitle_service.go` 的 entertainment 字幕门禁 → 娱乐课现在走完整 AI 链（字幕→summary→quiz→advice）。`import_service.go` 改成按 subject.Category 判断 content_type。
+  - **娱乐课仍不触发 badge**：`EvaluateRules` 唯一调用点在 `progress_service:260`，娱乐分支 line 169 早 return 走不到——已验证。娱乐进度仍物理分表（`entertainment_progresses`），学习数据零污染。
+  - admin `Subjects` 列表加"分类"列、`CourseModal` 放开 AI 配置入口（不再 `!isEntertainment &&` 隐藏）、subjectIcon 加 4 个娱乐子类图标。
+- 验证：`go build` ✓ / `go test ./internal/...`（既有 flaky 见技术债）/ `tsc --noEmit` ✓ / `npm test` 55/55 ✓ / `flutter analyze` 0 errors ✓。
+
+### 2026-07-20 新识别的技术债（本轮 review 发现，未处理）
+
+1. **[中] 既有 flaky test `TestRegenerateAdvice_NilSafeAndDedupes`**：`NewAIService` 每次调用都 `go s.runWorker()` 启动**永不退出**的后台 goroutine，配合 in-memory SQLite 连接池隔离（每个 pooled connection 看不到 :memory: 表），导致整套 service test 并行跑时间歇性 `no such table: users`。**HEAD 也 flaky**（5 次约 1 次 fail），非本轮引入。修法：给 worker 加 context cancellation，或 advice/summary 测试改用 `testutil.NewFileDB`。
+2. **[中] Answer 表无 content_type 过滤（错题本前置）**：娱乐课做 quiz 后 Answer 数据会进 `answers` 表。未来做"错题本"（P0 项）时，若直接聚合 `answers` 表会把娱乐答题记录混入。需在错题本查询 JOIN courses 按 `content_type='learning'` 过滤。
+3. **[低] ReadingRoom subject 下拉未按 Category 过滤**：admin 阅读室编辑表单的 subject 下拉显示所有 subject（含娱乐子类），admin 理论上可把书挂在"动画片"subject 下。属既有开放性，不影响功能。考虑按 Category 过滤或给阅读模块也加 content_type 概念。
+4. **[低] CourseModal useEffect 依赖不全**：`[open, course]` 没列 `subjects`，modal 打开时若 subjects 还在加载，subject state 短暂为空（后端 `binding:"required"` 会 400 拒绝空 subject，不会写脏数据）。既有问题，影响小（admin 刷新后 subjects 预热）。
 
 ### 2026-07-19 用户反馈修复轮次（commit `c9e1f04` + `fc6a730` + `99b408f`）
 

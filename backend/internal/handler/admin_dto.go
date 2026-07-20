@@ -354,6 +354,9 @@ type subjectDTO struct {
 	Color     string `json:"color"`
 	SortOrder int    `json:"sort_order"`
 	IsSystem  bool   `json:"is_system"` // true = seeded default, protected from deletion
+	// Category: "academic"(学术学科)或"entertainment"(娱乐子类)。让 admin
+	// CourseModal 按 content type 过滤可选科目。详见 model.SubjectCategory。
+	Category string `json:"category"`
 	// 学科级默认 AI 提示。从 Subject.AIConfigJSON(单一 JSON blob)解析出来,DTO
 	// 层拆成 5 个平铺字段方便前端表单回显。课程级对应字段为空时回退到这里。详见
 	// model.Subject.AIConfig / Course.Effective*Hint。
@@ -376,6 +379,7 @@ func toSubjectDTO(s model.Subject) subjectDTO {
 		Color:       s.Color,
 		SortOrder:   s.SortOrder,
 		IsSystem:    s.IsSystem,
+		Category:    s.Category,
 		WhisperHint: cfg.WhisperHint,
 		SummaryHint: cfg.SummaryHint,
 		QuizHint:    cfg.QuizHint,

@@ -61,6 +61,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   // Subject catalog for resolving the course's subject key → label/color.
   List<Subject> _subjectsCatalog = const [];
 
+  // 课程总览卡片展开状态。默认收起——summary 文本可能很长(含表格/SVG),默认
+  // 全部展开会把下方"闯关目录"推到很远。用户点标题行展开看全文。无动画,纯布尔
+  // 显隐——避免 AnimatedSize 在过渡帧测量异常触发同类的"组件消失"渲染 bug
+  // (见 docs/frontend_render_fix_summary.md)。
+  bool _summaryExpanded = false;
+
   @override
   void initState() {
     super.initState();
@@ -383,25 +389,38 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFEF3C7),
-                      borderRadius: BorderRadius.circular(12),
+              // 标题行:整行可点切换展开/收起。InkWell 无圆角(已在卡片外层),
+              // 与 _HistoryQuizCard(ai_study_screen.dart) 的 toggle 模式一致。
+              InkWell(
+                onTap: () => setState(() => _summaryExpanded = !_summaryExpanded),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFEF3C7),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(Icons.auto_stories_outlined, color: Color(0xFFD97706), size: 22),
                     ),
-                    child: const Icon(Icons.auto_stories_outlined, color: Color(0xFFD97706), size: 22),
-                  ),
-                  const SizedBox(width: 12),
-                  const Text(
-                    '课程总览',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        '课程总览',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+                      ),
+                    ),
+                    Icon(
+                      _summaryExpanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
+                      size: 26,
+                      color: const Color(0xFF64748B),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 16),
-              // 陈旧提示:字幕逐节补全后内容可能未涵盖最新课时。
+              const SizedBox(height: 12),
+              // 陈旧提示:字幕逐节补全后内容可能未涵盖最新课时。收起态也显示
+              // (诚实告诉用户总览可能过期,不展开也能看到)。
               if (summary.isStale)
                 Container(
                   margin: const EdgeInsets.only(bottom: 12),
@@ -427,10 +446,23 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     ],
                   ),
                 ),
-              MarkdownView(
-                data: summary.summaryText!,
-                textScale: 1.0,
-              ),
+              // 收起态显示一行小灰字提示,展开时显示完整 summaryText(含表格/SVG)。
+              // 纯布尔显隐,不用动画——避免 AnimatedSize 在过渡帧触发测量异常。
+              if (!_summaryExpanded)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '点开看完整总览 →',
+                    style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                  ),
+                ),
+              if (_summaryExpanded) ...[
+                const SizedBox(height: 4),
+                MarkdownView(
+                  data: summary.summaryText!,
+                  textScale: 1.0,
+                ),
+              ],
               const SizedBox(height: 12),
               // 底部元信息:生成时间 + 模型。RFC3339 解析后本地化展示。
               if (summary.generatedAt != null || (summary.modelUsed ?? '').isNotEmpty)

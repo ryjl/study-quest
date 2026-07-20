@@ -148,7 +148,6 @@ type SubtitleJobStats struct {
 const (
 	SkipReasonHasSubtitle  = "has_subtitle"  // episode already has a subtitle row
 	SkipReasonAlreadyQueue = "already_queued" // episode already has an active job
-	SkipReasonEntertainment = "entertainment" // entertainment content, no subtitles needed
 	SkipReasonNotFound     = "not_found"      // episode id doesn't exist
 )
 
@@ -196,15 +195,10 @@ func (s *subtitleJobService) Enqueue(episodeID uint, priority int, language stri
 	if ep == nil {
 		return nil, true, SkipReasonNotFound, nil
 	}
-	// Entertainment content doesn't get subtitles — it's pure playback. The
-	// flag lives on the course, not the episode, so we join through the course.
-	contentType, cerr := s.episodeRepo.FindCourseContentType(episodeID)
-	if cerr != nil {
-		return nil, false, "", cerr
-	}
-	if contentType == string(model.ContentEntertainment) {
-		return nil, true, SkipReasonEntertainment, nil
-	}
+	// 2026-07-20:娱乐内容现在也支持生成字幕 + AI(summary/quiz/advice)链。
+	// 之前 entertainment 在这里被主动 skip 是因为"娱乐视频没必要做学习分析",
+	// 但用户反馈娱乐课(动画片/电影/纪录片)也想用 AI 讨论,所以放开。娱乐课
+	// 仍不计入学习时长/badge —— 那个开关在 progress_service 而不是这里。
 
 	// Already has a subtitle? Don't re-queue.
 	hasSub, herr := s.episodeRepo.HasSubtitle(episodeID)

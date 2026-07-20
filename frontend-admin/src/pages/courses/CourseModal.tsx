@@ -61,8 +61,18 @@ export function CreateEditCourseModal({
       setGrade(course?.grades ?? course?.grade ?? '');
       const ct = (course?.content_type === 'entertainment' ? 'entertainment' : 'learning') as 'learning' | 'entertainment';
       setContentType(ct);
-      // Entertainment courses are pinned to the "entertainment" subject.
-      setSubject(ct === 'entertainment' ? 'entertainment' : (course?.subject ?? subjects[0]?.key ?? ''));
+      // 2026-07-20:不再强制 entertainment 课程用 'entertainment' 占位 subject。
+      // 直接保留 course.subject(可能是 animation/movie 等娱乐子类 key)。
+      // 新建时若是娱乐类型,默认选第一个娱乐子类(避免空 subject)。
+      if (course?.subject) {
+        setSubject(course.subject);
+      } else if (ct === 'entertainment') {
+        const firstEnt = subjects.find((s) => s.category === 'entertainment');
+        setSubject(firstEnt?.key ?? subjects[0]?.key ?? '');
+      } else {
+        const firstAcad = subjects.find((s) => s.category === 'academic' || !s.category);
+        setSubject(firstAcad?.key ?? subjects[0]?.key ?? '');
+      }
       setCoverUrl(course?.cover_url ?? '');
       setTagIDs(course?.tag_ids ?? []);
       // AI switches default OFF when unset — AI is an opt-in add-on layer; a
@@ -88,7 +98,11 @@ export function CreateEditCourseModal({
         // backward compatibility with any older middleware path.
         grades: grade,
         grade,
-        subject: isEntertainment ? 'entertainment' : subject,
+        // 2026-07-20:subject 和 content_type 不再硬绑定。直接传当前选中的 subject
+        // (可能是 academic 或 entertainment 子类的 key)。后端 import_service 会
+        // 根据 subject.Category 自动判定 content_type,这里仍然显式传 content_type
+        // 保持一致性。
+        subject,
         content_type: contentType,
         cover_url: coverUrl,
         tag_ids: tagIDs,
@@ -134,14 +148,30 @@ export function CreateEditCourseModal({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => { setContentType('learning'); setSubject(course?.subject ?? subjects[0]?.key ?? ''); }}
+              onClick={() => {
+                setContentType('learning');
+                // 切到学习时,若当前 subject 是娱乐子类,清空让用户重选学术科目。
+                const cur = subjects.find((s) => s.key === subject);
+                if (cur?.category === 'entertainment') {
+                  const firstAcad = subjects.find((s) => s.category === 'academic' || !s.category);
+                  setSubject(firstAcad?.key ?? '');
+                }
+              }}
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${!isEntertainment ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
             >
               <BookOpen size={14} /> 学习
             </button>
             <button
               type="button"
-              onClick={() => { setContentType('entertainment'); setSubject('entertainment'); }}
+              onClick={() => {
+                setContentType('entertainment');
+                // 切到娱乐时,若当前 subject 是学术科目,清空让用户重选娱乐子类。
+                const cur = subjects.find((s) => s.key === subject);
+                if (!cur || cur.category === 'academic' || !cur.category) {
+                  const firstEnt = subjects.find((s) => s.category === 'entertainment');
+                  setSubject(firstEnt?.key ?? '');
+                }
+              }}
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${isEntertainment ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
             >
               <Film size={14} /> 娱乐
@@ -149,18 +179,27 @@ export function CreateEditCourseModal({
           </div>
         </div>
 
-        {!isEntertainment && (
-          <div>
-            <label className="mb-1 block text-xs text-muted">类别 / 科目</label>
-            <select className="input" value={subject} onChange={(e) => setSubject(e.target.value)}>
-              {subjects.filter((s) => s.key !== 'entertainment').map((s) => (
+        {/* 科目下拉:根据 content type 过滤显示对应 category 的 subject。
+            2026-07-20:不再隐藏整个块,娱乐课也能选科目(动画片/电影/纪录片/综艺)。 */}
+        <div>
+          <label className="mb-1 block text-xs text-muted">
+            {isEntertainment ? '娱乐分类' : '类别 / 科目'}
+          </label>
+          <select className="input" value={subject} onChange={(e) => setSubject(e.target.value)}>
+            {subjects
+              .filter((s) => {
+                // 学习课:显示 academic(或没标 category 的旧数据,默认按 academic 处理)。
+                // 娱乐课:显示 entertainment。
+                if (isEntertainment) return s.category === 'entertainment';
+                return s.category === 'academic' || !s.category;
+              })
+              .map((s) => (
                 <option key={s.key} value={s.key}>
                   {s.label} ({s.key})
                 </option>
               ))}
-            </select>
-          </div>
-        )}
+          </select>
+        </div>
 
         <ImageUpload label="封面图" value={coverUrl} onChange={setCoverUrl} />
 
@@ -170,31 +209,29 @@ export function CreateEditCourseModal({
         </div>
 
         {/* AI 提示配置已迁移到「AI 控制台 → Prompt 配置」tab,这里只留跳转入口。
-            课程基本信息(title/grade/subject/cover/tags)和课程级 AI 开关仍在这里,
-            因为它们是课程本体的语义属性;具体的 5 字段 hint 配置挪到 AI 控制台集中管理,
-            避免 CourseModal 过载(AI 是附加层,课程 CRUD 不应被它绑架)。 */}
-        {!isEntertainment && (
-          <div className="flex items-center justify-between rounded-xl border border-border bg-card-2 p-3">
-            <div>
-              <div className="text-xs font-medium text-txt">AI 提示与 Prompt 预览</div>
-              <div className="mt-0.5 text-[11px] text-muted">5 个 hint(Whisper/总结/出题/建议/术语字典)+ 学科默认 + Prompt 预览,集中管理。</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                if (!isEdit || !course) {
-                  toast.info('请先创建课程,再配置 AI 提示');
-                  return;
-                }
-                navigate(`/admin/ai-console?tab=prompt&course=${course.id}`);
-              }}
-              className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
-              title="跳转到 AI 控制台 配置该课程的 AI 提示"
-            >
-              配置 →
-            </button>
+            2026-07-20:娱乐课也支持 AI(字幕→summary→quiz→advice 链已放开),
+            所以 AI 配置入口不再隐藏。课程基本信息(title/grade/subject/cover/tags)
+            和课程级 AI 开关仍在这里;具体的 5 字段 hint 配置挪到 AI 控制台集中管理。 */}
+        <div className="flex items-center justify-between rounded-xl border border-border bg-card-2 p-3">
+          <div>
+            <div className="text-xs font-medium text-txt">AI 提示与 Prompt 预览</div>
+            <div className="mt-0.5 text-[11px] text-muted">5 个 hint(Whisper/总结/出题/建议/术语字典)+ 学科默认 + Prompt 预览,集中管理。</div>
           </div>
-        )}
+          <button
+            type="button"
+            onClick={() => {
+              if (!isEdit || !course) {
+                toast.info('请先创建课程,再配置 AI 提示');
+                return;
+              }
+              navigate(`/admin/ai-console?tab=prompt&course=${course.id}`);
+            }}
+            className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
+            title="跳转到 AI 控制台 配置该课程的 AI 提示"
+          >
+            配置 →
+          </button>
+        </div>
 
         <div className="space-y-2 rounded-xl border border-border bg-card-2 p-3">
           <label className="flex items-center gap-2 text-sm">

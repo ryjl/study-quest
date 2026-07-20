@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 )
@@ -56,11 +55,6 @@ func (s *courseService) GetCourseByID(id uint) (*model.Course, error) {
 }
 
 func (s *courseService) CreateCourse(title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiConfig model.AIConfig, aiSummaryEnabled, aiQuizEnabled bool) (*model.Course, error) {
-	for _, g := range grades {
-		if !g.Valid() {
-			return nil, errors.New("invalid course grade value: " + string(g))
-		}
-	}
 	if !contentType.Valid() {
 		contentType = model.ContentLearning
 	}
@@ -104,11 +98,6 @@ func (s *courseService) CreateCourse(title string, grades []model.Grade, subject
 }
 
 func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade, subjectID uint, contentType model.ContentType, coverURL string, tagIDs []uint, attachmentJSON string, aiConfig model.AIConfig, aiSummaryEnabled, aiQuizEnabled bool) (*model.Course, error) {
-	for _, g := range grades {
-		if !g.Valid() {
-			return nil, errors.New("invalid course grade value: " + string(g))
-		}
-	}
 	if !contentType.Valid() {
 		contentType = model.ContentLearning
 	}

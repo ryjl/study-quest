@@ -109,6 +109,9 @@ export const api = {
   async listCourses(): Promise<Course[]> {
     return request('/admin/api/courses');
   },
+  async listGradeTags(): Promise<{ key: string; label: string; preset: boolean }[]> {
+    return request('/admin/api/courses/grade-tags');
+  },
   async getCourse(id: number): Promise<CourseDetail> {
     return request(`/admin/api/courses/${id}/detail`);
   },

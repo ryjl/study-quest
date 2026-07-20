@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 // 搜索区 Focus widget 的 onKeyEvent)。
 import 'package:flutter/services.dart';
 import '../../model/course.dart';
+import '../../model/grade_tag.dart';
 import '../../model/progress.dart';
 import '../../model/subject.dart';
 import '../../model/tag.dart';
@@ -17,17 +18,16 @@ import '../widget/state_widgets.dart';
 import '../widget/subject_icon.dart';
 import 'course_detail_screen.dart';
 
-// Backend stores grade as a stable key ("1".."9", "universal"); the UI shows
-// Chinese labels. These maps bridge the two so filtering compares keys and
-// display resolves to labels (fixes the old "'3'+'年级'='3年级' ≠ '三年级'" bug).
-const Map<String, String> _gradeLabels = {
-  '1': '一年级', '2': '二年级', '3': '三年级', '4': '四年级',
-  '5': '五年级', '6': '六年级', '7': '七年级', '8': '八年级', '9': '九年级',
-  'universal': '通用',
-};
-String gradeLabelOf(String key) => _gradeLabels[key] ?? '$key 年级';
-// Filter chips: "全部" + each grade key, shown via gradeLabelOf.
-final List<String> _gradeFilterKeys = ['全部', ..._gradeLabels.keys];
+// 2026-07-20: grade 改成开放 tag 体系,过滤栏不再写死 1-9 年级。
+// _gradeTagsCatalog 从 /api/v1/courses/grade-tags 动态拉取(5 预设 + admin 已
+// 用的自定义 tag)。fallback 用 kPresetGradeTags 兜底,保证端点失败也能过滤。
+// gradeLabelOf 现在从 catalog 查 label,找不到原样输出(自定义 tag)。
+String gradeLabelOf(String key, List<GradeTag> catalog) {
+  for (final t in catalog) {
+    if (t.key == key) return t.label;
+  }
+  return key;
+}
 
 class CourseListScreen extends StatefulWidget {
   final int activeUserId;
@@ -92,10 +92,17 @@ class _CourseListScreenState extends State<CourseListScreen> {
   List<Tag> _tagsCatalog = const [];
   final Set<int> _selectedTagIDs = {};
 
-  /// "全部" + one entry per subject key. Refreshed when the catalog loads.
+  // Grade-tag catalog fetched from /api/v1/courses/grade-tags. Drives the
+  // grade filter chips. 2026-07-20: grade 改开放 tag,不再写死 1-9 年级。
+  // 失败 fallback 到 kPresetGradeTags(5 个预设)。
+  List<GradeTag> _gradeTagsCatalog = const [];
+
+  /// "全部" + one entry per ACADEMIC subject key. Refreshed when the catalog loads.
+  /// 2026-07-20:过滤掉 entertainment 子类(动画片/电影/纪录片/综艺)——它们属于
+  /// 娱乐 tab,不应出现在学习大厅的科目过滤里。娱乐 tab 重新启用时再单独处理。
   List<String> get _subjectFilters => [
     '全部',
-    ..._subjectsCatalog.map((s) => s.key),
+    ..._subjectsCatalog.where((s) => !s.isEntertainment).map((s) => s.key),
   ];
 
   @override
@@ -119,6 +126,12 @@ class _CourseListScreenState extends State<CourseListScreen> {
     // Load the tag catalog the same way (drives the multi-select chips).
     ApiService.fetchTags(widget.activeUserId).then((list) {
       if (mounted) setState(() => _tagsCatalog = list);
+    });
+    // Load the grade-tag catalog (drives the grade filter chips).
+    // 失败时用 kPresetGradeTags 兜底,保证过滤栏始终可用。
+    ApiService.fetchGradeTags(widget.activeUserId).then((list) {
+      if (!mounted) return;
+      setState(() => _gradeTagsCatalog = list.isEmpty ? kPresetGradeTags : list);
     });
   }
 
@@ -148,7 +161,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
           final filteredCourses = courses.where((c) {
             final matchSearch = c.title.toLowerCase().contains(_searchQuery.toLowerCase());
             final matchSubject = _selectedSubject == '全部' || c.subject == _selectedSubject;
-            final matchGrade = _selectedGrade == '全部' || c.grade == _selectedGrade;
+            // Grade 匹配:course.grade 可能是 comma-separated 的多个 key
+            // (如 "primary,junior"),用 split 后 contains 判断,选了其中任一
+            // key 就匹配。universal 在后端 SQL 层也会被匹配到任意过滤。
+            final courseGradeKeys = c.grade.split(',').map((s) => s.trim()).toSet();
+            final matchGrade = _selectedGrade == '全部' || courseGradeKeys.contains(_selectedGrade);
             // Tag multi-select: course matches if it carries ANY of the
             // selected tag IDs (intersection of selected set and course tagIds).
             final matchTag = _selectedTagIDs.isEmpty ||
@@ -537,7 +554,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
     // Real first tag (replaces mock tag rotation).
     final tags = course.tagsList;
     final tag = tags.isNotEmpty ? tags.first : '';
-    final gradeLabel = gradeLabelOf(course.grade);
+    // course.grade 可能是 comma-separated 的多个 key(如 "primary,junior")。
+    // 卡片角标只显示第一个 key 的 label(主学段),完整列表在详情页看。
+    final gradeKeys = course.grade.split(',').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    final firstGradeKey = gradeKeys.isNotEmpty ? gradeKeys.first : '';
+    final gradeLabel = gradeLabelOf(firstGradeKey, _gradeTagsCatalog);
     final cardLabel = tag.isEmpty ? gradeLabel : '$tag | $gradeLabel';
     // TV 大字模式:卡片各处字号放大,提升远距离可读性。
     final tv = TvMode.instance.isActive;
@@ -799,16 +820,16 @@ class _CourseListScreenState extends State<CourseListScreen> {
                   ),
                   const SizedBox(height: 24),
                   
-                  const Text('适合年级', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textMuted)),
+                  const Text('适合学段', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textMuted)),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 10,
                     runSpacing: 10,
-                    children: _gradeFilterKeys.map((grade) {
+                    children: ['全部', ..._gradeTagsCatalog.map((t) => t.key)].map((grade) {
                       final active = _selectedGrade == grade;
                       return ChoiceChip(
                         label: Text(
-                          grade == '全部' ? '所有年级' : gradeLabelOf(grade),
+                          grade == '全部' ? '所有学段' : gradeLabelOf(grade, _gradeTagsCatalog),
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,

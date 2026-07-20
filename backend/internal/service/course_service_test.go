@@ -41,15 +41,27 @@ func TestCourseService(t *testing.T) {
 		}
 	})
 
-	t.Run("CreateCourseInvalidGrade", func(t *testing.T) {
-		_, err := svc.CreateCourse("Invalid", []model.Grade{model.Grade("12")}, subjects["math"].ID, model.ContentLearning, "", nil, "", model.AIConfig{}, false, false)
-		if err == nil {
-			t.Error("Expected error creating course with invalid grade, got nil")
+	t.Run("CreateCourseCustomGradeTag", func(t *testing.T) {
+		// 2026-07-20: grade 是开放 tag 体系,任意非空 trim 字符串都合法。
+		// 不再有硬编码 enum 校验。"考研" 是自定义 tag,合法且原样显示。
+		course, err := svc.CreateCourse("Custom Tag", []model.Grade{model.Grade("考研")}, subjects["math"].ID, model.ContentLearning, "", nil, "", model.AIConfig{}, false, false)
+		if err != nil {
+			t.Fatalf("custom grade tag '考研' should be accepted, got error: %v", err)
+		}
+		if course.GradeDisplay() != "考研" {
+			t.Errorf("custom tag '考研' should display as-is, got: %s", course.GradeDisplay())
 		}
 
-		_, err = svc.CreateCourse("Invalid Parts", []model.Grade{model.Grade("3"), model.Grade("invalid")}, subjects["math"].ID, model.ContentLearning, "", nil, "", model.AIConfig{}, false, false)
-		if err == nil {
-			t.Error("Expected error creating course with invalid grade part, got nil")
+		// 混合预设 + 自定义 tag 也应该接受。
+		mixed, err := svc.CreateCourse("Mixed Tags", []model.Grade{model.GradePrimary, model.Grade("职场")}, subjects["math"].ID, model.ContentLearning, "", nil, "", model.AIConfig{}, false, false)
+		if err != nil {
+			t.Fatalf("mixed preset+custom grade tags should be accepted, got error: %v", err)
+		}
+		if mixed == nil || mixed.ID == 0 {
+			t.Fatal("mixed-tag course should be created with valid ID")
+		}
+		if mixed.GradeDisplay() != "小学, 职场" {
+			t.Errorf("mixed tags should display localized + raw, got: %s", mixed.GradeDisplay())
 		}
 	})
 

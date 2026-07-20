@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../model/user.dart';
 import '../model/course.dart';
+import '../model/grade_tag.dart';
 import '../model/subject.dart';
 import '../model/tag.dart';
 import '../model/progress.dart';
@@ -155,6 +156,24 @@ class ApiService {
       return list.map((e) => Course.fromJson(e)).toList();
     }
     _fail(response.statusCode, '获取课程库失败: ${response.statusCode}');
+  }
+
+  // 3a-bis. Fetch the available grade-tag list (5 presets + any custom tags
+  // actually used by courses). Drives the filter chips so custom tags show up
+  // without an app update. Non-fatal: callers fall back to the 5 presets.
+  static Future<List<GradeTag>> fetchGradeTags(int activeUserId) async {
+    final response = await _httpClient.get(
+      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/grade-tags'),
+      headers: _headers(activeUserId),
+    );
+    if (response.statusCode == 200) {
+      final List<dynamic> list = jsonDecode(response.body);
+      return list
+          .map((e) => GradeTag.fromJson(e as Map<String, dynamic>))
+          .toList(growable: false);
+    }
+    // Non-fatal: callers fall back to the built-in presets.
+    return const [];
   }
 
   // 3b. Fetch the subject catalog (for filter chips + card labels/gradients).

@@ -11,18 +11,27 @@ class Subject {
   final String key;
   final String label;
   final String color;
+  // Category 区分学术学科("academic")和娱乐子类("entertainment",如动画片/电影/
+  // 纪录片)。让客户端过滤栏只显示学术 subject(避免学习大厅出现"动画片"过滤项)。
+  // 后端 Subject.Category 字段,老数据无值时按 'academic' 处理(后端 default)。
+  final String category;
 
   const Subject({
     required this.key,
     required this.label,
     this.color = '#9ca3af',
+    this.category = 'academic',
   });
+
+  /// 是否娱乐子类(动画片/电影/纪录片/综艺)。
+  bool get isEntertainment => category == 'entertainment';
 
   factory Subject.fromJson(Map<String, dynamic> json) {
     return Subject(
       key: json['key'] ?? json['Key'] ?? '',
       label: json['label'] ?? json['Label'] ?? '',
       color: json['color'] ?? json['Color'] ?? '#9ca3af',
+      category: (json['category'] ?? json['Category'] ?? 'academic').toString(),
     );
   }
 
@@ -30,11 +39,13 @@ class Subject {
     String? key,
     String? label,
     String? color,
+    String? category,
   }) {
     return Subject(
       key: key ?? this.key,
       label: label ?? this.label,
       color: color ?? this.color,
+      category: category ?? this.category,
     );
   }
 }
