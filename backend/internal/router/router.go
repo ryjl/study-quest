@@ -241,6 +241,7 @@ func RegisterRoutes(
 		adm.PUT("/api/ai/providers/:id", admin.UpdateAIProvider)
 		adm.DELETE("/api/ai/providers/:id", admin.DeleteAIProvider)
 		adm.POST("/api/ai/providers/:id/test", admin.TestAIProvider)
+		adm.POST("/api/ai/providers/test-real", admin.RealTestAIProvider)
 		adm.POST("/api/ai/providers/models", admin.ListAIProviderModels)
 		adm.GET("/api/ai/status", admin.GetAIStatus)
 		// AI module — generation jobs + observability.

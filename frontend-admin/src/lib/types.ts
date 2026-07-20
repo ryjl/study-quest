@@ -407,6 +407,35 @@ export interface AiModelsResult {
   message?: string;
 }
 
+// Result of POST /admin/api/ai/providers/test-real — 实战测试(模拟 quiz 出题规模的长输出),
+// 用来暴露中转站长输出超时 502 这类连通性测试测不出的故障。和 AiProviderTestResult
+// (只测连通性)互补。real_model_hint 是从响应头启发式推测的中转站后端模型(Gemini/OpenAI/...),
+// 仅供参考;response_headers / sample_output / usage 放折叠区让 admin 自行判断。
+export interface AiRealTestResult {
+  ok: boolean;
+  message: string;
+  latency_ms?: number;
+  // 人话诊断:502/超时/鉴权失败等的一句话定位,帮 admin 快速判断是中转站问题还是配置问题。
+  diagnosis?: string;
+  // 启发式推测的中转站后端模型后端,如"疑似 Google Gemini"。探测不到时为"未知(...)"。
+  real_model_hint?: string;
+  // 挑过的关键响应头白名单(server/via/x-served-by/...),大小写规范化为小写键。
+  response_headers?: Record<string, string>;
+  // 模型输出前 500 字采样,用于看是否完整 JSON / 是否乱码 / 是否被截断。
+  sample_output?: string;
+  // 本次请求的 token 消耗。
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  // finish_reason:"stop"=正常结束;"length"=被 max_tokens 截断(容量/稳定性信号)。
+  finish_reason?: string;
+  // 本次请求的规模描述(system/user prompt 字数、max_tokens、temperature),透明展示测了啥。
+  request?: {
+    system_prompt_chars: number;
+    user_prompt_chars: number;
+    max_tokens: number;
+    temperature: number;
+  };
+}
+
 // AppRelease is one published APK build. (version_code, abi) is the identity —
 // the same pair the OTA client contract keys on. is_active=false means the
 // build is withdrawn (hidden from clients, not downloadable) but kept for history.

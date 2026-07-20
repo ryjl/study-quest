@@ -129,6 +129,7 @@ type AdminHandler interface {
 	UpdateAIProvider(c *gin.Context)
 	DeleteAIProvider(c *gin.Context)
 	TestAIProvider(c *gin.Context)
+	RealTestAIProvider(c *gin.Context)
 	ListAIProviderModels(c *gin.Context)
 	GetAIStatus(c *gin.Context)
 	// AI module — generation jobs + observability.

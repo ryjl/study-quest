@@ -17,6 +17,7 @@ package ai
 
 import (
 	"context"
+	"net/http"
 )
 
 // ---------------------------------------------------------------------------
@@ -217,6 +218,12 @@ type ChatResponse struct {
 	// Usage is token accounting for this single turn. Aggregated across turns
 	// by the agent and written to ai_runs for observability/cost tracking.
 	Usage Usage
+
+	// Headers 暴露本次响应的原始 HTTP 响应头。正常业务路径(总结/出题/建议)用不到,
+	// 它是为 admin 的"实战测试"加的——通过 server / via / x-served-by 等头启发式推测
+	// 中转站背后的真实模型后端(Gemini / OpenAI 系 / DeepSeek...)。nil 表示调用方未
+	// 填充(例如 Ping 或被 mock 的实现),读之前判空。不影响现有调用方,默认零值。
+	Headers http.Header
 }
 
 // Usage is the token accounting for one model call. The agent sums these across

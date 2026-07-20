@@ -34,6 +34,7 @@ import type {
   AiProvider,
   AiProviderTestResult,
   AiModelsResult,
+  AiRealTestResult,
   AiJob,
   AiJobsResponse,
   AiJobEnqueueResult,
@@ -536,6 +537,15 @@ export const api = {
     return request('/admin/api/ai/providers/models', {
       method: 'POST',
       body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+    });
+  },
+  // 实战测试:发一个接近真实 quiz 生成规模的长输出请求(max_tokens=6000),验证中转站
+  // 能否扛住真实业务负载。暴露连通性测试测不出的长输出超时 502 故障,并启发式推测中转站
+  // 后端模型。同样不依赖已保存的 DB 行(填表即测)。注意:耗时较长(实测 40-60s)。
+  async realTestAiProvider(baseUrl: string, apiKey: string, modelName: string): Promise<AiRealTestResult> {
+    return request('/admin/api/ai/providers/test-real', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model_name: modelName }),
     });
   },
 

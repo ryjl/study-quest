@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { RefreshCw, Plug } from 'lucide-react';
+import { RefreshCw, Plug, FlaskConical } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import { useAiProviders, useInvalidateAiProviders } from '../lib/useAiProviders';
-import type { AiProvider, AiModelsResult } from '../lib/types';
+import type { AiProvider, AiModelsResult, AiRealTestResult } from '../lib/types';
 
 // AiProvidersSection is the AI-provider management card on the Settings page.
 //
@@ -188,6 +188,11 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
           {saveMut.isPending ? '保存中…' : isEdit ? '保存' : '配置'}
         </button>
       </div>
+      {/* 实战测试:发一个 quiz 规模的长输出请求,验证中转站能否扛住真实业务负载(连通性
+          测试 max_tokens=5 测不出长输出超时 502 这类故障)。独立面板放在表单底部,因为
+          结果信息量大(后端模型推测、响应头、输出采样),需要展开空间。不依赖已保存的
+          provider——填了 URL+Key+Model 即可测,这样配新中转站选型时不用先保存。 */}
+      <RealTestPanel baseUrl={baseUrl} apiKey={apiKey} modelName={modelName} />
     </div>
   );
 }
@@ -209,5 +214,133 @@ function ConnectionTestButton({ id }: { id: number }) {
     <button className="btn-secondary inline-flex items-center gap-1.5" onClick={() => testMut.mutate()} disabled={testMut.isPending}>
       {testMut.isPending ? '测试中…' : <><Plug size={14} /> 测试连接</>}
     </button>
+  );
+}
+
+// RealTestPanel 是 admin 的"实战测试"入口:发一个 quiz 规模的长输出请求(max_tokens=6000),
+// 验证中转站能否扛住真实业务负载。连通性测试(max_tokens=5)测不出长输出超时 502 这类
+// 故障——这正是本功能要暴露的。结果信息量大(后端模型推测、响应头、输出采样),用可展开
+// 卡片展示:顶部一行成功/失败 + 耗时,主行显示后端模型推测,细节(响应头/采样/tokens)
+// 放折叠区。不依赖已保存的 provider,填了 URL+Key+Model 即可测。
+//
+// 用 apiKey 作为入参:edit 模式下表单的 apiKey 可能是空(留空=不修改),此时按钮禁用——
+// 和"拉取可用模型"按钮一致的策略,避免用空 key 发请求拿到误导性的 401。
+function RealTestPanel({ baseUrl, apiKey, modelName }: { baseUrl: string; apiKey: string; modelName: string }) {
+  const [result, setResult] = useState<AiRealTestResult | null>(null);
+
+  const testMut = useMutation({
+    mutationFn: () => api.realTestAiProvider(baseUrl.trim(), apiKey.trim(), modelName.trim()),
+    onSuccess: (d) => {
+      setResult(d);
+    },
+    onError: (e) => {
+      // 网络/路由层错误(request() 在非 2xx 时 throw)——包装成统一的失败结果渲染。
+      setResult({ ok: false, message: (e as Error).message });
+    },
+  });
+
+  const canTest = baseUrl.trim() !== '' && apiKey.trim() !== '' && modelName.trim() !== '';
+
+  return (
+    <div className="mt-2 rounded-lg border border-border/60 bg-bg-secondary/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-1.5 text-sm font-medium text-txt">
+            <FlaskConical size={14} /> 实战测试
+          </div>
+          <p className="mt-0.5 text-[11px] text-muted">
+            发一个 quiz 规模的长输出请求(模拟出题,max_tokens=6000),验证中转站能否扛住真实业务负载。{canTest ? '' : '(填好 URL + Key + 模型后可用)'}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn-secondary btn-sm inline-flex shrink-0 items-center gap-1.5"
+          onClick={() => testMut.mutate()}
+          disabled={!canTest || testMut.isPending}
+        >
+          {testMut.isPending ? '测试中…(最长 90 秒)' : <><FlaskConical size={14} /> 开始测试</>}
+        </button>
+      </div>
+
+      {result && <RealTestResultCard result={result} />}
+    </div>
+  );
+}
+
+// RealTestResultCard 渲染实战测试结果。顶部大字状态行(成功绿/失败红)+ 耗时;主行显示
+// 后端模型推测和诊断(失败时);细节(响应头/输出采样/tokens)放 <details> 折叠区,默认
+// 收起——这些是给需要深入排查的 admin 看的,日常用主行状态判断就够了。
+function RealTestResultCard({ result }: { result: AiRealTestResult }) {
+  const ok = result.ok;
+  return (
+    <div className={`mt-3 rounded-md border p-3 text-sm ${ok ? 'border-green-500/40 bg-green-50/40 dark:bg-green-950/20' : 'border-red-500/40 bg-red-50/40 dark:bg-red-950/20'}`}>
+      {/* 状态行:✅/❌ + 一句话结论 + 耗时 */}
+      <div className="flex items-center justify-between gap-2">
+        <span className={`font-semibold ${ok ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+          {ok ? '✅ 实战测试通过' : '❌ 实战测试失败'}
+        </span>
+        {typeof result.latency_ms === 'number' && (
+          <span className="font-mono text-xs text-muted">{(result.latency_ms / 1000).toFixed(1)} 秒</span>
+        )}
+      </div>
+
+      {/* 后端模型推测(成功才有)——这是本功能的核心增值信息 */}
+      {ok && result.real_model_hint && (
+        <div className="mt-2 text-xs">
+          <span className="text-muted">中转站后端:</span>{' '}
+          <span className="font-medium text-txt">{result.real_model_hint}</span>
+        </div>
+      )}
+
+      {/* 人话诊断(失败时才有)——帮 admin 快速定位是 502/超时/鉴权 */}
+      {!ok && result.diagnosis && (
+        <div className="mt-2 text-xs text-txt">{result.diagnosis}</div>
+      )}
+
+      {/* finish_reason != stop 高亮(成功但有容量/截断信号) */}
+      {ok && result.finish_reason && result.finish_reason !== 'stop' && (
+        <div className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+          ⚠️ finish_reason={result.finish_reason}(输出未正常结束;length=被 max_tokens 截断)
+        </div>
+      )}
+
+      {/* 失败时也展示原始 message,让 admin 看到原始错误串 */}
+      {!ok && (
+        <div className="mt-1 font-mono text-[11px] text-muted">{result.message}</div>
+      )}
+
+      {/* 细节折叠区:请求规模、tokens、响应头、输出采样 */}
+      {(result.request || result.usage || result.response_headers || result.sample_output) && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-[11px] text-muted hover:text-txt">详细信息</summary>
+          <div className="mt-2 space-y-2">
+            {result.request && (
+              <div className="text-[11px] text-muted">
+                请求规模:system prompt {result.request.system_prompt_chars} 字 + user prompt {result.request.user_prompt_chars} 字 · max_tokens={result.request.max_tokens} · temperature={result.request.temperature}
+              </div>
+            )}
+            {result.usage && (
+              <div className="text-[11px] text-muted">
+                Token 消耗:prompt {result.usage.prompt_tokens} + completion {result.usage.completion_tokens} = {result.usage.total_tokens}
+              </div>
+            )}
+            {result.response_headers && Object.keys(result.response_headers).length > 0 && (
+              <div>
+                <div className="mb-0.5 text-[11px] text-muted">响应头:</div>
+                <pre className="overflow-x-auto rounded bg-bg/60 p-2 font-mono text-[10px] text-txt">
+{Object.entries(result.response_headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
+                </pre>
+              </div>
+            )}
+            {result.sample_output && (
+              <div>
+                <div className="mb-0.5 text-[11px] text-muted">模型输出采样(前 500 字):</div>
+                <pre className="max-h-40 overflow-auto rounded bg-bg/60 p-2 font-mono text-[10px] text-txt">{result.sample_output}</pre>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
   );
 }

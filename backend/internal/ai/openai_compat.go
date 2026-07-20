@@ -258,5 +258,8 @@ func decodeChatResponse(resp *http.Response) (*ChatResponse, error) {
 		ToolCalls:    first.Message.ToolCalls,
 		FinishReason: first.FinishReason,
 		Usage:        parsed.Usage,
+		// 响应头在 io.ReadAll(body) 之后仍可读(HTTP 头在 body 之前就已解析完毕),
+		// 这里顺手 clone 一份供"实战测试"探测中转站后端模型用;正常业务路径不读它。
+		Headers: resp.Header.Clone(),
 	}, nil
 }
