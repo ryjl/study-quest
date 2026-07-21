@@ -103,7 +103,7 @@ func TestComputeUnlockedCount(t *testing.T) {
 func TestComputeUnlockedCountEmptyCourse(t *testing.T) {
 	granted := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
 	now := granted.AddDate(0, 0, 30)
-	weekly := []model.WeeklyTime{{0, 19, 0}}
+	weekly := []model.WeeklyTime{{Weekday: 0, Hour: 19, Minute: 0}}
 	for _, strat := range []string{
 		model.StrategyAllOpen, model.StrategyManual, model.StrategySelected,
 	} {
@@ -173,10 +173,10 @@ func TestValidateStrategy(t *testing.T) {
 		{"selected ok", model.StrategySelected, 0, nil, false},
 		{"interval ok", model.StrategyInterval, 3600, nil, false},
 		{"interval zero interval errors", model.StrategyInterval, 0, nil, true},
-		{"weekly ok", model.StrategyWeekly, 0, []model.WeeklyTime{{0, 19, 0}}, false},
+		{"weekly ok", model.StrategyWeekly, 0, []model.WeeklyTime{{Weekday: 0, Hour: 19, Minute: 0}}, false},
 		{"weekly empty errors", model.StrategyWeekly, 0, nil, true},
-		{"weekly bad weekday", model.StrategyWeekly, 0, []model.WeeklyTime{{7, 19, 0}}, true},
-		{"weekly bad hour", model.StrategyWeekly, 0, []model.WeeklyTime{{0, 24, 0}}, true},
+		{"weekly bad weekday", model.StrategyWeekly, 0, []model.WeeklyTime{{Weekday: 7, Hour: 19, Minute: 0}}, true},
+		{"weekly bad hour", model.StrategyWeekly, 0, []model.WeeklyTime{{Weekday: 0, Hour: 24, Minute: 0}}, true},
 		{"unknown strategy errors", "bogus", 0, nil, true},
 	}
 	for _, tc := range cases {

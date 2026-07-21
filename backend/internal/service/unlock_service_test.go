@@ -253,7 +253,7 @@ func TestNextUnlockAtWeekly(t *testing.T) {
 	}
 	granted := cst("2026-03-01 08:00:00") // Sunday
 	now := cst("2026-03-01 10:00:00")
-	wt := []model.WeeklyTime{{0, 19, 0}}
+	wt := []model.WeeklyTime{{Weekday: 0, Hour: 19, Minute: 0}}
 	next := nextUnlockAt(model.StrategyWeekly, 0, wt, granted, now, 10, 1)
 	if next == nil {
 		t.Fatal("expected next unlock, got nil")

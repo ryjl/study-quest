@@ -222,10 +222,6 @@ func itoa(id uint) string {
 	return string(buf[i:])
 }
 
-// (silence unused-import during incremental file growth: model is used by
-// the E test's grade assertion.)
-var _ = model.GradeUniversal
-
 // ---- C. Course DTO dual contract (admin snake_case vs client PascalCase) ----
 
 // TestCourseDTOContracts locks in that the admin and client course endpoints
