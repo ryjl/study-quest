@@ -4,7 +4,8 @@
 > whisper worker 认领并转录 → 字幕自动落库 → 播放器立即可用。
 >
 > 后端 VPS（2c2g）只做协调；whisper 重计算跑在带 GPU 的用户台式机上。本文档描述
-> 后端这一侧的队列、协议、状态机与并发设计。
+> 后端这一侧的队列、协议、状态机与并发设计。字幕系统的**改造决策**（VTT 统一、
+> 字幕润色分块+diff、词汇表挖矿）见 §12；跨模块踩坑见 `docs/pitfalls/`。
 
 ---
 
@@ -39,7 +40,7 @@ VPS 一个比特的视频流量都不背——下载直链指向网盘 CDN，不
 
 ## 2. 数据模型
 
-`backend/internal/model/models.go` — `SubtitleJob`：
+`backend/internal/model/content.go` — `SubtitleJob`：
 
 | 字段 | 类型 | 说明 |
 | :--- | :--- | :--- |
@@ -58,9 +59,10 @@ VPS 一个比特的视频流量都不背——下载直链指向网盘 CDN，不
 多个终结任务（done/failed 历史）保留——所以去重**不在 DB 上做唯一约束**，而是在
 service 层 `Enqueue` 时 check-then-act（见 §5 的边界说明）。
 
-状态常量与 `IsTerminalSubtitleJobStatus` 辅助函数也在 `models.go`。
+状态常量（`SubtitleJobQueued` / `SubtitleJobProcessing` / `SubtitleJobDone` /
+`SubtitleJobFailed` / `SubtitleJobSkipped`）在 `content.go` 顶部 const 块。
 
-`AutoMigrate` 已注册，部署时自动建表，无需手动迁移。
+`AutoMigrate` 已注册（`model/migrate.go`），部署时自动建表，无需手动迁移。
 
 ---
 
@@ -147,7 +149,7 @@ service 层 `Enqueue` 时 check-then-act（见 §5 的边界说明）。
 
 ```
 backend/internal/
-├── model/models.go                      SubtitleJob model + 状态常量 + AutoMigrate
+├── model/content.go + model/migrate.go                      SubtitleJob model + 状态常量 + AutoMigrate
 ├── repository/subtitle_job_repo.go      SubtitleJobRepository（含原子 ClaimNext）
 ├── service/subtitle_service.go          SubtitleJobService（业务守门 + 状态机）
 ├── handler/
@@ -156,7 +158,7 @@ backend/internal/
 ├── repository/episode_repo.go           新增 CountSubtitlesByEpisodes / HasSubtitle
 │                                        / FindCourseContentType（gate 检查 + DTO 计数）
 ├── handler/admin_dto.go                 episodeDTO 加 subtitle_count 字段
-├── handler/admin_content.go             ListEpisodesByCourse / GetCourseDetail 批量填计数
+├── handler/admin_{course,episode,chapter,subtitle}.go (拆分后)             ListEpisodesByCourse / GetCourseDetail 批量填计数
 └── cmd/server/
     ├── main.go                          接线 + reaper goroutine + busy_timeout DSN
     └── subtitle_jobs_integration_test.go 7 个集成测试
@@ -268,7 +270,7 @@ CLAUDE.md 早标注"生产没设 busy_timeout"。这套队列引入了并发写�
   加入/跳过数 + 跳过原因。入队后 invalidate `['episodes', course.id]`。
 - **`pages/SubtitleQueue.tsx`**（新增）：队列管理页。状态统计条 + 任务表（状态/Worker/
   优先级/尝试/更新时间/错误 + 重试/跳过操作）+ 状态过滤。running 时 3s 轮询，idle 停。
-- **`lib/api.ts`** + **`lib/types.ts`**：`SubtitleJob` / `SubtitleJobStats` /
+- **`lib/api/` 域聚合 (拆分后)** + **`lib/types.ts`**：`SubtitleJob` / `SubtitleJobStats` /
   `SubtitleJobEnqueueResult` 类型 + 5 个 api 方法。
 - **`components/Layout.tsx`** + **`App.tsx`**：导航"字幕队列" + 路由。
 
@@ -302,7 +304,7 @@ N+1），`ListEpisodesByCourse` / `GetCourseDetail` 批量填进 DTO。这样课
 机制，不是我的代码的保证）。原子性保证来自单条 SQL 语句本身，所以测的是"语句的属性"
 （每次返回正确且不同的行），而非"并发执行的行为"。这点在测试注释里写明了。
 
-`docs/subtitle-queue-smoke.md` 是 curl 端到端冒烟测，无需 Python worker 即可验证整条
+`docs/dev-setup.md (合并后)` 是 curl 端到端冒烟测，无需 Python worker 即可验证整条
 协议链路。
 
 ---
@@ -339,7 +341,7 @@ Whisper 的 `initial_prompt` 不是自由指令，是解码器上下文（~244 t
 2. **课程元数据**（claim 响应自动带）——subject/course_title/chapter_title，学科术语密集
    的标题能压制 Whisper 把专有名词转错。
 3. **whisper_hint**（admin 在课程编辑页手填，存 `Course.AIConfigJSON`）——针对性提示，如"老师口音重""重点听 ε-δ 定义"。
-   按课程设一次，该课所有 episode 共用。出题/总结 agent 用同一 JSON 列里的 `quiz_hint` 字段（见 `docs/ai-agent-module.md` §4）。
+   按课程设一次，该课所有 episode 共用。出题/总结 agent 用同一 JSON 列里的 `quiz_hint` 字段（见 `docs/modules/ai/overview.md` §4）。
 
 截断到 240 字符（CJK 保守估计 1 字符 ≈ 1 token）。不需要每个视频手写 prompt。
 
@@ -387,7 +389,7 @@ claim 响应在 Step 1 基础上加了缓存键 + prompt 上下文（全部向�
 
 后端 `ClaimNext` 顺路 join episode→course→chapter→subject 填上。`whisper_hint` 来自
 `Course.EffectiveWhisperHint()`（读 `AIConfigJSON` JSON 列，回退老 `AIHint` 列）。
-admin 在课程编辑页填，详见 `docs/ai-agent-module.md` §4。
+admin 在课程编辑页填，详见 `docs/modules/ai/overview.md` §4。
 
 ---
 
@@ -493,7 +495,123 @@ export，才能让动态链接器看到。
 
 - **字幕润色 LLM**：SRT 落库后过一遍 LLM 修 whisper 错别字（象棋等专业领域术语错字
   明显）。已部分实现——summary/quiz/advice LLM 在输出时按 `quiz_hint` 术语字典纠正
-  （只改输出不改字幕，见 `docs/ai-agent-module.md` §9/§14）。字幕本身的纠错仍待做。
+  （只改输出不改字幕，见 `docs/modules/ai/overview.md` §9/§14）。字幕本身的纠错仍待做。
 - **字幕切片 + embedding（RAG）**：为出题 agent 准备语料，Step 3。
 - **多语言**：当前默认 zh-CN，`Language` 字段已支持扩展。
 - ~~**worker 主动推送进度**~~：已实现（§9.3）。
+
+---
+
+## 12. 设计决策（"为什么"，已落地）
+
+本节提炼自已完成的字幕系统改造。实施时不要重新质疑这些决策，除非遇到具体障碍。
+
+### 12.1 存储统一为 VTT（不再 SRT）
+
+`subtitles` 表 `srt_content` 字段已改名为 `vtt_content`，**只存 VTT**。
+
+理由：
+- 播放路径省一步转换（原每次播放都 `srtToVtt`）
+- 保留内嵌字幕样式（粗体/位置，对学生有用）
+- 避免"双存"（SRT+VTT 两字段）的一致性陷阱
+
+**给 AI 时**：`VttToSrt(sub.VttContent)` 转换后走原有 SRT 解析逻辑。
+
+### 12.2 字幕润色：分块 + diff 输出
+
+全量字幕分块送 LLM，但 LLM **只输出 `{changes: [...]}` diff，不重写全文**。
+
+- 一次性全量不可行——输出 token 物理上限（DeepSeek 8k，最长字幕 9 万字）
+- 预过滤（只送疑似错字的 cue）不可行——"选出有问题的句子"本身就是核心问题
+- LLM 的价值在"判断该不该改"，需要看上下文
+- diff 输出省 70-90% 输出 token
+
+**分块参数**（基于真实数据校准，可调）：
+- 块大小 150 cue（≈6900 字 + prompt ≈ 8k input）
+- 块重叠 3 cue（前后各 1.5 句上下文）
+- 并发 3 路（用户要求，很多中转站限速严格）
+- MaxTokens 8000
+- 单块失败 3 次后用原文，标 `partial_optimized`
+
+**时间戳保证**：后端维护 `id → 时间戳` 映射，LLM 只输出 `id → 修正文本`。
+时间戳根本不进 prompt，物理上不会错。
+
+### 12.3 润色用便宜模型
+
+| 任务 | 模型要求 |
+|---|---|
+| 字幕润色 | 低（指令遵循 + 中文常识） |
+| Quiz self-check | 低-中 |
+| Summary | 中 |
+| Quiz 出题 / Advice | 中-高 |
+
+推荐润色模型：DeepSeek-chat（中文强 + 便宜 + ¥0.3-1/节）。多 provider 落地：
+provider 配置里 `tags` 字段（JSON 数组），润色任务优先找 tags 含 `"polish"` 的 provider，
+找不到 fallback 到默认 chat。
+
+### 12.4 词汇表自动生成（挖矿工作流）
+
+润色时顺带挖矿，admin 审核入库。LLM 在润色时本来就要判断"这个是不是术语错字"——
+让它**显式输出**这个判断（glossary 字段），沉淀下来。**零额外 LLM 成本**（同一次
+调用里多吐一个字段）。
+
+两套互补系统：
+
+| 系统 | 位置 | 角色 |
+|---|---|---|
+| **TermDict** | `Course.AIConfigJSON.TermDict` + `Subject.AIConfigJSON` | admin 手写的权威字典，LLM 每次润色按它纠正 |
+| **glossary_candidates** | `glossary_candidates` 表（`model/ai.go`） | LLM 挖出的建议池，status: pending/accepted/rejected，admin 审核后 accepted → 自动追加进 TermDict |
+
+单向流：candidates → TermDict（接受）。TermDict 手改不影响 candidates。
+
+### 12.5 字幕格式全覆盖
+
+统一走 ffmpeg `-c:s webvtt` 转换。文本格式（SRT/ASS/SSA/SUB/SMI/WebVTT）全能转。
+图形格式（PGS/VOBSUB/DVB）不能转，admin UI 报错提示走 whisper OCR——判定由
+`media.IsBitmapSubtitleCodec`（`backend/internal/media/probe.go`）。
+
+### 12.6 不转 ASS 存储
+
+虽然 ASS 支持复杂样式（卡拉OK/双语分行/说话人颜色），但中小学学习场景不需要，且
+AI 管线（segmenter/summarizer/prompt）都深度依赖 SRT 结构，转 ASS 会断链。**保持
+VTT 存储**。若未来要"重点高亮"，让润色 LLM 在 VTT 里给术语包 `<b>` 标签（VTT 原生
+支持），零额外架构成本。
+
+---
+
+## 13. 关键陷阱（字幕系统专属）
+
+跨模块通用坑见 `docs/pitfalls/`，本节只列字幕改造踩过的、对修改字幕代码仍然有效的坑。
+
+### 13.1 跨层契约改动不能并行
+
+`Subtitle.SrtContent` → `VttContent` 涉及多个调用点。**改之前先
+`grep -rn "SrtContent\|srt_content"` 把所有调用点列出来**，逐个改完。
+
+主要调用点（重构后路径）：
+- `backend/internal/model/content.go` — Subtitle struct 定义
+- `backend/internal/handler/episode_handler.go` — GetSubtitleVTT（读 vtt_content）
+- `backend/internal/service/ai_service.go` — runSegmentJob
+- `backend/internal/repository/episode_repo.go` — SaveSubtitle upsert
+- `backend/internal/handler/admin_subtitle.go` — 字幕 CRUD（admin_content 拆分后）
+- `backend/internal/handler/admin_dto.go` — subtitleDTO
+- `backend/internal/service/import_service.go` — auto-match 字幕
+- `tools/video-pipeline/api_client.py` — **不改**，继续上传 SRT，后端转 VTT
+
+### 13.2 model 改动后立即跑全量测试
+
+CLAUDE.md 硬规则：model-layer change → `make test` every time，no exceptions。
+`go build` 绿不等于行为绿。
+
+### 13.3 `whisper_hint` 字段不要被 VTT 迁移误伤
+
+字幕 job 的 `whisper_hint` 字段（`subtitle_job_handler.go`）是给 worker 的 prompt
+context（**不是字幕**），和字幕存储格式无关。改字幕格式不要动它。
+
+### 13.4 删库重建前先备份
+
+用户已批准删库重建（不做迁移脚本）。但每次改 schema 前先备份：
+
+```bash
+cp backend/data/studyquest.db backend/data/studyquest.db.bak.$(date +%Y%m%d)
+```

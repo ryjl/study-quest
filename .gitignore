@@ -42,11 +42,15 @@ tools/video-pipeline/config.yaml
 # pytest cache
 .pytest_cache/
 
-# Private AI docs (handoff notes, design seeds, PRD) — never committed.
-docs/handoff-*
-docs/handoff-ai-*.md
-docs/handoff-admin-*.md
-docs/ai-step3-seed.md
+# Handoff/交接文档:会话级产物,完成后失效。统一前缀 \`handoff-\` 保证不进 git。
+# 命名约定:无论放在 docs/ 根、docs/modules/<x>/ 子目录,文件名都以 handoff- 开头。
+# 这样一条规则覆盖所有位置 + 未来新增模块的 handoff 也不会漏。
+docs/**/handoff-*.md
+docs/**/handoff_*.md
+docs/handoff/
+# 私人 seed/PRD 文档(不进 git,本地 brainstorm 用)
+docs/**/*-seed.md
+docs/**/*-seed-*.md
 study_quest_ai_prd.md
 
 # IDEs

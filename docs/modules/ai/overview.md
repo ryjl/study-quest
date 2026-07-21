@@ -1,7 +1,7 @@
 # AI Agent 模块（Learning Agent：总结 / 出题 / 建议 / 报告 / Chat）
 
-> 技术文档，进 git。对标 `docs/ai-subtitle-queue.md` 的深度，作为本模块的权威架构参考。
-> 设计 seed 见 `docs/ai-step3-seed.md`（不进 git）；交接笔记见 `docs/handoff-ai-step3.md`（不进 git）。
+> 技术文档，进 git。对标 `docs/modules/ai/subtitle-queue.md` 的深度，作为本模块的权威架构参考。
+> 本文档是本模块的权威架构参考。
 > 本文档记录**已落地**的设计；标注 ⏳ 的部分尚未实现。
 
 ## 1. 背景与定位
@@ -123,7 +123,7 @@ type Embedder interface {
 
 ## 4. 数据模型
 
-全部新表（核心表只加字段），集中在 `internal/model/models.go` 注册 AutoMigrate。
+全部新表（核心表只加字段），集中在 `internal/model/<domain>.go (拆分后,见 CLAUDE.md Code layout)` 注册 AutoMigrate。
 
 ### Course 新增字段（核心表改动，最小）
 ```go
@@ -599,7 +599,7 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - `agent/grading.go` — GradeChoice / GradeMultiChoice / GradeFill / NormalizeText（填空题归一化判题；Scoring 列解析在内部）
 - `vector.go`（ai 根包）— CosineSim / TopK / ParseEmbedding / NormalizeText（纯函数）
 - `service/ai_service_quiz.go` — 出题编排：worker runQuizJob + 懒生成 + 答题 + 观测读
-- `handler/ai_handler.go`（客户端 quiz 3 方法）+ `handler/admin_ai.go`（观测 3 方法）
+- `handler/ai_handler.go`（客户端 quiz 3 方法）+ `handler/admin_ai_*.go (拆分后)`（观测 3 方法）
 - 前端：`ai_study_screen.dart`（独立 AI 学习页）+ admin `AIUserView.tsx`（用户视图）
 
 ### ReAct loop（agent.go）
@@ -969,7 +969,7 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 
 1. **FK 约束真正生效**（`cmd/server/main.go`）：DSN 加 `_foreign_keys=on`。这不是 schema 变更（约束一直在 CREATE TABLE DDL 里，只是之前 PRAGMA per-connection 导致池里大部分连接 FK 关闭、约束没触发）。修好后 GORM 声明的 20+ 个 `OnDelete:CASCADE/RESTRICT` 在所有连接生效。**升级安全**：已用真实 dev DB 副本验证 `PRAGMA foreign_key_check` 为空（零违规），AutoMigrate 不会因孤儿行失败。手动 cascade 仍保留作双保险（AI 相关表如 ai_summaries/content_chunks/quizzes 没有 GORM foreignKey 声明，只靠手动 cascade）。
 
-2. **`a_iproviders` → `ai_providers` 表重命名**（`model/models.go`）：GORM 默认 snake-case 把 `AIProvider` 解析成 `a_iproviders`（每个大写字母前加下划线再 trim → 难看的名字）。给 struct 加 `TableName()` 返回 `ai_providers` 固定名字，并写 `migrateAIProvidersTableName` 在 AutoMigrate **之前**用 SQLite 原生 `ALTER TABLE ... RENAME TO` 原地重命名（保留所有行 + 索引，零数据移动）。**这是定档后唯一一次"改表名"操作**——属于"改唯一索引/主键"级别的特例，但用 `ALTER TABLE RENAME` 实现所以仍是零风险无缝升级。幂等（重命名后检测到新表存在就跳过；两表都在则告警不猜）。升级安全已用真实 dev DB 副本 + 3 个单元测试验证（重命名/幂等/全新安装）。
+2. **`a_iproviders` → `ai_providers` 表重命名**（`model/migrate.go`）：GORM 默认 snake-case 把 `AIProvider` 解析成 `a_iproviders`（每个大写字母前加下划线再 trim → 难看的名字）。给 struct 加 `TableName()` 返回 `ai_providers` 固定名字，并写 `migrateAIProvidersTableName` 在 AutoMigrate **之前**用 SQLite 原生 `ALTER TABLE ... RENAME TO` 原地重命名（保留所有行 + 索引，零数据移动）。**这是定档后唯一一次"改表名"操作**——属于"改唯一索引/主键"级别的特例，但用 `ALTER TABLE RENAME` 实现所以仍是零风险无缝升级。幂等（重命名后检测到新表存在就跳过；两表都在则告警不猜）。升级安全已用真实 dev DB 副本 + 3 个单元测试验证（重命名/幂等/全新安装）。
 
 > **关于"定档"承诺的诚实说明**：这两处是定档后发生的 schema 相关操作。#1 不动 schema（只是让既有约束生效）。#2 是表重命名，技术上属于"定档"想避免的类别，但因为用 `ALTER TABLE RENAME` 实现（SQLite 原生、保留数据、幂等、AutoMigrate 前跑），实际升级路径仍是 `make deploy` 零手动干预。记录在此提醒未来：表名/列名一旦定，再改就要走这种"AutoMigrate 前 raw SQL 迁移"的路径——能做但要谨慎。
 

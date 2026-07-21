@@ -1,118 +1,12 @@
 # TODO — StudyQuest 待办清单
 
-> 本文件记录所有"已识别但未实现"的 feature idea，按优先级分组。每次迭代从这里挑选。
-> 最后更新：2026-07-20（SVG 美化 + 卡片折叠 + 年级 tag 化 + 娱乐分类重构 + 放开娱乐 AI）
-
-每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、**工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
-
----
-
-## 已完成
-
-### 2026-07-20 用户反馈轮次（SVG 美化 + 卡片折叠 + 年级 tag 化 + 娱乐分类重构）
-
-用户 5 个反馈 + 调研后衍生的娱乐分类重构，一次性交付。**本轮新识别的 4 个技术债见文末「2026-07-20 新识别」段**。
-
-- **SVG 美化（适度放开）**：后端 4 个 prompt（`prompts.go` Summarizer/Quizzer/Advice/CourseSummary）放开图型（流程图/柱状图/饼图/思维导图/对比卡）+ 元素（circle/ellipse/path/marker/渐变）+ 协调色板。客户端 `markdown_view.dart` 只改 `BoxFit.contain → fitWidth`，**严守前一轮 NaN bug 红线**（不加 width/height/clip）。prompt 强制 SVG 带 `width/height/viewBox` 让客户端稳定测量 intrinsic size。
-- **课程总览卡片默认收起**：`course_detail_screen.dart` 加 `_summaryExpanded` state（默认 false），标题行 InkWell + 切换箭头，MarkdownView 用 `if (_summaryExpanded)` 包（**纯布尔显隐无动画**，避免 AnimatedSize 过渡帧触发同类渲染崩溃）。对齐 `_HistoryQuizCard` 模式。
-- **Alist Token UI 引导**：`StorageSourcesSection.tsx` token 输入框下加说明"可选，留空用账号密码自动登录"+ 获取方式。后端逻辑本就支持 token/userpass 二选一。
-- **科目 SortOrder 重排**：`subject_service.go` 12 个科目重排，小学常用（语数英象棋课外百科）排 1-5，初中分科排 7-12。**不删任何科目**（用户后续决定把娱乐拆出来，见下条）。
-- **年级开放 tag 化（预设 + 自定义）**：保留 grade 维度（不合并到 tag 系统），把硬编码 1-9 enum 改成 5 预设（primary/junior/senior/adult/universal）+ admin 自定义输入。后端：`Grade.Valid()` 改成只校验非空、新增 `GET /api/v1/courses/grade-tags` 端点（合并预设 + DB 实际用过的自定义 tag）、`parseGrades` 接受任意非空值、reading 6 处去掉 `binding:"required"`。admin：`GradePicker` 重构成 5 预设 checkbox + 自定义输入框 + chip 回显、`CoursesContent` 过滤栏动态拉取。Flutter：删 `_gradeLabels` 硬编码，改用 `fetchGradeTags` API + `kPresetGradeTags` fallback。
-- **娱乐分类重构 + 放开 AI**（用户洞察"Subject 里 entertainment 是误导的占位符"后衍生）：
-  - 纠正错位：`Subject.Category` 新字段（`academic`/`entertainment`），把单行 `entertainment` 占位 subject 删除，换成 4 个具体娱乐子类（`animation`/`movie`/`documentary`/`variety`）。用户删库重建，不做兼容兜底。
-  - 拆开 `subject`/`content_type` 硬绑定：`CourseModal` 不再强制 entertainment 课程用 'entertainment' subject，改成按 Category 过滤下拉（学习选 academic，娱乐选 entertainment 子类）。
-  - 放开娱乐 AI：删 `subtitle_service.go` 的 entertainment 字幕门禁 → 娱乐课现在走完整 AI 链（字幕→summary→quiz→advice）。`import_service.go` 改成按 subject.Category 判断 content_type。
-  - **娱乐课仍不触发 badge**：`EvaluateRules` 唯一调用点在 `progress_service:260`，娱乐分支 line 169 早 return 走不到——已验证。娱乐进度仍物理分表（`entertainment_progresses`），学习数据零污染。
-  - admin `Subjects` 列表加"分类"列、`CourseModal` 放开 AI 配置入口（不再 `!isEntertainment &&` 隐藏）、subjectIcon 加 4 个娱乐子类图标。
-- 验证：`go build` ✓ / `go test ./internal/...`（既有 flaky 见技术债）/ `tsc --noEmit` ✓ / `npm test` 55/55 ✓ / `flutter analyze` 0 errors ✓。
-
-### 2026-07-20 新识别的技术债（本轮 review 发现，未处理）
-
-1. **[中] 既有 flaky test `TestRegenerateAdvice_NilSafeAndDedupes`**：`NewAIService` 每次调用都 `go s.runWorker()` 启动**永不退出**的后台 goroutine，配合 in-memory SQLite 连接池隔离（每个 pooled connection 看不到 :memory: 表），导致整套 service test 并行跑时间歇性 `no such table: users`。**HEAD 也 flaky**（5 次约 1 次 fail），非本轮引入。修法：给 worker 加 context cancellation，或 advice/summary 测试改用 `testutil.NewFileDB`。
-2. **[中] Answer 表无 content_type 过滤（错题本前置）**：娱乐课做 quiz 后 Answer 数据会进 `answers` 表。未来做"错题本"（P0 项）时，若直接聚合 `answers` 表会把娱乐答题记录混入。需在错题本查询 JOIN courses 按 `content_type='learning'` 过滤。
-3. **[低] ReadingRoom subject 下拉未按 Category 过滤**：admin 阅读室编辑表单的 subject 下拉显示所有 subject（含娱乐子类），admin 理论上可把书挂在"动画片"subject 下。属既有开放性，不影响功能。考虑按 Category 过滤或给阅读模块也加 content_type 概念。
-4. **[低] CourseModal useEffect 依赖不全**：`[open, course]` 没列 `subjects`，modal 打开时若 subjects 还在加载，subject state 短暂为空（后端 `binding:"required"` 会 400 拒绝空 subject，不会写脏数据）。既有问题，影响小（admin 刷新后 subjects 预热）。
-
-### 2026-07-19 用户反馈修复轮次（commit `c9e1f04` + `fc6a730` + `99b408f`）
-
-用户反馈 + 自测发现的 bug 一次性处理。**下个 session 接续未解决的前端渲染 bug，详见 `docs/handoff-frontend-render-issues.md`**。
-
-- **导入文件名保留原字符**：删 `import_service.go` / `reading_import_service.go` 里 `-`/`_` → 空格的替换。`26-7-12【...】` 这类日期/编号不再被破坏。
-- **cache MISS log 措辞**：worker.py 原来误导成 "using netdisk URL"，改成 "wav/mp4 cache 仍会尝试"。真正的"走网盘"在 audio.py 里另有准确 log。
-- **cache 流程重构**：worker 原来是 video cache 优先，wav cache 在 audio.extract_wav 内部——wav 已命中时还白做 video 扫描（含 WSL 9P）。重排为 wav → video → 网盘。`audio.find_cached_wav()` 抽出为公开函数。
-- **WSL2 9P readdir EIO 兜底**：`/mnt/e` 上 find/os.walk 会因 9P EIO 静默漏文件（但 stat 单个路径走不同 9P 消息通常正常）。`cache._scan_find` 加 returncode 告警，`cache.lookup` 索引 MISS 时做 `_probe_flat` stat 兜底（平铺布局下救回 EIO 漏的文件）。测试：12 cache + 5 audio。
-- **`UpsertSummary` 改 OnConflict**：旧版 `db.Save(s)` 在 s.ID=0 时走 INSERT，重新生成撞 uniqueIndex 报 "duplicated key not allowed"。用户被迫先手动删才能重生成。
-- **AI summary 内容 normalize**（`parseSummaryJSON` + 客户端 `MarkdownView._normalizeMarkdown` 双向兜底）：
-  - 字面量 `\n`（backslash+n）→ 真换行（修 GFM 表格被当一行）
-  - 裸 `<svg>...</svg>` → 自动补 ` ```svg ` 围栏（修 SVG 被当内联 HTML 转义）
-  - 8 个 normalize 单元测试（含"生产 DB 真实样本"用例）
-- **Summarizer prompt 富文本**：`"可选/鼓励"` → `"主动使用"`（修 3 门课一副图一表格没生成）。CourseSummary prompt 也加富文本段落，去掉"禁止代码块标记"。
-- **课程总览全链路（Phase D 客户端入口）**：
-  - `AICourseSummary.EpisodeCountAtGen` 字段 + 陈旧检测（生成时快照的"已总结课时数"vs 当前数）
-  - admin 内容管理 tab：status 轮询 + 删除按钮 gate（无 summary 不显示）+ 陈旧橙色提示 + summary_text 预览
-  - Flutter `course_detail_screen` 在 Hero header 和"闯关目录"之间插课程总览卡片
-  - `GeneratedAt` 统一为 RFC3339（admin 端已是，client 端从"2006-01-02 15:04"改）
-- **AI 控制台「内容管理」**：tab 改名（原"重新生成"但既有重生成也有删除，语义更准）。`GET /admin/api/ai/courses/:id/summaries-status` 新端点（返回有 summary 的 episode id 列表，gate 每集删除按钮）。
-- **决策痕迹/最近活动显示课程标题**：新增 `AIRunView`（内嵌 AIRun + EpisodeTitle/CourseTitle/UserNickname）+ `enrichRuns`（批量解析 run.job → episode/course/user 标题）。AIWorkflow RunList 表格加"课程/课时"列。
-- 验证：`go build` ✓ / `go test ./internal/ai/agent/...` ✓ / `tsc --noEmit` ✓ / `flutter analyze`（无新错误）✓ / cache 单元测试 17/17 ✓ / 生产 DB 级联删除验证（sqlite_sequence vs 实际行数对比，0 孤儿）✓ / MuMu 实测课程总览卡片显示 ✓。
-
-### ⚠️ 本轮未完成（下 session 接续）
-
-3 个前端渲染 bug，根因都疑似"某个卡片渲染异常让后续兄弟节点不显示"。详见 `docs/handoff-frontend-render-issues.md`：
-
-1. **table 盖文字**：`common_mistakes`/`methods` 的 MarkdownView 在带 padding 的 Container 里，约束让 flutter_markdown 内置横向 scrollview 没生效。
-2. **数学课 quiz 卡片不显示**：后端返回 ready，`_buildQuizSection` 也进 ready 分支（logcat 已确认），但视觉上看不到——可能渲染中触发 silent error。
-3. **课程总览卡片让下方章节列表看不见**（2026-07-19 用户新发现）：症状同上，疑似同类问题。
-
-`ai_study_screen.dart` 已留 4 处 print 诊断日志（`_loadQuiz` / `_buildSummarySection` / `_buildQuizSection` 入口 / hiding 分支），release 模式下也输出到 logcat，调完清掉。
-
----
-
-### 2026-07-19 AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次
-
-本轮（尚未 commit，代码在 working tree）。AI 内容生命周期管理 + AI 配置集中化 + FK 级联：
-
-- **5 类产物 regen + DELETE 闭环**：Episode Summary / Quiz / Advice / Course Summary / User Study Report 每类都齐了两端点 —— 覆盖式重新生成（覆盖旧产物，保留 Upsert 语义）+ 物理 DELETE（idempotent，幂等删，删完再查返回 null）。覆盖式优先，DELETE 作为清理脏数据的兜底。新路由 8 条（`POST .../quizzes/regenerate`、`POST .../advice/regenerate`、`GET .../advice`、5 条 DELETEs）。Service：`RegenerateAdvice`（admin 可强制重算，跳过 mastery gate）、`RegenerateQuizForUser`（与客户端 `RegenerateQuiz` 共享 impl）、`Delete*`（幂等）、`ListUserAdvice`。
-- **EnqueueSummary 去重门**：照抄 `hasPendingJob("segment", id)` / `hasPendingQuizJob` 模式 —— 有 queued/processing summary job 直接返回不再入队。修了"admin 连点堆 job"的 bug。
-- **AI 表 FK CASCADE（9 张表）**：给 9 个 AI struct（AISummary/ContentChunk/Quiz/Question/Answer/KnowledgeMemory/AICourseSummary/UserStudyReport/AIRun）的 relation 字段加 `gorm:"foreignKey:XxxID;constraint:OnDelete:CASCADE"`。**单向声明**：只在 AI 侧加 FK，core Episode/Course/User 保持零感知（"AI 是 add-on 层"原则）。relation 字段全带 `json:"-"`。**简化 repo 级联**：episode/course/user repo 的 Delete 现在主要靠 CASCADE，只剩 AIJob（无 FK）和 StudyAdvice（polymorphic scope_id）还需要手动 `tx.Delete`。**修了 userRepo.Delete 完全不动 AI 数据的 bug** —— 之前清理 ZERO AI tables，现在补 AIJob + StudyAdvice 手动 + Quiz/Question/Answer/KnowledgeMemory/UserStudyReport 走 CASCADE。
-- **AIJob.EpisodeID/CourseID "形式 not null" bug 修复**：原来是 `uint gorm:"not null"`，但 subject-scope advice job 写 0（0 是合法 uint，SQLite 接受了，但语义上指向不存在的 episode）。改 `*uint`（nullable）+ 新增 `model.PtrVal(*uint) uint` helper + 更新 ~9 个 call site。**这是本轮 FK 工作中顺带发现的 bug** —— 加 FK 时立刻暴露（FK 会拒掉 0 行）。
-- **集中化：AIConsole 页**：新建 `pages/AIConsole.tsx`（5 tabs：重新生成 / Prompt 配置 / 任务队列 / 学生数据 / Provider）。URL `?tab=` 控 tab，`?course=`/`?subject=` 预选实体（CourseModal/SubjectModal 跳转用）。AIWorkflow 和 AIUserView 嵌进去（`embedded` prop）。**CourseModal 瘦身**：删 125 行 AI hint UI，改成「配置 →」链接到 `/admin/ai-console?tab=prompt&course=:id`；Course 级 AI 开关（`ai_summary_enabled`/`ai_quiz_enabled`）保留；save body 透传 `ai_config: course?.ai_config`（原样 roundtrip，PUT 不覆盖 5 个 hint 字段）。**SubjectModal 同样瘦身**（删 62 行，链接 `?tab=prompt&subject=:id`）。**Settings 移除 AiProvidersSection 渲染**，改成「前往 AI 控制台 →」卡片。抽公共组件 `PromptConfigTab` + `AIHintFields`（5 textarea，从 CourseModal+SubjectModal 的重复代码抽出）。**Layout/App 路由调整**：AI 运营 nav 2→1，老路由 `/admin/ai-workflow`、`/admin/ai-user` 重定向到 `?tab=jobs`/`?tab=users`。删 `lib/aiHintTemplates.ts`（集中化后 `getSubjectTemplate` 零调用方的死代码）。
-- **象棋升系统级 + AIConfig seed**：`xiangqi` 从自定义学科升为系统学科（`IsSystem=true`），在 `SeedDefaultSubjects` seed 5 字段 AIConfig（whisper/summary/quiz/advice/term_dict）。模板内容来自原前端 `aiHintTemplates.ts`（本轮删除）。注：math/english 之前就已有 seed，象棋是本轮新增。
-- **测试**：新增 `repository/user_repo_test.go`、`repository/ai_content_delete_test.go`；`repository/cleanup_orphans_test.go` 扩展；新增 `service/ai_service_test.go`（EnqueueSummary 去重）、`service/ai_service_advice_test.go`（RegenerateAdvice）、`service/subject_service_test.go`（新增 `TestSeedDefaultSubjects_XiangqiAIConfig` + 更新已有计数）；`lib/api.test.ts` +9 tests。
-- 验证：`go build` ✓ / `go test ./internal/service/ ./internal/repository/` ✓ / `tsc --noEmit` ✓ / `npm test` 55 passed ✓ / DB 删后重建 AutoMigrate 从零生成（FK 约束 baked in）+ 手动启动服务器 + sqlite 查询确认象棋 `is_system=1`、`ai_config_json` 489 字节、5 字段全在（含"车→居"纠错）。
-
-### 2026-07-19 prompt 架构重构轮次
-
-代码已 push（commit `bb53dac`）。5 维度配置 + 学科级默认 + 完整可观测性：
-
-- **5 个 AIConfig 维度**：`whisper_hint` / `summary_hint` / `quiz_hint` / `advice_hint` / `term_dict`（前 3 个原有，后 2 个新拆/新增）。存 `Course.AIConfigJSON` + `Subject.AIConfigJSON` 两层。
-- **两层解析**：`Course.EffectiveXxxHint(subject)` Course > Subject > legacy AIHint；`term_dict` 特殊——课程级+学科级**合并**（学科在前，课程追加）。
-- **system prompt 5 处硬编码学科术语全清**（车→居、通分→同分），改成注入式 TermDict（user prompt 的【术语字典】段）。英语课 prompt 不再带象棋术语。
-- **Advice agent 终于拿到 hint**（之前 AdviceRequest 完全没 hint 字段）。
-- **TermDict 直传 Request**（summary/advice），不走 ReAct 工具路径，术语纠错每次必生效。Quiz 走 `get_episode_info` 工具返回。
-- **可观测性**：`AIRun.SystemPromptText/UserPromptText` 记录每次 LLM 调用的完整 prompt；`agent.Run`（4 个 agent 共同入口）+ `summarizer.recordRun` 写入；admin AI Workflow「查看回放」展示。
-- **预览端点** `POST /admin/api/ai/courses/:id/preview-prompt`（不调 LLM 拼出完整 prompt 供调优）；`agent/preview.go` 的 `BuildXxxPromptForPreview` 调同一个 build 函数保证"预览即真相"。
-- **学科级默认**：SubjectModal 加 5 字段配置；CourseModal "套用模板"改为优先读 DB 学科 `ai_config`（回退前端 `aiHintTemplates.ts`）；数学/英语两科 seed 在 `SeedDefaultSubjects` 回填。
-- **CourseModal/CourseService 签名重构**：从 `(whisperHint, quizHint string, ...)` 改成传 `model.AIConfig` struct。
-- **经验教训**：写进 `CLAUDE.md`「Workflow: when to parallelize with subagents」——高耦合重构主会话串行做，跨 agent 契约先定死贴进每个 agent 指令，model 改动后必须跑全量 test 不能只 build。
-- 验证：`go build` ✓ / `go test` ✓（全过）/ `tsc --noEmit` ✓ / `npm test` ✓（46 passed）
-
-### 2026-07-18 体验优化轮次
-
-代码已 push（commit `e367503`）。8 条用户反馈一次性交付：
-
-- **AI 富文本（表格 + SVG 图）**：前端 `MarkdownView`（`flutter_markdown` + `flutter_svg`），
-  后端 `prompts.go` 三处 prompt 鼓励约束式 SVG（只允许简单流程图/柱状图）+ GFM 表格。
-  AI 页 summary / advice / quiz 的 stem / explanation 全部支持 markdown 渲染。
-- **字幕按钮重复 bug**：`_nativeSubtitleIds` 改 Set 去重 + `_getSubtitleOptions` label 层去重。
-- **全局字号配置**：`UiPrefs`（SharedPreferences）—— 字幕字号（小中大超大）和 AI 页字号
-  （紧凑/标准/大/超大）各自独立，改一次全局沿用。AI 页右上角加字号调整按钮。
-- **跳转 AI 未暂停**：helper panel 常驻 AI 入口补 `_player.pause()`。
-- **Android TV 适配**：`TvMode` 检测 + 设置页「预览 TV 模式」调试开关（MuMu 可验证）；
-  搜索框 D-pad 焦点陷阱修复；播放器 TV 下 seek ±30s + helper panel 默认展开；
-  AI 页 TV 下隐藏 quiz、字号强制大。
-
----
+> 本文件记录所有"已识别但未实现"的 feature idea 和技术债，按优先级分组。
+> 已完成的功能不在此记录（git log 是完成历史）；本文件只面向未来工作。
+>
+> 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、
+> **工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
+>
+> 最后更新：2026-07-21（全项目重构 + 文档整理后）
 
 ## P0 — 高价值，建议下一轮做
 
@@ -284,13 +178,3 @@ agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
 - **工作量预估**：小。service 层加重算前检查（对比 `MasterySnapshotJSON` 和当前 mastery 的 diff）。
 - **触发条件**：观察到 advice 重算频率过高 / token 账单上涨。
 
-### [已于 2026-07-19 解决] 删 episode/course/user 时 AI 数据无级联
-
-**已解决：FK CASCADE + userRepo 补全。** 9 张 AI 表加了 `foreignKey:XxxID;constraint:OnDelete:CASCADE`（单向 AI 侧声明，core 零感知），episode/course/user repo Delete 现在靠 CASCADE 自动清，仅 AIJob（无 FK）和 StudyAdvice（polymorphic scope_id）保留手动 `tx.Delete`；并修了 `userRepo.Delete` 之前清理 ZERO AI tables 的 bug。详见顶部「2026-07-19 AI 控制台 + 重新生成/DELETE 闭环 + FK 级联轮次」。以下为历史记录，保留备查。
-
-`AISummary/Quiz/Question/Answer/StudyAdvice/AICourseSummary/UserStudyReport/ContentChunk/KnowledgeMemory/AIRun/AIJob` 这些表的 `EpisodeID/CourseID/UserID` 列都只有 `gorm:"index;not null"`，**没有 `gorm:"foreignKey:..."` 声明**。删 episode/course/user 时这些 AI 数据变孤儿残留。
-
-- **要做什么**：要么加 FK 声明 + OnDelete 策略（CASCADE 或 RESTRICT），要么在 service 层的 Delete 方法里显式清理 AI 数据。
-- **价值**：避免 DB 长期积累孤儿数据；也让「重新生成闭环」P0 项里的"删除 AI 产物"语义更干净。
-- **工作量预估**：小到中。主要是决策（CASCADE 还是 service 层手动清）+ 改 Delete 方法。
-- **触发条件**：和「重新生成闭环」一起做最合理（都是 AI 内容生命周期管理）。

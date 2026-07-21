@@ -1,7 +1,7 @@
 # AI 出题 Agent（Phase C：memory + ReAct + 出题）
 
 > 技术文档，进 git。记录 Phase C 出题 agent 的**已落地设计**，对标
-> `docs/ai-subtitle-queue.md` 的深度。整体模块背景见 `docs/ai-agent-module.md`；
+> `docs/modules/ai/subtitle-queue.md` 的深度。整体模块背景见 `docs/modules/ai/overview.md`；
 > 实现交接笔记见 `docs/handoff-ai-step3-phaseC.md`（不进 git）。
 >
 > 本文聚焦**出题 agent 这一条能力线**（总结见 §Phase B，chat 留 Phase D）。
