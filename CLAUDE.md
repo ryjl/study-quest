@@ -29,10 +29,48 @@ cd frontend-admin && npx tsc --noEmit   # type-check admin without emitting
 cd frontend && flutter analyze    # student client
 ```
 
-Always run `make test` before declaring backend work done. The admin SPA has
-a pre-existing failing suite (`TagInput.test.tsx` — missing
-`QueryClientProvider`) that fails on a clean tree too; it's not your
-regression unless you touched `TagInput`.
+Always run `make test` before declaring backend work done. The admin SPA's
+`TagInput.test.tsx` mocks its data hook (`useTags`) so it runs without a
+`QueryClientProvider` and passes on a clean tree — historical warnings to
+the contrary are stale.
+
+## Code layout (orient yourself here before editing)
+
+**Backend (`backend/internal/`)** — Go package per concern:
+- `model/` — every GORM model. Split by domain (`identity.go`, `grade.go`,
+  `content.go`, `progress.go`, `unlock.go`, `reading.go`, `watch.go`,
+  `ai.go`, `release.go`); `migrate.go` holds `AutoMigrate`. `models.go` is
+  just the index/overview.
+- `handler/` — Gin HTTP handlers. Big topics are sub-filed (`admin_ai_*.go`,
+  `admin_reading_*.go`, `admin_content` → `admin_{course,episode,chapter,subtitle}.go`).
+  Shared helpers (`bindJSON`, `parseUintParam`, `parseLimit`, `respondError`)
+  live in `httperr.go`.
+- `service/` — business logic. `ai_service*.go` is split into
+  `{_advice,_quiz,_course_summary,_user_report,_polish,_jobs,_naming}.go` +
+  the core `ai_service.go` (interface/struct/worker/segment+summary runners).
+- `repository/` — GORM queries. `ai_content_repo.go` is the interface +
+  constructor; method bodies live in `ai_{chunk,summary,job,quiz,memory,advice}_repo.go`.
+- `media/` — ffmpeg/ffprobe wrappers (probe, screenshot, cover extraction,
+  retry-on-transient-network-error).
+- `ai/` — LLM provider plumbing and prompt construction (`agent/`, `polish/`).
+- `appclock/` — the single business-timezone indirection (see rule below).
+
+**Admin SPA (`frontend-admin/src/`):**
+- `lib/api/` — endpoint client split by domain (`auth.ts`, `courses.ts`,
+  `ai.ts`, ...) aggregated by `lib/api.ts` as `export const api = {...}`.
+  Call sites always use `api.foo()`; the split is navigability-only.
+- `lib/types.ts` is pure interfaces; runtime subject/tag caches live in
+  `lib/caches.ts` and grade presets/labels in `lib/grades.ts`.
+- Big pages are folder-per-screen (`pages/users/`, `pages/ai-console/regen/`,
+  `pages/reading-room/`, `pages/courses/`).
+
+**Flutter client (`frontend/lib/`):**
+- `model/` / `service/` / `ui/{screen,widget,ai}/` layering.
+- `service/api_service.dart` is the sole HTTP surface (plus deliberate
+  bypasses in `update_service.dart` and `pdf_reader_screen.dart` for OTA /
+  book-stream flows that run outside the auth envelope).
+- `ui/widget/` holds reusable widgets; screen-specific extracted widgets
+  live alongside the screen (e.g. `ui/widget/player/helper_panel.dart`).
 
 ## Hard-won rules (each exists because a bug violated it)
 

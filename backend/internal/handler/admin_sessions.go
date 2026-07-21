@@ -108,10 +108,7 @@ func (h *adminHandler) UpdateSessionNote(c *gin.Context) {
 	var req struct {
 		Note string `json:"note"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	if err := h.sessionService.SetDeviceNote(token, req.Note); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update note"})
 		return

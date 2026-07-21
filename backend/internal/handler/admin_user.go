@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -230,12 +229,7 @@ func (h *adminHandler) UserLedger(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid user ID"})
 		return
 	}
-	limit := 20
-	if l := c.Query("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
-			limit = n
-		}
-	}
+	limit := parseLimit(c, 20, 200)
 	ledger, err := h.progressRepo.GetPointsLedger(userID, limit, 0)
 	if err != nil {
 		respondError(c, err)
@@ -279,10 +273,7 @@ func (h *adminHandler) CreateUser(c *gin.Context) {
 		Role      string `json:"role" binding:"required"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	user, err := h.userService.CreateUser(req.Nickname, req.AvatarURL, req.Pin, req.Role)
 	if err != nil {
@@ -331,10 +322,7 @@ func (h *adminHandler) GrantAccess(c *gin.Context) {
 		CourseID uint `json:"course_id" binding:"required"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	// Storage-source whitelist gate (防呆): refuse if any episode in this course
 	// lives on a source the user's allow-list doesn't include. Staff roles
@@ -371,10 +359,7 @@ func (h *adminHandler) RevokeAccess(c *gin.Context) {
 		CourseID uint `json:"course_id" binding:"required"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	if err := h.userService.RevokeCourseAccess(req.UserID, req.CourseID); err != nil {
 		respondError(c, err)
@@ -398,10 +383,7 @@ func (h *adminHandler) UpdateUser(c *gin.Context) {
 		Role      string `json:"role" binding:"required"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	user, err := h.userService.UpdateUser(id, req.Nickname, req.AvatarURL, req.Pin, req.Role)
 	if err != nil {
@@ -427,10 +409,7 @@ func (h *adminHandler) BulkAccess(c *gin.Context) {
 		Action string `json:"action" binding:"required"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	// grant_all respects the storage allow-list. A user with an EMPTY list is
 	// allowed nothing (default-deny), so grant_all refuses with a hint. With a

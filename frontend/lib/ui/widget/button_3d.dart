@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../theme.dart';
+
 class Button3D extends StatefulWidget {
   final VoidCallback? onPressed;
   final Widget child;
@@ -15,7 +17,7 @@ class Button3D extends StatefulWidget {
     this.onPressed,
     required this.child,
     this.backgroundColor = const Color(0xFF3B82F6),
-    this.shadowColor = const Color(0xFF2563EB),
+    this.shadowColor = AppTheme.blue600,
     this.borderRadius = 16.0,
     this.border,
     this.padding = const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
@@ -34,7 +36,7 @@ class Button3D extends StatefulWidget {
       key: key,
       onPressed: onPressed,
       backgroundColor: const Color(0xFF3B82F6),
-      shadowColor: const Color(0xFF2563EB),
+      shadowColor: AppTheme.blue600,
       borderRadius: 16.0,
       padding: padding,
       autoFocus: autoFocus,
@@ -54,35 +56,15 @@ class Button3D extends StatefulWidget {
       key: key,
       onPressed: onPressed,
       backgroundColor: Colors.white,
-      shadowColor: const Color(0xFFE2E8F0),
+      shadowColor: AppTheme.borderMuted,
       borderRadius: 16.0,
-      border: Border.all(color: const Color(0xFFF1F5F9), width: 2.0),
+      border: Border.all(color: AppTheme.slate100, width: 2.0),
       padding: padding,
       autoFocus: autoFocus,
       child: DefaultTextStyle.merge(
-        style: const TextStyle(color: Color(0xFF64748B)),
+        style: const TextStyle(color: AppTheme.textMuted),
         child: child,
       ),
-    );
-  }
-
-  // Helper factory for Dark 3D button
-  factory Button3D.dark({
-    Key? key,
-    VoidCallback? onPressed,
-    required Widget child,
-    EdgeInsets padding = const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-    bool autoFocus = false,
-  }) {
-    return Button3D(
-      key: key,
-      onPressed: onPressed,
-      backgroundColor: const Color(0xFF1E293B),
-      shadowColor: const Color(0xFF0F172A),
-      borderRadius: 16.0,
-      padding: padding,
-      autoFocus: autoFocus,
-      child: child,
     );
   }
 
@@ -134,7 +116,7 @@ class _Button3DState extends State<Button3D> {
                     ),
                     if (_isFocused)
                       BoxShadow(
-                        color: widget.backgroundColor.withOpacity(0.3),
+                        color: widget.backgroundColor.withValues(alpha: 0.3),
                         spreadRadius: 4,
                         blurRadius: 8,
                       ),
@@ -142,7 +124,7 @@ class _Button3DState extends State<Button3D> {
                 : [
                     if (_isFocused)
                       BoxShadow(
-                        color: widget.backgroundColor.withOpacity(0.3),
+                        color: widget.backgroundColor.withValues(alpha: 0.3),
                         spreadRadius: 4,
                         blurRadius: 8,
                       ),

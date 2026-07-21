@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { pollWhileActive } from '../lib/query';
 import { useSubjects } from '../lib/useSubjects';
 import { useStorageSources } from '../lib/useStorageSources';
 import { useTags } from '../lib/useTags';
@@ -107,7 +108,7 @@ export function Layout() {
   const probeQ = useQuery({
     queryKey: ['probe'],
     queryFn: api.probeProgress,
-    refetchInterval: (q) => (q.state.data?.running ? 2000 : false),
+    refetchInterval: pollWhileActive(2000),
     refetchIntervalInBackground: false,
   });
 

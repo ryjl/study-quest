@@ -278,7 +278,7 @@ func (h *releaseHandler) Upload(c *gin.Context) {
 // and abi are immutable (they are the identity of a released build; clients may
 // already have cached a reference to them).
 func (h *releaseHandler) Update(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid release id"})
 		return
@@ -298,10 +298,7 @@ func (h *releaseHandler) Update(c *gin.Context) {
 		ForceUpdate  *bool   `json:"force_update"`
 		IsActive     *bool   `json:"is_active"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	if req.ReleaseNotes != nil {
 		rel.ReleaseNotes = *req.ReleaseNotes
 	}
@@ -320,7 +317,7 @@ func (h *releaseHandler) Update(c *gin.Context) {
 
 // Delete DELETE /admin/api/releases/:id — removes the DB row AND the apk file.
 func (h *releaseHandler) Delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid release id"})
 		return

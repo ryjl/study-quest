@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"studyquest/backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -69,10 +68,7 @@ func (h *tagHandler) AdminCreateTag(c *gin.Context) {
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	tag, err := h.svc.Create(req.Key, req.Label, req.Color, req.SortOrder)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -84,7 +80,7 @@ func (h *tagHandler) AdminCreateTag(c *gin.Context) {
 // AdminUpdateTag PUT /admin/api/tags/:id
 // Courses store tag IDs, so renaming the label or key requires no cascade.
 func (h *tagHandler) AdminUpdateTag(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tag ID"})
 		return
@@ -95,10 +91,7 @@ func (h *tagHandler) AdminUpdateTag(c *gin.Context) {
 		Color     string `json:"color"`
 		SortOrder int    `json:"sort_order"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	tag, err := h.svc.FindByID(uint(id))
 	if err != nil {
 		respondError(c, err)
@@ -124,7 +117,7 @@ func (h *tagHandler) AdminUpdateTag(c *gin.Context) {
 // deletable and the course_tags join rows are cleared by ON DELETE CASCADE
 // (i.e. the tag is detached from every course that used it).
 func (h *tagHandler) AdminDeleteTag(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tag ID"})
 		return

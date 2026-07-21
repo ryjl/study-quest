@@ -112,11 +112,7 @@ class ReadingBook {
       subject: json['Subject'] ?? json['subject'] ?? '',
     );
   }
-
-  /// Whether this book is standalone (not part of a series).
-  bool get isStandalone => seriesId == 0;
 }
-
 /// A web article on the shelf.
 class ReadingArticle {
   final int id;
@@ -172,8 +168,6 @@ class ReadingArticle {
       mirrorStatus: json['MirrorStatus'] ?? json['mirror_status'] ?? 'none',
     );
   }
-
-  bool get isStandalone => seriesId == 0;
 
   /// The URL the client should load. Phase 1: always sourceUrl.
   /// Phase 2 (future): mirrored URL when mirrorStatus == 'ready'.

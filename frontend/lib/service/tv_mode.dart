@@ -25,7 +25,6 @@ class TvMode {
 
   /// TV 模式是否生效。UI 各处用这个判断走 PAD 分支还是 TV 分支。
   bool get isActive => _autoDetected || _forceEnabled;
-  bool get autoDetected => _autoDetected;
   bool get forceEnabled => _forceEnabled;
 
   /// 启动时调一次。幂等。

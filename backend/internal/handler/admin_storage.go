@@ -68,10 +68,7 @@ func (h *adminHandler) CreateStorageSource(c *gin.Context) {
 		return
 	}
 	var req storageSourceDTO
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	if req.Name == "" || req.Type == "" || req.URL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name, type, url 为必填"})
 		return
@@ -114,10 +111,7 @@ func (h *adminHandler) UpdateStorageSource(c *gin.Context) {
 		return
 	}
 	var req storageSourceDTO
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	src, err := h.storageSourceRepo.FindByID(id)
 	if err != nil {
 		respondError(c, err)
@@ -272,10 +266,7 @@ func (h *adminHandler) SetStorageWhitelist(c *gin.Context) {
 	var req struct {
 		SourceIDs []uint `json:"source_ids"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	if err := h.storageSourceRepo.SetWhitelist(id, req.SourceIDs); err != nil {
 		respondError(c, err)
 		return

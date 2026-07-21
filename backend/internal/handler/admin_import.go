@@ -61,10 +61,7 @@ func (h *adminHandler) PreviewTree(c *gin.Context) {
 func (h *adminHandler) ExecuteImport(c *gin.Context) {
 	var req service.ExecuteTreeImportRequest
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	err := h.importService.ExecuteTreeImport(&req)
 	if err != nil {

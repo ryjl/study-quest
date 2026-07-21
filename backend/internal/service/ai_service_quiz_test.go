@@ -26,8 +26,10 @@ func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentReposit
 		nil,                  // no glossary repo — quiz path doesn't touch it
 		nil,                  // no subject repo — polish-only
 	).(*aiService)
+	t.Cleanup(svc.Stop) // release the worker goroutine (see ai_service_test.go)
 	return svc, contentRepo
 }
+
 
 // seedQuizWithQuestions inserts one active quiz with the given questions and
 // returns the quiz + the created question rows. Mirrors the shape the quizzer

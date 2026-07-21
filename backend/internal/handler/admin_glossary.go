@@ -168,10 +168,7 @@ func (h *adminHandler) AcceptGlossaryCandidateBatch(c *gin.Context) {
 		return
 	}
 	var req acceptGlossaryBatchReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	if len(req.IDs) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "ids 不能为空"})
 		return

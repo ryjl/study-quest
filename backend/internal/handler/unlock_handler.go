@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"studyquest/backend/internal/appclock"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/service"
@@ -112,10 +111,7 @@ func (h *unlockHandler) SaveTemplate(c *gin.Context) {
 		return
 	}
 	var req templateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	wt, perr := parseWeeklyTimes(req.WeeklyTimes)
 	if perr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid weekly_times: " + perr.Error()})
@@ -187,10 +183,7 @@ func (h *unlockHandler) SaveOverride(c *gin.Context) {
 		return
 	}
 	var req templateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	wt, perr := parseWeeklyTimes(req.WeeklyTimes)
 	if perr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid weekly_times: " + perr.Error()})
@@ -256,10 +249,7 @@ func (h *unlockHandler) SetAllowedEpisodes(c *gin.Context) {
 	var req struct {
 		AllowedEpisodeIDs []uint `json:"allowed_episode_ids"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	ids := req.AllowedEpisodeIDs
 	if ids == nil {
 		ids = []uint{}
@@ -338,12 +328,12 @@ func unlockOverrideDTO(o *model.UserUnlockOverride, allowedIDs []uint) gin.H {
 // writes the error response on failure. Returns ok=false if the caller should
 // abort. parseUintParam is defined in admin_handler.go and reused here.
 func parseUserCourseParams(c *gin.Context) (uid, cid uint, ok bool) {
-	u, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	u, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user ID"})
 		return 0, 0, false
 	}
-	cc, err := strconv.ParseUint(c.Param("cid"), 10, 32)
+	cc, err := parseUintParam(c, "cid")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID"})
 		return 0, 0, false

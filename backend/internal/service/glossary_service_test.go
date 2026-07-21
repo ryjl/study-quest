@@ -28,6 +28,7 @@ func glossaryTestEnv(t *testing.T) (*aiService, repository.GlossaryRepository, r
 		glossaryRepo,
 		subjectRepo,
 	).(*aiService)
+	t.Cleanup(svc.Stop) // release the worker goroutine (see ai_service_test.go)
 	return svc, glossaryRepo, courseRepo, subjectRepo
 }
 

@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"studyquest/backend/internal/model"
@@ -209,7 +208,7 @@ func (h *readingHandler) GetReadingRoom(c *gin.Context) {
 // fail-closed: a student without series access gets 403. Series access implies
 // child access (matching Course→Episode semantics), so all children are listed.
 func (h *readingHandler) GetSeries(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid series ID format"})
 		return
@@ -265,7 +264,7 @@ func (h *readingHandler) GetSeries(c *gin.Context) {
 // StreamBook 302-redirects to the PDF's storage provider download URL, mirroring
 // episode.Stream. Access-gated fail-closed via CanAccess (series inheritance).
 func (h *readingHandler) StreamBook(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book ID format"})
 		return
@@ -327,7 +326,7 @@ func (h *readingHandler) StreamBook(c *gin.Context) {
 }
 
 func (h *readingHandler) GetBookProgress(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book ID format"})
 		return
@@ -358,7 +357,7 @@ func (h *readingHandler) GetBookProgress(c *gin.Context) {
 }
 
 func (h *readingHandler) ReportBookProgress(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid book ID format"})
 		return
@@ -379,10 +378,7 @@ func (h *readingHandler) ReportBookProgress(c *gin.Context) {
 	var req struct {
 		LastPage int `json:"lastPage"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	prog, err := h.bookService.ReportProgress(uid, uint(id), req.LastPage)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save progress: " + err.Error()})
@@ -392,7 +388,7 @@ func (h *readingHandler) ReportBookProgress(c *gin.Context) {
 }
 
 func (h *readingHandler) GetArticle(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid article ID format"})
 		return

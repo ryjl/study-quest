@@ -61,6 +61,8 @@ class AppUpdateService {
     );
 
     try {
+      // NOTE: bypasses ApiService because OTA runs pre-auth (no session token
+      // yet) and only needs the bare Accept header.
       final response = await http.get(uri, headers: {'Accept': 'application/json'});
       // 404 = no release for this ABI → up to date. Non-200 is treated the same:
       // never surface a check error as a hard failure.
@@ -109,6 +111,8 @@ class AppUpdateService {
     final sink = file.openWrite();
 
     try {
+      // NOTE: bypasses ApiService because OTA streams an arbitrary release
+      // asset URL with manual byte-counting for the progress callback.
       final request = http.Request('GET', Uri.parse(downloadUrl));
       final client = http.Client();
       final response = await client.send(request);

@@ -62,10 +62,7 @@ func (h *userHandler) Login(c *gin.Context) {
 		DeviceName string `json:"device_name"` // optional; OS-level device label for the admin device list
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	valid, err := h.userService.Authenticate(req.UserID, req.Pin)
 	if err != nil {

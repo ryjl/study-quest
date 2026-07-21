@@ -3,7 +3,6 @@ package handler
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
 	"studyquest/backend/internal/service"
 
@@ -87,7 +86,7 @@ func (h *subtitleJobHandler) Claim(c *gin.Context) {
 }
 
 func (h *subtitleJobHandler) Complete(c *gin.Context) {
-	id, err := parseJobID(c)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
 		return
@@ -98,10 +97,7 @@ func (h *subtitleJobHandler) Complete(c *gin.Context) {
 		Language   string `json:"language"`
 		Label      string `json:"label"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	if err := h.svc.Complete(id, req.SrtContent, req.Language, req.Label); err != nil {
 		if errors.Is(err, service.ErrSubtitleJobNotFound) {
@@ -122,7 +118,7 @@ func (h *subtitleJobHandler) Complete(c *gin.Context) {
 }
 
 func (h *subtitleJobHandler) Heartbeat(c *gin.Context) {
-	id, err := parseJobID(c)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
 		return
@@ -142,7 +138,7 @@ func (h *subtitleJobHandler) Heartbeat(c *gin.Context) {
 }
 
 func (h *subtitleJobHandler) Fail(c *gin.Context) {
-	id, err := parseJobID(c)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
 		return
@@ -156,14 +152,4 @@ func (h *subtitleJobHandler) Fail(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "failed"})
-}
-
-// parseJobID reads :id from the path. Mirrors parseUintParam but local to avoid
-// depending on the admin handler's helpers.
-func parseJobID(c *gin.Context) (uint, error) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint(id), nil
 }

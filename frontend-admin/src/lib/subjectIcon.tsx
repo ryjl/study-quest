@@ -19,7 +19,6 @@ import {
   Clapperboard,
   Tv,
   Video,
-  GraduationCap,
   type LucideProps,
 } from 'lucide-react';
 
@@ -70,7 +69,4 @@ export function resolveSubjectIcon(key: string): ComponentType<LucideProps> {
   return SUBJECT_ICONS[key] ?? BookOpen;
 }
 
-// Re-export the fallback so callers that want the "generic subject" icon
-// (e.g. a subject picker's empty state) can reach it directly.
-export const GenericSubjectIcon = GraduationCap;
 export { BookOpen };

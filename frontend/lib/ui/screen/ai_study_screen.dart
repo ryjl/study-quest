@@ -6,6 +6,7 @@ import '../../service/api_service.dart';
 import '../../service/quiz_draft_store.dart';
 import '../../service/ui_prefs.dart';
 import '../../service/tv_mode.dart';
+import '../../theme.dart';
 import '../widget/markdown_view.dart';
 import 'player_screen.dart';
 
@@ -419,18 +420,18 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: Color(0xFF64748B)),
+          icon: const Icon(Icons.arrow_back_rounded, color: AppTheme.textMuted),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
           widget.episode.title,
-          style: const TextStyle(color: Color(0xFF0F172A), fontSize: 16, fontWeight: FontWeight.w600),
+          style: const TextStyle(color: AppTheme.slate900, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         // 字号调整按钮(需求 #6)。TV 模式下隐藏——TV 永远走最大档,调了也没用。
         actions: [
           if (!TvMode.instance.isActive)
             IconButton(
-              icon: const Icon(Icons.format_size_rounded, color: Color(0xFF64748B)),
+              icon: const Icon(Icons.format_size_rounded, color: AppTheme.textMuted),
               tooltip: '字号',
               onPressed: () => _showTextScaleMenu(context),
             ),
@@ -472,9 +473,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(children: [
-                  const Icon(Icons.format_size_rounded, size: 18, color: Color(0xFF0F172A)),
+                  const Icon(Icons.format_size_rounded, size: 18, color: AppTheme.slate900),
                   const SizedBox(width: 8),
-                  const Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+                  const Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
                 ]),
               ),
               for (int i = 0; i < UiPrefs.aiScaleLabels.length; i++)
@@ -483,18 +484,18 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                     // 4 档依次给个大小递增的字号图标,直观表达档位语义。
                     [Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded][i],
                     size: [16, 20, 24, 28][i].toDouble(),
-                    color: UiPrefs.instance.aiTextScaleIndex == i ? const Color(0xFF8B5CF6) : const Color(0xFF94A3B8),
+                    color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : AppTheme.slate400,
                   ),
                   title: Text(
                     UiPrefs.aiScaleLabels[i],
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: UiPrefs.instance.aiTextScaleIndex == i ? FontWeight.w700 : FontWeight.w500,
-                      color: UiPrefs.instance.aiTextScaleIndex == i ? const Color(0xFF8B5CF6) : const Color(0xFF334155),
+                      color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : const Color(0xFF334155),
                     ),
                   ),
                   trailing: UiPrefs.instance.aiTextScaleIndex == i
-                      ? const Icon(Icons.check_rounded, color: Color(0xFF8B5CF6))
+                      ? const Icon(Icons.check_rounded, color: AppTheme.violet500)
                       : null,
                   onTap: () async {
                     await UiPrefs.instance.setAiTextScaleIndex(i);
@@ -529,17 +530,17 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         child: ExpansionTile(
           initiallyExpanded: false,
           tilePadding: EdgeInsets.zero,
-          iconColor: const Color(0xFF64748B),
-          collapsedIconColor: const Color(0xFF64748B),
+          iconColor: AppTheme.textMuted,
+          collapsedIconColor: AppTheme.textMuted,
           title: Row(children: [
-            const Icon(Icons.history_rounded, size: 16, color: Color(0xFF64748B)),
+            const Icon(Icons.history_rounded, size: 16, color: AppTheme.textMuted),
             const SizedBox(width: 6),
-            const Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+            const Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
             const SizedBox(width: 8),
             if (_historyLoading)
               const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
             else
-              Text('${_history.length} 套', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
+              Text('${_history.length} 套', style: const TextStyle(fontSize: 12, color: AppTheme.slate400)),
           ]),
           children: [
             for (final h in _history) _HistoryQuizCard(
@@ -567,9 +568,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     return _Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         const Row(children: [
-          Icon(Icons.auto_awesome_rounded, size: 16, color: Color(0xFF8B5CF6)),
+          Icon(Icons.auto_awesome_rounded, size: 16, color: AppTheme.violet500),
           SizedBox(width: 6),
-          Text('AI 重点总结', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+          Text('AI 重点总结', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
         ]),
         if (s.headline.isNotEmpty) ...[
           const SizedBox(height: 10),
@@ -607,7 +608,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           Container(
             padding: const EdgeInsets.only(left: 12, right: 4, top: 2, bottom: 2),
             decoration: const BoxDecoration(
-              border: Border(left: BorderSide(color: Color(0xFF10B981), width: 3)),
+              border: Border(left: BorderSide(color: AppTheme.accentGreen, width: 3)),
             ),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               const Row(children: [
@@ -663,7 +664,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             children: s.concepts
                 .map((c) => Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(6)),
+                      decoration: BoxDecoration(color: AppTheme.blue100, borderRadius: BorderRadius.circular(6)),
                       child: Text(c, style: const TextStyle(fontSize: 11, color: Color(0xFF1D4ED8))),
                     ))
                 .toList(),
@@ -700,7 +701,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           child: Row(children: [
             SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
             SizedBox(width: 10),
-            Text('正在分析你的学习情况…', style: TextStyle(fontSize: 13, color: Color(0xFF64748B))),
+            Text('正在分析你的学习情况…', style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
           ]),
         ),
       );
@@ -715,7 +716,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         const Row(children: [
           Icon(Icons.lightbulb_outline_rounded, size: 16, color: Color(0xFFF59E0B)),
           SizedBox(width: 6),
-          Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+          Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
         ]),
         const SizedBox(height: 8),
         // 学习建议正文是 agent 跨知识点综合分析,鼓励输出 markdown 列表/加粗/对比表格。
@@ -743,9 +744,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           child: Column(children: [
             CircularProgressIndicator(),
             SizedBox(height: 12),
-            Text('正在为你生成练习…', style: TextStyle(fontSize: 14, color: Color(0xFF64748B))),
+            Text('正在为你生成练习…', style: TextStyle(fontSize: 14, color: AppTheme.textMuted)),
             SizedBox(height: 4),
-            Text('AI 正在分析这节课内容并针对你的学习情况出题', style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+            Text('AI 正在分析这节课内容并针对你的学习情况出题', style: TextStyle(fontSize: 11, color: AppTheme.slate400)),
           ]),
         ),
       );
@@ -761,18 +762,18 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 8),
         child: Row(children: [
-          const Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Color(0xFF0F172A))),
+          const Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
           const SizedBox(width: 8),
           if (submitted)
-            const Text('已交卷', style: TextStyle(fontSize: 12, color: Color(0xFF10B981), fontWeight: FontWeight.w600))
+            const Text('已交卷', style: TextStyle(fontSize: 12, color: AppTheme.accentGreen, fontWeight: FontWeight.w600))
           else
-            Text('${_answeredCount()}/${questions.length} 已答', style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8))),
+            Text('${_answeredCount()}/${questions.length} 已答', style: const TextStyle(fontSize: 12, color: AppTheme.slate400)),
           const Spacer(),
           TextButton.icon(
             onPressed: _regenerate,
             icon: const Icon(Icons.refresh_rounded, size: 14),
             label: const Text('换题', style: TextStyle(fontSize: 12)),
-            style: TextButton.styleFrom(foregroundColor: const Color(0xFF8B5CF6)),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.violet500),
           ),
         ]),
       ),
@@ -846,7 +847,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             child: ElevatedButton(
               onPressed: _submittingAll ? null : _submitAll,
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF8B5CF6),
+                backgroundColor: AppTheme.violet500,
                 foregroundColor: Colors.white,
                 elevation: 0,
                 padding: const EdgeInsets.symmetric(vertical: 14),
@@ -892,7 +893,7 @@ class _Card extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: AppTheme.borderMuted),
       ),
       child: child,
     );
@@ -942,14 +943,14 @@ class _QuestionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: AppTheme.borderMuted),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(5)),
-            child: Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+            decoration: BoxDecoration(color: AppTheme.slate100, borderRadius: BorderRadius.circular(5)),
+            child: Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
           ),
           const SizedBox(width: 6),
           Container(
@@ -960,7 +961,7 @@ class _QuestionCard extends StatelessWidget {
                   ? const Color(0xFFFFFBEB)
                   : question.isMultiChoice
                       ? const Color(0xFFF5F3FF)
-                      : const Color(0xFFEFF6FF),
+                      : AppTheme.blue100,
               borderRadius: BorderRadius.circular(5),
             ),
             child: Text(
@@ -982,7 +983,7 @@ class _QuestionCard extends StatelessWidget {
         MarkdownView(
           data: question.stem,
           textScale: textScale,
-          baseTextColor: const Color(0xFF0F172A),
+          baseTextColor: AppTheme.slate900,
         ),
         const SizedBox(height: 10),
         // 按题型分派选项渲染:填空 → 输入框;多选 → checkbox 风(可多选);单选 → radio 风。
@@ -1002,8 +1003,8 @@ class _QuestionCard extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               onPressed: onJump,
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 16, color: Color(0xFF2563EB)),
-              label: Text('跳转视频 ${_fmtJump(question.chunkStartTime!)}', style: const TextStyle(fontSize: 12, color: Color(0xFF2563EB))),
+              icon: const Icon(Icons.play_circle_outline_rounded, size: 16, color: AppTheme.blue600),
+              label: Text('跳转视频 ${_fmtJump(question.chunkStartTime!)}', style: const TextStyle(fontSize: 12, color: AppTheme.blue600)),
             ),
           ),
       ]),
@@ -1037,18 +1038,18 @@ class _QuestionCard extends StatelessWidget {
     // 学生错选:已选 + 交卷有结果 + 不在正确集合里。
     final isWrongPick = hasVerdict && isSelected && !isCorrect;
     Color bg = Colors.white;
-    Color border = const Color(0xFFE2E8F0);
+    Color border = AppTheme.borderMuted;
     if (submitted && hasVerdict) {
       if (isCorrect) {
         bg = const Color(0xFFECFDF5);
-        border = const Color(0xFF10B981);
+        border = AppTheme.accentGreen;
       } else if (isWrongPick) {
         bg = const Color(0xFFFEF2F2);
         border = const Color(0xFFEF4444);
       }
     } else if (isSelected) {
       bg = const Color(0xFFF5F3FF);
-      border = const Color(0xFF8B5CF6);
+      border = AppTheme.violet500;
     }
     return GestureDetector(
       onTap: submitted ? null : () => onMultiToggle?.call(i),
@@ -1063,15 +1064,15 @@ class _QuestionCard extends StatelessWidget {
             height: 20,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: isSelected ? const Color(0xFF8B5CF6) : const Color(0xFFCBD5E1)),
-              color: isSelected ? const Color(0xFF8B5CF6) : Colors.transparent,
+              border: Border.all(color: isSelected ? AppTheme.violet500 : const Color(0xFFCBD5E1)),
+              color: isSelected ? AppTheme.violet500 : Colors.transparent,
             ),
             alignment: Alignment.center,
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
           Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
-          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: Color(0xFF10B981)),
+          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
           if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
         ]),
       ),
@@ -1086,18 +1087,18 @@ class _QuestionCard extends StatelessWidget {
     final isCorrect = hasVerdict && result!.correctIndex == i;
     final isWrongPick = hasVerdict && isSelected && !isCorrect;
     Color bg = Colors.white;
-    Color border = const Color(0xFFE2E8F0);
+    Color border = AppTheme.borderMuted;
     if (submitted) {
       if (isCorrect) {
         bg = const Color(0xFFECFDF5);
-        border = const Color(0xFF10B981);
+        border = AppTheme.accentGreen;
       } else if (isWrongPick) {
         bg = const Color(0xFFFEF2F2);
         border = const Color(0xFFEF4444);
       }
     } else if (isSelected) {
       bg = const Color(0xFFF5F3FF);
-      border = const Color(0xFF8B5CF6);
+      border = AppTheme.violet500;
     }
     return GestureDetector(
       onTap: submitted ? null : () => onPick(i),
@@ -1111,15 +1112,15 @@ class _QuestionCard extends StatelessWidget {
             height: 20,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: isSelected ? const Color(0xFF8B5CF6) : const Color(0xFFCBD5E1)),
-              color: isSelected ? const Color(0xFF8B5CF6) : Colors.transparent,
+              border: Border.all(color: isSelected ? AppTheme.violet500 : const Color(0xFFCBD5E1)),
+              color: isSelected ? AppTheme.violet500 : Colors.transparent,
             ),
             alignment: Alignment.center,
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
           Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
-          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: Color(0xFF10B981)),
+          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
           if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
         ]),
       ),
@@ -1133,14 +1134,14 @@ class _QuestionCard extends StatelessWidget {
       onChanged: (_) => onFillChanged(), // 触发 rebuild(已答计数) + 落盘草稿
       decoration: InputDecoration(
         hintText: '输入你的答案',
-        hintStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+        hintStyle: const TextStyle(color: AppTheme.slate400, fontSize: 13),
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFFE2E8F0))),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.borderMuted)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.borderMuted)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       ),
-      style: const TextStyle(fontSize: 14, color: Color(0xFF0F172A)),
+      style: const TextStyle(fontSize: 14, color: AppTheme.slate900),
     );
   }
 
@@ -1154,7 +1155,7 @@ class _QuestionCard extends StatelessWidget {
             ? const Color(0xFFFFFBEB)
             : const Color(0xFFFEF2F2);
     final Color iconColor = r.correct
-        ? const Color(0xFF10B981)
+        ? AppTheme.accentGreen
         : isPartial
             ? const Color(0xFFF59E0B)
             : const Color(0xFFEF4444);
@@ -1184,7 +1185,7 @@ class _QuestionCard extends StatelessWidget {
         if (question.isFill) ...[
           const SizedBox(height: 4),
           Text('你填的: ${question.userAnswerText.isNotEmpty ? question.userAnswerText : (fillController?.text ?? '')}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF64748B))),
+              style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
         ],
         // 多选题:partial 时提示漏选/多选的具体数量(选项已用绿/红高亮,这里给一句文字总结)。
         if (question.isMultiChoice && isPartial) ...[
@@ -1204,7 +1205,7 @@ class _QuestionCard extends StatelessWidget {
           MarkdownView(
             data: r.explanation,
             textScale: textScale,
-            baseTextColor: const Color(0xFF64748B),
+            baseTextColor: AppTheme.textMuted,
           ),
         ],
       ]),
@@ -1264,7 +1265,7 @@ class _HistoryQuizCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
+        border: Border.all(color: AppTheme.borderMuted),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Header row (tap to toggle).
@@ -1275,7 +1276,7 @@ class _HistoryQuizCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(children: [
               Icon(expanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
-                  size: 18, color: const Color(0xFF64748B)),
+                  size: 18, color: AppTheme.textMuted),
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
@@ -1284,7 +1285,7 @@ class _HistoryQuizCard extends StatelessWidget {
                   style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
                 ),
               ),
-              Text('${quiz.questionCount} 题', style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+              Text('${quiz.questionCount} 题', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
               const SizedBox(width: 8),
               if (quiz.wrongCount > 0)
                 Container(
@@ -1337,12 +1338,12 @@ class _HistoryQuestionTile extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
         border: Border(
-          left: BorderSide(width: 3, color: q.wrong ? const Color(0xFFEF4444) : const Color(0xFFE2E8F0)),
+          left: BorderSide(width: 3, color: q.wrong ? const Color(0xFFEF4444) : AppTheme.borderMuted),
         ),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(children: [
-          Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: Color(0xFF64748B))),
+          Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
           const SizedBox(width: 6),
           if (q.wrong)
             const Text('错', style: TextStyle(fontSize: 10, color: Color(0xFFEF4444), fontWeight: FontWeight.w700))
@@ -1354,7 +1355,7 @@ class _HistoryQuestionTile extends StatelessWidget {
         MarkdownView(
           data: q.stem,
           textScale: textScale,
-          baseTextColor: const Color(0xFF0F172A),
+          baseTextColor: AppTheme.slate900,
         ),
         const SizedBox(height: 8),
         // 按题型分派:填空 → 文本回放;多选 → correctIndices 高亮所有正确项 + 学生错选项标红;
@@ -1371,7 +1372,7 @@ class _HistoryQuestionTile extends StatelessWidget {
           MarkdownView(
             data: q.explanation,
             textScale: textScale,
-            baseTextColor: const Color(0xFF64748B),
+            baseTextColor: AppTheme.textMuted,
           ),
         ],
         if (q.chunkStartTime != null)
@@ -1379,9 +1380,9 @@ class _HistoryQuestionTile extends StatelessWidget {
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               onPressed: () => onJump(q.chunkStartTime!),
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 14, color: Color(0xFF2563EB)),
+              icon: const Icon(Icons.play_circle_outline_rounded, size: 14, color: AppTheme.blue600),
               label: Text('跳转视频 ${_fmtJump(q.chunkStartTime!)}',
-                  style: const TextStyle(fontSize: 11, color: Color(0xFF2563EB))),
+                  style: const TextStyle(fontSize: 11, color: AppTheme.blue600)),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 minimumSize: const Size(0, 24),
@@ -1402,11 +1403,11 @@ class _HistoryQuestionTile extends StatelessWidget {
           decoration: BoxDecoration(
             color: q.correctIndex == i ? const Color(0xFFECFDF5) : Colors.white,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: q.correctIndex == i ? const Color(0xFF10B981) : const Color(0xFFE2E8F0)),
+            border: Border.all(color: q.correctIndex == i ? AppTheme.accentGreen : AppTheme.borderMuted),
           ),
           child: Row(children: [
             Expanded(child: Text(q.options[i], style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
-            if (q.correctIndex == i) const Icon(Icons.check_circle, size: 14, color: Color(0xFF10B981)),
+            if (q.correctIndex == i) const Icon(Icons.check_circle, size: 14, color: AppTheme.accentGreen),
           ]),
         ),
     ]);
@@ -1431,16 +1432,16 @@ class _HistoryQuestionTile extends StatelessWidget {
             borderRadius: BorderRadius.circular(6),
             border: Border.all(
               color: correctSet.contains(i)
-                  ? const Color(0xFF10B981)
+                  ? AppTheme.accentGreen
                   : userSet.contains(i)
                       ? const Color(0xFFEF4444)
-                      : const Color(0xFFE2E8F0),
+                      : AppTheme.borderMuted,
             ),
           ),
           child: Row(children: [
             Expanded(child: Text(q.options[i], style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
             if (correctSet.contains(i))
-              const Icon(Icons.check_circle, size: 14, color: Color(0xFF10B981))
+              const Icon(Icons.check_circle, size: 14, color: AppTheme.accentGreen)
             else if (userSet.contains(i))
               const Icon(Icons.cancel, size: 14, color: Color(0xFFEF4444)),
           ]),
@@ -1472,7 +1473,7 @@ class _HistoryQuestionTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: const Color(0xFFECFDF5),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: const Color(0xFF10B981)),
+          border: Border.all(color: AppTheme.accentGreen),
         ),
         child: Text('正确答案: ${q.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669))),
       ),
@@ -1531,7 +1532,7 @@ class _PointItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 3, left: 10),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('· ', style: TextStyle(color: Color(0xFF8B5CF6), fontWeight: FontWeight.bold)),
+        const Text('· ', style: TextStyle(color: AppTheme.violet500, fontWeight: FontWeight.bold)),
         Expanded(
           child: MarkdownView(
             data: data,

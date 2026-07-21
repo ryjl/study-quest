@@ -13,7 +13,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// 用 index 而非原始数值:档位是离散的(小/中/大/超大),存 index 让 UI 的 segmented
 /// control 直接绑定,且未来想调整具体数值只改 [_subtitleSizes]/[_aiScales] 即可。
-class UiPrefs extends ChangeNotifier {
+///
+/// 不再 extends ChangeNotifier(原 Step 7 fallback 决策):全 App 通过
+/// [instance] 单例直读,~25 处调用点里大量位于 `onTap` 等非 build 上下文,
+/// `context.watch` 在那里是非法的;迁移到 MultiProvider 会逼着重写那些回调并
+/// 影响 rebuild 语义。没有任何外部代码调用 addListener / notifyListeners,
+/// 所以去掉 mixin 后唯一行为变化是 setter 不再广播 —— 而调用方本来就需要
+/// 主动 setState 拉新值,等价于现在的契约。
+class UiPrefs {
   UiPrefs._();
   static final UiPrefs instance = UiPrefs._();
 
@@ -37,14 +44,9 @@ class UiPrefs extends ChangeNotifier {
 
   double get subtitleSize => _subtitleSizes[_subtitleSizeIndex.clamp(0, _subtitleSizes.length - 1)];
   int get subtitleSizeIndex => _subtitleSizeIndex;
-  String get subtitleSizeLabel => subtitleSizeLabels[_subtitleSizeIndex];
 
   double get aiTextScale => _aiScales[_aiTextScaleIndex.clamp(0, _aiScales.length - 1)];
   int get aiTextScaleIndex => _aiTextScaleIndex;
-  String get aiScaleLabel => aiScaleLabels[_aiTextScaleIndex];
-
-  /// 把一个基础 fontSize 按 AI 页缩放因子放大。AI 页所有 Text 都过这个方法。
-  double scaled(double baseFontSize) => (baseFontSize * aiTextScale).roundToDouble();
 
   /// 启动时调用一次,把 prefs 读进内存。调用方应 await 完成后再读字段。
   /// 重复调用幂等(已加载直接返回)。
@@ -64,7 +66,6 @@ class UiPrefs extends ChangeNotifier {
     final clamped = index.clamp(0, _subtitleSizes.length - 1);
     if (clamped == _subtitleSizeIndex) return;
     _subtitleSizeIndex = clamped;
-    notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_kSubtitleSize, clamped);
@@ -77,7 +78,6 @@ class UiPrefs extends ChangeNotifier {
     final clamped = index.clamp(0, _aiScales.length - 1);
     if (clamped == _aiTextScaleIndex) return;
     _aiTextScaleIndex = clamped;
-    notifyListeners();
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setInt(_kAiTextScale, clamped);

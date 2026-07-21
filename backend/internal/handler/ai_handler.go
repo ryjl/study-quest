@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -125,7 +124,7 @@ type preAdventureItem struct {
 // the client treats 404 as "no summary available" and hides the card. This is
 // the graceful-degradation contract: AI is an add-on, so absence is normal.
 func (h *aiHandler) GetEpisodeSummary(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
 		return
@@ -188,7 +187,7 @@ type quizResponse struct {
 //   - 202 {status:"generating"}          — enqueued, client should poll
 //   - 404 {status:"unavailable"}         — AI off / no chunks / not visible
 func (h *aiHandler) GetEpisodeQuiz(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
 		return
@@ -237,7 +236,7 @@ type submitAllQuizRequest struct {
 //
 // 状态码:200(交卷成功,返回每题结果数组)/ 409(已交卷,不能重复提交)/ 400(格式)。
 func (h *aiHandler) SubmitAllQuizAnswers(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
 		return
@@ -254,10 +253,7 @@ func (h *aiHandler) SubmitAllQuizAnswers(c *gin.Context) {
 		return // canAccessEpisode 已写好错误响应
 	}
 	var req submitAllQuizRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请求格式无效"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 	results, err := h.aiService.SubmitAllQuizAnswers(userID, uint(id), req.Answers)
 	if err != nil {
 		// 已交卷 → 409,告诉前端别重复提交。
@@ -275,7 +271,7 @@ func (h *aiHandler) SubmitAllQuizAnswers(c *gin.Context) {
 // their latest memory (换题). Returns the new status (generating → poll).
 // POST /api/v1/episodes/:id/ai-quiz/regenerate
 func (h *aiHandler) RegenerateQuiz(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
 		return
@@ -307,7 +303,7 @@ func (h *aiHandler) RegenerateQuiz(c *gin.Context) {
 // case before the first regenerate, not an error. Same canAccessEpisode gate as
 // the other quiz endpoints.
 func (h *aiHandler) GetEpisodeQuizHistory(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
 		return
@@ -431,7 +427,7 @@ type adviceResponse struct {
 // 和 quiz 端点同一道 canAccessEpisode 闸门:能看这节课视频才能看它的建议。
 // 第一次访问触发 lazy 生成(入队 advice job),返回 generating 让客户端轮询。
 func (h *aiHandler) GetEpisodeAdvice(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid episode ID"})
 		return
@@ -462,7 +458,7 @@ func (h *aiHandler) GetEpisodeAdvice(c *gin.Context) {
 // advice 数据本身按 user_id 键存(拿不到别人的),但这里仍校验课程访问权,
 // 避免任意登录用户对未授权课程触发 LLM job 或探测课程存在性。
 func (h *aiHandler) GetCourseAdvice(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID"})
 		return
@@ -491,7 +487,7 @@ func (h *aiHandler) GetCourseAdvice(c *gin.Context) {
 //
 // 访问控制:只需登录(同 course 级理由)。
 func (h *aiHandler) GetSubjectAdvice(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid subject ID"})
 		return
@@ -544,7 +540,7 @@ type courseSummaryResponse struct {
 // 访问控制:只需登录(总结是 course-unique 共享的,内容对所有能访问该课程的学生公开;
 // 若后续要严格校验课程访问权,可在 service 层加 userRepo.HasAccess 检查)。
 func (h *aiHandler) GetCourseSummary(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	id, err := parseUintParam(c, "id")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid course ID"})
 		return

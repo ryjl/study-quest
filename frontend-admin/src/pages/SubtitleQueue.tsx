@@ -3,28 +3,10 @@ import { useState } from 'react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import type { SubtitleJob, SubtitleJobStatus } from '../lib/types';
+import { fmtTime } from '../lib/format';
+import { SUBTITLE_STATUS_META as STATUS_META, STATUS_FILTERS } from '../lib/jobStatus';
+import { pollWhileActive, pollWhen } from '../lib/query';
 import { PageHeader } from '../components/PageHeader';
-
-// Human labels + Tailwind color classes per status. Kept inline since only
-// this page renders status badges.
-const STATUS_META: Record<SubtitleJobStatus, { label: string; cls: string }> = {
-  queued: { label: '排队中', cls: 'bg-blue-500/15 text-blue-600' },
-  processing: { label: '转录中', cls: 'bg-amber-500/15 text-amber-600' },
-  done: { label: '已完成', cls: 'bg-emerald-500/15 text-emerald-600' },
-  failed: { label: '失败', cls: 'bg-bad/15 text-bad' },
-  skipped: { label: '已跳过', cls: 'bg-gray-500/15 text-muted' },
-};
-
-const STATUS_FILTERS: (SubtitleJobStatus | 'all')[] = ['all', 'queued', 'processing', 'failed', 'skipped', 'done'];
-
-function fmtTime(s?: string | null): string {
-  if (!s) return '—';
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false });
-  } catch {
-    return s;
-  }
-}
 
 export function SubtitleQueue() {
   const qc = useQueryClient();
@@ -36,17 +18,17 @@ export function SubtitleQueue() {
   const jobsQ = useQuery({
     queryKey: ['subtitle-jobs', filter],
     queryFn: () => api.listSubtitleJobs(filter === 'all' ? undefined : filter),
-    refetchInterval: (q) => {
-      const hasActive = q.state.data?.some((j) => j.status === 'queued' || j.status === 'processing');
-      return hasActive ? 3000 : false;
-    },
+    refetchInterval: pollWhen(
+      (data: SubtitleJob[] | undefined) =>
+        !!data?.some((j) => j.status === 'queued' || j.status === 'processing'),
+    ),
     refetchIntervalInBackground: false,
   });
 
   const statsQ = useQuery({
     queryKey: ['subtitle-jobs-stats'],
     queryFn: api.subtitleJobStats,
-    refetchInterval: (q) => (q.state.data?.running ? 3000 : false),
+    refetchInterval: pollWhileActive(),
     refetchIntervalInBackground: false,
   });
 

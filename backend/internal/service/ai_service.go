@@ -6,15 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
-	"strings"
 	"time"
-
 	"gorm.io/gorm"
-
 	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/ai/agent"
-	"studyquest/backend/internal/ai/polish"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/subtitle"
@@ -245,6 +240,12 @@ type aiService struct {
 	subtitleRepo  repository.EpisodeRepository // same repo, GetSubtitle lives here
 	resolver      *ai.ProviderResolver
 	unlockService UnlockService // gates client quiz access (IsEpisodeVisible); nil in tests
+	// cancel stops the runWorker goroutine. Replacing the old "worker polls
+	// forever, leaks one goroutine per NewAIService call" pattern that caused
+	// intermittent test failures when many service tests spawned workers
+	// concurrently. Production never calls Stop (process exit reclaims it);
+	// tests register t.Cleanup(svc.Stop).
+	cancel context.CancelFunc
 	// userRepo feeds advice agent 的 list_user_courses 工具(查学生被授权的课程 id)。
 	// nil 时该工具回退返回空(advice agent 据此降级)。quiz 路径不用它。
 	userRepo aiUserCourseLister
@@ -324,8 +325,19 @@ func NewAIService(
 		glossaryRepo:  glossaryRepo,
 		subjectRepo:   subjectRepo,
 	}
-	go s.runWorker() // single in-process worker goroutine; see runWorker
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	go s.runWorker(ctx) // single in-process worker goroutine; see runWorker
 	return s
+}
+
+// Stop halts the background worker goroutine. Production code never needs to
+// call this (the worker dies with the process); it exists so tests can release
+// the worker instead of leaking it for the duration of `go test ./...`.
+func (s *aiService) Stop() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // --- job enqueue ---
@@ -621,8 +633,12 @@ func (s *aiService) hasPendingJob(jobType string, episodeID uint) bool {
 // the job stays "processing" and a future reaper would reset it; for now, a
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
-func (s *aiService) runWorker() {
+func (s *aiService) runWorker(ctx context.Context) {
 	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report", "polish"}
+	// Use a 3s ticker for polling; on ctx cancellation the worker exits
+	// promptly (within the select, not after a full sleep).
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
 	for {
 		// recover guard: a panic in any job handler (nil deref on a deleted
 		// row, a bug in a new job type, etc.) MUST NOT kill the worker
@@ -644,10 +660,15 @@ func (s *aiService) runWorker() {
 			}()
 			s.processOneJob(jobTypes)
 		}()
-		// Poll every 3s. A real impl might use a channel signaled on enqueue,
-		// but a poll is simpler and the 3s latency is invisible to the admin
-		// (jobs take 5-30s to run anyway).
-		sleep(3)
+		// Wait for either the next poll tick or cancellation. The old sleep(3)
+		// was uninterruptible, so canceled workers stuck around for up to 3s
+		// AND leaked entirely if the test forgot to call stop (none did, since
+		// stop didn't exist).
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -803,232 +824,6 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 // segment, never enqueueing a polish job in the first place. The source check
 // here is defense-in-depth (a misrouted job skips cleanly instead of polishing
 // a track that shouldn't be).
-func (s *aiService) runPolishJob(job *model.AIJob) {
-	ctx := context.Background()
-	if s.resolver == nil {
-		// No resolver = AI entirely off. Block (failed) so the admin notices
-		// once they configure a provider; they can retry or skip then.
-		s.failJob(job, "AI not configured (no resolver)")
-		return
-	}
-	if job.EpisodeID == nil || job.CourseID == nil {
-		s.failJob(job, "polish job missing episode_id/course_id")
-		return
-	}
-	episodeID, courseID := *job.EpisodeID, *job.CourseID
-
-	sub, err := s.episodeRepo.GetSubtitle(episodeID)
-	if err != nil {
-		s.failJob(job, "load subtitle: "+err.Error())
-		return
-	}
-	if sub == nil {
-		s.failJob(job, "no primary subtitle for this episode")
-		return
-	}
-	if sub.Source != "whisper" {
-		// Shouldn't happen (OnSubtitleCompleted gates on source), but if a
-		// misrouted job slips through, skip it cleanly rather than polishing
-		// a track that's already human-corrected. This is NOT a failure —
-		// chain to segment so downstream proceeds.
-		s.contentRepo.UpdateJobStatus(job.ID, "skipped",
-			"source="+sub.Source+" not eligible for polish", nil)
-		s.enqueueSegmentForPolish(episodeID, courseID)
-		return
-	}
-
-	llm, err := s.resolver.ResolveChatByPurpose("polish")
-	if err != nil {
-		// Provider not configured / misconfigured. Block — admin fixes the
-		// provider config and retries. We do NOT fall through to segment,
-		// because the whole point of polish is to fix the raw transcript
-		// before AI consumes it.
-		s.failJob(job, "resolve chat provider: "+err.Error())
-		return
-	}
-	modelName := s.resolver.ChatModelNameByPurpose("polish")
-
-	// Build the polish request: TermDict comes from Course + Subject merge
-	// (Course.EffectiveTermDict). Subject is also passed to the LLM as domain
-	// context ("xiangqi" vs "math" primes it toward the right terminology).
-	course, err := s.courseRepo.FindByID(courseID)
-	if err != nil {
-		s.failJob(job, "load course: "+err.Error())
-		return
-	}
-	if course == nil {
-		// courseRepo.FindByID returns (nil, nil) when the row was deleted
-		// between enqueue and run. Split from the err branch above so we don't
-		// dereference a nil err — that panic would kill the AI worker goroutine
-		// (runWorker has no recover).
-		s.failJob(job, fmt.Sprintf("course %d not found (deleted after polish enqueue?)", courseID))
-		return
-	}
-	var subject model.Subject
-	if s.subjectRepo != nil {
-		if subj, serr := s.subjectRepo.FindByID(course.SubjectID); serr == nil && subj != nil {
-			subject = *subj
-		}
-	}
-	termDict := course.EffectiveTermDict(subject)
-	subjectLabel := subject.Label
-	if subjectLabel == "" {
-		// Fall back to the key (e.g. "math") when Label is empty — the
-		// polish prompt just needs SOME domain hint.
-		subjectLabel = subject.Key
-	}
-
-	// Polish deadline: the PoC ran 7m13s for a 157k-char episode at concurrency 3.
-	// 20 min is a generous ceiling that still catches a stuck relay.
-	polishCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
-
-	// Source the polish input from RawVttContent (the immutable pre-polish
-	// snapshot) when it exists, falling back to VttContent for legacy rows
-	// that predate the RawVttContent column. This is the WHOLE POINT of
-	// RawVttContent (see model.Subtitle doc): re-running polish must start
-	// from the original whisper transcript each time, not from a prior polish
-	// result — otherwise LLM drift compounds across re-polishes. The snapshot
-	// is written by SaveSubtitleWithSource (Complete/upload/embedded extract
-	// paths) and never overwritten by polish itself.
-	polishInput := sub.RawVttContent
-	if strings.TrimSpace(polishInput) == "" {
-		polishInput = sub.VttContent
-	}
-
-	result, err := polish.Polish(polishCtx, llm, modelName, polish.PolishRequest{
-		VttContent: polishInput,
-		TermDict:   termDict,
-		Subject:    subjectLabel,
-	})
-	if err != nil {
-		s.failJob(job, "polish: "+err.Error())
-		return
-	}
-
-	// Persist the polished subtitle. We write ONLY VttContent + Optimized +
-	// Source — RawVttContent stays empty here so episodeRepo.SaveSubtitle's
-	// "non-empty only" guard leaves the original snapshot untouched. IsPrimary
-	// is echoed back from the loaded sub so the upsert doesn't accidentally
-	// demote the primary track.
-	if err := s.episodeRepo.SaveSubtitle(&model.Subtitle{
-		ID:            sub.ID,
-		EpisodeID:     sub.EpisodeID,
-		Language:      sub.Language,
-		Label:         sub.Label,
-		VttContent:    result.PolishedVtt,
-		Source:        "llm_optimized",
-		Optimized:     true,
-		IsPrimary:     sub.IsPrimary,
-	}); err != nil {
-		s.failJob(job, "persist polished subtitle: "+err.Error())
-		return
-	}
-
-	// Mine term candidates for the admin review queue (PR2.5 UI). Best-effort:
-	// a failure here doesn't unwind the polish itself (the subtitle is already
-	// corrected and useful); we just log and move on. nil glossaryRepo in tests.
-	if s.glossaryRepo != nil && len(result.Glossary) > 0 {
-		candidates := polishGlossaryToModel(courseID, result.Glossary)
-		if err := s.glossaryRepo.UpsertCandidates(candidates); err != nil {
-			log.Printf("AI: polish job %d: glossary upsert failed (non-fatal): %v", job.ID, err)
-		}
-	}
-
-	detail := fmt.Sprintf("polished: %d/%d cues changed, %d glossary candidates, cost≈%s",
-		result.Stats.ChangedCues, result.Stats.TotalCues, len(result.Glossary),
-		result.Stats.Duration.Truncate(time.Second))
-	if result.Stats.PartialOptimized {
-		// List which chunks failed + their last error, capped so a pathological
-		// relay doesn't blow up the error column. The chunk index is 0-based
-		// and maps to a contiguous cue range, so the admin can tell which part
-		// of the subtitle wasn't polished.
-		detail += fmt.Sprintf(" (partial: %d/%d chunks failed", result.Stats.FailedChunks, result.Stats.ChunkCount)
-		// Collect + sort by chunk idx NUMERICALLY (not lexically — "chunk#10"
-		// would sort before "chunk#2" under string sort). Cap each error at 120
-		// runes so one verbose parse failure doesn't dominate the job detail.
-		type failEntry struct {
-			idx int
-			err string
-		}
-		entries := make([]failEntry, 0, len(result.Stats.FailedChunkErrors))
-		for idx, e := range result.Stats.FailedChunkErrors {
-			// Truncate by RUNE count, not bytes — error strings carry Chinese
-			// (ffmpeg/relay messages localized) and a byte cut would produce
-			// invalid UTF-8 mid-character.
-			if rs := []rune(e); len(rs) > 120 {
-				e = string(rs[:120]) + "…"
-			}
-			entries = append(entries, failEntry{idx, e})
-		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
-		if len(entries) > 0 {
-			parts := make([]string, len(entries))
-			for i, e := range entries {
-				parts[i] = fmt.Sprintf("chunk#%d: %s", e.idx, e.err)
-			}
-			detail += "; " + strings.Join(parts, "; ")
-		}
-		detail += ")"
-	}
-	s.contentRepo.UpdateJobStatus(job.ID, "done", detail, nil)
-
-	// Chain to segment NOW that the polished subtitle is in place. Mirrors
-	// runSegmentJob's chain-to-summary: same priority, same hasPendingJob guard.
-	s.enqueueSegmentForPolish(episodeID, courseID)
-}
-
-// enqueueSegmentForPolish chains a segment job after a successful polish (or
-// after a non-whisper subtitle completed, or after the admin skips polish).
-// Centralized so runPolishJob, SkipPolish, and OnSubtitleCompleted's non-whisper
-// branch all share the exact same gate logic. The hasPendingJob guard prevents
-// stacking: if a segment job is already queued/processing (e.g. a previous run
-// left one), this is a no-op.
-func (s *aiService) enqueueSegmentForPolish(episodeID, courseID uint) {
-	if s.hasPendingJob("segment", episodeID) {
-		return
-	}
-	epID, cID := episodeID, courseID
-	job := &model.AIJob{
-		JobType:   "segment",
-		EpisodeID: &epID,
-		CourseID:  &cID,
-		Status:    "queued",
-		Priority:  prioritySegment,
-	}
-	if err := s.contentRepo.CreateJob(job); err != nil {
-		log.Printf("AI: failed to chain-enqueue segment job for episode %d: %v", episodeID, err)
-	}
-}
-
-// polishGlossaryToModel converts the polish package's mined candidates into
-// model rows ready for UpsertCandidates. EvidenceCount is seeded from the
-// number of cue ids the LLM cited, so the first sighting of a rule starts at
-// the right count instead of 1. EvidenceSample is left empty for now — the
-// polish package carries cue ids (not text), and PR2.5's accept UI will
-// re-derive sample text from the persisted diff if the admin wants to see
-// examples. The schema field is kept ready for that.
-func polishGlossaryToModel(courseID uint, in []polish.GlossaryCandidate) []model.GlossaryCandidate {
-	out := make([]model.GlossaryCandidate, 0, len(in))
-	for _, g := range in {
-		out = append(out, model.GlossaryCandidate{
-			CourseID:      courseID,
-			Original:      g.Original,
-			Corrected:     g.Corrected,
-			Context:       g.Context,
-			Confidence:    g.Confidence,
-			EvidenceCount: len(g.EvidenceIDs),
-			Status:        "pending",
-		})
-	}
-	return out
-}
-
-
-// runSummaryJob reads an episode's chunks and asks the summarizer to summarize.
-// Requires chunks to exist (a segment job must have run first). If none exist,
-// the job is marked failed with a clear message rather than silently producing
-// an empty summary.
 func (s *aiService) runSummaryJob(job *model.AIJob) {
 	ctx := context.Background()
 	if s.resolver == nil {
@@ -1102,463 +897,9 @@ func (s *aiService) failJob(job *model.AIJob, msg string) {
 
 // --- reads ---
 
-func (s *aiService) GetSummary(episodeID uint) (*model.AISummary, error) {
-	return s.contentRepo.GetSummary(episodeID)
-}
-
-// --- admin regen + delete ---
-
-func (s *aiService) DeleteSummary(episodeID uint) error {
-	return s.contentRepo.DeleteSummary(episodeID)
-}
-
-func (s *aiService) DeleteQuiz(quizID uint) error {
-	// 删 quiz:Fk CASCADE 会自动清 Question + Answer,所以这里只删 quiz 一行。
-	return s.contentRepo.DeleteQuiz(quizID)
-}
-
-func (s *aiService) DeleteAdvice(userID uint, scope string, scopeID uint) error {
-	return s.contentRepo.DeleteAdvice(userID, scope, scopeID)
-}
-
-func (s *aiService) DeleteCourseSummary(courseID uint) error {
-	return s.contentRepo.DeleteCourseSummary(courseID)
-}
-
-func (s *aiService) DeleteUserReport(userID uint) error {
-	return s.contentRepo.DeleteUserReport(userID)
-}
-
-func (s *aiService) ListUserAdvice(userID uint) ([]model.StudyAdvice, error) {
-	return s.contentRepo.ListUserAdvice(userID)
-}
-
-func (s *aiService) ListJobs(jobType, status string, limit int) ([]AIJobView, error) {
-	jobs, err := s.contentRepo.ListJobs(jobType, status, limit)
-	if err != nil {
-		return nil, err
-	}
-	names := s.resolveJobNames(jobs)
-	out := make([]AIJobView, 0, len(jobs))
-	for _, j := range jobs {
-		v := AIJobView{Job: j}
-		v.EpisodeTitle, v.CourseTitle, v.UserNickname = names.forJob(&j)
-		out = append(out, v)
-	}
-	return out, nil
-}
-
-func (s *aiService) GetJob(id uint) (*AIJobView, error) {
-	job, err := s.contentRepo.GetJob(id)
-	if err != nil {
-		return nil, err
-	}
-	if job == nil {
-		return nil, nil
-	}
-	v := &AIJobView{Job: *job}
-	names := s.resolveJobNames([]model.AIJob{*job})
-	v.EpisodeTitle, v.CourseTitle, v.UserNickname = names.forJob(job)
-	return v, nil
-}
-
-func (s *aiService) ListRunsForJob(jobID uint) ([]model.AIRun, error) {
-	return s.contentRepo.ListRunsForJob(jobID)
-}
-
-func (s *aiService) ListRecentRuns(limit int) ([]model.AIRun, error) {
-	return s.contentRepo.ListRecentRuns(limit)
-}
-
-// ListRecentRunsEnriched returns recent runs with episode/course/user titles
-// resolved via the run's job. Powers the admin "决策痕迹(最近运行)" list and
-// the Dashboard 最近活动 feed — both want to show WHAT (capability) plus WHERE
-// (course/episode), not just the capability.
-func (s *aiService) ListRecentRunsEnriched(limit int) ([]AIRunView, error) {
-	runs, err := s.contentRepo.ListRecentRuns(limit)
-	if err != nil {
-		return nil, err
-	}
-	return s.enrichRuns(runs), nil
-}
-
-// ListRunsForJobEnriched is the per-job variant, used by GetAIJob so the job
-// detail view's run list also shows episode/course context.
-func (s *aiService) ListRunsForJobEnriched(jobID uint) ([]AIRunView, error) {
-	runs, err := s.contentRepo.ListRunsForJob(jobID)
-	if err != nil {
-		return nil, err
-	}
-	return s.enrichRuns(runs), nil
-}
-
-// enrichRuns batch-resolves episode/course/user titles for a set of runs by
-// joining through AIRun.JobID → AIJob → EpisodeID/CourseID/UserID. The job
-// batch is loaded in one query (not per-run), then resolveJobNames does the
-// id→title fanout. Best-effort: any lookup failure leaves the title empty.
-func (s *aiService) enrichRuns(runs []model.AIRun) []AIRunView {
-	if len(runs) == 0 {
-		return []AIRunView{}
-	}
-	// Collect distinct job IDs the runs reference (JobID=0 means ad-hoc, skip).
-	seen := map[uint]bool{}
-	jobIDs := make([]uint, 0, len(runs))
-	for _, r := range runs {
-		if r.JobID != 0 && !seen[r.JobID] {
-			seen[r.JobID] = true
-			jobIDs = append(jobIDs, r.JobID)
-		}
-	}
-	// Load all referenced jobs in one query, then reuse the existing job-name
-	// resolver (it dedups episode/course/user id lookups internally).
-	nameByJobID := map[uint]struct{ ep, course, user string }{}
-	if len(jobIDs) > 0 {
-		var jobs []model.AIJob
-		if err := s.db.Where("id IN ?", jobIDs).Find(&jobs).Error; err == nil && len(jobs) > 0 {
-			cache := s.resolveJobNames(jobs)
-			for _, j := range jobs {
-				ep, course, user := cache.forJob(&j)
-				nameByJobID[j.ID] = struct{ ep, course, user string }{ep, course, user}
-			}
-		}
-	}
-	out := make([]AIRunView, len(runs))
-	for i, r := range runs {
-		v := AIRunView{AIRun: r}
-		if r.JobID != 0 {
-			if n, ok := nameByJobID[r.JobID]; ok {
-				v.EpisodeTitle = n.ep
-				v.CourseTitle = n.course
-				v.UserNickname = n.user
-			}
-		}
-		out[i] = v
-	}
-	return out
-}
-
-func (s *aiService) GetRun(id uint) (*model.AIRun, error) {
-	return s.contentRepo.GetRun(id)
-}
-
-func (s *aiService) JobStats() (map[string]int, error) {
-	return s.contentRepo.JobStats()
-}
-
-// ListEpisodeSummaryStatus 返回某课程下已有 summary 的 episode id 列表。
-// 给 admin 内容管理 tab gate 每集"删除"按钮:无 summary 不显示删除。
-func (s *aiService) ListEpisodeSummaryStatus(courseID uint) ([]uint, error) {
-	return s.contentRepo.ListEpisodeIDsWithSummaryByCourse(courseID)
-}
-
-// CountEpisodesWithSummary 课程总览陈旧检测用:跟 AICourseSummary.EpisodeCountAtGen
-// 对比,差值 > 0 = 已新增了 summary 的课时,建议刷新。
-func (s *aiService) CountEpisodesWithSummary(courseID uint) (int64, error) {
-	return s.contentRepo.CountEpisodesWithSummaryByCourse(courseID)
-}
-
-// ReapStaleJobs 委托给 repo,固定 30 分钟阈值。一个 LLM 调用最多 ~30s,加上
-// ReAct 多轮也就几分钟;claimed_at 超过半小时还停在 processing 几乎可以肯定
-// 是 worker 挂了,重置回 queued 让下一轮 poll 重新认领。
-func (s *aiService) ReapStaleJobs() (int64, error) {
-	return s.contentRepo.ReapStaleJobs(30 * time.Minute)
-}
-
-// ResetJob 委托给 repo:把单条 processing 任务重置回 queued。repo 会校验当前
-// 必须处于 processing,否则返回 ErrJobNotProcessing(非致命,handler 转 409)。
-func (s *aiService) ResetJob(jobID uint) error {
-	return s.contentRepo.ResetJob(jobID)
-}
-
-// RetryJob 委托给 repo:把单条 failed 任务复位回 queued,让 worker 重跑。repo 校验
-// 当前必须处于 failed,否则返回 ErrJobNotFailed(非致命,handler 转 409)。
-func (s *aiService) RetryJob(jobID uint) error {
-	return s.contentRepo.RetryJob(jobID)
-}
-
-// SkipPolish is the admin escape hatch for a stuck (failed) polish job. It:
-//  1. validates the job is a polish job AND currently failed — anything else
-//     is a misuse (409 to the admin, not a silent success).
-//  2. marks the job done with "admin skipped polish" so it leaves the failed
-//     queue and stops showing as an error.
-//  3. chains a segment job so downstream AI proceeds off the raw subtitle.
-//
-// The subtitle itself is left untouched (still raw whisper text, optimized=
-// false). If the admin later wants polish after all, they enqueue a fresh
-// polish job via EnqueueSegmentForCourse-style batch (or the future regen UI).
-// There's no "un-skip" — re-running polish is just a new polish job.
-func (s *aiService) SkipPolish(jobID uint) error {
-	job, err := s.contentRepo.GetJob(jobID)
-	if err != nil {
-		return err
-	}
-	if job == nil {
-		return repository.ErrJobNotFound
-	}
-	if job.JobType != "polish" {
-		return repository.ErrJobNotPolish
-	}
-	if job.Status != "failed" {
-		return repository.ErrJobNotFailed
-	}
-	s.contentRepo.UpdateJobStatus(jobID, "done", "admin skipped polish", nil)
-	if job.EpisodeID != nil && job.CourseID != nil {
-		s.enqueueSegmentForPolish(*job.EpisodeID, *job.CourseID)
-	}
-	return nil
-}
-
-// --- glossary candidate review (PR2.5) ---
-//
-// The polish job mines term-correction rules and leaves them as pending
-// candidates. The admin reviews them in the AI Console: accept promotes a rule
-// into the course TermDict (so future polish runs apply it automatically),
-// reject hides it from the default review list. Accepted/rejected rows are
-// kept so UpsertCandidate won't re-create them next polish run.
-
-// formatTermDictEntry renders one candidate as the TermDict format the polish
-// prompt understands: "original→corrected（context）". Parens + context are
-// omitted when context is empty (the prompt tolerates both forms). This is the
-// exact shape Course.EffectiveTermDict returns to the polish job, so what the
-// admin accepts is byte-identical to what the next polish run receives.
-func formatTermDictEntry(original, corrected, context string) string {
-	context = strings.TrimSpace(context)
-	if context == "" {
-		return original + "→" + corrected
-	}
-	return original + "→" + corrected + "（" + context + "）"
-}
-
-// appendTermDict appends one entry to a course's TermDict string, respecting
-// the ';' separator. Handles the empty-existing case (no leading separator)
-// and dedup: if the exact entry is already present (admin re-accepting after a
-// context edit), it's a no-op.
-func appendTermDict(existing, entry string) string {
-	existing = strings.TrimSpace(existing)
-	entry = strings.TrimSpace(entry)
-	if entry == "" {
-		return existing
-	}
-	// Dedup: scan existing semicolon-separated entries for an exact match.
-	for _, e := range strings.Split(existing, ";") {
-		if strings.TrimSpace(e) == entry {
-			return existing
-		}
-	}
-	if existing == "" {
-		return entry
-	}
-	return existing + ";" + entry
-}
-
-// applyGlossaryToCourse mutates one course's AIConfig.TermDict in place by
-// appending the entry, then persists the course. Centralized so the accept and
-// the apply-to-siblings paths share the exact same write logic.
-func (s *aiService) applyGlossaryToCourse(courseID uint, entry string) error {
-	course, err := s.courseRepo.FindByID(courseID)
-	if err != nil {
-		return fmt.Errorf("load course %d: %w", courseID, err)
-	}
-	if course == nil {
-		return nil // course deleted between polish and review — skip silently
-	}
-	cfg := course.AIConfig()
-	cfg.TermDict = appendTermDict(cfg.TermDict, entry)
-	course.SetAIConfig(cfg)
-	return s.courseRepo.Update(course)
-}
-
-// ListGlossaryCandidates delegates to the repo. The handler passes "" for
-// status to show all, or "pending" for the default review list.
-func (s *aiService) ListGlossaryCandidates(courseID uint, status string) ([]model.GlossaryCandidate, error) {
-	if s.glossaryRepo == nil {
-		return nil, errors.New("glossary subsystem not configured")
-	}
-	return s.glossaryRepo.ListByCourse(courseID, status)
-}
-
-// AcceptGlossaryCandidate promotes one pending candidate into TermDict. The
-// admin may override corrected/context (e.g. the LLM suggested 居 but the admin
-// knows it should be 車) — the overrides are applied both to the candidate row
-// (so the record reflects what was actually accepted) and to the TermDict entry.
-// applyToSubjectSiblings repeats the TermDict append on every other course
-// under the same subject, sparing the admin from per-course review.
-func (s *aiService) AcceptGlossaryCandidate(id uint, correctedOverride, contextOverride string, applyToSubjectSiblings bool) error {
-	if s.glossaryRepo == nil {
-		return errors.New("glossary subsystem not configured")
-	}
-	c, err := s.glossaryRepo.FindByID(id)
-	if err != nil {
-		return err
-	}
-	if c == nil {
-		return repository.ErrGlossaryNotFound
-	}
-	if c.Status != "pending" {
-		return ErrGlossaryNotPending
-	}
-	// Apply admin overrides (empty = keep the LLM's values).
-	corrected := strings.TrimSpace(correctedOverride)
-	if corrected == "" {
-		corrected = c.Corrected
-	}
-	context := strings.TrimSpace(contextOverride)
-	if context == "" {
-		context = c.Context
-	}
-	// Stamp the row as accepted with the FINAL (possibly admin-edited) values.
-	c.Corrected = corrected
-	c.Context = context
-	c.Status = "accepted"
-	now := time.Now()
-	c.AcceptedAt = &now
-	if err := s.glossaryRepo.Update(c); err != nil {
-		return err
-	}
-
-	// Promote to the originating course's TermDict.
-	entry := formatTermDictEntry(c.Original, corrected, context)
-	if err := s.applyGlossaryToCourse(c.CourseID, entry); err != nil {
-		return err
-	}
-
-	// Optional cross-course推广: same subject, every other course gets the rule
-	// too. Best-effort — a failure on one sibling course doesn't unwind the
-	// accept itself (the candidate is already marked accepted on the origin
-	// course); we log and continue so one bad course doesn't block the rest.
-	if applyToSubjectSiblings {
-		origin, err := s.courseRepo.FindByID(c.CourseID)
-		// Guard against SubjectID==0: courseRepo.List("", 0, ...) skips the
-		// subject filter entirely (0 means "no filter" in that query), so
-		// without this check we'd推广 the rule to EVERY course in the DB — a
-		// xiangqi term would land in math/english/... TermDicts. A course with
-		// no subject has no siblings by definition; skip the推广 silently.
-		if err == nil && origin != nil && origin.SubjectID != 0 {
-		// contentType=ContentLearning: 推广只覆盖同学科的学习课程。
-		// entertainment 课程（动画片/电影）即使共享学科 key，其术语需求和
-		// 学习课也不同——象棋术语不该被强加给一部电影。接受的术语进的是
-		// 每门课独立的 TermDict（admin 在 Prompt 配置 tab 可随时改/删），
-		// 所以如果某门娱乐课确实需要该术语，admin 可手动去那门课加。
-		// 用具体的 ContentLearning 而非 ""，因为后者也会 fallback 到 learning
-		// 但语义不显式；显式更清晰且未来想放开时只改这一处。
-		siblings, lerr := s.courseRepo.List("", origin.SubjectID, model.ContentLearning, nil)
-			if lerr != nil {
-				log.Printf("glossary accept: list subject %d siblings failed (non-fatal): %v", origin.SubjectID, lerr)
-			}
-			for i := range siblings {
-				sib := &siblings[i]
-				if sib.ID == origin.ID {
-					continue
-				}
-				if err := s.applyGlossaryToCourse(sib.ID, entry); err != nil {
-					log.Printf("glossary accept: apply to sibling course %d failed (non-fatal): %v", sib.ID, err)
-				}
-			}
-		} else if err == nil && origin != nil && origin.SubjectID == 0 {
-			log.Printf("glossary accept: course %d has no subject; skipping sibling推广", origin.ID)
-		}
-	}
-	return nil
-}
-
-// RejectGlossaryCandidate marks one candidate rejected. The row stays (it's
-// the dedup anchor that stops UpsertCandidate re-creating it), it just leaves
-// the default review list (which filters status=pending).
-func (s *aiService) RejectGlossaryCandidate(id uint) error {
-	if s.glossaryRepo == nil {
-		return errors.New("glossary subsystem not configured")
-	}
-	c, err := s.glossaryRepo.FindByID(id)
-	if err != nil {
-		return err
-	}
-	if c == nil {
-		return repository.ErrGlossaryNotFound
-	}
-	if c.Status != "pending" {
-		return ErrGlossaryNotPending
-	}
-	c.Status = "rejected"
-	return s.glossaryRepo.Update(c)
-}
-
-
-// view can render names without an N+1 (one query per distinct episode/course/
-// user, not one per job). Titles are best-effort: a missing id (deleted row)
-// simply isn't in the map, and forJob returns "" for it.
-type jobNameCache struct {
-	episodeTitles map[uint]string
-	courseTitles  map[uint]string
-	userNicknames map[uint]string
-}
-
-func (c jobNameCache) forJob(j *model.AIJob) (string, string, string) {
-	ep, course, user := "", "", ""
-	// Episode lookup is by job.EpisodeID via the course chain: the episode row
-	// gives us the title AND its CourseID (which we trust over job.CourseID for
-	// title resolution, since the episode is the source of truth for course
-	// membership). job.CourseID is denormalized at enqueue time.
-	// EpisodeID/CourseID 现在是 *uint,subject 级 advice job 是 nil → ptrVal 返回 0,
-	// map 查 0 拿不到标题(正常,subject job 没 episode/course 可显示)。
-	if t, ok := c.episodeTitles[model.PtrVal(j.EpisodeID)]; ok {
-		ep = t
-	}
-	if t, ok := c.courseTitles[model.PtrVal(j.CourseID)]; ok {
-		course = t
-	}
-	if j.UserID != nil {
-		if t, ok := c.userNicknames[*j.UserID]; ok {
-			user = t
-		}
-	}
-	return ep, course, user
-}
-
-// resolveJobNames batch-loads episode/course/user titles for a job set. It
-// collects the distinct ids referenced, then issues one Find per type (the
-// repos expose single-id FindByID only, so we loop — counts are small: a list
-// page is capped at 100 jobs, and most share a handful of episodes/courses).
-// Lookups are best-effort: any error degrades to an empty title for that id.
-func (s *aiService) resolveJobNames(jobs []model.AIJob) jobNameCache {
-	c := jobNameCache{
-		episodeTitles: make(map[uint]string, len(jobs)),
-		courseTitles:  make(map[uint]string, len(jobs)),
-		userNicknames: make(map[uint]string, len(jobs)),
-	}
-	seenEp, seenCourse, seenUser := map[uint]bool{}, map[uint]bool{}, map[uint]bool{}
-	for _, j := range jobs {
-		// EpisodeID/CourseID 是 *uint:subject 级 advice job 为 nil,跳过 title 解析
-		// (没对应实体,无标题可解析)。ptrVal nil → 0,seenEp[0] 防止重复空查询。
-		epID := model.PtrVal(j.EpisodeID)
-		if j.EpisodeID != nil && !seenEp[epID] {
-			seenEp[epID] = true
-			if ep, err := s.episodeRepo.FindByID(epID); err == nil && ep != nil {
-				c.episodeTitles[epID] = ep.Title
-			}
-		}
-		courseID := model.PtrVal(j.CourseID)
-		if j.CourseID != nil && !seenCourse[courseID] {
-			seenCourse[courseID] = true
-			if course, err := s.courseRepo.FindByID(courseID); err == nil && course != nil {
-				c.courseTitles[courseID] = course.Title
-			}
-		}
-		if j.UserID != nil && !seenUser[*j.UserID] {
-			seenUser[*j.UserID] = true
-			// Resolve nickname via db directly: aiService doesn't carry a
-			// UserRepository (its constructor predates this need), and a single
-			// column read is cheap. A real userRepo dependency would be cleaner
-			// but would ripple into NewAIService + main.go + tests for one field.
-			var nick string
-			if err := s.db.Model(&model.User{}).Select("nickname").Where("id = ?", *j.UserID).Take(&nick).Error; err == nil {
-				c.userNicknames[*j.UserID] = nick
-			}
-		}
-	}
-	return c
-}
-
-// sleep is a thin wrapper around time.Sleep used by the worker poll loop. Kept
-// as a helper so it's swappable in tests (a test can replace it with a no-op or
-// a channel signal).
-var sleep = func(seconds int) { time.Sleep(time.Duration(seconds) * time.Second) }
+// Cohesive blocks extracted to siblings (same package):
+//   ai_service_polish.go  — runPolishJob + glossary workflow
+//   ai_service_jobs.go    — job/run listing + reset/retry/skip
+//   ai_service_naming.go  — jobNameCache + resolveJobNames + sleep seam
+// The interface, struct, constructor, enqueue logic, and the worker loop
+// (incl. runSegmentJob / runSummaryJob / failJob) remain here.

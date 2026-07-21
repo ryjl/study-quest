@@ -3,6 +3,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_svg/flutter_svg.dart';
 
+import '../../theme.dart';
+
 /// MarkdownView —— AI 文本统一渲染入口。
 ///
 /// ## 用途
@@ -50,12 +52,12 @@ class MarkdownView extends StatelessWidget {
 
   // 设计 token。提到 widget 顶层 const 是为了 styleSheet 闭包里方便引用。
   static const Color _defaultTextColor = Color(0xFF334155); // Slate-700
-  static const Color _tableHeadBg = Color(0xFFF1F5F9); // Slate-100
+  static const Color _tableHeadBg = AppTheme.slate100; // Slate-100
   static const Color _tableBorder = Color(0xFFCBD5E1); // Slate-300
-  static const Color _codeBlockBg = Color(0xFFF1F5F9); // Slate-100
-  static const Color _codeBlockText = Color(0xFF0F172A); // Slate-900
-  static const Color _mutedText = Color(0xFF64748B); // Slate-500
-  static const Color _inlineCodeBg = Color(0xFFE2E8F0); // Slate-200
+  static const Color _codeBlockBg = AppTheme.slate100; // Slate-100
+  static const Color _codeBlockText = AppTheme.slate900; // Slate-900
+  static const Color _mutedText = AppTheme.textMuted; // Slate-500
+  static const Color _inlineCodeBg = AppTheme.borderMuted; // Slate-200
 
   @override
   Widget build(BuildContext context) {
@@ -175,7 +177,7 @@ class MarkdownView extends StatelessWidget {
         fontWeight: FontWeight.w700,
       ),
       em: base.em?.copyWith(color: textColor),
-      a: const TextStyle(color: Color(0xFF2563EB)), // Blue-600
+      a: const TextStyle(color: AppTheme.blue600), // Blue-600
       listBullet: TextStyle(
         fontSize: 16 * scale,
         color: _mutedText,
@@ -404,9 +406,9 @@ class _SvgViewState extends State<_SvgView> {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9), // Slate-100
+        color: AppTheme.slate100, // Slate-100
         borderRadius: const BorderRadius.all(Radius.circular(8)),
-        border: Border.all(color: const Color(0xFFE2E8F0), width: 1),
+        border: Border.all(color: AppTheme.borderMuted, width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -416,7 +418,7 @@ class _SvgViewState extends State<_SvgView> {
             '(图表渲染失败,显示源码)',
             style: TextStyle(
               fontSize: 12,
-              color: const Color(0xFF64748B), // Slate-500
+              color: AppTheme.textMuted, // Slate-500
             ),
           ),
           const SizedBox(height: 6),
@@ -426,7 +428,7 @@ class _SvgViewState extends State<_SvgView> {
               fontFamily: 'monospace',
               fontFamilyFallback: const ['RobotoMono', 'Courier New'],
               fontSize: 12,
-              color: const Color(0xFF0F172A), // Slate-900
+              color: AppTheme.slate900, // Slate-900
               height: 1.4,
             ),
           ),

@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
+import { roleLabel } from '../lib/format';
 import {
   ActivityFeed,
   LoadingState,
@@ -31,22 +32,6 @@ import {
   AlertCircle,
   Hourglass,
 } from 'lucide-react';
-
-// Role key → Chinese label for the activity feed detail line.
-function roleLabel(role: string): string {
-  switch (role) {
-    case 'student':
-      return '学生';
-    case 'teen':
-      return '青少年';
-    case 'parent':
-      return '家长';
-    case 'admin':
-      return '管理员';
-    default:
-      return role;
-  }
-}
 
 // AI job_type → Chinese label for the activity feed title.
 const AI_JOB_TYPE_LABEL: Record<string, string> = {

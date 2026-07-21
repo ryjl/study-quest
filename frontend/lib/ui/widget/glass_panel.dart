@@ -35,7 +35,7 @@ class GlassPanel extends StatelessWidget {
         boxShadow: hasFocus
             ? [
                 BoxShadow(
-                  color: AppTheme.primaryColor.withOpacity(0.15),
+                  color: AppTheme.primaryColor.withValues(alpha: 0.15),
                   blurRadius: 16,
                   spreadRadius: 1,
                   offset: const Offset(0, 0),
@@ -43,7 +43,7 @@ class GlassPanel extends StatelessWidget {
               ]
             : [
                 BoxShadow(
-                  color: const Color(0xFF0F172A).withOpacity(0.04),
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.04),
                   blurRadius: 24,
                   offset: const Offset(0, 8),
                 )

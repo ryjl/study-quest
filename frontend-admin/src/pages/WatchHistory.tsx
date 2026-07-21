@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import type { User } from '../lib/types';
 import { LoadingState, EmptyState } from '../components/ui';
-import { formatDurationShort, formatDuration } from '../lib/format';
+import { formatDurationShort, formatDuration, roleLabel } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
 
 // localStorage key for the last-selected user, so re-entry doesn't reset.
@@ -318,16 +318,6 @@ function toDayStr(d: Date): string {
 function hm(iso: string): string {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function roleLabel(role: string): string {
-  switch (role) {
-    case 'student': return '学生';
-    case 'teen': return '青少年';
-    case 'parent': return '家长';
-    case 'admin': return '管理员';
-    default: return role;
-  }
 }
 
 // heatTier maps a seconds value to a 0..3 index into HEAT_COLORS.

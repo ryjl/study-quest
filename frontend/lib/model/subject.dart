@@ -34,18 +34,4 @@ class Subject {
       category: (json['category'] ?? json['Category'] ?? 'academic').toString(),
     );
   }
-
-  Subject copyWith({
-    String? key,
-    String? label,
-    String? color,
-    String? category,
-  }) {
-    return Subject(
-      key: key ?? this.key,
-      label: label ?? this.label,
-      color: color ?? this.color,
-      category: category ?? this.category,
-    );
-  }
 }

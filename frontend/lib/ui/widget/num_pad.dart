@@ -54,7 +54,7 @@ class _NumPadState extends State<NumPad> {
   Widget build(BuildContext context) {
     return GlassPanel(
       borderRadius: 24.0,
-      baseColor: Colors.white.withOpacity(0.85),
+      baseColor: Colors.white.withValues(alpha: 0.85),
       borderColor: Colors.white,
       borderWidth: 1.5,
       padding: const EdgeInsets.all(24),
@@ -92,7 +92,7 @@ class _NumPadState extends State<NumPad> {
               height: 54,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(
@@ -107,7 +107,7 @@ class _NumPadState extends State<NumPad> {
                       color: filled ? AppTheme.primaryColor : Colors.transparent,
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: filled ? AppTheme.primaryColor : AppTheme.textMuted.withOpacity(0.3),
+                        color: filled ? AppTheme.primaryColor : AppTheme.textMuted.withValues(alpha: 0.3),
                         width: 2,
                       ),
                     ),

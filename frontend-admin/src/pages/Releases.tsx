@@ -3,44 +3,36 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Package } from 'lucide-react';
 import { api } from '../lib/api';
 import type { AppRelease } from '../lib/types';
+import { formatFileSize } from '../lib/format';
 import { Modal, LoadingState, EmptyState } from '../components/ui';
 import { useToast, useConfirm } from '../lib/toast';
+import { useTypedMutation } from '../lib/useTypedMutation';
 import { PageHeader } from '../components/PageHeader';
 
 // The closed set of ABIs the backend accepts. Mirrors SupportedABIs in
 // release_handler.go — changing one without the other breaks upload.
 const ABIS = ['arm64-v8a', 'armeabi-v7a', 'x86_64'] as const;
 
-function formatBytes(n: number): string {
-  if (!n) return '-';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
 export function Releases() {
-  const qc = useQueryClient();
-  const toast = useToast();
   const confirm = useConfirm();
   const [uploading, setUploading] = useState(false);
   const [editing, setEditing] = useState<AppRelease | null>(null);
 
   const releasesQ = useQuery({ queryKey: ['releases'], queryFn: api.listReleases });
 
-  const deleteMut = useMutation({
+  const deleteMut = useTypedMutation({
     mutationFn: (id: number) => api.deleteRelease(id),
-    onSuccess: () => {
-      toast.success('版本已删除');
-      qc.invalidateQueries({ queryKey: ['releases'] });
-    },
-    onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '删除失败'),
+    successMsg: '版本已删除',
+    invalidateKeys: [['releases']],
+    errorMsg: '删除失败',
   });
 
-  const toggleActiveMut = useMutation({
-    mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
-      api.updateRelease(id, { is_active: isActive }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['releases'] }),
-    onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '操作失败'),
+  const toggleActiveMut = useTypedMutation<{ id: number; isActive: boolean }, { status: string }>({
+    mutationFn: async ({ id, isActive }) => {
+      await api.updateRelease(id, { is_active: isActive });
+      return { status: 'ok' };
+    },
+    invalidateKeys: [['releases']],
   });
 
   const onDelete = async (r: AppRelease) => {
@@ -94,7 +86,7 @@ export function Releases() {
                   <td className="px-4 py-3">
                     <code className="rounded bg-card-2 px-1.5 py-0.5 text-xs text-muted">{r.abi}</code>
                   </td>
-                  <td className="px-4 py-3 text-muted">{formatBytes(r.file_size)}</td>
+                  <td className="px-4 py-3 text-muted">{formatFileSize(r.file_size)}</td>
                   <td className="px-4 py-3">{r.force_update ? <span className="text-warn">是</span> : <span className="text-muted">否</span>}</td>
                   <td className="px-4 py-3">
                     {r.is_active ? (

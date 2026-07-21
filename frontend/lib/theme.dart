@@ -12,6 +12,48 @@ class AppTheme {
   static const Color textMuted = Color(0xFF64748B); // Slate-500
   static const Color borderMuted = Color(0xFFE2E8F0); // Slate-200 border
 
+  // Extended Slate ramp — promoted from inline literals so files don't
+  // keep re-typing the same hex. backgroundColor above is slate50.
+  static const Color slate50 = Color(0xFFF8FAFC);
+  static const Color slate100 = Color(0xFFF1F5F9);
+  static const Color slate200 = Color(0xFFE2E8F0); // alias of borderMuted
+  static const Color slate300 = Color(0xFFCBD5E1);
+  static const Color slate400 = Color(0xFF94A3B8);
+  static const Color slate500 = Color(0xFF64748B); // alias of textMuted
+  static const Color slate600 = Color(0xFF475569);
+  static const Color slate900 = Color(0xFF0F172A);
+
+  // Brand accent ramp.
+  static const Color indigo500 = Color(0xFF6366F1);
+  static const Color violet500 = Color(0xFF8B5CF6);
+  static const Color blue100 = Color(0xFFEFF6FF);
+  static const Color blue600 = Color(0xFF2563EB);
+
+  // Semantic / status accents.
+  static const Color emerald100 = Color(0xFFECFDF5);
+  static const Color amber50 = Color(0xFFFFFBEB);
+  static const Color orange400 = Color(0xFFFB923C);
+  static const Color yellow400 = Color(0xFFFACC15);
+
+  // Reusable gradient tokens. Brand drives primary CTAs/headers; levelBadge
+  // powers the XP/grade pill; avatarRing is the circular halo behind user
+  // avatars in the profile drawer.
+  static const Gradient brandGradient = LinearGradient(
+    colors: [Color(0xFF3B82F6), Color(0xFF6366F1)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const Gradient levelBadgeGradient = LinearGradient(
+    colors: [Color(0xFFFB923C), Color(0xFFFACC15)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+  static const Gradient avatarRingGradient = LinearGradient(
+    colors: [Color(0xFF60A5FA), Color(0xFFC084FC)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
   // Switch Style Constants
   static const double borderRadiusValue = 20.0;
   static const double borderWidthValue = 3.0;
@@ -40,26 +82,6 @@ class AppTheme {
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
-
-  static Gradient getSubjectGradient(String subject) {
-    // Subject is now a stable key (e.g. "math"), not a Chinese display name.
-    // The caller should prefer getSubjectGradientFromColor(subject.color) so
-    // the gradient matches the admin-configured palette. This key-based
-    // fallback only covers the canonical defaults and degrades to emerald.
-    switch (subject) {
-      case 'chinese':
-        return blueGradient;
-      case 'math':
-      case 'extra':
-        return indigoGradient;
-      case 'english':
-      case 'general':
-        return skyGradient;
-      case 'physics':
-      default:
-        return emeraldGradient;
-    }
-  }
 
   /// Builds a diagonal gradient from a hex color (e.g. "#f59e0b"). Used so the
   /// course card banner matches the admin-configured subject color instead of
@@ -112,7 +134,6 @@ class AppTheme {
       colorScheme: const ColorScheme.light(
         primary: primaryColor,
         secondary: accentGreen,
-        background: backgroundColor,
         surface: cardColor,
         onSurface: textWhite,
       ),
@@ -135,14 +156,14 @@ class AppTheme {
       boxShadow: hasFocus
           ? [
               BoxShadow(
-                color: primaryColor.withOpacity(0.15),
+                color: primaryColor.withValues(alpha: 0.15),
                 blurRadius: 16,
                 offset: const Offset(0, 0),
               )
             ]
           : [
               BoxShadow(
-                color: const Color(0xFF0F172A).withOpacity(0.03),
+                color: const Color(0xFF0F172A).withValues(alpha: 0.03),
                 blurRadius: 20,
                 offset: const Offset(0, 4),
               )

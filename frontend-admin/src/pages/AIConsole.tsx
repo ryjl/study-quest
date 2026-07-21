@@ -3,7 +3,7 @@ import { PageHeader } from '../components/PageHeader';
 import { AIWorkflow } from './AIWorkflow';
 import { AIUserView } from './AIUserView';
 import { AiProvidersSection } from './AiProvidersSection';
-import { RegenTab } from './ai-console/RegenTab';
+import { RegenTab } from './ai-console/regen/RegenTab';
 import { PromptConfigTab } from './ai-console/PromptConfigTab';
 import { GlossaryTab } from './ai-console/GlossaryTab';
 

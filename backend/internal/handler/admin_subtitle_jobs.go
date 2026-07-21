@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"studyquest/backend/internal/repository"
@@ -72,10 +71,7 @@ func (h *adminHandler) EnqueueSubtitleJobs(c *gin.Context) {
 		EpisodeIDs []uint `json:"episode_ids" binding:"required"`
 		Priority   int    `json:"priority"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	enqueued, skipped, reasons, err := h.subtitleJobService.EnqueueBatch(req.EpisodeIDs, req.Priority)
 	if err != nil {
@@ -94,12 +90,7 @@ func (h *adminHandler) EnqueueSubtitleJobs(c *gin.Context) {
 // filter; ?limit= caps the row count (default 200).
 func (h *adminHandler) ListSubtitleJobs(c *gin.Context) {
 	status := c.Query("status")
-	limit := 200
-	if v := c.Query("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
-		}
-	}
+	limit := parseLimit(c, 200, 500)
 	rows, err := h.subtitleJobService.ListQueue(status, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed: " + err.Error()})

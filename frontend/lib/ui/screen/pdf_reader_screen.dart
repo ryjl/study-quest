@@ -95,6 +95,8 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       partFile.deleteSync();
     }
     try {
+      // NOTE: bypasses ApiService because PDF streams arbitrary book URLs with
+      // manual byte counting on the StreamedResponse.
       final url = ApiService.bookStreamUrl(widget.book.id);
       final request = http.Request('GET', Uri.parse(url));
       // Auth via the opaque session token (the backend rejects the legacy

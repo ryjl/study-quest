@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
-import 'package:pdfrx/pdfrx.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:screen_brightness/screen_brightness.dart';
@@ -12,14 +10,18 @@ import '../../config.dart';
 import '../../model/course.dart';
 import '../../model/quiz.dart';
 import '../../service/api_service.dart';
+import '../../service/track_selection_controller.dart';
 import '../../service/ui_prefs.dart';
 import '../../service/tv_mode.dart';
 import '../ai/ai_availability.dart';
 import 'ai_study_screen.dart';
 import '../../theme.dart';
 import '../widget/button_3d.dart';
+import '../widget/buffered_seek_bar.dart';
 import '../widget/focus_button.dart';
-import '../widget/glass_panel.dart';
+import '../widget/helper_panel.dart';
+import '../widget/inline_chip_menu.dart';
+import '../widget/pdf_viewer_dialog.dart';
 
 /// Immersive video playback screen.
 ///
@@ -1139,7 +1141,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               //   [0 .. position]   → played (primary)
               //   [position .. buf] → buffered (lighter)
               //   [buf .. end]      → unbuffered (faint)
-              trackShape: _BufferedSeekBarTrackShape(
+              trackShape: BufferedSeekBarTrackShape(
                 bufferedFraction: totalMs > 0 ? bufMs / totalMs : 0.0,
                 bufferedColor: Colors.white38,
               ),
@@ -1186,58 +1188,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
 
   List<Map<String, dynamic>> _getSubtitleOptions() {
-    final list = <Map<String, dynamic>>[];
-    // 修复字幕按钮重复 bug(需求 #4):native(libmpv 内置)轨和 backend 轨可能
-    // 同名(都叫「中文」),直接拼接会让菜单里出现两个「中文」按钮,点第二个触发
-    // setSubtitleTrack → 新 tracks 事件 → 历史上再次 add id,越点越多。
-    // 用 seenLabels 在最终列表的 label 层做去重:同一个 label 只保留一个来源,
-    // 优先保留 native(切换更可靠,直接走 libmpv 的内置轨),backend 的同名 label
-    // 跳过。「关闭字幕」label 唯一,自然不会被去重掉。
-    final seenLabels = <String>{};
-
-    list.add({'label': '关闭字幕', 'type': 'off'});
-    seenLabels.add('关闭字幕');
-
-    final cleanNativeSubs = _player.state.tracks.subtitle
-        .where((t) => _nativeSubtitleIds.contains(t.id))
-        .toList();
-    for (var track in cleanNativeSubs) {
-      final label = track.title ?? track.language ?? '内置字幕 ${track.id}';
-      if (!seenLabels.contains(label)) {
-        seenLabels.add(label);
-        list.add({
-          'label': label,
-          'type': 'native',
-          'track': track,
-        });
-      }
-    }
-
-    // Backend 字幕(Whisper 转录/校对版)。和 native 重名时不直接跳过 —— backend
-    // 版本可能是经过术语纠错的优质翻译,直接去重会让用户选不到。改成给重名的加
-    // 「(校对版)」后缀,既避免菜单出现两个一模一样的「中文」,又保留可选项。
-    // 不重名的正常加入。
-    final backendSubs = _playInfo?.subtitles ?? const [];
-    for (var sub in backendSubs) {
-      final label = seenLabels.contains(sub.label)
-          ? '${sub.label}(校对版)'
-          : sub.label;
-      // 后缀后的 label 理论上仍可能撞名(极端情况:已有 native 叫「中文(校对版)」),
-      // 用 while 兜底直到不重名。正常场景一次就够。
-      var finalLabel = label;
-      var n = 2;
-      while (seenLabels.contains(finalLabel)) {
-        finalLabel = '${sub.label}(校对版$n)';
-        n++;
-      }
-      seenLabels.add(finalLabel);
-      list.add({
-        'label': finalLabel,
-        'type': 'backend',
-        'track': sub,
-      });
-    }
-    return list;
+    return TrackSelectionController.subtitleOptions(
+      player: _player,
+      nativeSubtitleIds: _nativeSubtitleIds,
+      backendSubtitles: _playInfo?.subtitles ?? const [],
+    );
   }
 
   void _autoSelectDefaultSubtitle(List<Map<String, dynamic>> options) {
@@ -1273,25 +1228,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     } else if (type == 'native') {
       await _player.setSubtitleTrack(opt['track'] as SubtitleTrack);
     } else if (type == 'backend') {
-      final sub = opt['track'];
-      final url = ApiService.absoluteUrl(sub.url);
+      final sub = opt['track'] as EpisodeSubtitle;
+      final url = TrackSelectionController.backendSubtitleUrl(sub);
       await _player.setSubtitleTrack(SubtitleTrack.uri(url, title: sub.label));
     }
   }
 
   List<Map<String, dynamic>> _getAudioOptions() {
-    final list = <Map<String, dynamic>>[];
-    final cleanAudioTracks = _player.state.tracks.audio
-        .where((t) => t.id != 'no' && t.id != 'auto')
-        .toList();
-    for (var track in cleanAudioTracks) {
-      final label = track.title ?? track.language ?? '音轨 ${track.id}';
-      list.add({
-        'label': label,
-        'track': track,
-      });
-    }
-    return list;
+    return TrackSelectionController.audioOptions(_player);
   }
 
   Future<void> _applyAudioOption(Map<String, dynamic> opt) async {
@@ -1299,210 +1243,92 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {});
   }
 
-  Widget _buildCustomChip({
-    required String label,
-    required bool selected,
-    required VoidCallback onTap,
-  }) {
-    return FocusButton(
-      onPressed: () {
-        onTap();
-        _scheduleAutoHide();
-      },
-      borderRadius: 16,
-      baseColor: selected ? AppTheme.primaryColor : Colors.white.withOpacity(0.12),
-      borderColor: Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (selected) ...[
-            const Icon(Icons.check_rounded, color: Colors.white, size: 14),
-            const SizedBox(width: 4),
-          ],
-          Text(
-            label,
-            style: TextStyle(
-              color: selected ? Colors.white : Colors.white70,
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInlineMenuWrapper({required Widget child}) {
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.55),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withOpacity(0.08), width: 1),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-          child: child,
-        ),
-      ),
-    );
-  }
-
   Widget _buildSpeedInlineMenu() {
-    return _buildInlineMenuWrapper(
-      child: Row(
-        children: [
-          const Text(
-            '播放速度：',
-            style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((r) {
-                  final isSelected = _rate == r;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8.0),
-                    child: _buildCustomChip(
-                      label: '${r}x',
-                      selected: isSelected,
-                      onTap: () {
-                        _setRate(r);
-                      },
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return InlineChipMenu(
+      title: '播放速度：',
+      items: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+          .map((r) => InlineChipItem(
+                label: '${r}x',
+                selected: _rate == r,
+                onTap: () {
+                  _setRate(r);
+                  _scheduleAutoHide();
+                },
+              ))
+          .toList(),
     );
   }
 
   Widget _buildSubtitleInlineMenu() {
     final subtitleOptions = _getSubtitleOptions();
-    return _buildInlineMenuWrapper(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text(
-                '字幕选择：',
-                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: subtitleOptions.asMap().entries.map((entry) {
-                      final idx = entry.key;
-                      final opt = entry.value;
-                      final isSelected = _selectedSubtitle == idx;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8.0),
-                        child: _buildCustomChip(
-                          label: opt['label'],
-                          selected: isSelected,
-                          onTap: () async {
-                            await _applySubtitleOption(opt, idx);
-                            setState(() {});
-                          },
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Row(
-            children: [
-              const Text(
-                '字幕大小：',
-                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(width: 8),
-              // 字号档位接全局 UiPrefs(需求 #5 + #7):四档「小/中/大/超大」,
-              // 选中态读 UiPrefs.subtitleSizeIndex,点击写回 SharedPreferences,
-              // 下次进播放器沿用上次选择。改档位后 setState 重建,上面的
-              // SubtitleViewConfiguration 会读最新的 UiPrefs.subtitleSize 生效。
-              Row(
-                children: UiPrefs.subtitleSizeLabels
-                    .asMap()
-                    .entries
-                    .map((entry) {
-                  final index = entry.key;
-                  final label = entry.value;
-                  final isSelected =
-                      UiPrefs.instance.subtitleSizeIndex == index;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8.0),
-                    child: _buildCustomChip(
-                      label: label,
-                      selected: isSelected,
-                      onTap: () async {
-                        await UiPrefs.instance.setSubtitleSizeIndex(index);
-                        setState(() {});
-                      },
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-        ],
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InlineChipMenu(
+          title: '字幕选择：',
+          items: subtitleOptions.asMap().entries.map((entry) {
+            final idx = entry.key;
+            final opt = entry.value;
+            return InlineChipItem(
+              label: opt['label'],
+              selected: _selectedSubtitle == idx,
+              onTap: () async {
+                await _applySubtitleOption(opt, idx);
+                setState(() {});
+                _scheduleAutoHide();
+              },
+            );
+          }).toList(),
+        ),
+        const SizedBox(height: 10),
+        // 字号档位接全局 UiPrefs(需求 #5 + #7):四档「小/中/大/超大」,
+        // 选中态读 UiPrefs.subtitleSizeIndex,点击写回 SharedPreferences,
+        // 下次进播放器沿用上次选择。改档位后 setState 重建,上面的
+        // SubtitleViewConfiguration 会读最新的 UiPrefs.subtitleSize 生效。
+        InlineChipMenu(
+          title: '字幕大小：',
+          items: UiPrefs.subtitleSizeLabels.asMap().entries.map((entry) {
+            final index = entry.key;
+            final label = entry.value;
+            return InlineChipItem(
+              label: label,
+              selected: UiPrefs.instance.subtitleSizeIndex == index,
+              onTap: () async {
+                await UiPrefs.instance.setSubtitleSizeIndex(index);
+                setState(() {});
+                _scheduleAutoHide();
+              },
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 
   Widget _buildAudioInlineMenu() {
     final audioOptions = _getAudioOptions();
     final currentAudio = _player.state.track.audio;
-    return _buildInlineMenuWrapper(
-      child: Row(
-        children: [
-          const Text(
-            '音轨选择：',
-            style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: audioOptions.isEmpty
-                ? const Text('无其它音轨', style: TextStyle(color: Colors.white70, fontSize: 13))
-                : SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: audioOptions.map((opt) {
-                        final track = opt['track'] as AudioTrack;
-                        final isSelected = currentAudio.id == track.id;
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 8.0),
-                          child: _buildCustomChip(
-                            label: opt['label'],
-                            selected: isSelected,
-                            onTap: () async {
-                              await _applyAudioOption(opt);
-                              setState(() {});
-                            },
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-          ),
-        ],
-      ),
+    if (audioOptions.isEmpty) {
+      return InlineChipMenu(
+        title: '音轨选择：',
+        items: const [],
+      );
+    }
+    return InlineChipMenu(
+      title: '音轨选择：',
+      items: audioOptions.map((opt) {
+        final track = opt['track'] as AudioTrack;
+        return InlineChipItem(
+          label: opt['label'],
+          selected: currentAudio.id == track.id,
+          onTap: () async {
+            await _applyAudioOption(opt);
+            setState(() {});
+            _scheduleAutoHide();
+          },
+        );
+      }).toList(),
     );
   }
 
@@ -1647,136 +1473,23 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Helper panel (right ~30%)
   // ---------------------------------------------------------------------------
 
-  /// TV 模式下随堂助手/附属资料/任务卡等所有文字统一放大 ×1.3(需求 #9)。
-  /// 提成实例方法(而非 _buildHelperPanel 的局部闭包)是为了让 _buildAttachmentsSection /
-  /// _buildPreAdventureSection / _buildAiStudyEntry / _taskCard / _placeholderTile
-  /// 这些子方法也能用同一套缩放 —— 否则 TV 下标题放大了但子卡片文字没放大,字号不一致。
-  /// 非 TV 时 textScale=1.0,返回值与传入的 base 相同(roundToDouble 不改变整数值)。
-  double _tvScaled(double base) {
-    final textScale = TvMode.instance.isActive ? 1.3 : 1.0;
-    return (base * textScale).roundToDouble();
-  }
-
   Widget _buildHelperPanel() {
-    return Container(
-      width: 360,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(left: BorderSide(color: Color(0xFFE2E8F0), width: 2)),
-      ),
-      child: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Title bar
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFEFF6FF),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.psychology_rounded,
-                      color: Color(0xFF2563EB), size: 24),
-                ),
-                const SizedBox(width: 12),
-                Text('随堂助手',
-                    style: TextStyle(
-                        fontSize: _tvScaled(20),
-                        fontWeight: FontWeight.w900,
-                        color: AppTheme.textWhite)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, color: Color(0xFF94A3B8)),
-                  onPressed: () {
-                    setState(() {
-                      _showHelperPanel = false;
-                      _isFullscreen = true;
-                    });
-                  },
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // Episode title context
-            Text(widget.episode.title,
-                style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    fontSize: _tvScaled(15),
-                    color: AppTheme.textWhite)),
-            const SizedBox(height: 28),
-
-            // Attachments section
-            Text('附属资料',
-                style: TextStyle(
-                    fontSize: _tvScaled(12),
-                    fontWeight: FontWeight.w900,
-                    letterSpacing: 1.5,
-                    color: AppTheme.textMuted)),
-            const SizedBox(height: 12),
-            _buildAttachmentsSection(),
-            const SizedBox(height: 28),
-
-            // Pre-adventure tasks
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('本节探索任务',
-                    style: TextStyle(
-                        fontSize: _tvScaled(12),
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.5,
-                        color: AppTheme.textMuted)),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text('带着问题看',
-                      style: TextStyle(
-                          fontSize: _tvScaled(10),
-                          fontWeight: FontWeight.bold,
-                          color: const Color(0xFF2563EB))),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            _buildPreAdventureSection(),
-            const SizedBox(height: 28),
-
-            // AI 学习入口 —— 常驻 helper panel,不随顶栏自动隐藏。比顶栏那个
-            // 会消失的图标更可发现。三态 gating 与顶栏一致(走同一 helper)。
-            _buildAiStudyEntry(),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // AI 学习入口卡片:常驻显示(不受 _controlsVisible 影响)。AI 开 + 有字幕时
-  // 可点击进入 AiStudyScreen;不可用时置灰 + 点击弹 SnackBar 提示原因。
-  // disableAiTab=true 时整体不渲染(AI 跳转 push 出来的播放器不能再进 AI 页)。
-  Widget _buildAiStudyEntry() {
-    if (widget.disableAiTab) return const SizedBox.shrink();
-    final availability = AiAvailabilityHelper.fromEpisode(widget.episode);
-    final enabled = availability == AiAvailability.enabled;
-    return GestureDetector(
-      onTap: () async {
-        if (!enabled) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(AiAvailabilityHelper.tooltipFor(availability)!),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-          return;
-        }
+    return HelperPanel(
+      episode: widget.episode,
+      attachments: _attachments,
+      loadingExtras: _loadingExtras,
+      summary: _summary,
+      preAdventureTasks: widget.preAdventureTasks,
+      disableAiTab: widget.disableAiTab,
+      tvModeActive: TvMode.instance.isActive,
+      onClosePanel: () {
+        setState(() {
+          _showHelperPanel = false;
+          _isFullscreen = true;
+        });
+      },
+      onOpenAttachment: (att) => _openAttachment(att),
+      onEnterAiStudy: () async {
         // 进 AI 学习页前暂停视频,避免在后台继续播放(含音频)。
         // 与顶栏 AI 入口行为一致 —— 之前 helper panel 这个常驻入口漏了 pause,
         // 导致从卡片进 AI 页后视频还在后台放(需求 #1)。
@@ -1790,183 +1503,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
         );
       },
-      child: Opacity(
-        opacity: enabled ? 1.0 : 0.5,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFF6366F1), Color(0xFF8B5CF6)],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.auto_awesome_rounded,
-                  color: Colors.white, size: _tvScaled(20)),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text('AI 学习',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w800,
-                        fontSize: _tvScaled(14))),
-              ),
-              Icon(Icons.chevron_right_rounded,
-                  color: Colors.white70, size: _tvScaled(20)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAttachmentsSection() {
-    if (_loadingExtras) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 8),
-        child: SizedBox(
-          width: 20,
-          height: 20,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-      );
-    }
-    if (_attachments.isEmpty) {
-      return _placeholderTile(
-        icon: Icons.picture_as_pdf_outlined,
-        title: '暂无配套讲义',
-        accent: const Color(0xFFF97316),
-      );
-    }
-    return Column(
-      children: _attachments.map((att) {
-        final isPdf = att.isPdf;
-        final accent =
-            isPdf ? const Color(0xFFF97316) : const Color(0xFF8B5CF6);
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: FocusButton(
-            onPressed: () => _openAttachment(att),
-            borderRadius: 14,
-            baseColor: isPdf
-                ? const Color(0xFFFFF7ED)
-                : const Color(0xFFF5F3FF),
-            borderColor:
-                isPdf ? const Color(0xFFFED7AA) : const Color(0xFFDDD6FE),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(isPdf ? Icons.picture_as_pdf_rounded : Icons.attach_file,
-                    color: accent, size: _tvScaled(18)),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Text(att.fileName.isEmpty ? '配套资料' : att.fileName,
-                      style: TextStyle(
-                          color: accent,
-                          fontWeight: FontWeight.w800,
-                          fontSize: _tvScaled(13)),
-                      overflow: TextOverflow.ellipsis),
-                ),
-                Icon(Icons.chevron_right_rounded,
-                    color: Color(0xFF94A3B8), size: _tvScaled(18)),
-              ],
-            ),
-          ),
-        );
-      }).toList(),
-    );
-  }
-
-  Widget _buildPreAdventureSection() {
-    // Phase 2:数据源切到 /ai-summary 的 pre_adventure(课程详情页传进来的
-    // preAdventureTasks 也来自 summary)。优先用显式入参(列表页已缓存),
-    // 否则取本屏 lazy 加载的 _summary.preAdventure。
-    final tasks = widget.preAdventureTasks.isNotEmpty
-        ? widget.preAdventureTasks
-        : (_summary?.preAdventure.map((p) => p.prompt).toList() ?? const []);
-    if (tasks.isEmpty) {
-      return _placeholderTile(
-        icon: Icons.casino_outlined,
-        title: '本节暂无探索任务',
-        accent: const Color(0xFF3B82F6),
-      );
-    }
-    return Column(
-      children: List.generate(tasks.length, (i) {
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: _taskCard(i + 1, tasks[i]),
-        );
-      }),
-    );
-  }
-
-  Widget _placeholderTile(
-      {required IconData icon,
-      required String title,
-      required Color accent}) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: accent.withOpacity(0.5), size: _tvScaled(18)),
-          const SizedBox(width: 10),
-          Text(title,
-              style: TextStyle(
-                  color: AppTheme.textMuted,
-                  fontWeight: FontWeight.bold,
-                  fontSize: _tvScaled(13))),
-        ],
-      ),
-    );
-  }
-
-  Widget _taskCard(int index, String text) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 24,
-            height: 24,
-            alignment: Alignment.center,
-            decoration: const BoxDecoration(
-              color: Color(0xFFEFF6FF),
-              shape: BoxShape.circle,
-            ),
-            child: Text('$index',
-                style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                    color: Color(0xFF2563EB),
-                    fontSize: _tvScaled(11))),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(text,
-                style: TextStyle(
-                    color: Color(0xFF475569),
-                    fontWeight: FontWeight.bold,
-                    fontSize: _tvScaled(13),
-                    height: 1.4)),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1983,86 +1519,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
     // SfPdfViewer.network which supports headers; for others we fall back to
     // launching externally.
     if (att.isPdf) {
-      _showPdfViewer(att, streamUrl);
+      PdfViewerDialog.show(context, att, streamUrl);
     } else {
       _launchExternal(streamUrl);
     }
   }
 
-  void _showPdfViewer(Attachment att, String url) {
-    showDialog(
-      context: context,
-      barrierColor: const Color(0x900F172A),
-      builder: (context) {
-        return Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 900),
-            height: MediaQuery.of(context).size.height * 0.85,
-            child: GlassPanel(
-              borderRadius: 24,
-              baseColor: Colors.white,
-              borderColor: Colors.white,
-              borderWidth: 2,
-              padding: const EdgeInsets.all(0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: const BoxDecoration(
-                      color: Color(0xFFFFF7ED),
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(22),
-                        topRight: Radius.circular(22),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        const Icon(Icons.picture_as_pdf_rounded,
-                            color: Color(0xFFF97316)),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(att.fileName,
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  color: Color(0xFF7C2D12))),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: PdfViewer(
-                      PdfDocumentRefUri(
-                        Uri.parse(url),
-                        // Auth via the opaque session token (legacy X-User-ID
-                        // is rejected by the backend). Empty if logged out;
-                        // the request then 401s instead of using a dead identity.
-                        headers: {
-                          if (ApiService.authToken != null &&
-                              ApiService.authToken!.isNotEmpty)
-                            'Authorization':
-                                'Bearer ${ApiService.authToken}',
-                        },
-                      ),
-                      params: PdfViewerParams(
-                        // Keep the viewer ready for streaming range requests
-                        // from the Go backend's 302 attachment endpoint.
-                        enableTextSelection: true,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
 
   Future<void> _launchExternal(String url) async {
     final uri = Uri.parse(url);
@@ -2131,95 +1593,4 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return '${two(d.inMinutes)}:${two(d.inSeconds.remainder(60))}';
   }
 }
-
-
-/// A [SliderTrackShape] that paints a three-segment seek bar:
-///   played (activeColor) | buffered (bufferedColor) | unbuffered (trackColor).
-///
-/// Standard Material Slider only shows played vs. unplayed; for a video player
-/// we also want to show how far ahead the demuxer has buffered, so the user
-/// knows whether a seek target is ready to play instantly.
-class _BufferedSeekBarTrackShape extends RoundedRectSliderTrackShape {
-  _BufferedSeekBarTrackShape({
-    required this.bufferedFraction,
-    required this.bufferedColor,
-  });
-
-  /// Fraction of total duration already buffered, in [0, 1].
-  final double bufferedFraction;
-  final Color bufferedColor;
-
-  @override
-  void paint(
-    PaintingContext context,
-    Offset offset, {
-    required RenderBox parentBox,
-    required SliderThemeData sliderTheme,
-    required Animation<double> enableAnimation,
-    required TextDirection textDirection,
-    required Offset thumbCenter,
-    Offset? secondaryOffset,
-    bool isDiscrete = false,
-    bool isEnabled = false,
-    double additionalActiveTrackHeight = 0,
-  }) {
-    if (sliderTheme.trackHeight == null) return;
-    final trackHeight = sliderTheme.trackHeight!;
-    final radius = Radius.circular(trackHeight / 2);
-
-    // Compute the track rect manually. The Slider leaves horizontal padding
-    // for the thumb; we mirror the default Material layout (thumb radius
-    // ≈ trackHeight to keep things simple).
-    final thumbGap = trackHeight;
-    final trackLeft = offset.dx + thumbGap;
-    final trackRight = offset.dx + parentBox.size.width - thumbGap;
-    final trackTop = offset.dy + (parentBox.size.height - trackHeight) / 2;
-    final trackRect = Rect.fromLTRB(
-        trackLeft, trackTop, trackRight, trackTop + trackHeight);
-
-    // Layer 1 (bottom): full base track = unbuffered segment.
-    context.canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-            trackRect.left, trackRect.top, trackRect.right, trackRect.bottom),
-        topLeft: radius,
-        topRight: radius,
-        bottomLeft: radius,
-        bottomRight: radius,
-      ),
-      Paint()..color = sliderTheme.inactiveTrackColor ?? Colors.white12,
-    );
-
-    // Layer 2: buffered segment [0 .. bufferedFraction].
-    final bufferEnd =
-        trackRect.left + trackRect.width * bufferedFraction.clamp(0.0, 1.0);
-    if (bufferEnd > trackRect.left) {
-      context.canvas.drawRRect(
-        RRect.fromRectAndCorners(
-          Rect.fromLTRB(
-              trackRect.left, trackRect.top, bufferEnd, trackRect.bottom),
-          topLeft: radius,
-          topRight: radius,
-          bottomLeft: radius,
-          bottomRight: radius,
-        ),
-        Paint()..color = bufferedColor,
-      );
-    }
-
-    // Layer 3 (top): played segment [0 .. thumbCenter] in active color.
-    context.canvas.drawRRect(
-      RRect.fromRectAndCorners(
-        Rect.fromLTRB(
-            trackRect.left, trackRect.top, thumbCenter.dx, trackRect.bottom),
-        topLeft: radius,
-        topRight: radius,
-        bottomLeft: radius,
-        bottomRight: radius,
-      ),
-      Paint()..color = sliderTheme.activeTrackColor ?? AppTheme.primaryColor,
-    );
-  }
-}
-
 

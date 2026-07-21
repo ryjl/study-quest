@@ -35,27 +35,6 @@ export interface SubjectMeta {
   ai_config?: AiConfig;
 }
 
-// Subject catalog cache. The admin SPA used to ship a hardcoded SUBJECTS
-// constant here; subjects are now DB-driven and editable. useSubjects()
-// (in lib/useSubjects.ts) fetches /admin/api/subjects and seeds this cache so
-// that the plain subjectMeta() helper below — used outside React render paths
-// or in legacy call sites — keeps resolving keys without a hook.
-let subjectCache: SubjectMeta[] = [];
-
-export function setSubjectCache(list: SubjectMeta[]) {
-  subjectCache = list;
-}
-
-export function subjectMeta(key: string): SubjectMeta {
-  return (
-    subjectCache.find((s) => s.key === key) ?? {
-      key,
-      label: key,
-      color: '#9ca3af',
-    }
-  );
-}
-
 export interface TagMeta {
   id?: number;
   key: string;
@@ -66,57 +45,19 @@ export interface TagMeta {
   course_count?: number; // how many courses use this tag (delete-confirm blast radius)
 }
 
-// Tag catalog cache — same pattern as subjects. Warmed by useTags() in
-// Layout so tagMeta(id) works outside React render paths.
-let tagCache: TagMeta[] = [];
-
-export function setTagCache(list: TagMeta[]) {
-  tagCache = list;
-}
-
-export function tagMetaByID(id: number): TagMeta | undefined {
-  return tagCache.find((t) => t.id === id);
-}
-
-// 2026-07-20: grade 改开放 tag 体系,不再硬编码 1-9 年级。
-// PRESET_GRADES 是 admin 表单默认显示的 5 个预设 tag + 中文 label。
-// 历史的 "1"-"9" 不在预设里 —— 若 DB 已有这些值,会以自定义 chip 形式回显。
-// admin 还可以在表单里追加任意自定义 tag(如"考研""职场""幼小衔接")。
-export const PRESET_GRADES: { key: string; name: string }[] = [
-  { key: 'primary', name: '小学' },
-  { key: 'junior', name: '初中' },
-  { key: 'senior', name: '高中' },
-  { key: 'adult', name: '成人' },
-  { key: 'universal', name: '通用' },
-];
-
-// GRADES 保留为 PRESET_GRADES 的别名,向后兼容老引用(避免大面积改名)。
-// 新代码请直接用 PRESET_GRADES。
-export const GRADES = PRESET_GRADES;
-
-// gradeLabel 把单个 grade key 渲染成展示文字。
-//   - 预设值(primary/junior/senior/adult/universal) → 中文 label
-//   - 纯数字(legacy "1"-"9") → "<n>年级"(向后兼容老 DB 数据)
-//   - 其它(自定义 tag 如"考研") → 原样
-export function gradeLabel(key: string): string {
-  const preset = PRESET_GRADES.find((g) => g.key === key);
-  if (preset) return preset.name;
-  if (/^\d+$/.test(key)) return `${key}年级`;
-  return key;
-}
-
-export function gradeName(key: string): string {
-  return gradeLabel(key);
-}
-
-// gradeDisplay 把后端 grade 字段(逗号分隔的 key 列表)渲染成展示文字。
-// universal 单独显示为"全学段通用";多个值用逗号连接各自的 gradeLabel。
-export function gradeDisplay(grade: string): string {
-  if (!grade) return '';
-  const parts = grade.split(',').map((g) => g.trim()).filter((g) => g.length > 0);
-  if (parts.length === 1 && parts[0] === 'universal') return '全学段通用';
-  return parts.map(gradeLabel).join(', ');
-}
+// Runtime caches + grade helpers used to live here. They've been split out to:
+//   - ./caches.ts : setSubjectCache, subjectMeta, setTagCache, tagMetaByID
+//   - ./grades.ts : PRESET_GRADES, GRADES, gradeLabel, gradeDisplay
+// Re-exported below so existing `import { subjectMeta, gradeDisplay, ... } from
+// './types'` call sites keep resolving. New code should import from the split
+// modules directly.
+export {
+  setSubjectCache,
+  subjectMeta,
+  setTagCache,
+  tagMetaByID,
+} from './caches';
+export { PRESET_GRADES, GRADES, gradeLabel, gradeDisplay } from './grades';
 
 export interface MediaStream {
   index: number;
@@ -190,10 +131,18 @@ export interface Course {
   cover_url: string;
   cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
   attachment_json: string;
-  /** DEPRECATED. Single-field predecessor of the split whisper_hint/quiz_hint
+  /**
+   * DEPRECATED. Single-field predecessor of the split whisper_hint/quiz_hint
    * (now stored together in one backend JSON column, AIConfigJSON). Kept for
    * edit-form repopulation of legacy rows; new writes go to whisper_hint /
-   * quiz_hint. See backend model.Course.AIConfig. */
+   * quiz_hint. See backend model.Course.AIConfig.
+   *
+   * Read today only by PromptConfigTab.tsx (~L207) as a fallback when
+   * ai_config.whisper_hint is empty. Do not add new write sites; migrate the
+   * fallback reader and delete this field.
+   * @deprecated use {@link AiConfig.whisper_hint} / {@link AiConfig.quiz_hint} via {@link Course.ai_config} instead.
+   */
+  // DEPRECATED: legacy ai_hint — see JSDoc above.
   ai_hint?: string;
   /** Admin-authored hint fed to the subtitle worker's Whisper initial_prompt
    * (terminology list, accent notes, ≤240 chars). Sourced from the backend's
@@ -800,8 +749,23 @@ export interface AiQuizQuestion {
   type: string; // "choice" | "multi_choice" | "fill"
   stem: string;
   options?: string; // JSON []string (choice / multi_choice)
-  answer: number; // DEPRECATED choice: 0-based index (multi_choice 恒 0,看 correct_indices)
-  answer_text?: string; // DEPRECATED fill: JSON []string of acceptable answers (multi_choice 空)
+  /**
+   * DEPRECATED choice-type answer: 0-based index into `options`. Always 0 for
+   * multi_choice (read `correct_indices` instead). Read today only by
+   * AIUserView.tsx (~L313) for legacy single-choice rows; new quiz rows use
+   * `correct_indices` for multi-choice and the scoring metadata for other types.
+   * @deprecated read {@link AiQuizQuestion.correct_indices} / {@link AiQuizQuestion.scoring} instead.
+   */
+  // DEPRECATED: legacy `answer` field — see JSDoc above.
+  answer: number;
+  /**
+   * DEPRECATED fill-type answer: JSON []string of acceptable answers. Empty
+   * for multi_choice. Read today only by AIUserView.tsx (~L328-329) for legacy
+   * fill-in-the-blank rows; new quiz rows carry the answer inside `scoring`.
+   * @deprecated read {@link AiQuizQuestion.scoring} instead.
+   */
+  // DEPRECATED: legacy `answer_text` field — see JSDoc above.
+  answer_text?: string;
   /** multi_choice: 正确选项索引数组(choice/fill 不下发)。admin 核对多选题答案用。 */
   correct_indices?: number[];
   /** multi_choice: 是否允许部分对 scoring。 */

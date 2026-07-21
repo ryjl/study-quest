@@ -3,7 +3,6 @@ package handler
 import (
 	"crypto/rand"
 	"fmt"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"studyquest/backend/internal/ai"
@@ -416,16 +415,6 @@ func (d *AdminHandlerDeps) Build() AdminHandler {
 		aiResolver:            d.AIResolver,
 		aiService:             d.AIService,
 	}
-}
-
-// LoginAPI authenticates the admin password and sets the session cookie.
-// Replaces the old form-based LoginPost with a JSON endpoint for the SPA.
-func parseUintParam(c *gin.Context, name string) (uint, error) {
-	id, err := strconv.ParseUint(c.Param(name), 10, 32)
-	if err != nil {
-		return 0, err
-	}
-	return uint(id), nil
 }
 
 // API CONTROLLERS

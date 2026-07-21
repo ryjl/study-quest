@@ -111,3 +111,52 @@ export function parseAttachmentJSON(json?: string): string[] {
     return [];
   }
 }
+
+// Format an ISO timestamp using zh-CN locale (24h). Returns '—' for falsy or
+// unparseable input. Shared by SubtitleQueue and AIWorkflow.
+export function fmtTime(s?: string | null): string {
+  if (!s) return '—';
+  try {
+    return new Date(s).toLocaleString('zh-CN', { hour12: false });
+  } catch {
+    return s;
+  }
+}
+
+// Role key → Chinese label for activity feeds and user tables.
+export function roleLabel(role: string): string {
+  switch (role) {
+    case 'student':
+      return '学生';
+    case 'teen':
+      return '青少年';
+    case 'parent':
+      return '家长';
+    case 'admin':
+      return '管理员';
+    default:
+      return role;
+  }
+}
+
+// Compact watch-time formatter. Uses raw seconds for sub-minute precision so
+// a user who watched e.g. 40 seconds doesn't show a misleading "0 分".
+export function formatWatchTime(seconds?: number): string {
+  if (seconds !== undefined && seconds > 0) {
+    const s = Math.floor(seconds);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const rem = s % 60;
+    if (h > 0) return rem === 0 ? (m === 0 ? `${h} 时` : `${h} 时 ${m} 分`) : `${h} 时 ${m} 分`;
+    if (m > 0) return rem === 0 ? `${m} 分` : `${m} 分 ${rem} 秒`;
+    return `${rem} 秒`;
+  }
+  return '0 分';
+}
+
+// m:ss formatter for short clip/segment durations.
+export function fmtSec(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}

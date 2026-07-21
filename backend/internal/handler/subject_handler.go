@@ -68,10 +68,7 @@ func (h *subjectHandler) AdminCreateSubject(c *gin.Context) {
 		// AIConfig 是学科级默认 AI 提示(5 字段)。可选:不传(nil)→ 走空配置。
 		AIConfig  *aiConfigRequest `json:"ai_config"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	aiCfg, _ := req.AIConfig.toModel()
 	subj, err := h.svc.Create(req.Key, req.Label, req.Color, req.SortOrder, aiCfg)
@@ -104,10 +101,7 @@ func (h *subjectHandler) AdminUpdateSubject(c *gin.Context) {
 		// AIConfigJSON);非 nil → 用请求体的 5 字段整体覆盖(全空即清空)。
 		AIConfig  *aiConfigRequest `json:"ai_config"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	subj, err := h.svc.FindByID(uint(id))
 	if err != nil {

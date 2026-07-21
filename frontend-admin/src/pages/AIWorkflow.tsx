@@ -1,23 +1,13 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
-import { useToast } from '../lib/toast';
-import type { AiJob, AiJobStatus, AiRun, AiTraceStep } from '../lib/types';
+import type { AiJob, AiJobStatus, AiJobsResponse, AiRun, AiTraceStep } from '../lib/types';
+import { fmtTime } from '../lib/format';
+import { STATUS_META, STATUS_FILTERS } from '../lib/jobStatus';
+import { pollWhen } from '../lib/query';
+import { useTypedMutation } from '../lib/useTypedMutation';
 import { Modal } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
-
-// Status badge palette. Kept inline since only this page renders these badges.
-// Follows the SubtitleQueue pattern: tailwind palette swatches per status,
-// `bad` token for failures so it tracks the theme.
-const STATUS_META: Record<AiJobStatus, { label: string; cls: string }> = {
-  queued: { label: '排队中', cls: 'bg-blue-500/15 text-blue-600' },
-  processing: { label: '处理中', cls: 'bg-amber-500/15 text-amber-600' },
-  done: { label: '已完成', cls: 'bg-emerald-500/15 text-emerald-600' },
-  failed: { label: '失败', cls: 'bg-bad/15 text-bad' },
-  skipped: { label: '已跳过', cls: 'bg-gray-500/15 text-muted' },
-};
-
-const STATUS_FILTERS: (AiJobStatus | 'all')[] = ['all', 'queued', 'processing', 'done', 'failed', 'skipped'];
 
 // job_type → Chinese label. The backend job_type is a free string today; map
 // the two known ones and pass anything else through verbatim.
@@ -35,15 +25,6 @@ const JOB_TYPE_LABEL: Record<string, string> = {
 
 function jobTypeLabel(t: string): string {
   return JOB_TYPE_LABEL[t] ?? t;
-}
-
-function fmtTime(s?: string | null): string {
-  if (!s) return '—';
-  try {
-    return new Date(s).toLocaleString('zh-CN', { hour12: false });
-  } catch {
-    return s;
-  }
 }
 
 // Wall-clock duration of a finished job: completed_at - created_at, in seconds.
@@ -70,10 +51,10 @@ export function AIWorkflow({ embedded = false }: { embedded?: boolean } = {}) {
   const jobsQ = useQuery({
     queryKey: ['ai-jobs', null, filter],
     queryFn: () => api.listAiJobs(undefined, filter === 'all' ? undefined : filter),
-    refetchInterval: (q) => {
-      const hasActive = q.state.data?.jobs.some((j) => j.status === 'queued' || j.status === 'processing');
-      return hasActive ? 3000 : false;
-    },
+    refetchInterval: pollWhen(
+      (data: AiJobsResponse | undefined) =>
+        !!data?.jobs.some((j) => j.status === 'queued' || j.status === 'processing'),
+    ),
     refetchIntervalInBackground: false,
   });
 
@@ -83,10 +64,11 @@ export function AIWorkflow({ embedded = false }: { embedded?: boolean } = {}) {
   const runsQ = useQuery({
     queryKey: ['ai-runs', 20],
     queryFn: () => api.listAiRuns(20),
-    refetchInterval: (q) => {
-      const hasActive = q.state.data?.some((r) => Date.now() - new Date(r.created_at).getTime() < 60_000);
-      return hasActive ? 5000 : false;
-    },
+    refetchInterval: pollWhen(
+      (data: AiRun[] | undefined) =>
+        !!data?.some((r) => Date.now() - new Date(r.created_at).getTime() < 60_000),
+      5000,
+    ),
     refetchIntervalInBackground: false,
   });
 
@@ -175,8 +157,6 @@ export function AIWorkflow({ embedded = false }: { embedded?: boolean } = {}) {
 }
 
 function JobRow({ job }: { job: AiJob }) {
-  const qc = useQueryClient();
-  const toast = useToast();
   const meta = STATUS_META[job.status];
   const showProgress = job.status === 'processing' && job.progress != null;
 
@@ -184,26 +164,20 @@ function JobRow({ job }: { job: AiJob }) {
   // reaper). Inherited from SubtitleQueue's retryMut pattern: invalidate the
   // jobs list on success so the row re-renders as 'queued'. The 409 (not
   // processing) path surfaces as a benign toast, not a scary error.
-  const resetMut = useMutation({
+  const resetMut = useTypedMutation({
     mutationFn: () => api.resetAiJob(job.id),
-    onSuccess: () => {
-      toast.success('已重置回排队');
-      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
-    },
-    onError: (e) => toast.error((e as Error).message),
+    successMsg: '已重置回排队',
+    invalidateKeys: [['ai-jobs']],
   });
 
   // Retry a 'failed' job: revive it to 'queued' so the worker re-runs it. Use
   // case: the job failed (e.g. embedding was misconfigured), the admin fixed the
   // problem, now they want to re-run. Distinct from resetMut (which targets
   // stuck-but-alive 'processing' jobs). 409 (not failed) → benign toast.
-  const retryMut = useMutation({
+  const retryMut = useTypedMutation({
     mutationFn: () => api.retryAiJob(job.id),
-    onSuccess: () => {
-      toast.success('已重新排队,worker 将重试');
-      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
-    },
-    onError: (e) => toast.error((e as Error).message),
+    successMsg: '已重新排队,worker 将重试',
+    invalidateKeys: [['ai-jobs']],
   });
 
   // Skip polish: polish-specific escape hatch for a FAILED polish job. Polish
@@ -211,13 +185,10 @@ function JobRow({ job }: { job: AiJob }) {
   // — retry (retryMut above) or give up on polish and let downstream proceed
   // off the raw subtitle. Marks the job done + chains segment. 409 (not a
   // failed polish job) → benign toast.
-  const skipPolishMut = useMutation({
+  const skipPolishMut = useTypedMutation({
     mutationFn: () => api.skipPolish(job.id),
-    onSuccess: () => {
-      toast.success('已跳过润色,切片任务已入队(用原始字幕)');
-      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
-    },
-    onError: (e) => toast.error((e as Error).message),
+    successMsg: '已跳过润色,切片任务已入队(用原始字幕)',
+    invalidateKeys: [['ai-jobs']],
   });
 
   return (

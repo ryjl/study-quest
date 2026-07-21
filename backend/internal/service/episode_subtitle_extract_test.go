@@ -9,6 +9,7 @@ import (
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/testutil"
+	"studyquest/backend/internal/media"
 )
 
 // TestExtractEmbeddedSubtitle_RejectsInvalidStreamIndex covers the W2 guard:
@@ -168,7 +169,7 @@ func TestIsBitmapSubtitleCodec(t *testing.T) {
 			"dvb_teletext",      // DVB teletext
 		}
 		for _, c := range bitmap {
-			if !isBitmapSubtitleCodec(c) {
+			if !media.IsBitmapSubtitleCodec(c) {
 				t.Errorf("expected %q to be bitmap (un-extractable)", c)
 			}
 		}
@@ -190,7 +191,7 @@ func TestIsBitmapSubtitleCodec(t *testing.T) {
 			"realtext",   // RealText
 		}
 		for _, c := range text {
-			if isBitmapSubtitleCodec(c) {
+			if media.IsBitmapSubtitleCodec(c) {
 				t.Errorf("expected %q to be text (extractable), got bitmap", c)
 			}
 		}
@@ -200,7 +201,7 @@ func TestIsBitmapSubtitleCodec(t *testing.T) {
 		// ffprobe lowercases codec_name, but guard against mixed-case input
 		// anyway (some forks / wrappers don't normalize).
 		for _, c := range []string{"HDMV_PGS_SUBTITLE", "Dvd_Subtitle", "DVB_SUBTITLE"} {
-			if !isBitmapSubtitleCodec(c) {
+			if !media.IsBitmapSubtitleCodec(c) {
 				t.Errorf("expected case-insensitive match for %q to be bitmap", c)
 			}
 		}
@@ -212,7 +213,7 @@ func TestIsBitmapSubtitleCodec(t *testing.T) {
 		// better than pre-emptively disabling the button for a codec we just
 		// haven't enumerated yet.
 		for _, c := range []string{"", "unknown_codec", "some_future_text_codec"} {
-			if isBitmapSubtitleCodec(c) {
+			if media.IsBitmapSubtitleCodec(c) {
 				t.Errorf("expected %q to default to text, got bitmap", c)
 			}
 		}

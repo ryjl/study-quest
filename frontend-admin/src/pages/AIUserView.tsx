@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check } from 'lucide-react';
 import { api } from '../lib/api';
 import type { AiQuizDetail, AiTraceStep } from '../lib/types';
+import { fmtSec } from '../lib/format';
+import { pollWhileGenerating } from '../lib/query';
 import { Modal } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
 
@@ -166,7 +168,7 @@ function UserStudyReportSection({ userId }: { userId: number }) {
     queryFn: () => api.getUserReport(userId),
     // 只在 generating 时轮询;ready 或空时停止(省请求)。refetchIntervalInBackground
     // 关掉,避免后台标签页无意义轮询(同 SubtitleQueue 的做法)。
-    refetchInterval: (q) => (q.state.data?.status === 'generating' ? 3000 : false),
+    refetchInterval: pollWhileGenerating(),
     refetchIntervalInBackground: false,
   });
   const data = reportQ.data;
@@ -382,10 +384,4 @@ function TraceTimeline({ runs }: { runs: AiQuizDetail['runs'] }) {
       </ol>
     </div>
   );
-}
-
-function fmtSec(s: number): string {
-  const m = Math.floor(s / 60);
-  const sec = s % 60;
-  return `${m}:${sec.toString().padStart(2, '0')}`;
 }

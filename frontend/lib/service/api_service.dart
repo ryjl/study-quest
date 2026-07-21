@@ -61,6 +61,52 @@ class ApiService {
     return hdrs;
   }
 
+  /// Centralized GET wrapper. Builds the URL from [AppConfig.baseUrl] + [path],
+  /// attaches the standard JSON + bearer headers, and applies an 8s default
+  /// timeout (overridable per-call). Returns the raw [http.Response]; callers
+  /// decide status handling. activeUserId is forwarded to [_headers] for
+  /// future-proofing but currently does not change the on-wire header.
+  static Future<http.Response> _get(
+    String path, {
+    int? userId,
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _httpClient
+        .get(
+          Uri.parse('${AppConfig.baseUrl}$path'),
+          headers: _headers(userId),
+        )
+        .timeout(timeout);
+  }
+
+  /// Centralized POST wrapper. Same contract as [_get] but accepts an optional
+  /// JSON [body] (already-encoded Map or List). Callers handle status.
+  static Future<http.Response> _post(
+    String path, {
+    Object? body,
+    int? userId,
+    Duration timeout = const Duration(seconds: 8),
+  }) {
+    return _httpClient
+        .post(
+          Uri.parse('${AppConfig.baseUrl}$path'),
+          headers: _headers(userId),
+          body: body == null ? null : jsonEncode(body),
+        )
+        .timeout(timeout);
+  }
+
+  /// Streamed GET (used for PDF byte counting where the body is consumed
+  /// incrementally). The URI is passed in already-absolute because callers
+  /// like the PDF reader need to point at the ref-URL host.
+  static Future<http.StreamedResponse> streamGet(
+    Uri uri, {
+    Map<String, String>? headers,
+  }) {
+    final req = http.Request('GET', uri)..headers.addAll(headers ?? const {});
+    return _httpClient.send(req).timeout(const Duration(seconds: 8));
+  }
+
   /// Fire-and-forget 401 hook. Called from each authenticated method's failure
   /// path when the server says the session is gone. Wrapped so a misbehaving
   /// callback can't replace the real error.
@@ -84,10 +130,7 @@ class ApiService {
   // 1. Fetch public users list (for profile selection screen)
   static Future<List<User>> fetchUsers() async {
     try {
-      final response = await _httpClient.get(
-        Uri.parse('${AppConfig.baseUrl}/api/v1/users'),
-        headers: _headers(),
-      ).timeout(const Duration(seconds: 4));
+      final response = await _get('/api/v1/users', timeout: const Duration(seconds: 4));
       if (response.statusCode == 200) {
         final List<dynamic> list = jsonDecode(response.body);
         return list.map((e) => User.fromJson(e)).toList();
@@ -110,11 +153,7 @@ class ApiService {
     if (deviceName != null && deviceName.isNotEmpty) {
       body['device_name'] = deviceName;
     }
-    final response = await _httpClient.post(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/users/login'),
-      headers: _headers(),
-      body: jsonEncode(body),
-    );
+    final response = await _post('/api/v1/users/login', body: body);
     if (response.statusCode == 200) {
       final Map<String, dynamic> data = jsonDecode(response.body);
       final tok = data['token'] as String?;
@@ -131,10 +170,7 @@ class ApiService {
   /// bad token in memory). Idempotent.
   static Future<void> logout() async {
     try {
-      await _httpClient.post(
-        Uri.parse('${AppConfig.baseUrl}/api/v1/users/logout'),
-        headers: _headers(),
-      ).timeout(const Duration(seconds: 4));
+      await _post('/api/v1/users/logout', timeout: const Duration(seconds: 4));
     } catch (_) {
       // Swallow: local clear below is what matters for the client.
     }
@@ -147,10 +183,7 @@ class ApiService {
   // 3. Fetch courses authorized for this student. Pass contentType to filter
   // by learning (default) or entertainment.
   static Future<List<Course>> fetchCourses(int activeUserId, {String contentType = 'learning'}) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/courses?content_type=$contentType'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/courses?content_type=$contentType', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list.map((e) => Course.fromJson(e)).toList();
@@ -162,10 +195,7 @@ class ApiService {
   // actually used by courses). Drives the filter chips so custom tags show up
   // without an app update. Non-fatal: callers fall back to the 5 presets.
   static Future<List<GradeTag>> fetchGradeTags(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/grade-tags'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/courses/grade-tags', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list
@@ -179,10 +209,7 @@ class ApiService {
   // 3b. Fetch the subject catalog (for filter chips + card labels/gradients).
   // Requires the student's auth header since /api/v1/subjects is restricted.
   static Future<List<Subject>> fetchSubjects(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/subjects'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/subjects', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list.map((e) => Subject.fromJson(e as Map<String, dynamic>)).toList();
@@ -194,10 +221,7 @@ class ApiService {
   // 3c. Fetch the tag catalog (for multi-select filter chips). Tags are
   // DB-driven and editable from the admin Tags page.
   static Future<List<Tag>> fetchTags(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/tags'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/tags', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list.map((e) => Tag.fromJson(e as Map<String, dynamic>)).toList();
@@ -207,10 +231,7 @@ class ApiService {
 
   // 4. Fetch episodes for a given course
   static Future<List<Episode>> fetchEpisodes(int activeUserId, int courseId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/$courseId/episodes'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/courses/$courseId/episodes', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list.map((e) => Episode.fromJson(e)).toList();
@@ -223,10 +244,7 @@ class ApiService {
   // (returns status=generating, caller polls).
 
   static Future<EpisodeSummary?> fetchEpisodeSummary(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-summary'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/episodes/$episodeId/ai-summary', userId: activeUserId);
     if (response.statusCode == 200) {
       return EpisodeSummary.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
     }
@@ -238,10 +256,7 @@ class ApiService {
   // 触发的(course-unique,不应让任一学生触发)。无总结时 404 → 返回 null,
   // 调用方隐藏卡片。失败/AI 未配置也是 404 + status=unavailable,语义相同。
   static Future<CourseSummary?> fetchCourseSummary(int activeUserId, int courseId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/$courseId/ai-summary'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/courses/$courseId/ai-summary', userId: activeUserId);
     if (response.statusCode == 200) {
       return CourseSummary.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
     }
@@ -250,10 +265,7 @@ class ApiService {
   }
 
   static Future<QuizResponse> fetchEpisodeQuiz(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/episodes/$episodeId/ai-quiz', userId: activeUserId);
     if (response.statusCode == 200 || response.statusCode == 202) {
       return QuizResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
     }
@@ -271,10 +283,10 @@ class ApiService {
     required int episodeId,
     required List<Map<String, dynamic>> answers,
   }) async {
-    final response = await _httpClient.post(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/submit-all'),
-      headers: _headers(activeUserId),
-      body: jsonEncode({'answers': answers}),
+    final response = await _post(
+      '/api/v1/episodes/$episodeId/ai-quiz/submit-all',
+      userId: activeUserId,
+      body: {'answers': answers},
     );
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body);
@@ -288,10 +300,7 @@ class ApiService {
   }
 
   static Future<void> regenerateQuiz(int activeUserId, int episodeId) async {
-    final response = await _httpClient.post(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/regenerate'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _post('/api/v1/episodes/$episodeId/ai-quiz/regenerate', userId: activeUserId);
     if (response.statusCode != 202 && response.statusCode != 200) {
       _fail(response.statusCode, '重新生成失败: ${response.statusCode}');
     }
@@ -301,10 +310,7 @@ class ApiService {
   // quiz generations for an episode; each is fully revealed (correct answers
   // shown). Empty list when there's no history yet (normal before first regen).
   static Future<List<ArchivedQuizView>> fetchQuizHistory(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-quiz/history'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/episodes/$episodeId/ai-quiz/history', userId: activeUserId);
     if (response.statusCode == 200) {
       final body = jsonDecode(response.body);
       final list = (body is Map && body['history'] is List) ? body['history'] as List : const [];
@@ -321,10 +327,7 @@ class ApiService {
   /// 404 → unavailable(AI 未配置 / 无 mastery)。首次访问触发后端入队 advice job,
   /// 返回 generating,调用方轮询直到 ready。
   static Future<AdviceResponse> fetchEpisodeAdvice(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/ai-advice'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/episodes/$episodeId/ai-advice', userId: activeUserId);
     if (response.statusCode == 200 || response.statusCode == 202) {
       return AdviceResponse.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
     }
@@ -336,10 +339,7 @@ class ApiService {
 
   // 6. Fetch play info (resolves direct streaming URL and custom HTTP headers for netdisk bypass)
   static Future<PlayInfo> fetchPlayInfo(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/play-info'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/episodes/$episodeId/play-info', userId: activeUserId);
     if (response.statusCode == 200) {
       final Map<String, dynamic> data = jsonDecode(response.body);
       return PlayInfo.fromJson(data);
@@ -351,10 +351,7 @@ class ApiService {
   // The backend stores these as a JSON array of relative storage paths, so we
   // wrap each entry into an [Attachment] carrying its index for stream URL use.
   static Future<List<Attachment>> fetchAttachments(int activeUserId, int episodeId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/episodes/$episodeId/attachments'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/episodes/$episodeId/attachments', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       final result = <Attachment>[];
@@ -395,14 +392,14 @@ class ApiService {
     required int positionSeconds,
     required int deltaWatchSeconds,
   }) async {
-    final response = await _httpClient.post(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/progress/report'),
-      headers: _headers(activeUserId),
-      body: jsonEncode({
+    final response = await _post(
+      '/api/v1/progress/report',
+      userId: activeUserId,
+      body: {
         'episode_id': episodeId,
         'position_seconds': positionSeconds,
         'delta_watch_seconds': deltaWatchSeconds,
-      }),
+      },
     );
     if (response.statusCode == 200) {
       return UserProgress.fromJson(jsonDecode(response.body));
@@ -412,10 +409,7 @@ class ApiService {
 
   // 8. Fetch user points ledger total balance
   static Future<UserPoint> fetchUserPoints(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/progress/points'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/progress/points', userId: activeUserId);
     if (response.statusCode == 200) {
       return UserPoint.fromJson(jsonDecode(response.body));
     }
@@ -424,10 +418,7 @@ class ApiService {
 
   // 9. Fetch user progress list overview
   static Future<List<UserProgress>> fetchProgressOverview(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/progress'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/progress', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list.map((e) => UserProgress.fromJson(e)).toList();
@@ -437,10 +428,7 @@ class ApiService {
 
   // 10. Fetch chapters for a course (real chapter tree, replaces mock split)
   static Future<List<Chapter>> fetchChapters(int activeUserId, int courseId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/courses/$courseId/chapters'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/courses/$courseId/chapters', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list.map((e) => Chapter.fromJson(e)).toList();
@@ -454,10 +442,9 @@ class ApiService {
     int limit = 20,
     int offset = 0,
   }) async {
-    final response = await _httpClient.get(
-      Uri.parse(
-          '${AppConfig.baseUrl}/api/v1/progress/ledger?limit=$limit&offset=$offset'),
-      headers: _headers(activeUserId),
+    final response = await _get(
+      '/api/v1/progress/ledger?limit=$limit&offset=$offset',
+      userId: activeUserId,
     );
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
@@ -468,10 +455,7 @@ class ApiService {
 
   // 12. Fetch all badges with their unlocked state for the current user
   static Future<List<BadgeStatus>> fetchUserBadges(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/users/$activeUserId/badges'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/users/$activeUserId/badges', userId: activeUserId);
     if (response.statusCode == 200) {
       final List<dynamic> list = jsonDecode(response.body);
       return list
@@ -485,10 +469,7 @@ class ApiService {
 
   /// Fetch the aggregated reading-room shelf view (series + standalone books/articles).
   static Future<ReadingRoomView> fetchReadingRoom(int activeUserId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/readings'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/readings', userId: activeUserId);
     if (response.statusCode == 200) {
       return ReadingRoomView.fromJson(jsonDecode(response.body));
     }
@@ -500,10 +481,7 @@ class ApiService {
     int activeUserId,
     int seriesId,
   ) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/series/$seriesId'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/readings/series/$seriesId', userId: activeUserId);
     if (response.statusCode == 200) {
       return ReadingSeriesDetail.fromJson(jsonDecode(response.body));
     }
@@ -512,10 +490,7 @@ class ApiService {
 
   /// Fetch the last-read page of a PDF book (returns 0 if no progress yet).
   static Future<int> fetchBookProgress(int activeUserId, int bookId) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/books/$bookId/progress'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/readings/books/$bookId/progress', userId: activeUserId);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
       return (data['lastPage'] ?? data['last_page'] ?? 0) as int;
@@ -529,10 +504,10 @@ class ApiService {
     required int bookId,
     required int lastPage,
   }) async {
-    final response = await _httpClient.post(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/books/$bookId/progress'),
-      headers: _headers(activeUserId),
-      body: jsonEncode({'lastPage': lastPage}),
+    final response = await _post(
+      '/api/v1/readings/books/$bookId/progress',
+      userId: activeUserId,
+      body: {'lastPage': lastPage},
     );
     if (response.statusCode != 200) {
       _fail(response.statusCode, '汇报阅读进度失败: ${response.statusCode}');
@@ -544,10 +519,7 @@ class ApiService {
     int activeUserId,
     int articleId,
   ) async {
-    final response = await _httpClient.get(
-      Uri.parse('${AppConfig.baseUrl}/api/v1/readings/articles/$articleId'),
-      headers: _headers(activeUserId),
-    );
+    final response = await _get('/api/v1/readings/articles/$articleId', userId: activeUserId);
     if (response.statusCode == 200) {
       return ReadingArticle.fromJson(jsonDecode(response.body));
     }

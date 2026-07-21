@@ -85,7 +85,7 @@ class _FocusButtonState extends State<FocusButton> {
             child: GlassPanel(
               borderRadius: widget.borderRadius,
               hasFocus: active,
-              baseColor: active ? AppTheme.primaryColor.withOpacity(0.12) : widget.baseColor,
+              baseColor: active ? AppTheme.primaryColor.withValues(alpha: 0.12) : widget.baseColor,
               borderColor: active ? AppTheme.primaryColor : widget.borderColor,
               padding: widget.padding,
               child: DefaultTextStyle(

@@ -133,12 +133,6 @@ export function SubjectsTable() {
   );
 }
 
-// Legacy default export. The route is removed in App.tsx but kept here so any
-// stray reference still resolves; it simply renders the shared table.
-export function Subjects() {
-  return <SubjectsTable />;
-}
-
 function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClose: () => void }) {
   const isEdit = !!subject;
   const toast = useToast();

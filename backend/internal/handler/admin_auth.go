@@ -12,10 +12,7 @@ func (h *adminHandler) LoginAPI(c *gin.Context) {
 	var req struct {
 		Password string `json:"password"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	savedHash, err := h.settingsRepo.Get("admin_password_hash")
 	if err != nil {
@@ -91,10 +88,7 @@ func (h *adminHandler) UpdateSettings(c *gin.Context) {
 		AdminPassword string `json:"admin_password"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	if req.AdminPassword != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(req.AdminPassword), bcrypt.DefaultCost)

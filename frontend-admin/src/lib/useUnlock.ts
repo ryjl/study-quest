@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 
 // useUnlockTemplate — fetches the course-level default unlock strategy.
@@ -11,17 +11,6 @@ export function useUnlockTemplate(courseId: number | undefined) {
   });
 }
 
-// useUserOverrides — fetches all per-course overrides for a user (for the
-// authorization drawer's per-course readouts).
-export function useUserOverrides(userId: number | undefined) {
-  return useQuery({
-    queryKey: ['unlock-overrides', userId],
-    queryFn: () => api.listUserOverrides(userId!),
-    enabled: userId != null,
-    staleTime: 10_000,
-  });
-}
-
 // useUnlockPreview — the resolved "this student currently sees X/Y episodes"
 // readout for one (user, course).
 export function useUnlockPreview(userId: number | undefined, courseId: number | undefined) {
@@ -31,20 +20,6 @@ export function useUnlockPreview(userId: number | undefined, courseId: number | 
     enabled: userId != null && courseId != null,
     staleTime: 5_000,
   });
-}
-
-// Centralized invalidation for any unlock mutation. The users list depends on
-// overrides indirectly (the drawer re-reads), and templates/previews are
-// distinct caches, so blow them all away on any write per the React-Query
-// "invalidate what you change" rule in CLAUDE.md.
-export function useInvalidateUnlock() {
-  const qc = useQueryClient();
-  return () => {
-    qc.invalidateQueries({ queryKey: ['unlock-template'] });
-    qc.invalidateQueries({ queryKey: ['unlock-overrides'] });
-    qc.invalidateQueries({ queryKey: ['unlock-preview'] });
-    qc.invalidateQueries({ queryKey: ['users'] });
-  };
 }
 
 // Strategy metadata for rendering selectors and labels in one place.

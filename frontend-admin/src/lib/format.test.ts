@@ -7,6 +7,10 @@ import {
   codecLabel,
   parseMediaMeta,
   parseAttachmentJSON,
+  fmtTime,
+  roleLabel,
+  formatWatchTime,
+  fmtSec,
 } from './format';
 import { gradeDisplay } from './types';
 
@@ -149,5 +153,87 @@ describe('parseAttachmentJSON', () => {
 
   it('returns empty for invalid JSON', () => {
     expect(parseAttachmentJSON('{bad')).toEqual([]);
+  });
+});
+
+describe('fmtTime', () => {
+  // Consolidated from SubtitleQueue.tsx + AIWorkflow.tsx (byte-identical).
+
+  it('returns em dash for falsy', () => {
+    expect(fmtTime(undefined)).toBe('—');
+    expect(fmtTime(null)).toBe('—');
+    expect(fmtTime('')).toBe('—');
+  });
+
+  it('formats an ISO timestamp using zh-CN 24h locale', () => {
+    const out = fmtTime('2026-07-21T10:30:00Z');
+    // Locale-dependent — just assert it's a non-empty string that's not the
+    // fallback em dash and contains the year.
+    expect(out).not.toBe('—');
+    expect(out).toContain('2026');
+  });
+});
+
+describe('roleLabel', () => {
+  // Consolidated from Dashboard.tsx + WatchHistory.tsx (byte-identical).
+
+  it('maps known roles to Chinese labels', () => {
+    expect(roleLabel('student')).toBe('学生');
+    expect(roleLabel('teen')).toBe('青少年');
+    expect(roleLabel('parent')).toBe('家长');
+    expect(roleLabel('admin')).toBe('管理员');
+  });
+
+  it('passes unknown roles through unchanged', () => {
+    expect(roleLabel('teacher')).toBe('teacher');
+    expect(roleLabel('')).toBe('');
+  });
+});
+
+describe('formatWatchTime', () => {
+  // Consolidated from Users.tsx. Uses raw seconds for sub-minute precision.
+
+  it('returns 0 分 for falsy / non-positive', () => {
+    expect(formatWatchTime(undefined)).toBe('0 分');
+    expect(formatWatchTime(0)).toBe('0 分');
+    expect(formatWatchTime(-10)).toBe('0 分');
+  });
+
+  it('renders sub-minute seconds (not a misleading 0 分)', () => {
+    expect(formatWatchTime(40)).toBe('40 秒');
+  });
+
+  it('renders minutes (+ seconds when there is a remainder)', () => {
+    expect(formatWatchTime(60)).toBe('1 分');
+    expect(formatWatchTime(65)).toBe('1 分 5 秒');
+    expect(formatWatchTime(125)).toBe('2 分 5 秒');
+  });
+
+  it('renders hours (+ minutes), always dropping the seconds remainder', () => {
+    expect(formatWatchTime(3600)).toBe('1 时');
+    expect(formatWatchTime(3660)).toBe('1 时 1 分');
+    // 3661s = 1h 1m 1s — seconds are intentionally dropped at the hour scale.
+    expect(formatWatchTime(3661)).toBe('1 时 1 分');
+    // 7384s = 2h 3m 4s — seconds dropped.
+    expect(formatWatchTime(7384)).toBe('2 时 3 分');
+  });
+});
+
+describe('fmtSec', () => {
+  // Consolidated from AIUserView.tsx. m:ss formatter for clip/segment offsets.
+
+  it('formats zero', () => {
+    expect(fmtSec(0)).toBe('0:00');
+  });
+
+  it('zero-pads the seconds component', () => {
+    expect(fmtSec(5)).toBe('0:05');
+    expect(fmtSec(65)).toBe('1:05');
+  });
+
+  it('rolls minutes past 60', () => {
+    expect(fmtSec(125)).toBe('2:05');
+    expect(fmtSec(599)).toBe('9:59');
+    expect(fmtSec(3605)).toBe('60:05');
   });
 });

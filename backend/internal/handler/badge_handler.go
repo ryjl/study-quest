@@ -69,10 +69,7 @@ func (h *badgeHandler) AdminCreateBadge(c *gin.Context) {
 		RuleJSON    string `json:"rule_json"` // composite rule tree; when set, RuleType="composite"
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	// When a composite rule JSON is supplied, normalize RuleType to "composite"
 	// so list views can distinguish composite from single-rule badges. The
@@ -124,10 +121,7 @@ func (h *badgeHandler) AdminUpdateBadge(c *gin.Context) {
 		RuleJSON    string `json:"rule_json"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	ruleType := req.RuleType
 	if req.RuleJSON != "" {

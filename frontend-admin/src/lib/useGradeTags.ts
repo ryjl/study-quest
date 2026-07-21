@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from './api';
 
 // GradeTagEntry 是 /admin/api/courses/grade-tags 返回的单个 tag 条目。
@@ -18,10 +18,4 @@ export function useGradeTags() {
     queryFn: () => api.listGradeTags(),
     staleTime: 60_000,
   });
-}
-
-// 让 mutation 在创建/更新/删除课程后刷新 tag 列表(可能新增了自定义 tag)。
-export function useInvalidateGradeTags() {
-  const qc = useQueryClient();
-  return () => qc.invalidateQueries({ queryKey: ['grade-tags'] });
 }

@@ -6,10 +6,10 @@ import '../../model/progress.dart';
 import '../../model/quiz.dart';
 import '../../model/subject.dart';
 import '../../service/api_service.dart';
+import '../../service/chapter_grouper.dart';
 import '../../theme.dart';
 import '../ai/ai_availability.dart';
 import '../widget/focus_button.dart';
-import '../widget/glass_panel.dart';
 import '../widget/button_3d.dart';
 import '../widget/markdown_view.dart';
 import '../widget/state_widgets.dart';
@@ -49,10 +49,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   // Built once per load in _refreshData; the FutureBuilder reads this.
   late Future<List<dynamic>> _combinedFuture;
 
-  /// Per-episode attachments cache, keyed by episode id. Fetched lazily once
-  /// the episode list is available so the row badge ("配套讲义") reflects real
-  /// data instead of a mock toggle.
-  final Map<int, List<Attachment>> _attachmentCache = {};
   // summary 缓存。课前探险问题的数据源是 /ai-summary 的 pre_adventure。这里缓存
   // 避免列表行点击弹窗 + 播放器进入时重复请求同一个 summary。失败/老数据存 null,
   // 取不到就降级为"暂无探索任务"。
@@ -98,13 +94,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     // single setState so the list only rebuilds once after everything lands.
     bool changed = false;
     for (final ep in episodes) {
-      try {
-        final atts = await ApiService.fetchAttachments(widget.activeUserId, ep.id);
-        _attachmentCache[ep.id] = atts;
-        changed = true;
-      } catch (_) {
-        // Enrichment is best-effort; rows simply fall back to no-badge.
-      }
       // 课前探险问题数据源是 summary.pre_adventure,与列表行的富化并行预取
       // (失败时静默,弹窗/播放器再按需 lazy fetch)。
       try {
@@ -171,14 +160,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             // Group episodes by real chapter. Episodes whose ChapterID maps to
             // a known chapter are filed under it; everything else (ChapterID 0
             // or orphaned) falls into a trailing "全部课时" bucket.
-            final groups = _groupEpisodesByChapter(episodes, chapters);
+            final groups = groupEpisodesByChapter(episodes, chapters);
 
             return Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // Sticky Top Bar with White 3D Back button
                 Container(
-                  color: Colors.white.withOpacity(0.7),
+                  color: Colors.white.withValues(alpha: 0.7),
                   padding: EdgeInsets.symmetric(
                     horizontal: isPortrait(context) ? 16.0 : 40.0,
                     vertical: 16.0,
@@ -190,9 +179,9 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         onPressed: () => Navigator.pop(context),
                         child: Row(
                           children: const [
-                            Icon(Icons.arrow_back_rounded, size: 18, color: Color(0xFF64748B)),
+                            Icon(Icons.arrow_back_rounded, size: 18, color: AppTheme.textMuted),
                             SizedBox(width: 8),
-                            Text('返回大厅', style: TextStyle(color: Color(0xFF64748B))),
+                            Text('返回大厅', style: TextStyle(color: AppTheme.textMuted)),
                           ],
                         ),
                       ),
@@ -219,7 +208,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                             border: Border.all(color: Colors.white, width: 4.0),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.08),
+                                color: Colors.black.withValues(alpha: 0.08),
                                 blurRadius: 30,
                                 offset: const Offset(0, 12),
                               )
@@ -247,10 +236,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(36),
-                            border: Border.all(color: const Color(0xFFE2E8F0), width: 2.0),
+                            border: Border.all(color: AppTheme.borderMuted, width: 2.0),
                             boxShadow: [
                               BoxShadow(
-                                color: const Color(0xFF0F172A).withOpacity(0.02),
+                                color: AppTheme.slate900.withValues(alpha: 0.02),
                                 blurRadius: 20,
                                 offset: const Offset(0, 4),
                               )
@@ -265,10 +254,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFFEFF6FF),
+                                      color: AppTheme.blue100,
                                       borderRadius: BorderRadius.circular(12),
                                     ),
-                                    child: const Icon(Icons.list_alt_rounded, color: Color(0xFF2563EB), size: 24),
+                                    child: const Icon(Icons.list_alt_rounded, color: AppTheme.blue600, size: 24),
                                   ),
                                   const SizedBox(width: 14),
                                   const Text(
@@ -301,7 +290,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                                 height: 24,
                                                 decoration: BoxDecoration(
                                                   gradient: const LinearGradient(
-                                                    colors: [Color(0xFF60A5FA), Color(0xFF2563EB)],
+                                                    colors: [Color(0xFF60A5FA), AppTheme.blue600],
                                                     begin: Alignment.topCenter,
                                                     end: Alignment.bottomCenter,
                                                   ),
@@ -377,10 +366,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: const Color(0xFFE2E8F0), width: 2.0),
+            border: Border.all(color: AppTheme.borderMuted, width: 2.0),
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFF0F172A).withOpacity(0.02),
+                color: AppTheme.slate900.withValues(alpha: 0.02),
                 blurRadius: 20,
                 offset: const Offset(0, 4),
               )
@@ -413,7 +402,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     Icon(
                       _summaryExpanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
                       size: 26,
-                      color: const Color(0xFF64748B),
+                      color: AppTheme.textMuted,
                     ),
                   ],
                 ),
@@ -453,7 +442,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     '点开看完整总览 →',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
+                    style: const TextStyle(fontSize: 12, color: AppTheme.slate400),
                   ),
                 ),
               if (_summaryExpanded) ...[
@@ -473,12 +462,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     if (summary.generatedAt != null)
                       Text(
                         '生成于 ${_formatSummaryDate(summary.generatedAt!)}',
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                        style: const TextStyle(fontSize: 11, color: AppTheme.slate400),
                       ),
                     if ((summary.modelUsed ?? '').isNotEmpty)
                       Text(
                         '模型 ${summary.modelUsed}',
-                        style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
+                        style: const TextStyle(fontSize: 11, color: AppTheme.slate400),
                       ),
                   ],
                 ),
@@ -560,7 +549,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           children: [
             const Text(
               '学习进度',
-              style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w900),
+              style: TextStyle(color: AppTheme.slate400, fontSize: 11, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 4),
             Row(
@@ -573,7 +562,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 ),
                 const Text(
                   '%',
-                  style: TextStyle(fontSize: 18, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 18, color: AppTheme.slate400, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -607,9 +596,9 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
+        color: Colors.white.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white.withOpacity(0.2)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -631,7 +620,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF94A3B8), Color(0xFF64748B)],
+          colors: [AppTheme.slate400, AppTheme.textMuted],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -642,50 +631,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         size: 24,
       ),
     );
-  }
-
-  /// Groups episodes under their chapters in display order. Real chapters
-  /// come first (in [sortOrder] then [id] order), each populated with the
-  /// episodes whose [Episode.chapterId] matches. Any episodes left over
-  /// (chapterId == 0 or pointing at a chapter not in the list) are collected
-  /// into a trailing "全部课时" bucket.
-  List<_GroupedChapter> _groupEpisodesByChapter(
-      List<Episode> episodes, List<Chapter> chapters) {
-    final sortedChapters = [...chapters]
-      ..sort((a, b) {
-        final c = a.sortOrder.compareTo(b.sortOrder);
-        return c != 0 ? c : a.id.compareTo(b.id);
-      });
-
-    final byChapter = <int, List<Episode>>{};
-    final ungrouped = <Episode>[];
-    for (final ep in episodes) {
-      if (ep.chapterId > 0 && sortedChapters.any((c) => c.id == ep.chapterId)) {
-        byChapter.putIfAbsent(ep.chapterId, () => []).add(ep);
-      } else {
-        ungrouped.add(ep);
-      }
-    }
-
-    final groups = <_GroupedChapter>[];
-    for (final ch in sortedChapters) {
-      final list = byChapter[ch.id];
-      if (list != null && list.isNotEmpty) {
-        groups.add(_GroupedChapter(title: ch.title, episodes: list, isUngrouped: false));
-      }
-    }
-    if (ungrouped.isNotEmpty) {
-      groups.add(_GroupedChapter(
-        title: sortedChapters.isEmpty ? '全部课时' : '其他课时',
-        episodes: ungrouped,
-        isUngrouped: true,
-      ));
-    }
-    // If there are no chapters and no episodes somehow, fall back to a single group.
-    if (groups.isEmpty && episodes.isNotEmpty) {
-      groups.add(_GroupedChapter(title: '全部课时', episodes: episodes, isUngrouped: true));
-    }
-    return groups;
   }
 
   Widget _buildEpisodeRow(Episode ep, bool isCompleted,
@@ -706,8 +651,6 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     final resumePct = (hasResume && totalSeconds > 0)
         ? (resumeSeconds * 100 ~/ totalSeconds).clamp(0, 99)
         : 0;
-    // Drive badges from real data: PDF attachment present + AI content present.
-    final hasPdf = (_attachmentCache[ep.id] ?? const []).any((a) => a.isPdf);
     // Phase 2:AI 学习按钮的三态由 episode 上的 AI 开关 + 字幕标志决定。
     // 按钮始终展示(保持入口可见),但不可用时变灰且点击只弹提示:
     //   - enabled:亮色,进入 AiStudyScreen
@@ -725,7 +668,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         child: FocusButton(
           padding: const EdgeInsets.all(16.0),
           borderRadius: 20,
-          borderColor: const Color(0xFFE2E8F0),
+          borderColor: AppTheme.borderMuted,
           onPressed: () {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -741,11 +684,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 height: 68,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
-                  color: const Color(0xFFF1F5F9),
-                  border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
+                  color: AppTheme.slate100,
+                  border: Border.all(color: AppTheme.borderMuted, width: 1.5),
                 ),
                 child: const Center(
-                  child: Icon(Icons.lock_outline_rounded, color: Color(0xFF94A3B8), size: 26),
+                  child: Icon(Icons.lock_outline_rounded, color: AppTheme.slate400, size: 26),
                 ),
               ),
               const SizedBox(width: 16),
@@ -758,17 +701,17 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       style: const TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 16,
-                        color: Color(0xFF94A3B8),
+                        color: AppTheme.slate400,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Row(
                       children: const [
-                        Icon(Icons.lock_clock_outlined, size: 12, color: Color(0xFF94A3B8)),
+                        Icon(Icons.lock_clock_outlined, size: 12, color: AppTheme.slate400),
                         SizedBox(width: 4),
                         Text(
                           '等待解锁',
-                          style: TextStyle(fontSize: 11, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
+                          style: TextStyle(fontSize: 11, color: AppTheme.slate400, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
@@ -786,7 +729,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       child: FocusButton(
         padding: const EdgeInsets.all(16.0),
         borderRadius: 20,
-        borderColor: const Color(0xFFE2E8F0),
+        borderColor: AppTheme.borderMuted,
         onPressed: () {
           // 直接播放:课前探索任务已改为在播放器右侧 helper panel 常驻显示
           // (player_screen 的 _buildPreAdventureSection),不再前置弹窗打断。
@@ -800,7 +743,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               height: 68,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                color: const Color(0xFFF1F5F9),
+                color: AppTheme.slate100,
                 border: Border.all(
                   color: isCompleted ? const Color(0xFFA7F3D0) : const Color(0xFFCBD5E1),
                   width: 1.5,
@@ -822,7 +765,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
                     // Semi-transparent dark overlay for play button visibility
                     Container(
-                      color: Colors.black.withOpacity(0.15),
+                      color: Colors.black.withValues(alpha: 0.15),
                     ),
 
                     // Status Circle Overlay (Play / Complete check) in the center
@@ -832,12 +775,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         height: 32,
                         decoration: BoxDecoration(
                           color: isCompleted
-                              ? const Color(0xFFECFDF5).withOpacity(0.9)
-                              : Colors.white.withOpacity(0.9),
+                              ? const Color(0xFFECFDF5).withValues(alpha: 0.9)
+                              : Colors.white.withValues(alpha: 0.9),
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
+                              color: Colors.black.withValues(alpha: 0.1),
                               blurRadius: 4,
                               offset: const Offset(0, 2),
                             )
@@ -866,7 +809,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
-                      color: isCompleted ? const Color(0xFF94A3B8) : AppTheme.textWhite,
+                      color: isCompleted ? AppTheme.slate400 : AppTheme.textWhite,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -881,9 +824,9 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFF1F5F9),
+                          color: AppTheme.slate100,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: const Color(0xFFE2E8F0)),
+                          border: Border.all(color: AppTheme.borderMuted),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
@@ -898,41 +841,16 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         ),
                       ),
 
-                      // Orange PDF Button
-                      if (hasPdf)
-                        GestureDetector(
-                          onTap: () => _openResourceModal(context, 'pdf', ep),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFFFF7ED),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(color: const Color(0xFFFED7AA)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: const [
-                                Icon(Icons.picture_as_pdf_rounded, size: 12, color: Color(0xFFF97316)),
-                                SizedBox(width: 4),
-                                Text(
-                                  '配套讲义',
-                                  style: TextStyle(fontSize: 11, color: Color(0xFFC2410C), fontWeight: FontWeight.bold),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-
                       // Purple AI Study Button — opens the AI study page (summary +
                       // practice). Phase 2:按钮始终展示,但可用性三态化。
                       // enabled 才真正跳转,否则弹 SnackBar 提示原因。
                       Builder(builder: (btnContext) {
                         // 不可用时整套配色降到中性灰,视觉上明确"现在用不了"。
                         final enabled = aiAvailability == AiAvailability.enabled;
-                        final bgColor = enabled ? const Color(0xFFF5F3FF) : const Color(0xFFF1F5F9);
-                        final borderColor = enabled ? const Color(0xFFDDD6FE) : const Color(0xFFE2E8F0);
-                        final iconColor = enabled ? const Color(0xFF8B5CF6) : const Color(0xFF94A3B8);
-                        final textColor = enabled ? const Color(0xFF6D28D9) : const Color(0xFF94A3B8);
+                        final bgColor = enabled ? const Color(0xFFF5F3FF) : AppTheme.slate100;
+                        final borderColor = enabled ? const Color(0xFFDDD6FE) : AppTheme.borderMuted;
+                        final iconColor = enabled ? AppTheme.violet500 : AppTheme.slate400;
+                        final textColor = enabled ? const Color(0xFF6D28D9) : AppTheme.slate400;
                         return GestureDetector(
                           onTap: () {
                             if (!enabled) {
@@ -1002,7 +920,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       child: LinearProgressIndicator(
                         value: resumePct / 100,
                         minHeight: 4,
-                        backgroundColor: const Color(0xFFE2E8F0),
+                        backgroundColor: AppTheme.borderMuted,
                         valueColor:
                             const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
                       ),
@@ -1013,7 +931,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             ),
 
             // Caret right
-            const Icon(Icons.chevron_right_rounded, color: Color(0xFF94A3B8), size: 24),
+            const Icon(Icons.chevron_right_rounded, color: AppTheme.slate400, size: 24),
           ],
         ),
       ),
@@ -1041,394 +959,4 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       ),
     ).then((_) => _refreshData());
   }
-
-  void _showPreAdventureModal(BuildContext context, Episode ep) {
-    // Resolve the latest AI pre-adventure tasks for this episode. Phase 2 起从
-    // summary.pre_adventure 取;若 prefetch 已填缓存直接用,否则弹窗内 lazy fetch。
-    showDialog(
-      context: context,
-      barrierColor: const Color(0x900F172A), // dim background
-      builder: (dialogContext) {
-        return _PreAdventureDialog(
-          episode: ep,
-          activeUserId: widget.activeUserId,
-          cachedTasks: _cachedPreAdventureTasks(ep.id),
-          onStart: () {
-            Navigator.pop(dialogContext); // close dialog
-            _playEpisode(ep);
-          },
-        );
-      },
-    );
-  }
-
-  void _openResourceModal(BuildContext context, String type, Episode ep) {
-    final isPdf = type == 'pdf';
-    showDialog(
-      context: context,
-      barrierColor: const Color(0x900F172A),
-      builder: (context) {
-        return Center(
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 700),
-            height: MediaQuery.of(context).size.height * 0.75,
-            child: GlassPanel(
-              borderRadius: 32,
-              baseColor: Colors.white,
-              borderColor: Colors.white,
-              borderWidth: 2,
-              padding: const EdgeInsets.all(0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // Title Bar
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: isPdf ? const Color(0xFFFFF7ED) : const Color(0xFFF5F3FF),
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(30),
-                        topRight: Radius.circular(30),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: BoxDecoration(
-                            color: isPdf ? const Color(0xFFFFF0E0) : const Color(0xFFEDE9FE),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Icon(
-                            isPdf ? Icons.picture_as_pdf_rounded : Icons.auto_awesome_rounded,
-                            color: isPdf ? const Color(0xFFF97316) : const Color(0xFF8B5CF6),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                isPdf ? '课后讲义预览' : 'AI 核心知识总结',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 16,
-                                  color: isPdf ? const Color(0xFF7C2D12) : const Color(0xFF4C1D95),
-                                ),
-                              ),
-                              Text(
-                                ep.title,
-                                style: TextStyle(color: isPdf ? const Color(0xFFC2410C) : const Color(0xFF6D28D9), fontSize: 12),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close_rounded),
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  // Content Body
-                  Expanded(
-                    child: Container(
-                      color: const Color(0xFFF8FAFC),
-                      padding: EdgeInsets.all(isPortrait(context) ? 16 : 32),
-                      child: isPdf
-                          ? Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(color: const Color(0xFFE2E8F0)),
-                              ),
-                              alignment: Alignment.center,
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.picture_as_pdf_outlined, color: Color(0xFFF97316), size: 64),
-                                  const SizedBox(height: 16),
-                                  const Text('PDF 文件渲染器加载中...', style: TextStyle(fontWeight: FontWeight.w900)),
-                                  const SizedBox(height: 8),
-                                  const Text('这里将同步调用 syncfusion_flutter_pdfviewer 预览课件', style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-                                  const SizedBox(height: 24),
-                                  Button3D.blue(
-                                    onPressed: () => Navigator.pop(context),
-                                    child: const Text('好的，关闭', style: TextStyle(color: Colors.white)),
-                                  ),
-                                ],
-                              ),
-                            )
-                          : SingleChildScrollView(
-                              physics: const BouncingScrollPhysics(),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _buildSummarySection('核心内容提要', '本讲详细讲述了雨来被抓住后机智巧妙跟鬼子军官周旋的过程。展示了小英雄极强的爱国主义精神和无畏拼搏的智慧。'),
-                                  const SizedBox(height: 20),
-                                  _buildSummarySection('重点知识梳理', '1. 生字词学习：晋察冀边区、扫荡、周旋\n2. 阅读技巧：如何通过对话描写分析人物性格特写\n3. 历史背景：了解抗日战争时期华北根据地少年儿童的斗争历史'),
-                                  const SizedBox(height: 20),
-                                  _buildSummarySection('随堂问题互动', '课后思考：雨来能够成功逃跑的核心原因是什么？请结合第三章课本文字分析描写。'),
-                                ],
-                              ),
-                            ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildSummarySection(String title, String content) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE2E8F0)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(width: 4, height: 16, decoration: BoxDecoration(color: const Color(0xFF8B5CF6), borderRadius: BorderRadius.circular(2))),
-              const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: Color(0xFF4C1D95))),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Text(content, style: const TextStyle(color: Color(0xFF475569), fontSize: 13, height: 1.5, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
-}
-
-/// Pre-adventure task card dialog. Shows the AI-generated exploration prompts
-/// for an episode; if no tasks are available yet it falls back to a graceful
-/// "no tasks" state instead of fabricating mock content.
-class _PreAdventureDialog extends StatefulWidget {
-  final Episode episode;
-  final int activeUserId;
-  final List<String> cachedTasks;
-  final VoidCallback onStart;
-
-  const _PreAdventureDialog({
-    required this.episode,
-    required this.activeUserId,
-    required this.cachedTasks,
-    required this.onStart,
-  });
-
-  @override
-  State<_PreAdventureDialog> createState() => _PreAdventureDialogState();
-}
-
-class _PreAdventureDialogState extends State<_PreAdventureDialog> {
-  late List<String> _tasks;
-  bool _loading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _tasks = widget.cachedTasks;
-    // If the background prefetch hadn't populated tasks yet, fetch on demand.
-    if (_tasks.isEmpty) {
-      _loadTasks();
-    }
-  }
-
-  Future<void> _loadTasks() async {
-    setState(() => _loading = true);
-    try {
-      // Phase 2:课前任务数据源切到 /ai-summary 的 pre_adventure。
-      // 失败 / 老数据 / 未生成时为空,弹窗自动降级为"AI 老师还没布置任务"。
-      final summary = await ApiService.fetchEpisodeSummary(widget.activeUserId, widget.episode.id);
-      if (mounted) {
-        setState(() {
-          _tasks = summary?.preAdventure.map((p) => p.prompt).toList() ?? const [];
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 550),
-        child: GlassPanel(
-          borderRadius: 36,
-          baseColor: Colors.white,
-          borderColor: Colors.white,
-          borderWidth: 2,
-          padding: const EdgeInsets.all(0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Header gradient banner
-              Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF3B82F6), Color(0xFF6366F1)],
-                  ),
-                  borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(34),
-                    topRight: Radius.circular(34),
-                  ),
-                ),
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.2),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1.5),
-                      ),
-                      child: const Icon(Icons.casino_rounded, color: Colors.white, size: 36),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text('探险任务卡',
-                        style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: Colors.white)),
-                    const SizedBox(height: 8),
-                    Text('即将探索：${widget.episode.title}',
-                        style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-              ),
-
-              // Tasks list
-              Padding(
-                padding: const EdgeInsets.all(32),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.info_outline_rounded, color: Color(0xFF3B82F6), size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          _tasks.isEmpty ? '本节暂未生成探险任务' : '带上这 ${_tasks.length} 个秘密任务出发吧：',
-                          style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF64748B), fontSize: 15),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    if (_loading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: CircularProgressIndicator(color: AppTheme.primaryColor),
-                      )
-                    else if (_tasks.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 16),
-                        child: Text('AI 老师还没布置任务，可以直接开始观看～',
-                            style: TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold),
-                            textAlign: TextAlign.center),
-                      )
-                    else
-                      Column(
-                        children: List.generate(_tasks.length, (i) {
-                          return Padding(
-                            padding: EdgeInsets.only(bottom: i == _tasks.length - 1 ? 0 : 12),
-                            child: _PreAdventureTaskRow(index: i + 1, text: _tasks[i]),
-                          );
-                        }),
-                      ),
-                    const SizedBox(height: 32),
-
-                    // Action Button
-                    Button3D.blue(
-                      onPressed: widget.onStart,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: const [
-                          Text('接受任务，开始播放',
-                              style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.w900)),
-                          SizedBox(width: 8),
-                          Icon(Icons.rocket_launch_rounded, color: Colors.white, size: 20),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _PreAdventureTaskRow extends StatelessWidget {
-  final int index;
-  final String text;
-  const _PreAdventureTaskRow({required this.index, required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFF1F5F9), width: 2),
-        boxShadow: const [BoxShadow(color: Color(0x03000000), blurRadius: 4, offset: Offset(0, 2))],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFEFF6FF),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFDBEAFE)),
-            ),
-            child: Text('$index',
-                style: const TextStyle(fontWeight: FontWeight.w900, color: Color(0xFF2563EB), fontSize: 13)),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Text(text,
-                style: const TextStyle(color: Color(0xFF475569), fontWeight: FontWeight.bold, fontSize: 14, height: 1.4)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Display-only grouping of episodes under a chapter title.
-class _GroupedChapter {
-  final String title;
-  final List<Episode> episodes;
-  final bool isUngrouped;
-
-  const _GroupedChapter({
-    required this.title,
-    required this.episodes,
-    required this.isUngrouped,
-  });
 }

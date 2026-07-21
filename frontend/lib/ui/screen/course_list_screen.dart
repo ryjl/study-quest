@@ -324,7 +324,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                             borderRadius: BorderRadius.circular(24),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.03),
+                                color: Colors.black.withValues(alpha: 0.03),
                                 blurRadius: 10,
                                 offset: const Offset(0, 2),
                               )
@@ -362,7 +362,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                         onPressed: _showFilterBottomSheet,
                         borderRadius: 24,
                         baseColor: Colors.white,
-                        borderColor: const Color(0xFFE2E8F0),
+                        borderColor: AppTheme.borderMuted,
                         padding: EdgeInsets.zero,
                         child: SizedBox(
                           height: tv ? 56 : 48,
@@ -417,7 +417,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                                 style: TextStyle(
                                   fontSize: active ? 18 : 16,
                                   fontWeight: active ? FontWeight.w900 : FontWeight.bold,
-                                  color: active ? AppTheme.textWhite : AppTheme.textMuted.withOpacity(0.6),
+                                  color: active ? AppTheme.textWhite : AppTheme.textMuted.withValues(alpha: 0.6),
                                 ),
                               ),
                               const SizedBox(height: 6),
@@ -503,38 +503,6 @@ class _CourseListScreenState extends State<CourseListScreen> {
     );
   }
 
-  Widget _buildDropdown({
-    required IconData icon,
-    required MaterialColor color,
-    required String value,
-    required List<String> items,
-    required ValueChanged<String?> onChanged,
-    String Function(String)? labelOf,
-  }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: color, size: 20),
-        const SizedBox(width: 8),
-        DropdownButton<String>(
-          value: value,
-          onChanged: onChanged,
-          underline: const SizedBox(),
-          icon: const Icon(Icons.arrow_drop_down, color: AppTheme.textMuted),
-          style: TextStyle(color: color.shade800, fontWeight: FontWeight.bold, fontSize: 14),
-          dropdownColor: Colors.white,
-          items: items.map((item) {
-            final label = labelOf != null ? labelOf(item) : item;
-            return DropdownMenuItem<String>(
-              value: item,
-              child: Text(item == '全部' ? '所有' : label),
-            );
-          }).toList(),
-        ),
-      ],
-    );
-  }
-
   Widget _buildSubjectWatermark(String subject) {
     return Positioned(
       right: -24,
@@ -544,7 +512,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
         child: Icon(
           subjectIconData(subject),
           size: 130,
-          color: Colors.white.withOpacity(0.15),
+          color: Colors.white.withValues(alpha: 0.15),
         ),
       ),
     );
@@ -566,7 +534,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
     return FocusButton(
       padding: EdgeInsets.zero,
       borderRadius: 28,
-      borderColor: const Color(0xFFE2E8F0),
+      borderColor: AppTheme.borderMuted,
       onPressed: () {
         Navigator.push(
           context,
@@ -623,9 +591,9 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
-                        color: Colors.white.withOpacity(0.25),
+                        color: Colors.white.withValues(alpha: 0.25),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.white.withOpacity(0.2), width: 1.0),
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.2), width: 1.0),
                       ),
                       child: Text(
                         cardLabel,
@@ -662,7 +630,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF1F5F9),
+                      color: AppTheme.slate100,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
                     ),
@@ -838,7 +806,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                         ),
                         selected: active,
                         selectedColor: AppTheme.primaryColor,
-                        backgroundColor: const Color(0xFFF1F5F9),
+                        backgroundColor: AppTheme.slate100,
                         showCheckmark: false,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide.none),
                         onSelected: (val) {
@@ -869,7 +837,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                           ),
                           selected: active,
                           selectedColor: const Color(0xFFD1FAE5),
-                          backgroundColor: const Color(0xFFF1F5F9),
+                          backgroundColor: AppTheme.slate100,
                           showCheckmark: false,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12), 

@@ -40,10 +40,7 @@ func (h *progressHandler) ReportProgress(c *gin.Context) {
 		DeltaWatchSeconds   int  `json:"delta_watch_seconds" binding:"required"`
 	}
 
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body format"})
-		return
-	}
+	if !bindJSON(c, &req) { return }
 
 	prog, err := h.progressService.ReportProgress(userID, req.EpisodeID, req.PositionSeconds, req.DeltaWatchSeconds)
 	if err != nil {

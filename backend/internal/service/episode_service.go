@@ -1,18 +1,15 @@
 package service
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
+	"studyquest/backend/internal/media"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
@@ -536,7 +533,7 @@ func (s *episodeService) Probe(episodeID uint) (*model.MediaMeta, error) {
 		return nil, err
 	}
 
-	meta, err := probeMedia(link.URL)
+	meta, err := media.ProbeMedia(link.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -578,7 +575,7 @@ func (s *episodeService) Probe(episodeID uint) (*model.MediaMeta, error) {
 
 		// 1. Try to extract embedded cover art first
 		log.Printf("[probe] attempting to extract embedded cover for episode %d...", episodeID)
-		err = extractEmbeddedCover(link.URL, localFullPath)
+		err = media.ExtractEmbeddedCover(link.URL, localFullPath)
 		if err == nil && coverFileNonEmpty() {
 			ep.CoverURL = "/uploads/" + localFileName
 			log.Printf("[probe] successfully extracted embedded cover for episode %d", episodeID)
@@ -593,7 +590,7 @@ func (s *episodeService) Probe(episodeID uint) (*model.MediaMeta, error) {
 			if ep.DurationSeconds != nil {
 				durSecs = *ep.DurationSeconds
 			}
-			err = extractScreenshot(link.URL, localFullPath, durSecs)
+			err = media.ExtractScreenshot(link.URL, localFullPath, durSecs)
 			if err == nil && coverFileNonEmpty() {
 				ep.CoverURL = "/uploads/" + localFileName
 				log.Printf("[probe] successfully extracted screenshot cover for episode %d", episodeID)
@@ -717,7 +714,7 @@ func (s *episodeService) ExtractEmbeddedSubtitle(episodeID uint, streamIndex int
 	}
 	// Subtitle extraction is usually fast (<5s for a full movie) since it's
 	// a remux, not a re-encode. Give plenty of headroom for slow CDN reads.
-	if err := runFFmpegWithRetry("extract embedded subtitle", args, 5*time.Minute, 3); err != nil {
+	if err := media.RunFFmpegWithRetry("extract embedded subtitle", args, 5*time.Minute, 3); err != nil {
 		low := strings.ToLower(err.Error())
 		// ffmpeg prints this exact phrase when asked to transcode bitmap→text.
 		// Match loosely (the error wraps ffmpeg's stderr verbatim).
@@ -741,252 +738,9 @@ func (s *episodeService) ExtractEmbeddedSubtitle(episodeID uint, streamIndex int
 	return s.SaveSubtitleWithSource(episodeID, language, label, vtt, "embedded")
 }
 
-// extractEmbeddedCover tries to extract an embedded cover art/image stream from a video.
-func extractEmbeddedCover(videoURL, outputPath string) error {
-	// -reconnect 系列：天翼云 OBS 等云盘 CDN 对单个签名 URL 的并发 TLS 连接数有限，
-	// ffmpeg 默认会开多 socket 读取 mp4 moov+mdat，部分连接会被对端 RST，表现为
-	// "IO error: End of file" / "moov atom not found"。开启重连后单连接顺序读，稳定。
-	args := []string{
-		"-y",
-		"-reconnect", "1",
-		"-reconnect_streamed", "1",
-		"-reconnect_at_eof", "1",
-		"-reconnect_delay_max", "2",
-		"-i", videoURL,
-		"-map", "0:v",
-		"-map", "-0:V",
-		"-c", "copy",
-		outputPath,
-	}
-	return runFFmpegWithRetry("embedded cover extract", args, 20*time.Second, 3)
-}
 
-// extractScreenshot extracts a single frame at a specific timestamp as JPEG.
-func extractScreenshot(videoURL, outputPath string, durationSeconds int) error {
-	seekTime := "5"
-	if durationSeconds > 0 && durationSeconds <= 5 {
-		seekTime = strconv.Itoa(durationSeconds / 2)
-	}
-
-	// -reconnect 系列：同 extractEmbeddedCover，规避天翼云 OBS 对并发 TLS 连接的限制。
-	// -ss 在 -i 前是 fast seek（demuxer 层跳转），避免解码到目标帧前的所有数据。
-	args := []string{
-		"-y",
-		"-reconnect", "1",
-		"-reconnect_streamed", "1",
-		"-reconnect_at_eof", "1",
-		"-reconnect_delay_max", "2",
-		"-ss", seekTime,
-		"-i", videoURL,
-		"-vframes", "1",
-		"-q:v", "2",
-		"-update", "1",
-		outputPath,
-	}
-	return runFFmpegWithRetry("screenshot extract", args, 20*time.Second, 3)
-}
-
-// runFFmpegWithRetry runs `ffmpeg <args>` and retries on transient network
-// errors. The天翼云 OBS CDN (obs-ynkmfy-suzhou-home.obs.cn-jssz1.ctyun.cn,
-// ~80% of lesson videos) intermittently RSTs TLS connections during ffmpeg's
-// multi-socket moov/mdata read, surfacing as "IO error: End of file" /
-// "moov atom not found". A single retry with a 1s gap resolves ~70% of these;
-// 3 attempts covers ~97% based on A/B testing (1/5 → 4/5 success). Only
-// network-class errors are retried — real codec/format errors fail fast.
-func runFFmpegWithRetry(label string, args []string, perAttemptTimeout time.Duration, maxAttempts int) error {
-	var lastErr error
-	var lastStderr string
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), perAttemptTimeout)
-		cmd := exec.CommandContext(ctx, "ffmpeg", args...)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		err := cmd.Run()
-		cancel()
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		lastStderr = stderr.String()
-		// Only retry on transient network errors. If ffmpeg ran far enough to
-		// report a real codec/format problem (e.g. "no embedded cover" exit 234),
-		// retrying won't help — bail out.
-		if !isTransientFFmpegError(lastStderr) {
-			break
-		}
-		if attempt < maxAttempts {
-			time.Sleep(time.Duration(attempt) * time.Second) // 1s, 2s backoff
-		}
-	}
-	return fmt.Errorf("%s failed after retries: %w, stderr: %s", label, lastErr, lastStderr)
-}
-
-// isTransientFFmpegError reports whether an ffmpeg stderr indicates a network
-// flake worth retrying (TLS RST, connection reset, EOF mid-read) versus a
-// permanent failure (missing codec, no stream, bad format).
-func isTransientFFmpegError(stderr string) bool {
-	low := strings.ToLower(stderr)
-	for _, marker := range []string{
-		"end of file",          // TLS EOF — OBS RST during multi-socket read
-		"connection reset",     // TCP RST
-		"temporary failure in name resolution",
-		"connection refused",
-		"connection timed out",
-		"i/o error",
-	} {
-		if strings.Contains(low, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-// probeMedia shells out to ffprobe to extract container-level metadata from a
-// remote URL. Because the netdisk CDNs honor HTTP Range, ffprobe only reads the
-// header/index region (typically <1s). A 30s timeout guards against the
-// occasional file that makes ffprobe hang.
-//
-// Retries up to 3 times on transient TLS errors — the天翼云 OBS CDN
-// (obs-ynkmfy-suzhou-home.obs.cn-jssz1.ctyun.cn, ~80% of lesson videos)
-// intermittently RSTs ffprobe's TLS connections; single-shot success is only
-// ~40% in A/B testing, but 3 attempts with backoff reaches ~95%.
-func probeMedia(url string) (*model.MediaMeta, error) {
-	args := []string{
-		"-v", "error",
-		"-show_format", "-show_streams",
-		"-of", "json",
-		url,
-	}
-	var out []byte
-	var lastErr error
-	var lastStderr string
-	for attempt := 1; attempt <= 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmd := exec.CommandContext(ctx, "ffprobe", args...)
-		var stderr bytes.Buffer
-		cmd.Stderr = &stderr
-		o, err := cmd.Output()
-		cancel()
-		if err == nil {
-			out = o
-			lastErr = nil
-			break
-		}
-		lastErr = err
-		lastStderr = stderr.String()
-		if ctx.Err() == context.DeadlineExceeded {
-			lastErr = errors.New("ffprobe timed out after 30s")
-			break // timeout is not transient — don't retry
-		}
-		if !isTransientFFmpegError(lastStderr) {
-			break // real codec/format error — don't retry
-		}
-		if attempt < 3 {
-			time.Sleep(time.Duration(attempt) * time.Second)
-		}
-	}
-	if lastErr != nil {
-		return nil, fmt.Errorf("ffprobe failed: %w, stderr: %s", lastErr, lastStderr)
-	}
-
-	// ffprobe JSON structure (only the fields we consume).
-	var probe struct {
-		Format struct {
-			Duration   string `json:"duration"`
-			BitRate    string `json:"bit_rate"`
-			FormatName string `json:"format_name"`
-		} `json:"format"`
-		Streams []struct {
-			Index       int    `json:"index"`
-			CodecType   string `json:"codec_type"`
-			CodecName   string `json:"codec_name"`
-			Width       int    `json:"width"`
-			Height      int    `json:"height"`
-			BitRate     string `json:"bit_rate"`
-			AvgFrameRate string `json:"avg_frame_rate"`
-			Channels    int    `json:"channels"`
-			Tags        struct {
-				Language string `json:"language"`
-			} `json:"tags"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &probe); err != nil {
-		return nil, fmt.Errorf("parse ffprobe json: %w", err)
-	}
-
-	meta := &model.MediaMeta{
-		FormatName: probe.Format.FormatName,
-	}
-	if d, err := strconv.ParseFloat(probe.Format.Duration, 64); err == nil {
-		meta.DurationSeconds = int(d)
-	}
-	if br, err := strconv.ParseInt(probe.Format.BitRate, 10, 64); err == nil {
-		meta.BitRate = br
-	}
-
-	for _, s := range probe.Streams {
-		ms := model.MediaStream{
-			Index:    s.Index,
-			Type:     s.CodecType,
-			Codec:    s.CodecName,
-			Width:    s.Width,
-			Height:   s.Height,
-			Channels: s.Channels,
-			Language: s.Tags.Language,
-		}
-		// For subtitle streams, flag bitmap-based codecs (PGS/VOBSUB/DVB) so the
-		// admin UI can disable the extract button and point the user at Whisper.
-		// ffmpeg refuses to transcode these to WebVTT with "Subtitle encoding
-		// currently only possible from text to text or bitmap to bitmap".
-		if s.CodecType == "subtitle" {
-			ms.IsBitmap = isBitmapSubtitleCodec(s.CodecName)
-		}
-		if br, err := strconv.ParseInt(s.BitRate, 10, 64); err == nil {
-			ms.BitRate = br
-		}
-		meta.Streams = append(meta.Streams, ms)
-
-		// Promote the first video/audio stream to top-level convenience
-		// fields so consumers don't have to scan the stream list.
-		if s.CodecType == "video" && meta.VideoCodec == "" {
-			meta.VideoCodec = s.CodecName
-			meta.Width = s.Width
-			meta.Height = s.Height
-			meta.Fps = s.AvgFrameRate
-		} else if s.CodecType == "audio" && meta.AudioCodec == "" {
-			meta.AudioCodec = s.CodecName
-			meta.AudioChannels = s.Channels
-		}
-	}
-	return meta, nil
-}
-
-// isBitmapSubtitleCodec reports whether a codec name identifies a
-// bitmap/picture-based subtitle format. These cannot be transcoded to a text
-// format (WebVTT/SRT) by ffmpeg — it errors with "Subtitle encoding currently
-// only possible from text to text or bitmap to bitmap". For such streams the
-// only path to text is OCR (Whisper / SubtitleEdit), so the admin UI refuses
-// extraction and points the user at Whisper transcription instead.
-//
-// Covered codecs (case-insensitive ffprobe codec_name):
-//   - hdmv_pgs_subtitle  — Blu-ray PGS
-//   - dvd_subtitle       — VOBSUB (DVD)
-//   - dvb_subtitle       — DVB (digital TV)
-//   - dvb_teletext       — DVB teletext
-//   - hdmv_text_subtitle — technically text, but rare/fragile; treated as text
-//
-// Text-based codecs (mov_text / subrip / srt / ass / ssa / webvtt / microdvd /
-// sami / realtext / aqTitle / jacosub) return false and ARE extractable.
-func isBitmapSubtitleCodec(codecName string) bool {
-	switch strings.ToLower(codecName) {
-	case "hdmv_pgs_subtitle", // Blu-ray PGS
-		"dvd_subtitle",        // VOBSUB (DVD)
-		"dvdsub",              // libavcodec short name alias
-		"dvb_subtitle",        // DVB bitmap subtitles
-		"dvbsub",              // alias
-		"dvb_teletext",        // DVB teletext (page-based, not VTT-able)
-		"pgssub":              // another PGS alias
-		return true
-	}
-	return false
-}
+// ffmpeg/ffprobe helpers (extractEmbeddedCover, extractScreenshot,
+// runFFmpegWithRetry, isTransientFFmpegError, probeMedia, isBitmapSubtitleCodec)
+// have been extracted to internal/media/ (Exported as ExtractEmbeddedCover,
+// ExtractScreenshot, RunFFmpegWithRetry, IsTransientFFmpegError, ProbeMedia,
+// IsBitmapSubtitleCodec). Episode-related callers here use media.<Name>.

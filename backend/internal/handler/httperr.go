@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -83,5 +84,51 @@ func init() {
 	// sentinels; the service package is imported by handler (no cycle), so we
 	// reference them directly below — see service_errors_init.go for the
 	// registrations that depend on the service package.
+}
+
+// bindJSON unifies the c.ShouldBindJSON + 400 pattern that was duplicated 60+
+// times across handlers with 6 different (sometimes internal-detail-leaking)
+// error messages. Returns true on success; on failure it has already written
+// the 400 response, so callers just `if !bindJSON(c, &req) { return }`.
+//
+// The error message is deliberately generic ("Invalid payload format") and
+// does NOT include err.Error() — leaking binding/driver internals to the
+// client was a recurring red line violation (see the header comment above).
+func bindJSON(c *gin.Context, v any) bool {
+	if err := c.ShouldBindJSON(v); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid payload format"})
+		return false
+	}
+	return true
+}
+
+// parseUintParam reads a path parameter as a uint32. Returns an error
+// (without writing a response) so the caller can pick the right status /
+// message for its context. Most callers follow up with respondError or a
+// direct 400.
+func parseUintParam(c *gin.Context, name string) (uint, error) {
+	id, err := strconv.ParseUint(c.Param(name), 10, 32)
+	if err != nil {
+		return 0, err
+	}
+	return uint(id), nil
+}
+
+// parseLimit extracts a ?limit=N query parameter clamped to [1, max],
+// falling back to def when absent or invalid. Replaces 4 hand-rolled
+// variants that disagreed on max, error handling, and default.
+func parseLimit(c *gin.Context, def, max int) int {
+	raw := c.Query("limit")
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
 }
 

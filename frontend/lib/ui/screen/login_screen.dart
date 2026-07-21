@@ -182,7 +182,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: FocusButton(
                   padding: const EdgeInsets.all(12),
                   borderRadius: 16,
-                  baseColor: Colors.white.withOpacity(0.8),
+                  baseColor: Colors.white.withValues(alpha: 0.8),
                   borderColor: AppTheme.borderMuted,
                   onPressed: _showIpConfigDialog,
                   child: const Icon(
@@ -220,7 +220,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 6,
-                          color: AppTheme.primaryColor.withOpacity(0.7),
+                          color: AppTheme.primaryColor.withValues(alpha: 0.7),
                         ),
                       ),
                       const SizedBox(height: 48),
@@ -253,7 +253,7 @@ class _LoginScreenState extends State<LoginScreen> {
           if (_showPinPad && _selectedUser != null)
             Positioned.fill(
               child: Container(
-                color: Colors.black.withOpacity(0.15), // Light dim overlay
+                color: Colors.black.withValues(alpha: 0.15), // Light dim overlay
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
                   child: Center(
@@ -271,9 +271,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                             decoration: BoxDecoration(
-                              color: Colors.redAccent.withOpacity(0.15),
+                              color: Colors.redAccent.withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
+                              border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
                             ),
                             child: Text(
                               _errorMessage,
@@ -340,7 +340,7 @@ class _LoginScreenState extends State<LoginScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.05),
+                  color: Colors.black.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
