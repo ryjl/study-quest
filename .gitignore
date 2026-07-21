@@ -64,3 +64,7 @@ study_quest_ai_prd.md
 /frontend-admin/vite.config.js
 /frontend-admin/vite.config.d.ts
 .zcode/
+
+# stray go build binaries (cmd/* compiled outside bin/)
+backend/polishpoc
+backend/segverify

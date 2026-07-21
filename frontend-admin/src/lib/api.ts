@@ -45,6 +45,7 @@ import type {
   UserStudyReport,
   CourseSummaryAdmin,
   StudyAdviceRow,
+  GlossaryCandidate,
 } from './types';
 
 // Centralized API client. Same-origin cookies carry the admin session. All
@@ -280,6 +281,14 @@ export const api = {
   },
   async autoMatchSubtitle(form: FormData): Promise<{ status: string; episode_id: number; title: string }> {
     return request('/admin/api/subtitles/auto-match', { method: 'POST', headers: {} as Record<string, string>, body: form });
+  },
+  // PR3 — extract an embedded subtitle stream from the episode's video container
+  // (ffmpeg -map 0:streamIndex -c:s webvtt). streamIndex comes from the probed
+  // media_meta_json.streams[].index. Server returns 400 with a "use Whisper"
+  // hint for bitmap codecs (PGS/VOBSUB/DVB); that surfaces via the standard
+  // ApiError message path and shows in the toast.
+  async extractSubtitle(episodeId: number, body: { stream_index: number; language: string; label: string }): Promise<{ status: string }> {
+    return request(`/admin/api/episodes/${episodeId}/extract-subtitle`, { method: 'POST', body: JSON.stringify(body) });
   },
 
   // ---- Import / Storage ----
@@ -574,6 +583,40 @@ export const api = {
   // that as a benign "nothing to retry" toast.
   async retryAiJob(id: number): Promise<{ ok: boolean }> {
     return request(`/admin/api/ai/jobs/${id}/retry`, { method: 'POST' });
+  },
+  // Skip polish: the polish-specific escape hatch. A failed polish job HALTS the
+  // downstream chain (segment never auto-enqueues). When the admin decides the
+  // raw subtitle is good enough (or the provider issue can't be fixed), this
+  // marks the job done and chains segment so AI proceeds off the raw text.
+  // Only valid on a FAILED POLISH job — throws 409 otherwise (caller surfaces
+  // as a benign toast).
+  async skipPolish(id: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/jobs/${id}/skip-polish`, { method: 'POST' });
+  },
+  // --- PR2.5 glossary candidate review (术语候选审核) ---
+  // The polish job mines term-correction rules; the admin reviews them here.
+  // status: "" = all, "pending" = the default review list.
+  async listGlossaryCandidates(courseId: number, status: string): Promise<GlossaryCandidate[]> {
+    const q = status ? `?status=${encodeURIComponent(status)}` : '';
+    return request(`/admin/api/courses/${courseId}/glossary-candidates${q}`);
+  },
+  async acceptGlossaryCandidate(
+    id: number,
+    body: { corrected?: string; context?: string; apply_to_subject_siblings?: boolean },
+  ): Promise<{ ok: boolean }> {
+    return request(`/admin/api/glossary-candidates/${id}/accept`, { method: 'POST', body: JSON.stringify(body) });
+  },
+  async rejectGlossaryCandidate(id: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/glossary-candidates/${id}/reject`, { method: 'POST' });
+  },
+  async acceptGlossaryCandidateBatch(
+    ids: number[],
+    applyToSubjectSiblings: boolean,
+  ): Promise<{ accepted: number[]; errors: Record<number, string>; ok: boolean }> {
+    return request('/admin/api/glossary-candidates/accept-batch', {
+      method: 'POST',
+      body: JSON.stringify({ ids, apply_to_subject_siblings: applyToSubjectSiblings }),
+    });
   },
   // Decision-trace runs: the recorded model invocations an agent made. limit
   // caps the window (the page shows the most recent N).

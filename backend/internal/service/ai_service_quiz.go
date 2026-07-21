@@ -368,7 +368,11 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	episodeID, courseID := *job.EpisodeID, *job.CourseID
 
 	// Both providers are needed: chat for generation, embedding for search.
-	llm, err := s.resolver.ResolveChat()
+	// Quiz generation is the highest-stakes task (homophone-bad questions confuse
+	// students), so it gets the "quiz" purpose tag — admin can point this at the
+	// strongest model they have. The self-check (checkAgent below) reuses the
+	// same provider; if it deserves a separate tag later, thread "quiz_check".
+	llm, err := s.resolver.ResolveChatByPurpose("quiz")
 	if err != nil {
 		s.failJob(job, "resolve chat provider: "+err.Error())
 		return
@@ -378,7 +382,7 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 		s.failJob(job, "resolve embedding provider: "+err.Error())
 		return
 	}
-	modelName := s.resolver.ChatModelName()
+	modelName := s.resolver.ChatModelNameByPurpose("quiz")
 
 	// Episode + course context for the prompt + chunk-id resolution.
 	ep, err := s.episodeRepo.FindByID(episodeID)

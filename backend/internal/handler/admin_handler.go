@@ -93,6 +93,10 @@ type AdminHandler interface {
 	SaveSubtitle(c *gin.Context)
 	DeleteSubtitle(c *gin.Context)
 	AutoMatchSubtitle(c *gin.Context)
+	// ExtractSubtitle pulls an embedded subtitle stream from the episode's
+	// container (POST /admin/api/episodes/:id/extract-subtitle). Maps
+	// ErrBitmapSubtitleNotSupported to 400.
+	ExtractSubtitle(c *gin.Context)
 
 	// Subtitle generation queue
 	EnqueueSubtitleJobs(c *gin.Context)
@@ -138,6 +142,13 @@ type AdminHandler interface {
 	GetAIJob(c *gin.Context)
 	ResetAIJob(c *gin.Context)
 	RetryAIJob(c *gin.Context)
+	// SkipPolishAIJob: polish 失败逃生口(放弃润色,继续下游)。
+	SkipPolishAIJob(c *gin.Context)
+	// PR2.5 — glossary candidate review (术语候选审核)。
+	ListGlossaryCandidates(c *gin.Context)
+	AcceptGlossaryCandidate(c *gin.Context)
+	RejectGlossaryCandidate(c *gin.Context)
+	AcceptGlossaryCandidateBatch(c *gin.Context)
 	ListAIRuns(c *gin.Context)
 	GetAIRun(c *gin.Context)
 	// Phase C — quiz observability (per-user drill-down + summary content).

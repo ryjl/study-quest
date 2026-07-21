@@ -624,6 +624,8 @@ type subtitleDTO struct {
 	EpisodeID uint   `json:"episode_id"`
 	Language  string `json:"language"`
 	Label     string `json:"label"`
+	Source    string `json:"source"`
+	Optimized bool   `json:"optimized"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -633,6 +635,8 @@ func toSubtitleDTO(s model.Subtitle) subtitleDTO {
 		EpisodeID: s.EpisodeID,
 		Language:  s.Language,
 		Label:     s.Label,
+		Source:    s.Source,
+		Optimized: s.Optimized,
 		CreatedAt: formatTime(s.CreatedAt),
 	}
 }

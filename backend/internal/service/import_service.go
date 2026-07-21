@@ -8,6 +8,7 @@ import (
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
+	"studyquest/backend/internal/subtitle"
 
 	"gorm.io/gorm"
 )
@@ -463,7 +464,8 @@ func (s *importService) autoMapSubtitleTx(episodeRepo repository.EpisodeReposito
 			if err == nil {
 				sub := &model.Subtitle{
 					EpisodeID:  ep.ID,
-					SrtContent: string(content),
+					VttContent: subtitle.SrtToVtt(string(content)),
+					Source:     "manual",
 				}
 				_ = episodeRepo.SaveSubtitle(sub)
 			}
@@ -517,7 +519,8 @@ func (s *importService) autoMapSubtitle(ep *model.Episode) {
 			if err == nil {
 				sub := &model.Subtitle{
 					EpisodeID:  ep.ID,
-					SrtContent: string(content),
+					VttContent: subtitle.SrtToVtt(string(content)),
+					Source:     "manual",
 				}
 				_ = s.episodeRepo.SaveSubtitle(sub)
 			}

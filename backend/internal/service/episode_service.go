@@ -16,6 +16,7 @@ import (
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
+	"studyquest/backend/internal/subtitle"
 
 	"gorm.io/gorm"
 )
@@ -45,7 +46,8 @@ type EpisodeService interface {
 	GetSubtitle(episodeID uint) (*model.Subtitle, error)
 	ListSubtitles(episodeID uint) ([]model.Subtitle, error)
 	GetSubtitleByID(id uint) (*model.Subtitle, error)
-	SaveSubtitle(episodeID uint, lang, label, srtContent string) error
+	SaveSubtitle(episodeID uint, lang, label, srtOrVtt string) error
+	SaveSubtitleWithSource(episodeID uint, lang, label, srtOrVtt, source string) error
 	DeleteSubtitle(id uint) error
 
 	// Streaming Stream Link Resolution
@@ -61,6 +63,15 @@ type EpisodeService interface {
 	// so subsequent listings show correct durations without re-probing. Returns
 	// the parsed metadata.
 	Probe(episodeID uint) (*model.MediaMeta, error)
+
+	// ExtractEmbeddedSubtitle pulls the given subtitle stream out of the
+	// episode's video container as WebVTT and persists it with source="embedded"
+	// (which does NOT trigger the polish/segment pipeline — that's keyed to
+	// source="whisper"). streamIndex is the ffprobe stream index (the same one
+	// surfaced in media_meta_json.streams[].index). Returns
+	// ErrBitmapSubtitleNotSupported for picture-based codecs (PGS/VOBSUB/DVB)
+	// which ffmpeg cannot transcode to text.
+	ExtractEmbeddedSubtitle(episodeID uint, streamIndex int, language, label string) error
 }
 
 // ErrEpisodeMoveCrossCourse is returned by BulkMoveEpisodes when one or more
@@ -74,6 +85,32 @@ var ErrEpisodeMoveCrossCourse = errors.New("episodes must belong to the target c
 // concern (sort_order is only meaningful within a course), so mixing courses
 // would produce a nonsense ordering; the handler surfaces this as 400.
 var ErrEpisodesDifferentCourses = errors.New("batch-reordered episodes must belong to the same course")
+
+// ErrBitmapSubtitleNotSupported is returned by ExtractEmbeddedSubtitle when the
+// targeted stream is a bitmap/picture-based subtitle codec (PGS / VOBSUB /
+// DVB). ffmpeg cannot transcode these to WebVTT — it errors with "Subtitle
+// encoding currently only possible from text to text or bitmap to bitmap".
+// The only path to text is OCR (Whisper), so we surface a dedicated error the
+// handler maps to 400 with an actionable hint pointing the admin at Whisper.
+var ErrBitmapSubtitleNotSupported = errors.New("bitmap subtitles (PGS/VOBSUB/DVB) cannot be extracted as text; use Whisper transcription instead")
+
+// ErrInvalidStreamIndex is returned by ExtractEmbeddedSubtitle when the
+// requested stream index is negative, doesn't exist in the probed media, or
+// doesn't point at a text subtitle stream. The handler maps it to 400. Defense
+// in depth: the admin UI only offers valid text-subtitle stream buttons, but a
+// direct API call (or a stale media_meta_json after the source file changed)
+// could still hand in a bad index.
+var ErrInvalidStreamIndex = errors.New("stream index is not a valid text subtitle stream")
+
+// ErrSubtitleLanguageConflict is returned by ExtractEmbeddedSubtitle when the
+// episode already has a subtitle for the same (episode, language) pair. The
+// upsert semantics of SaveSubtitle would silently overwrite the existing
+// track — including clobbering a whisper track's VttContent + RawVttContent
+// snapshot + source label, which is real data loss. We refuse and tell the
+// admin to delete the existing track first (or pick a different language label).
+// PR3's multi-track-per-episode goal assumes each (episode, language) is still
+// unique; true multi-language comes from distinct language codes.
+var ErrSubtitleLanguageConflict = errors.New("a subtitle already exists for this episode and language; delete it first or use a different language")
 
 type episodeService struct {
 	db          *gorm.DB
@@ -349,18 +386,51 @@ func (s *episodeService) GetSubtitleByID(id uint) (*model.Subtitle, error) {
 	return s.episodeRepo.GetSubtitleByID(id)
 }
 
-func (s *episodeService) SaveSubtitle(episodeID uint, lang, label, srtContent string) error {
+// SaveSubtitle persists a subtitle for an episode, normalizing the input to
+// VTT storage format. The srtOrVtt argument is accepted in either format:
+// the whisper worker uploads SRT, admin manual upload may be SRT or VTT,
+// embedded extraction produces VTT. Anything not starting with "WEBVTT" is
+// treated as SRT and converted.
+//
+// Source defaults to "whisper" (the most common caller). Callers that know
+// the origin (embedded extractor, manual upload, polish pipeline) should use
+// SaveSubtitleWithSource to set it correctly — the polish pipeline keys off
+// Source == "whisper" to decide whether to run.
+func (s *episodeService) SaveSubtitle(episodeID uint, lang, label, srtOrVtt string) error {
+	return s.SaveSubtitleWithSource(episodeID, lang, label, srtOrVtt, "whisper")
+}
+
+// SaveSubtitleWithSource is like SaveSubtitle but lets the caller specify the
+// origin. Used by the embedded-subtitle extractor ("embedded"), admin manual
+// upload ("manual"), and the polish pipeline ("llm_optimized").
+//
+// This is the "fresh material" path: the caller is handing us a brand-new
+// subtitle (worker upload, admin upload, disk auto-match), so the raw
+// snapshot is taken FROM this input — RawVttContent mirrors VttContent. The
+// polish pipeline does NOT come through here; it writes polished text via
+// episodeRepo.SaveSubtitle directly with RawVttContent empty, so the
+// original snapshot survives.
+func (s *episodeService) SaveSubtitleWithSource(episodeID uint, lang, label, srtOrVtt, source string) error {
 	if lang == "" {
 		lang = "zh-CN"
 	}
 	if label == "" {
 		label = "中文"
 	}
+	vtt := srtOrVtt
+	if !strings.HasPrefix(strings.TrimSpace(vtt), "WEBVTT") {
+		vtt = subtitle.SrtToVtt(vtt)
+	}
+	if source == "" {
+		source = "whisper"
+	}
 	sub := &model.Subtitle{
-		EpisodeID:  episodeID,
-		Language:   lang,
-		Label:      label,
-		SrtContent: srtContent,
+		EpisodeID:     episodeID,
+		Language:      lang,
+		Label:         label,
+		VttContent:    vtt,
+		RawVttContent: vtt, // fresh material → snapshot it now; polish later won't touch this
+		Source:        source,
 	}
 	return s.episodeRepo.SaveSubtitle(sub)
 }
@@ -541,6 +611,134 @@ func (s *episodeService) Probe(episodeID uint) (*model.MediaMeta, error) {
 		return nil, err
 	}
 	return meta, nil
+}
+
+// ExtractEmbeddedSubtitle extracts the given subtitle stream from the
+// episode's video container into WebVTT and persists it with source="embedded".
+//
+// Flow:
+//  1. Resolve the stream URL (same path Probe/Stream use).
+//  2. Run ffmpeg: `-map 0:<streamIndex> -c:s webvtt out.vtt`. The -reconnect
+//     flags are the same as the cover/screenshot extractors — the天翼云 OBS CDN
+//     intermittently RSTs TLS during the multi-socket read.
+//  3. Bitmap codecs (PGS/VOBSUB/DVB) make ffmpeg fail with "Subtitle encoding
+//     currently only possible from text to text or bitmap to bitmap" — detect
+//     that marker and return ErrBitmapSubtitleNotSupported so the handler can
+//     surface a 400 with an actionable "use Whisper" hint instead of a 500.
+//  4. Read the output VTT, hand it to SaveSubtitleWithSource("embedded"). That
+//     normalizes to VTT (input is already VTT, so it passes through) and writes
+//     the RawVttContent snapshot.
+//
+// source="embedded" deliberately does NOT trigger the polish/segment pipeline
+// — PR2's OnSubtitleCompleted gating keys off source="whisper". Embedded
+// subtitles are usually human-authored and already clean; segmenting them is
+// left to an explicit admin trigger (or a later PR).
+func (s *episodeService) ExtractEmbeddedSubtitle(episodeID uint, streamIndex int, language, label string) error {
+	// Validate streamIndex against the probed media metadata BEFORE invoking
+	// ffmpeg. Three failure modes we want to catch here:
+	//   - negative index → ffmpeg undefined behavior (reject up front)
+	//   - index not in streams → ffmpeg would error with a cryptic message that
+	//     surfaces as 500 in the admin UI; reject with a clear 400 here
+	//   - index points at a non-subtitle or bitmap stream → same; reject here so
+	//     the message is actionable (bitmap → ErrBitmapSubtitleNotSupported,
+	//     non-subtitle → ErrInvalidStreamIndex)
+	// This also de-risks the case where media_meta_json is stale (the source
+	// file was swapped) — we'd find no match and reject rather than extract a
+	// garbage track as source="embedded".
+	if streamIndex < 0 {
+		return ErrInvalidStreamIndex
+	}
+	ep, err := s.episodeRepo.FindByID(episodeID)
+	if err != nil {
+		return err
+	}
+	if ep == nil {
+		return fmt.Errorf("episode %d not found", episodeID)
+	}
+	if strings.TrimSpace(ep.MediaMetaJSON) != "" {
+		var meta model.MediaMeta
+		if jerr := json.Unmarshal([]byte(ep.MediaMetaJSON), &meta); jerr == nil {
+			var match *model.MediaStream
+			for i := range meta.Streams {
+				if meta.Streams[i].Index == streamIndex {
+					match = &meta.Streams[i]
+					break
+				}
+			}
+			if match == nil {
+				return ErrInvalidStreamIndex
+			}
+			if match.Type != "subtitle" {
+				return ErrInvalidStreamIndex
+			}
+			if match.IsBitmap {
+				return ErrBitmapSubtitleNotSupported
+			}
+		}
+		// If meta didn't parse, fall through and let ffmpeg try — better to
+		// attempt than to refuse on a parse glitch.
+	}
+
+	// Refuse to clobber an existing (episode, language) subtitle. SaveSubtitle
+	// upserts on this key, so without this check extracting a zh-CN embedded
+	// track over an existing zh-CN whisper track would silently overwrite its
+	// VttContent + RawVttContent snapshot + source — real data loss. The admin
+	// must explicitly delete the old track first (or pick a distinct language
+	// code like zh-CN-alt). True multi-language (zh-CN + en-US) doesn't trip
+	// this because the keys differ.
+	existing, lerr := s.episodeRepo.ListSubtitles(episodeID)
+	if lerr == nil {
+		for _, sub := range existing {
+			if sub.Language == language {
+				return ErrSubtitleLanguageConflict
+			}
+		}
+	}
+
+	link, err := s.GetStreamURL(episodeID, "ffmpeg-extract-subtitle")
+	if err != nil {
+		return err
+	}
+
+	// Temp output next to the other data/uploads artifacts. A unique suffix
+	// guards against concurrent extractions on the same episode clobbering
+	// each other's output file.
+	tmpPath := filepath.Join(os.TempDir(), fmt.Sprintf("sq_extract_sub_ep%d_s%d_%d.vtt", episodeID, streamIndex, time.Now().UnixNano()))
+	args := []string{
+		"-y",
+		"-reconnect", "1",
+		"-reconnect_streamed", "1",
+		"-reconnect_at_eof", "1",
+		"-reconnect_delay_max", "2",
+		"-i", link.URL,
+		"-map", fmt.Sprintf("0:%d", streamIndex),
+		"-c:s", "webvtt",
+		tmpPath,
+	}
+	// Subtitle extraction is usually fast (<5s for a full movie) since it's
+	// a remux, not a re-encode. Give plenty of headroom for slow CDN reads.
+	if err := runFFmpegWithRetry("extract embedded subtitle", args, 5*time.Minute, 3); err != nil {
+		low := strings.ToLower(err.Error())
+		// ffmpeg prints this exact phrase when asked to transcode bitmap→text.
+		// Match loosely (the error wraps ffmpeg's stderr verbatim).
+		if strings.Contains(low, "bitmap to bitmap") || strings.Contains(low, "text to text") {
+			return ErrBitmapSubtitleNotSupported
+		}
+		return err
+	}
+	// Best-effort cleanup: never leave the temp file behind even if the read
+	// or DB write fails afterwards.
+	defer os.Remove(tmpPath)
+
+	vttBytes, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return fmt.Errorf("read extracted subtitle: %w", err)
+	}
+	vtt := string(vttBytes)
+	if strings.TrimSpace(vtt) == "" {
+		return errors.New("extracted subtitle was empty (stream may have no cues)")
+	}
+	return s.SaveSubtitleWithSource(episodeID, language, label, vtt, "embedded")
 }
 
 // extractEmbeddedCover tries to extract an embedded cover art/image stream from a video.
@@ -736,6 +934,13 @@ func probeMedia(url string) (*model.MediaMeta, error) {
 			Channels: s.Channels,
 			Language: s.Tags.Language,
 		}
+		// For subtitle streams, flag bitmap-based codecs (PGS/VOBSUB/DVB) so the
+		// admin UI can disable the extract button and point the user at Whisper.
+		// ffmpeg refuses to transcode these to WebVTT with "Subtitle encoding
+		// currently only possible from text to text or bitmap to bitmap".
+		if s.CodecType == "subtitle" {
+			ms.IsBitmap = isBitmapSubtitleCodec(s.CodecName)
+		}
 		if br, err := strconv.ParseInt(s.BitRate, 10, 64); err == nil {
 			ms.BitRate = br
 		}
@@ -754,4 +959,34 @@ func probeMedia(url string) (*model.MediaMeta, error) {
 		}
 	}
 	return meta, nil
+}
+
+// isBitmapSubtitleCodec reports whether a codec name identifies a
+// bitmap/picture-based subtitle format. These cannot be transcoded to a text
+// format (WebVTT/SRT) by ffmpeg — it errors with "Subtitle encoding currently
+// only possible from text to text or bitmap to bitmap". For such streams the
+// only path to text is OCR (Whisper / SubtitleEdit), so the admin UI refuses
+// extraction and points the user at Whisper transcription instead.
+//
+// Covered codecs (case-insensitive ffprobe codec_name):
+//   - hdmv_pgs_subtitle  — Blu-ray PGS
+//   - dvd_subtitle       — VOBSUB (DVD)
+//   - dvb_subtitle       — DVB (digital TV)
+//   - dvb_teletext       — DVB teletext
+//   - hdmv_text_subtitle — technically text, but rare/fragile; treated as text
+//
+// Text-based codecs (mov_text / subrip / srt / ass / ssa / webvtt / microdvd /
+// sami / realtext / aqTitle / jacosub) return false and ARE extractable.
+func isBitmapSubtitleCodec(codecName string) bool {
+	switch strings.ToLower(codecName) {
+	case "hdmv_pgs_subtitle", // Blu-ray PGS
+		"dvd_subtitle",        // VOBSUB (DVD)
+		"dvdsub",              // libavcodec short name alias
+		"dvb_subtitle",        // DVB bitmap subtitles
+		"dvbsub",              // alias
+		"dvb_teletext",        // DVB teletext (page-based, not VTT-able)
+		"pgssub":              // another PGS alias
+		return true
+	}
+	return false
 }

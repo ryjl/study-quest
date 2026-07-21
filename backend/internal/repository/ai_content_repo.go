@@ -213,6 +213,18 @@ var ErrJobNotProcessing = errors.New("job is not in processing state")
 // succeeded on a prior retry).
 var ErrJobNotFailed = errors.New("job is not in failed state")
 
+// ErrJobNotPolish is returned by AIService.SkipPolish when the targeted job
+// isn't a polish job (the skip-polish escape hatch only makes sense for polish;
+// other job types have their own retry/reset semantics). Non-fatal: handler
+// surfaces 409.
+var ErrJobNotPolish = errors.New("job is not a polish job")
+
+// ErrJobNotFound is returned by AIService methods that look up a job by id and
+// need to distinguish "not found" from a real DB error. GetJob itself returns
+// (nil, nil) for not-found (legacy convention from the episode repo), so the
+// service layer maps nil→this error for callers that want a value to compare.
+var ErrJobNotFound = errors.New("ai job not found")
+
 type aiContentRepo struct {
 	db *gorm.DB
 }

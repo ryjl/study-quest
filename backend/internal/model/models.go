@@ -435,18 +435,62 @@ type MediaStream struct {
 	BitRate  int64  `json:"bit_rate"`
 	Channels int    `json:"channels"` // audio only
 	Language string `json:"language"`
+	// IsBitmap is set only for subtitle streams. true = bitmap/picture-based
+	// subtitle codec (PGS / VOBSUB / DVB), which ffmpeg CANNOT transcode to a
+	// text format like WebVTT — extraction is impossible and the admin must use
+	// Whisper transcription instead. false for text-based subtitles (srt/ass/
+	// mov_text/webvtt/...) and for non-subtitle streams.
+	IsBitmap bool `json:"is_bitmap"`
 }
 
-// Subtitle holds the raw SRT subtitle content.
+// Subtitle holds subtitle content stored as WebVTT internally.
+//
+// Storage format is ALWAYS VTT (VttContent) so the playback path can serve it
+// directly without per-request conversion, and embedded subtitles can preserve
+// their inline styling. The AI path converts to SRT on the fly via
+// ai.VttToSrt() — AI doesn't need styles, and existing SRT parsers/segmenters
+// stay untouched.
+//
+// The worker protocol (subtitle_job_handler.Complete) and the admin manual
+// upload still accept SRT; SaveSubtitle converts SRT→VTT before persisting,
+// so callers that already have SRT don't need to change.
+//
+// Source tracks origin so the polish pipeline can decide whether to run:
+//   - "whisper"        — machine-transcribed, needs polish
+//   - "embedded"       — extracted from the video container (usually human-made)
+//   - "manual"         — admin-uploaded or auto-matched from disk
+//   - "llm_optimized"  — set by the polish pipeline after a successful run
+//
+// Optimized is flipped to true by the polish pipeline once it has rewritten
+// VttContent with corrected homophones/terminology. False means raw.
+//
+// RawVttContent is the immutable snapshot of the original subtitle taken at
+// Complete time. The polish pipeline NEVER touches it — it only overwrites
+// VttContent. This is what makes polish retryable / reversible: admin can
+// always see (or restore) the pre-polish text, and re-running polish starts
+// from the same baseline each time instead of compounding drift.
+// Empty when the row predates the field (legacy data) — treat empty as
+// "raw unknown, fall back to VttContent".
+//
+// IsPrimary marks the subtitle the AI pipeline (segment/summary/quiz) reads.
+// A multilingual episode may have several subtitle rows (zh-CN, en-US, ...);
+// only the primary one feeds the AI chain. Set by whoever creates the row
+// (whisper/embedded extractor/manual upload); the first subtitle for an
+// episode becomes primary by default, others are non-primary. Playback is
+// unaffected — the player lists all subtitle tracks and lets the user pick.
 type Subtitle struct {
-	ID         uint    `gorm:"primaryKey;autoIncrement"`
-	EpisodeID  uint    `gorm:"index:idx_episode_lang;not null"`
-	Episode    Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
-	Language   string  `gorm:"size:50;index:idx_episode_lang;not null;default:'zh-CN'"` // e.g. zh-CN, en-US, bi
-	Label      string  `gorm:"size:100;not null;default:'中文'"` // User-facing label
-	SrtContent string  `gorm:"type:text;not null"`
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID            uint    `gorm:"primaryKey;autoIncrement"`
+	EpisodeID     uint    `gorm:"index:idx_episode_lang;not null"`
+	Episode       Episode `gorm:"foreignKey:EpisodeID;constraint:OnDelete:CASCADE"`
+	Language      string  `gorm:"size:50;index:idx_episode_lang;not null;default:'zh-CN'"` // e.g. zh-CN, en-US, bi
+	Label         string  `gorm:"size:100;not null;default:'中文'"` // User-facing label
+	VttContent    string  `gorm:"type:text;not null"`               // Stored as WebVTT (was SrtContent)
+	RawVttContent string  `gorm:"type:text"`                         // Original snapshot, never overwritten by polish
+	Source        string  `gorm:"size:32;not null;default:'whisper'"` // whisper / embedded / manual / llm_optimized
+	Optimized     bool    `gorm:"not null;default:false"`             // flipped by polish pipeline
+	IsPrimary     bool    `gorm:"not null;default:false"`             // AI chain reads primary only
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // SubtitleJob is one row in the subtitle-generation queue. The admin opts
@@ -981,9 +1025,19 @@ type AIProvider struct {
 	APIKey       string `gorm:"size:1024"`              // bearer token; empty for onnx_local
 	ModelName    string `gorm:"size:255;not null"`      // model id (chat) or model dir (onnx)
 	ExtraJSON    string `gorm:"type:text"`              // capability-specific knobs (temperature, dim, seqLen...)
-	IsEnabled    bool   `gorm:"default:false"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Tags is a JSON array of purpose tags, e.g. ["polish","quiz-check"]. The
+	// resolver uses it to route tasks to specific providers: a provider tagged
+	// "polish" is preferred for the polish job, "quiz" for quiz generation, etc.
+	// Empty/missing tags = general-purpose (the historical default) — every task
+	// that finds no purpose-tagged provider falls back to this one. See
+	// ProviderResolver.ResolveChatByPurpose. Stored as raw JSON text rather than
+	// a real array because SQLite + GORM have no first-class JSON column type and
+	// we filter it in Go (provider count is tiny — single-digit — so a linear
+	// scan per resolve is free).
+	Tags      string `gorm:"size:256"`
+	IsEnabled bool   `gorm:"default:false"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // TableName pins the table name to `ai_providers`. Without this, GORM's default
@@ -995,6 +1049,50 @@ type AIProvider struct {
 // Pinning the name explicitly also future-proofs against any GORM
 // naming-convention change.
 func (AIProvider) TableName() string { return "ai_providers" }
+
+// ParseTags parses the provider's Tags JSON array into a slice. Returns nil for
+// empty/malformed tags (the caller treats nil as "general-purpose, matches no
+// specific purpose"). Centralized here so the resolver and the admin DTO both
+// parse the same way.
+func (p AIProvider) ParseTags() []string {
+	s := strings.TrimSpace(p.Tags)
+	if s == "" {
+		return nil
+	}
+	// Tolerate both `["a","b"]` and the degraded `a,b` form an admin might type
+	// by hand — we never want a typo here to brick the resolver.
+	if strings.HasPrefix(s, "[") {
+		var out []string
+		if err := json.Unmarshal([]byte(s), &out); err != nil {
+			return nil
+		}
+		return out
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// HasTag reports whether the provider's Tags contain the given purpose. Convenience
+// wrapper over ParseTags for the resolver's linear scan. Empty purpose always
+// matches (the "general-purpose" caller asking for the default).
+func (p AIProvider) HasTag(purpose string) bool {
+	if purpose == "" {
+		return true
+	}
+	for _, t := range p.ParseTags() {
+		if t == purpose {
+			return true
+		}
+	}
+	return false
+}
 
 // AIJob is one asynchronous AI generation task (segment/summary/quiz), modeled
 // on SubtitleJob's queue/claim/complete pattern. Generated offline so the
@@ -1360,6 +1458,37 @@ type UserStudyReport struct {
 	User User `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE" json:"-"`
 }
 
+// GlossaryCandidate is a term-correction rule the polish pipeline mined while
+// fixing homophones in a subtitle (see docs/subtitle-system-overhaul.md §三).
+// Each polish run asks the LLM to surface, alongside the per-cue fixes, the
+// reusable patterns it spotted — e.g. "车 is consistently mis-transcribed as
+// 军/局 in this xiangqi course". These land here as pending candidates for the
+// admin to review in the AI Console (PR2.5).
+//
+// Accepted candidates are appended to Course.AIConfigJSON.TermDict and become
+// input to future polish runs, so the system converges: early episodes mine a
+// lot, later ones almost nothing (the dict already covers the domain).
+//
+// Dedup key is (CourseID, Original, Corrected) — the same rule mined across
+// multiple episodes of one course accumulates EvidenceCount instead of
+// creating duplicate rows. Status guards against re-surfacing admin decisions:
+// once accepted/rejected, future polish runs won't disturb the row (the upsert
+// is a no-op on non-pending rows).
+type GlossaryCandidate struct {
+	ID             uint       `gorm:"primaryKey;autoIncrement"`
+	CourseID       uint       `gorm:"index:idx_course_orig_corr;not null"`
+	Original       string     `gorm:"size:64;index:idx_course_orig_corr;not null"`
+	Corrected      string     `gorm:"size:64;index:idx_course_orig_corr;not null"`
+	Context        string     `gorm:"size:256"`                       // free-form, e.g. "象棋术语,指棋子"
+	Confidence     float64                                        // LLM-reported, [0,1]; only >= 0.7 mined
+	EvidenceCount  int        `gorm:"default:0"`                     // total observations across episodes
+	EvidenceSample string     `gorm:"type:text"`                     // JSON array of <=5 sample cue texts
+	Status         string     `gorm:"size:16;default:'pending';index"` // pending | accepted | rejected
+	AcceptedAt     *time.Time                                     // set when admin accepts
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 func AutoMigrate(db *gorm.DB) error {
 	err := db.AutoMigrate(
 		&Setting{},
@@ -1422,6 +1551,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&AICourseSummary{},
 		// Phase E — admin 用户学习报告(agent 驱动,跨课程交叉分析)。
 		&UserStudyReport{},
+		// PR2 — 字幕润色挖出的术语候选(admin 审核后进 TermDict)。pending 池,
+		// 由 polish job 写入,PR2.5 的 admin UI 消费。
+		&GlossaryCandidate{},
 	)
 	if err != nil {
 		return err

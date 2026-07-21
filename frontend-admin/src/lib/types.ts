@@ -118,6 +118,21 @@ export function gradeDisplay(grade: string): string {
   return parts.map(gradeLabel).join(', ');
 }
 
+export interface MediaStream {
+  index: number;
+  type: string; // "video" | "audio" | "subtitle"
+  codec?: string;
+  width?: number;
+  height?: number;
+  bit_rate?: number;
+  channels?: number;
+  language?: string;
+  /** true = bitmap subtitle codec (PGS/VOBSUB/DVB) — ffmpeg can't transcode to
+   * text, so extraction is impossible; the UI shows a "use Whisper" hint instead
+   * of the 提取 button. Only set on subtitle streams. */
+  is_bitmap?: boolean;
+}
+
 export interface MediaMeta {
   duration_seconds: number;
   format_name?: string;
@@ -128,6 +143,9 @@ export interface MediaMeta {
   fps?: string;
   audio_codec?: string;
   audio_channels?: number;
+  /** Full stream list from ffprobe, including subtitle streams. SubtitleDrawer
+   * filters this to type === 'subtitle' and offers an extract button per stream. */
+  streams?: MediaStream[];
 }
 
 export interface Episode {
@@ -307,12 +325,14 @@ export interface Subtitle {
   episode_id: number;
   language: string;
   label: string;
+  source?: string;    // whisper / embedded / manual / llm_optimized
+  optimized?: boolean; // true if the polish pipeline has rewritten this subtitle
   created_at?: string;
 }
 
-/** Full subtitle including SRT text — fetched on demand when viewing content. */
+/** Full subtitle including VTT text — fetched on demand when viewing content. */
 export interface SubtitleDetail extends Subtitle {
-  srt_content: string;
+  vtt_content: string;
 }
 
 export interface ProbeStats {
@@ -389,6 +409,10 @@ export interface AiProvider {
   base_url: string; // chat (openai_compat); empty for onnx_local
   api_key: string; // chat (openai_compat); empty for onnx_local. Sensitive.
   model_name: string; // model name (chat) or model path (onnx)
+  // tags is the purpose-routing tag list (PR5). Empty/missing = general-purpose
+  // (the default fallback for every task type). Set specific tags like ['polish']
+  // to route only polish jobs to this provider. See docs PR5.
+  tags?: string[];
   is_enabled: boolean;
 }
 
@@ -397,6 +421,25 @@ export interface AiProviderTestResult {
   ok: boolean;
   message: string;
   latency_ms?: number;
+}
+
+// GlossaryCandidate is a term-correction rule mined by the polish job and
+// awaiting admin review (PR2.5). pending = needs review, accepted = promoted
+// into the course TermDict, rejected = dismissed (kept as a dedup anchor).
+// confidence in [0,1]; only >= 0.7 are mined in the first place.
+export interface GlossaryCandidate {
+  id: number;
+  course_id: number;
+  original: string;
+  corrected: string;
+  context?: string;
+  confidence: number;
+  evidence_count: number;
+  evidence_sample?: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  accepted_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // Result of POST /admin/api/ai/providers/models (probe a relay's model catalog

@@ -84,17 +84,11 @@ func (h *episodeHandler) GetSubtitleVTT(c *gin.Context) {
 		return
 	}
 
-	vttContent := srtToVtt(sub.SrtContent)
-
+	// Subtitle is stored as VTT already (see SaveSubtitle); serve it directly.
+	// The old per-request SRT→VTT conversion is gone — it was the only caller
+	// of srtToVtt, which is now replaced by subtitle.SrtToVtt at ingest time.
 	c.Header("Content-Type", "text/vtt; charset=utf-8")
-	c.String(http.StatusOK, vttContent)
-}
-
-func srtToVtt(srt string) string {
-	vtt := "WEBVTT\n\n"
-	content := strings.ReplaceAll(srt, ",", ".")
-	vtt += content
-	return vtt
+	c.String(http.StatusOK, sub.VttContent)
 }
 
 // checkEpisodeSourceAccess is the storage-source allow-list gate shared by all

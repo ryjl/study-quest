@@ -179,8 +179,24 @@ func (r *episodeRepo) Delete(id uint) error {
 	})
 }
 
+// GetSubtitle returns the episode's PRIMARY subtitle — the one the AI pipeline
+// (segment / summary / quiz) reads. Falls back to the oldest row when no row
+// is marked primary (legacy data from before IsPrimary existed, or a data
+// inconsistency). Playback does NOT use this — the player lists all tracks
+// via ListSubtitles and lets the user pick.
 func (r *episodeRepo) GetSubtitle(episodeID uint) (*model.Subtitle, error) {
 	var sub model.Subtitle
+	// Primary first. The single-row case (one subtitle per episode, the common
+	// case for whisper) is handled by SaveSubtitle auto-flagging it primary.
+	err := r.db.Where("episode_id = ? AND is_primary = ?", episodeID, true).First(&sub).Error
+	if err == nil {
+		return &sub, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	// No primary — fall back to the oldest row. ORDER BY id asc keeps the
+	// pre-IsPrimary behavior intact for legacy rows.
 	if err := r.db.Where("episode_id = ?", episodeID).Order("id asc").First(&sub).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -261,12 +277,63 @@ func (r *episodeRepo) SaveSubtitle(subtitle *model.Subtitle) error {
 	err := r.db.Where("episode_id = ? AND language = ?", subtitle.EpisodeID, subtitle.Language).First(&sub).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// First subtitle for this (episode, language). If the caller didn't
+			// say otherwise, it becomes the primary — the common case (whisper
+			// produces one zh-CN track per episode). A later second-language
+			// insert (PR3 embedded extractor) passes IsPrimary=false explicitly.
+			if !subtitle.IsPrimary {
+				var cnt int64
+				r.db.Model(&model.Subtitle{}).Where("episode_id = ?", subtitle.EpisodeID).Count(&cnt)
+				if cnt == 0 {
+					subtitle.IsPrimary = true
+				}
+			}
+			// First write: snapshot the raw content alongside VttContent so the
+			// polish pipeline has an immutable baseline. Caller may have already
+			// set RawVttContent (e.g. polish restoring raw); if not, mirror it.
+			if subtitle.RawVttContent == "" {
+				subtitle.RawVttContent = subtitle.VttContent
+			}
 			return r.db.Create(subtitle).Error
 		}
 		return err
 	}
-	sub.SrtContent = subtitle.SrtContent
+	sub.VttContent = subtitle.VttContent
+	// RawVttContent is the immutable pre-polish snapshot — only overwrite when
+	// the caller explicitly passes a value (first write / restore). The polish
+	// pipeline passes empty here on purpose so the original survives every
+	// re-polish. See model.Subtitle doc.
+	if subtitle.RawVttContent != "" {
+		sub.RawVttContent = subtitle.RawVttContent
+	}
 	sub.Label = subtitle.Label
+	if subtitle.Source != "" {
+		sub.Source = subtitle.Source
+	}
+	// Optimized only flips via the polish pipeline. Two reasons a caller reaches
+	// the update branch WITHOUT meaning to touch Optimized:
+	//   1. re-transcribe (SaveSubtitleWithSource, source=whisper) — new material
+	//      supersedes any prior polish, so optimized MUST reset to false here.
+	//   2. embedded/manual upload (SaveSubtitleWithSource) — also resets, fine.
+	//   3. polish writeback — sets Optimized=true explicitly.
+	// All current callers either explicitly set Optimized (polish) or want it
+	// reset (fresh material). Keep unconditional write; the value on `subtitle`
+	// is authoritative.
+	sub.Optimized = subtitle.Optimized
+	// IsPrimary follows "promote but never demote" semantics on update:
+	//   - polish writeback passes the loaded value back (no-op here either way).
+	//   - re-transcribe (SaveSubtitleWithSource) doesn't set it → zero value →
+	//     we must NOT let that clobber an existing primary, or the AI chain
+	//     loses its anchor track. So only an explicit true promotes.
+	//   - a dedicated "switch primary" flow would pass true on the new row +
+	//     separately demote the old one (the single primary-per-episode rule
+	//     is enforced at a higher layer, not here).
+	// Without this guard, an embedded extract on (episode, zh-CN) where a
+	// whisper zh-CN already exists as primary would silently clear primary,
+	// leaving the episode with no AI-readable subtitle.
+	if subtitle.IsPrimary {
+		sub.IsPrimary = true
+	}
 	return r.db.Save(&sub).Error
 }
 

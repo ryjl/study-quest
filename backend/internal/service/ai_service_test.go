@@ -5,14 +5,21 @@ import (
 
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/testutil"
 )
 
-// aiServiceTestEnv wires a real aiService (in-memory DB, real repos, no providers)
-// for the summary/enqueue-level tests. Mirrors aiServiceQuizTestEnv but kept
-// separate so each test file's intent is clear.
+// aiServiceTestEnv wires a real aiService (file-backed DB, real repos, no
+// providers) for the summary/enqueue-level tests.
+//
+// Uses NewFileDB (not the in-memory NewDB): NewAIService spawns a runWorker
+// goroutine that polls the DB every 3s, and GORM may hand it a 2nd pooled
+// connection. In-memory SQLite gives each connection a PRIVATE empty DB, so the
+// worker's connection sees "no such table: ai_jobs" under load. File-backed
+// SQLite shares the DB across connections, so the worker sees the migrated
+// tables regardless of which pooled connection it lands on.
 func aiServiceTestEnv(t *testing.T) (*aiService, repository.AIContentRepository, repository.EpisodeRepository, repository.CourseRepository) {
 	t.Helper()
-	db := setupTestDB(t)
+	db := testutil.NewFileDB(t)
 	contentRepo := repository.NewAIContentRepository(db)
 	episodeRepo := repository.NewEpisodeRepository(db)
 	courseRepo := repository.NewCourseRepository(db)
@@ -24,6 +31,8 @@ func aiServiceTestEnv(t *testing.T) (*aiService, repository.AIContentRepository,
 		nil,                             // no provider resolver — enqueue path doesn't need it
 		nil,                             // no unlock service
 		repository.NewUserRepository(db),
+		nil,                             // no glossary repo — these tests don't run polish
+		nil,                             // no subject repo — polish-only
 	).(*aiService)
 	return svc, contentRepo, episodeRepo, courseRepo
 }

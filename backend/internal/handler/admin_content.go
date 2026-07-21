@@ -611,7 +611,9 @@ func (h *adminHandler) SaveSubtitle(c *gin.Context) {
 		return
 	}
 
-	err = h.episodeService.SaveSubtitle(episodeID, req.Language, req.Label, req.SrtContent)
+	// Admin manual upload: source=manual so the polish pipeline skips it
+	// (human-made subtitles are already correct).
+	err = h.episodeService.SaveSubtitleWithSource(episodeID, req.Language, req.Label, req.SrtContent, "manual")
 	if err != nil {
 		respondError(c, err)
 		return
@@ -620,8 +622,44 @@ func (h *adminHandler) SaveSubtitle(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "saved"})
 }
 
-// GetSubtitle returns the full subtitle (including SRT content) for admin
-// preview. ListSubtitles deliberately omits srt_content (it can be large and
+// ExtractSubtitle pulls an embedded subtitle stream out of the episode's video
+// container (ffmpeg -map 0:<idx> -c:s webvtt) and persists it with
+// source="embedded". The episode must have been probed first so the stream
+// list is visible in media_meta_json; the client passes the stream_index it
+// picked from that list.
+//
+// Bitmap subtitle codecs (PGS / VOBSUB / DVB) can't be transcoded to text —
+// the service returns ErrBitmapSubtitleNotSupported, which respondError maps
+// to a 400 with an actionable "use Whisper" hint.
+func (h *adminHandler) ExtractSubtitle(c *gin.Context) {
+	episodeID, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid episode ID"})
+		return
+	}
+
+	var req struct {
+		StreamIndex int    `json:"stream_index"`
+		Language    string `json:"language"`
+		Label       string `json:"label"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	// Defaults are applied by SaveSubtitleWithSource, but mirroring them here
+	// keeps the openAPI-style contract obvious and lets the client omit them.
+
+	err = h.episodeService.ExtractEmbeddedSubtitle(episodeID, req.StreamIndex, req.Language, req.Label)
+	if err != nil {
+		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "saved"})
+}
+
+// GetSubtitle returns the full subtitle (including VTT content) for admin
+// preview. ListSubtitles deliberately omits vtt_content (it can be large and
 // the list view only needs metadata); this endpoint fetches one by id when the
 // admin wants to read the actual text.
 func (h *adminHandler) GetSubtitle(c *gin.Context) {
@@ -645,7 +683,9 @@ func (h *adminHandler) GetSubtitle(c *gin.Context) {
 		"episode_id":  sub.EpisodeID,
 		"language":    sub.Language,
 		"label":       sub.Label,
-		"srt_content": sub.SrtContent,
+		"vtt_content": sub.VttContent,
+		"source":      sub.Source,
+		"optimized":   sub.Optimized,
 		"created_at":  formatTime(sub.CreatedAt),
 	})
 }

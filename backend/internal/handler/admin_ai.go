@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,7 +30,13 @@ type aiProviderDTO struct {
 	APIKey       string `json:"api_key"`       // write-only: never echoed back on read
 	ModelName    string `json:"model_name"`    // model id (chat) or model dir (onnx)
 	ExtraJSON    string `json:"extra_json,omitempty"`
-	IsEnabled    bool   `json:"is_enabled"`
+	// Tags is the provider's purpose tags as a JSON array (e.g. ["polish"]).
+	// On WRITE the admin UI sends an array; we re-marshal it to a canonical JSON
+	// string before persisting. On READ we parse the stored string back to an
+	// array so the UI round-trips cleanly. nil/empty = general-purpose (the
+	// default fallback for any task with no purpose-tagged provider).
+	Tags      []string `json:"tags,omitempty"`
+	IsEnabled bool     `json:"is_enabled"`
 }
 
 // toAIProviderDTO converts a model row to its DTO, STRIPPING the api_key. The
@@ -47,8 +54,24 @@ func toAIProviderDTO(p model.AIProvider) aiProviderDTO {
 		APIKey:       "", // never echo back
 		ModelName:    p.ModelName,
 		ExtraJSON:    p.ExtraJSON,
+		Tags:         p.ParseTags(),
 		IsEnabled:    p.IsEnabled,
 	}
+}
+
+// tagsToStorage normalizes the DTO's Tags slice into the canonical JSON string
+// stored on the model. nil/empty → "" (general-purpose). We always re-marshal
+// (rather than storing the raw input) so equivalent inputs land on the same
+// bytes and the resolver's parse path is exercised identically by write+read.
+func tagsToStorage(tags []string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	out, err := json.Marshal(tags)
+	if err != nil {
+		return ""
+	}
+	return string(out)
 }
 
 // ListAIProviders returns all configured AI providers.
@@ -94,6 +117,7 @@ func (h *adminHandler) CreateAIProvider(c *gin.Context) {
 		APIKey:       req.APIKey,
 		ModelName:    req.ModelName,
 		ExtraJSON:    req.ExtraJSON,
+		Tags:         tagsToStorage(req.Tags),
 		IsEnabled:    req.IsEnabled,
 	}
 	if err := h.aiProviderRepo.Create(&p); err != nil {
@@ -145,6 +169,7 @@ func (h *adminHandler) UpdateAIProvider(c *gin.Context) {
 	existing.BaseURL = req.BaseURL
 	existing.ModelName = req.ModelName
 	existing.ExtraJSON = req.ExtraJSON
+	existing.Tags = tagsToStorage(req.Tags)
 	existing.IsEnabled = req.IsEnabled
 	if req.APIKey != "" {
 		existing.APIKey = req.APIKey
@@ -626,8 +651,10 @@ func (h *adminHandler) EnqueueAIJobs(c *gin.Context) {
 		enqueued, skipped, err = h.aiService.EnqueueSegment(req.EpisodeIDs)
 	case "summary":
 		enqueued, skipped, err = h.aiService.EnqueueSummary(req.EpisodeIDs)
+	case "polish":
+		enqueued, skipped, err = h.aiService.EnqueuePolish(req.EpisodeIDs)
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "job_type 必须是 segment 或 summary"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "job_type 必须是 segment / summary / polish"})
 		return
 	}
 	if err != nil {
@@ -830,6 +857,39 @@ func (h *adminHandler) RetryAIJob(c *gin.Context) {
 			return
 		}
 		respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// SkipPolishAIJob is the polish-specific escape hatch. A failed polish job
+// HALTS the downstream chain (segment never auto-enqueues). When the admin
+// decides polish isn't worth fixing (raw subtitle is good enough, or the
+// provider issue can't be resolved), this endpoint marks the job done and
+// chains segment so AI proceeds off the raw text. Only valid on a FAILED
+// POLISH job — other states/types return 409 so the UI can hide the button.
+// POST /admin/api/ai/jobs/:id/skip-polish
+func (h *adminHandler) SkipPolishAIJob(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 id"})
+		return
+	}
+	if err := h.aiService.SkipPolish(id); err != nil {
+		switch err {
+		case repository.ErrJobNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		case repository.ErrJobNotPolish:
+			c.JSON(http.StatusConflict, gin.H{"error": "该任务不是 polish 任务"})
+		case repository.ErrJobNotFailed:
+			c.JSON(http.StatusConflict, gin.H{"error": "任务不是失败状态,无需跳过"})
+		default:
+			respondError(c, err)
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})

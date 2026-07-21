@@ -60,12 +60,12 @@ func (s *aiService) runAdviceJob(job *model.AIJob) {
 	}
 
 	// chat provider 是必须的;embedder advice 不用(无向量检索)。
-	llm, err := s.resolver.ResolveChat()
+	llm, err := s.resolver.ResolveChatByPurpose("advice")
 	if err != nil {
 		s.failJob(job, "resolve chat provider: "+err.Error())
 		return
 	}
-	modelName := s.resolver.ChatModelName()
+	modelName := s.resolver.ChatModelNameByPurpose("advice")
 
 	// 构造 agent graph:deps adapter(带 userRepo)→ memory → advice toolbox → agent。
 	deps := &agentToolDeps{

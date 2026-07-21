@@ -6,6 +6,19 @@ import { useToast } from '../lib/toast';
 import { useAiProviders, useInvalidateAiProviders } from '../lib/useAiProviders';
 import type { AiProvider, AiModelsResult, AiRealTestResult } from '../lib/types';
 
+// PURPOSE_OPTIONS is the fixed menu of purpose tags the admin can assign to a
+// chat provider (PR5). The values match what the backend resolver routes on —
+// see backend/internal/service/ai_service*.go ResolveChatByPurpose calls.
+// Label is the Chinese display; the tooltip hints which model strength suits it.
+const PURPOSE_OPTIONS: { value: string; label: string; hint: string }[] = [
+  { value: 'polish', label: '字幕润色', hint: '推荐便宜模型(调用频繁,中文常识即可)' },
+  { value: 'summary', label: '课时总结', hint: '中等强度(综合多段字幕)' },
+  { value: 'quiz', label: '出题', hint: '推荐强模型(题目质量直接影响学生)' },
+  { value: 'advice', label: '学习建议', hint: '中-强(agent 多步推理)' },
+  { value: 'course_summary', label: '课程总结', hint: '中-强(跨课时综合)' },
+  { value: 'user_report', label: '学习报告', hint: '中-强(跨课程分析)' },
+];
+
 // AiProvidersSection is the AI-provider management card on the Settings page.
 //
 // Round-3 redesign: the embedding model is bundled in the docker image and
@@ -57,6 +70,10 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
   const [apiKey, setApiKey] = useState('');
   const [modelName, setModelName] = useState(provider?.model_name ?? '');
   const [isEnabled, setIsEnabled] = useState(provider?.is_enabled ?? true);
+  // tags: purpose-routing (PR5). Empty = general-purpose (every task falls back
+  // to this provider). Check specific purposes to dedicate this provider to them.
+  // We store as a Set for easy toggle; serialize to [] on submit.
+  const [tags, setTags] = useState<Set<string>>(new Set(provider?.tags ?? []));
 
   // Model dropdown state: fetched from the relay's /v1/models after base_url +
   // api_key are entered. Empty = not yet fetched (the input falls back to a
@@ -108,9 +125,21 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
       // no-op on update). Mirrors the admin-password "留空则不修改" convention.
       api_key: apiKey,
       model_name: modelName.trim(),
+      // Tags: empty array = general-purpose (the default). Backend stores [] as
+      // "" and treats "" as "matches no specific purpose, fallback for all".
+      tags: Array.from(tags),
       is_enabled: isEnabled,
     };
     saveMut.mutate(body);
+  };
+
+  const toggleTag = (t: string) => {
+    setTags((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
   };
 
   const canFetchModels = baseUrl.trim() !== '' && apiKey.trim() !== '';
@@ -175,6 +204,29 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
         {modelsFetched && models.length === 0 && (
           <p className="mt-1 text-[11px] text-muted">该端点未返回模型列表,可直接手动输入模型名。</p>
         )}
+      </div>
+      <div>
+        <label className="mb-1 block text-xs text-muted">用途标签</label>
+        <p className="mb-1.5 text-[11px] text-muted">
+          留空 = 通用(所有任务都用它,默认);勾选则只服务勾选的任务。配多个 provider 时按任务分工(如润色用便宜模型、出题用强模型)。
+        </p>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+          {PURPOSE_OPTIONS.map((p) => (
+            <label
+              key={p.value}
+              className="flex cursor-pointer items-center gap-1.5 rounded border border-border/60 px-2 py-1.5 text-xs hover:bg-card-2/50"
+              title={p.hint}
+            >
+              <input
+                type="checkbox"
+                checked={tags.has(p.value)}
+                onChange={() => toggleTag(p.value)}
+                className="h-3.5 w-3.5 accent-primary"
+              />
+              <span className="text-txt">{p.label}</span>
+            </label>
+          ))}
+        </div>
       </div>
       <div>
         <label className="flex h-[38px] items-center gap-2 text-sm text-txt">

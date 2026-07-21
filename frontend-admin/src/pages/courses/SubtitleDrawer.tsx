@@ -2,28 +2,98 @@ import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Captions, Check } from 'lucide-react';
 import { api } from '../../lib/api';
-import type { Episode } from '../../lib/types';
+import type { Episode, MediaStream } from '../../lib/types';
 import { Drawer, LoadingState, EmptyState } from '../../components/ui';
 import { useToast, useConfirm } from '../../lib/toast';
 
+/** Source badge label for a subtitle's origin. Empty/whisper → none (default). */
+function sourceBadge(source?: string): { text: string; cls: string } | null {
+  switch (source) {
+    case 'embedded':
+      return { text: '内嵌', cls: 'bg-primary/15 text-primary' };
+    case 'manual':
+      return { text: '手动', cls: 'bg-card-2 text-muted' };
+    case 'llm_optimized':
+      return { text: '已润色', cls: 'bg-good/20 text-good' };
+    default:
+      return null; // whisper — the default, no badge needed
+  }
+}
+
+/**
+ * Map an ffprobe ISO 639-2 language tag (e.g. "chi", "eng", "und") to the
+ * BCP-47 code our Subtitle.Language column expects ("zh-CN", "en-US"). Falls
+ * back to the raw tag if unknown, and "und"/"" → "zh-CN" (most study-quest
+ * content is Chinese, and an unlabeled embedded stream is overwhelmingly
+ * Chinese in this catalog). This is just a smart default for the extract
+ * button's payload — the admin can still edit the language on any saved row.
+ */
+function defaultLanguageForStream(lang?: string): string {
+  const l = (lang ?? '').trim().toLowerCase();
+  switch (l) {
+    case '':
+    case 'und': // ISO 639-2 "undetermined"
+      return 'zh-CN';
+    case 'chi':
+    case 'zho':
+    case 'zh':
+    case 'cmn':
+    case 'cmn-hans':
+      return 'zh-CN';
+    case 'eng':
+    case 'en':
+      return 'en-US';
+    default:
+      return l; // pass through (already lowercased short code)
+  }
+}
+
+/** Parse the episode's media_meta_json. Returns null on missing/garbage input. */
+function readSubtitleStreams(episode: Episode): MediaStream[] {
+  if (!episode.media_meta_json) return [];
+  try {
+    const meta = JSON.parse(episode.media_meta_json);
+    const streams = Array.isArray(meta?.streams) ? meta.streams : [];
+    return streams.filter((s: MediaStream) => s?.type === 'subtitle');
+  } catch {
+    return [];
+  }
+}
+
 /** A single subtitle row with an expandable content preview. */
-function SubtitleRow({ id, language, label, onDelete }: { id: number; language: string; label: string; onDelete: () => void }) {
+function SubtitleRow({
+  id,
+  language,
+  label,
+  source,
+  optimized,
+  onDelete,
+}: {
+  id: number;
+  language: string;
+  label: string;
+  source?: string;
+  optimized?: boolean;
+  onDelete: () => void;
+}) {
   const [open, setOpen] = useState(false);
-  // Fetch the SRT content only when the row is first expanded (lazy), and cache
-  // it so re-opening is instant. The list endpoint omits srt_content on purpose.
+  // Fetch the VTT content only when the row is first expanded (lazy), and cache
+  // it so re-opening is instant. The list endpoint omits vtt_content on purpose.
   const contentQ = useQuery({
     queryKey: ['subtitle-content', id],
     queryFn: () => api.getSubtitle(id),
     enabled: open,
     staleTime: Infinity,
   });
+  const badge = sourceBadge(optimized ? 'llm_optimized' : source);
 
   return (
     <div className="rounded-lg border border-border bg-card-2 px-3 py-2 text-sm">
       <div className="flex items-center justify-between">
-        <div>
+        <div className="flex items-center gap-2">
           <span className="rounded bg-good/20 px-1.5 py-0.5 text-xs text-good">{language}</span>
-          <strong className="ml-2 text-txt">{label}</strong>
+          <strong className="text-txt">{label}</strong>
+          {badge && <span className={`rounded px-1.5 py-0.5 text-[10px] ${badge.cls}`}>{badge.text}</span>}
         </div>
         <div className="flex gap-1.5">
           <button className="btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>
@@ -40,7 +110,7 @@ function SubtitleRow({ id, language, label, onDelete }: { id: number; language: 
             <div className="py-4 text-center text-xs text-bad">加载失败</div>
           ) : (
             <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-black/5 p-2 text-xs leading-relaxed text-txt">
-              {contentQ.data?.srt_content || '(空)'}
+              {contentQ.data?.vtt_content || '(空)'}
             </pre>
           )}
         </div>
@@ -87,6 +157,26 @@ export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose
     onError: (e) => toast.error((e as Error).message),
   });
 
+  // PR3 — extract an embedded subtitle stream. On success the new row appears
+  // in the "已有字幕" list above (same queryKey, invalidated). Bitmap-codec
+  // failures (PGS/VOBSUB/DVB) arrive as a 400 ApiError with the "use Whisper"
+  // hint already in message, so no special-case handling is needed here.
+  const extractMut = useMutation({
+    mutationFn: (vars: { streamIndex: number; language: string; label: string }) =>
+      api.extractSubtitle(episode.id, {
+        stream_index: vars.streamIndex,
+        language: vars.language,
+        label: vars.label,
+      }),
+    onSuccess: () => {
+      toast.success('内嵌字幕提取成功');
+      qc.invalidateQueries({ queryKey: ['subtitles', episode.id] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const subtitleStreams = readSubtitleStreams(episode);
+
   const onFile = (file: File) => {
     setFileName(file.name);
     const reader = new FileReader();
@@ -110,6 +200,8 @@ export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose
                 id={s.id}
                 language={s.language}
                 label={s.label}
+                source={s.source}
+                optimized={s.optimized}
                 onDelete={async () => {
                   if (await confirm({ message: `删除「${s.label}」字幕？`, danger: true })) delMut.mutate(s.id);
                 }}
@@ -118,6 +210,55 @@ export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose
           </div>
         )}
       </section>
+
+      {subtitleStreams.length > 0 && (
+        <section className="mb-6 border-t border-border pt-4">
+          <h3 className="mb-2 text-sm font-semibold text-txt">
+            内嵌字幕 ({subtitleStreams.length})
+          </h3>
+          <p className="mb-2 text-xs text-muted">
+            从视频容器中直接抽取文本字幕流。图形字幕（PGS/VOBSUB/DVB）无法提取，需用 Whisper 转录。
+          </p>
+          <div className="space-y-2">
+            {subtitleStreams.map((s) => {
+              const lang = defaultLanguageForStream(s.language);
+              const label = s.language ? `${s.language}` : '默认语言';
+              const isExtracting =
+                extractMut.isPending &&
+                extractMut.variables?.streamIndex === s.index;
+              return (
+                <div
+                  key={s.index}
+                  className="flex items-center justify-between rounded-lg border border-border bg-card-2 px-3 py-2 text-sm"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-card px-1.5 py-0.5 text-xs text-muted">
+                      #{s.index}
+                    </span>
+                    <span className="text-txt">{s.language || '未标语言'}</span>
+                    {s.codec && (
+                      <span className="rounded bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                        {s.codec}
+                      </span>
+                    )}
+                  </div>
+                  {s.is_bitmap ? (
+                    <span className="text-xs text-bad">图形字幕，无法提取，请用 Whisper 转录</span>
+                  ) : (
+                    <button
+                      className="btn-ghost btn-sm"
+                      disabled={extractMut.isPending}
+                      onClick={() => extractMut.mutate({ streamIndex: s.index, language: lang, label })}
+                    >
+                      {isExtracting ? '提取中...' : '提取'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section>
         <h3 className="mb-2 text-sm font-semibold text-txt">上传新字幕 (.srt / .vtt)</h3>

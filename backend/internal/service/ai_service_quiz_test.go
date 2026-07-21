@@ -5,15 +5,15 @@ import (
 
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/testutil"
 )
 
-// aiServiceQuizTestEnv wires a real aiService (with in-memory DB, real repos, no
-// providers) for the unified-submit flow tests. The providers/unlockService are
-// nil because SubmitAllQuizAnswers doesn't touch them — it only reads/writes
-// quiz/question/answer/memory rows via the content repo.
+// aiServiceQuizTestEnv wires a real aiService (file-backed DB, real repos, no
+// providers) for the unified-submit flow tests. See aiServiceTestEnv for why
+// file-backed: the runWorker goroutine needs a cross-connection-shared DB.
 func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentRepository) {
 	t.Helper()
-	db := setupTestDB(t)
+	db := testutil.NewFileDB(t)
 	contentRepo := repository.NewAIContentRepository(db)
 	svc := NewAIService(
 		db,
@@ -23,6 +23,8 @@ func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentReposit
 		nil,                  // no provider resolver — submit path doesn't need it
 		nil,                  // no unlock service — not exercised here
 		repository.NewUserRepository(db), // advice tools need userRepo, but submit path won't call it
+		nil,                  // no glossary repo — quiz path doesn't touch it
+		nil,                  // no subject repo — polish-only
 	).(*aiService)
 	return svc, contentRepo
 }

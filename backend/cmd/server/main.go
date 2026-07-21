@@ -144,7 +144,10 @@ func main() {
 	// observability reads. Built unconditionally; when no provider is configured
 	// jobs are recorded but processed as "skipped: AI not configured".
 	aiContentRepo := repository.NewAIContentRepository(db)
-	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo)
+	// glossaryRepo stores term-correction candidates mined by the polish job
+	// (PR2). Nil-safe in the service layer, but we always wire it in main.
+	glossaryRepo := repository.NewGlossaryRepository(db)
+	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo)
 	// Connect Step 2 → Step 3: when a subtitle lands, auto-enqueue a segment job
 	// (only if the course has AI enabled). The callback keeps the subtitle
 	// service free of any AI import — it just calls a function if set.

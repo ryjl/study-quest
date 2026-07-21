@@ -572,6 +572,15 @@ function EpisodeRow({
             {codec ? `·${codec}` : ''}
           </span>
         )}
+        {(ep.subtitle_count ?? 0) > 0 && (
+          <span
+            className="inline-flex items-center gap-0.5 rounded bg-good/10 px-1.5 py-0.5 text-[11px] tabular-nums text-good"
+            title={`已有字幕 ${ep.subtitle_count} 条`}
+          >
+            <Captions size={10} />
+            {ep.subtitle_count}
+          </span>
+        )}
         {ep.file_size && <span className="text-[11px] tabular-nums text-muted">{formatFileSize(ep.file_size)}</span>}
       </div>
 

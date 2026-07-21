@@ -66,6 +66,37 @@ func (r *ProviderResolver) ResolveChat() (LLMProvider, error) {
 	return r.resolveChat()
 }
 
+// ResolveChatByPurpose returns the enabled chat LLMProvider tagged for the given
+// purpose (e.g. "polish", "quiz"). Falls back to the general-purpose provider
+// (ResolveChat) when no provider is tagged for the purpose — so adding purpose
+// routing is strictly opt-in, and a deployment with one untagged provider behaves
+// exactly as before. Returns ErrNoProvider only when NO enabled chat provider
+// exists at all.
+//
+// Purpose values are the lower-case task keys documented in
+// docs/subtitle-system-overhaul.md §PR5: polish | summary | quiz | advice |
+// course_summary | user_report | quiz_check. The empty purpose ("") is the
+// explicit "general-purpose" request and matches only untagged providers,
+// falling back to ResolveChat when there are none.
+//
+// Implementation note: we DON'T cache purpose-tagged providers separately. The
+// provider count is tiny (single-digit) and resolving re-uses buildChat (which
+// builds an openai_compat client in microseconds). Caching one entry per
+// purpose would add cache-invalidation complexity for no measurable gain.
+func (r *ProviderResolver) ResolveChatByPurpose(purpose string) (LLMProvider, error) {
+	row, err := r.enabledRowByPurpose(model.AICapabilityChat, purpose)
+	if err == nil && row != nil {
+		p, berr := r.buildChat(row)
+		if berr != nil {
+			return nil, fmt.Errorf("build chat provider %q (purpose=%q): %w", row.Name, purpose, berr)
+		}
+		return p, nil
+	}
+	// No purpose-tagged provider → fall back to the general-purpose one. This is
+	// the backward-compat guarantee: un-configured deployments keep working.
+	return r.resolveChat()
+}
+
 // ResolveEmbedder returns the enabled embedding Embedder, building+caching on
 // first use. Returns ErrNoProvider if none is enabled.
 func (r *ProviderResolver) ResolveEmbedder() (Embedder, error) {
@@ -140,6 +171,18 @@ func (r *ProviderResolver) ChatModelName() string {
 	row, err := r.enabledRow(model.AICapabilityChat)
 	if err != nil || row == nil {
 		return ""
+	}
+	return row.ModelName
+}
+
+// ChatModelNameByPurpose is the purpose-aware sibling of ChatModelName. It
+// returns the model name of the provider that ResolveChatByPurpose would pick,
+// so a job stamps the run with the model that ACTUALLY ran it (not the default
+// one). Falls back to ChatModelName() when no purpose-tagged provider exists.
+func (r *ProviderResolver) ChatModelNameByPurpose(purpose string) string {
+	row, err := r.enabledRowByPurpose(model.AICapabilityChat, purpose)
+	if err != nil || row == nil {
+		return r.ChatModelName()
 	}
 	return row.ModelName
 }
@@ -245,6 +288,56 @@ func (r *ProviderResolver) enabledRow(capability string) (*model.AIProvider, err
 		p := &providers[i]
 		if !p.IsEnabled || p.Capability != capability {
 			continue
+		}
+		if best == nil || p.ID < best.ID {
+			best = p
+		}
+	}
+	if best == nil {
+		return nil, ErrNoProvider
+	}
+	return best, nil
+}
+
+// enabledRowByPurpose is the purpose-aware variant of enabledRow. It returns the
+// lowest-ID enabled provider whose capability matches AND whose Tags contain the
+// purpose. Empty purpose matches UNTAGGED providers only (the general-purpose
+// pool) — this lets ResolveChatByPurpose("") deliberately skip purpose-tagged
+// providers. Returns ErrNoProvider when nothing matches; the caller (the by-
+// purpose resolver) falls back to the untagged default in that case.
+//
+// Tag matching is exact ("polish" matches ["polish"], not ["polish-fast"]) so
+// admin-chosen tag names are the contract. ParseTags tolerates a hand-typed
+// "polish,quiz" comma form (see model.AIProvider.ParseTags) for robustness.
+func (r *ProviderResolver) enabledRowByPurpose(capability, purpose string) (*model.AIProvider, error) {
+	providers, err := r.providerRepo.List()
+	if err != nil {
+		return nil, err
+	}
+	var best *model.AIProvider
+	for i := range providers {
+		p := &providers[i]
+		if !p.IsEnabled || p.Capability != capability {
+			continue
+		}
+		tags := p.ParseTags()
+		if purpose == "" {
+			// Explicit general-purpose request: match ONLY untagged providers.
+			if len(tags) > 0 {
+				continue
+			}
+		} else {
+			// Match only providers whose tag set contains the purpose.
+			found := false
+			for _, t := range tags {
+				if t == purpose {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
 		}
 		if best == nil || p.ID < best.ID {
 			best = p

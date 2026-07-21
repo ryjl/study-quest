@@ -76,12 +76,12 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 	}
 
 	// chat provider 是必须的;course summary 不用 embedder(无向量检索)。
-	llm, err := s.resolver.ResolveChat()
+	llm, err := s.resolver.ResolveChatByPurpose("course_summary")
 	if err != nil {
 		s.failJob(job, "resolve chat provider: "+err.Error())
 		return
 	}
-	modelName := s.resolver.ChatModelName()
+	modelName := s.resolver.ChatModelNameByPurpose("course_summary")
 
 	// 构造 agent graph:deps adapter → course summary toolbox → agent。
 	// deps 和 advice 共用 agentToolDeps(它实现了所有 ToolDeps 方法);course summary

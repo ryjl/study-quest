@@ -80,12 +80,12 @@ func (s *aiService) runUserReportJob(job *model.AIJob) {
 	courses := s.buildUserStudyCourses(ctx, userID)
 
 	// chat provider 必须;embedder user_report 不用(无向量检索)。
-	llm, err := s.resolver.ResolveChat()
+	llm, err := s.resolver.ResolveChatByPurpose("user_report")
 	if err != nil {
 		s.failJob(job, "resolve chat provider: "+err.Error())
 		return
 	}
-	modelName := s.resolver.ChatModelName()
+	modelName := s.resolver.ChatModelNameByPurpose("user_report")
 
 	// 构造 agent graph:deps adapter → memory → user_study toolbox(只绑 userID)→ agent。
 	deps := &agentToolDeps{

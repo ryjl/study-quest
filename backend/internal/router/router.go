@@ -250,6 +250,13 @@ func RegisterRoutes(
 		adm.GET("/api/ai/jobs/:id", admin.GetAIJob)
 		adm.POST("/api/ai/jobs/:id/reset", admin.ResetAIJob)
 		adm.POST("/api/ai/jobs/:id/retry", admin.RetryAIJob)
+		// PR2 — polish 失败时 admin 的逃生口:放弃润色,用原始字幕继续 segment/summary。
+		adm.POST("/api/ai/jobs/:id/skip-polish", admin.SkipPolishAIJob)
+		// PR2.5 — glossary candidate review (术语候选审核)。
+		adm.GET("/api/courses/:id/glossary-candidates", admin.ListGlossaryCandidates)
+		adm.POST("/api/glossary-candidates/:id/accept", admin.AcceptGlossaryCandidate)
+		adm.POST("/api/glossary-candidates/:id/reject", admin.RejectGlossaryCandidate)
+		adm.POST("/api/glossary-candidates/accept-batch", admin.AcceptGlossaryCandidateBatch)
 		adm.GET("/api/ai/runs", admin.ListAIRuns)
 		adm.GET("/api/ai/runs/:id", admin.GetAIRun)
 		// Phase C — quiz observability (per-user drill-down + summary content).
@@ -290,6 +297,9 @@ func RegisterRoutes(
 		adm.GET("/api/episodes/:id/subtitles", admin.ListSubtitles)
 		adm.GET("/api/subtitles/:id", admin.GetSubtitle)
 		adm.POST("/api/episodes/:id/subtitles", admin.SaveSubtitle)
+		// PR3 — extract an embedded subtitle stream (ffmpeg -map 0:idx -c:s webvtt)
+		// from a probed episode. source="embedded" does NOT trigger polish/segment.
+		adm.POST("/api/episodes/:id/extract-subtitle", admin.ExtractSubtitle)
 		adm.DELETE("/api/subtitles/:id", admin.DeleteSubtitle)
 		adm.POST("/api/subtitles/auto-match", admin.AutoMatchSubtitle)
 

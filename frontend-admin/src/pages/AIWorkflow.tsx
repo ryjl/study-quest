@@ -25,6 +25,12 @@ const JOB_TYPE_LABEL: Record<string, string> = {
   slice: '切片',
   summarize: '总结',
   quiz: '出题',
+  segment: '切片',
+  summary: '总结',
+  polish: '字幕润色',
+  advice: '学习建议',
+  course_summary: '课程总结',
+  user_report: '学习报告',
 };
 
 function jobTypeLabel(t: string): string {
@@ -200,6 +206,20 @@ function JobRow({ job }: { job: AiJob }) {
     onError: (e) => toast.error((e as Error).message),
   });
 
+  // Skip polish: polish-specific escape hatch for a FAILED polish job. Polish
+  // failures HALT the chain (segment never enqueues), so the admin must decide
+  // — retry (retryMut above) or give up on polish and let downstream proceed
+  // off the raw subtitle. Marks the job done + chains segment. 409 (not a
+  // failed polish job) → benign toast.
+  const skipPolishMut = useMutation({
+    mutationFn: () => api.skipPolish(job.id),
+    onSuccess: () => {
+      toast.success('已跳过润色,切片任务已入队(用原始字幕)');
+      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
   return (
     <tr className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
       <td className="px-4 py-3">
@@ -247,14 +267,26 @@ function JobRow({ job }: { job: AiJob }) {
           </button>
         )}
         {job.status === 'failed' && (
-          <button
-            className="btn-ghost btn-sm"
-            disabled={retryMut.isPending}
-            onClick={() => retryMut.mutate()}
-            title="重新排队重试(修复了失败原因后用这个)"
-          >
-            {retryMut.isPending ? '重试中…' : '重试'}
-          </button>
+          <div className="inline-flex gap-1">
+            <button
+              className="btn-ghost btn-sm"
+              disabled={retryMut.isPending}
+              onClick={() => retryMut.mutate()}
+              title="重新排队重试(修复了失败原因后用这个)"
+            >
+              {retryMut.isPending ? '重试中…' : '重试'}
+            </button>
+            {job.job_type === 'polish' && (
+              <button
+                className="btn-ghost btn-sm"
+                disabled={skipPolishMut.isPending}
+                onClick={() => skipPolishMut.mutate()}
+                title="放弃润色,用原始字幕继续切片/总结(润色失败且不想重试时用)"
+              >
+                {skipPolishMut.isPending ? '跳过中…' : '跳过润色'}
+              </button>
+            )}
+          </div>
         )}
       </td>
     </tr>

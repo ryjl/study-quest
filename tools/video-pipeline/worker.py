@@ -64,6 +64,7 @@ import api_client
 import audio
 import cache
 import config as cfg_mod
+import srt_cache
 import transcriber
 from api_client import ApiClient, StaleCompletion
 
@@ -132,6 +133,11 @@ def process_job(client: ApiClient, tr: transcriber.Transcriber, idx: cache.Cache
     )
 
     # ── Cache priority (fast → slow) ──────────────────────────────────────
+    # 0. SRT cache: a previous whisper run already produced the final SRT for
+    #    this (filename, file_size, model). HIT → POST and return, skip
+    #    EVERYTHING else (no wav, no video scan, no netdisk, no ffmpeg, no
+    #    whisper). Fastest path; the common case for re-enqueues after a
+    #    transient backend/network error.
     # 1. WAV cache: a previous run already extracted the 16kHz wav for this
     #    (filename, file_size). HIT → transcribe directly, skip EVERYTHING
     #    else (no video scan, no netdisk URL, no ffmpeg). This is the common
@@ -140,10 +146,28 @@ def process_job(client: ApiClient, tr: transcriber.Transcriber, idx: cache.Cache
     #    local file (no netdisk download).
     # 3. Netdisk: download from the signed URL (slowest, may need mp4 cache).
     #
-    # IMPORTANT: checking wav cache FIRST means that on a wav HIT we don't
-    # even touch the video cache — avoiding the WSL2 9P readdir scan entirely
-    # for the common retry case. Previously the video cache lookup ran on
-    # every job even when the wav was already cached.
+    # IMPORTANT: checking srt cache FIRST means a re-enqueue of an already-
+    # transcribed job doesn't even spin up ffmpeg or whisper — and doesn't
+    # touch the video cache, avoiding the WSL2 9P readdir scan entirely.
+    cached_srt = srt_cache.find_cached_srt(
+        filename=job.episode.filename,
+        file_size=job.episode.file_size,
+        model_name=cfg.whisper.model_path,
+        srt_cache_dir=cfg.audio.srt_cache_dir or None,
+    )
+    if cached_srt is not None:
+        # No heartbeat needed: complete() is a single fast POST. If the backend
+        # says the job is already done (409 StaleCompletion), our cached SRT
+        # is redundant for THIS job — discard it from memory and move on. The
+        # on-disk cache file stays (it's still valid; a future re-enqueue of
+        # the same episode+model would hit it again). Don't retry, don't fail.
+        try:
+            client.complete(job.job_id, cached_srt)
+            log.info("job %d done (from srt cache): %d SRT bytes", job.job_id, len(cached_srt))
+        except StaleCompletion:
+            log.info("job %d stale-completed; cached SRT not needed (kept on disk for future runs)", job.job_id)
+        return
+
     wav_path = audio.find_cached_wav(
         filename=job.episode.filename,
         file_size=job.episode.file_size,
@@ -190,13 +214,37 @@ def process_job(client: ApiClient, tr: transcriber.Transcriber, idx: cache.Cache
             )
         prompt = transcriber.build_prompt(job.episode, cfg.whisper.base_prompt)
         srt = tr.transcribe(wav_path, initial_prompt=prompt, on_progress=hb.set_ratio)
+        # Cache the SRT BEFORE complete(): if the POST fails (network blip) the
+        # transcription work is preserved on disk, so a retry hits the cache and
+        # skips whisper entirely. If complete() raises StaleCompletion we still
+        # keep the cached SRT — it's valid output, another worker just happened
+        # to finish first this time; a future re-enqueue would want it.
+        #
+        # The cache write is best-effort: a full disk / read-only cache dir /
+        # permission error here must NOT fail the job. Whisper already succeeded
+        # and the SRT is in memory — we want to hand it to the server either way.
+        # If saving fails the job still completes, it just won't benefit from the
+        # cache on the next re-run (which is a perf cost, not a correctness one).
+        try:
+            srt_cache.save_srt(
+                filename=job.episode.filename,
+                file_size=job.episode.file_size,
+                model_name=cfg.whisper.model_path,
+                srt_content=srt,
+                srt_cache_dir=cfg.audio.srt_cache_dir or None,
+            )
+        except Exception:
+            log.warning("srt cache save failed; transcription will still upload",
+                        exc_info=True)
         try:
             client.complete(job.job_id, srt)
             log.info("job %d done: %d SRT bytes", job.job_id, len(srt))
         except StaleCompletion:
             # Not an error: another worker (or a reaper + re-claim) finished it.
-            # Our SRT is stale — drop it and move on.
-            log.info("job %d stale-completed by another worker; dropping SRT", job.job_id)
+            # Our SRT is stale for THIS job, but the cached SRT itself is still
+            # valid output — keep it on disk so a future re-enqueue of the same
+            # episode+model hits the cache and skips whisper. (Do NOT unlink.)
+            log.info("job %d stale-completed by another worker; keeping cached SRT for future re-runs", job.job_id)
     finally:
         hb.stop()
         # Intentionally NOT deleting wav_path: it's the retry cache. The WAV
@@ -228,6 +276,8 @@ def main() -> int:
 
     # Purge stale WAVs from previous runs so the cache doesn't grow forever.
     audio.clean_old_wavs(cfg.audio.wav_cache_dir or None, cfg.audio.wav_cache_max_age_days)
+    # Same for the SRT cache (default TTL 30 days — see srt_cache.py).
+    srt_cache.clean_old_srts(cfg.audio.srt_cache_dir or None)
 
     wid = cfg_mod.worker_id(cfg)
     log.info(

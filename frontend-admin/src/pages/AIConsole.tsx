@@ -5,10 +5,12 @@ import { AIUserView } from './AIUserView';
 import { AiProvidersSection } from './AiProvidersSection';
 import { RegenTab } from './ai-console/RegenTab';
 import { PromptConfigTab } from './ai-console/PromptConfigTab';
+import { GlossaryTab } from './ai-console/GlossaryTab';
 
-// AIConsole — the central AI operations page. 5 button tabs:
+// AIConsole — the central AI operations page. 6 button tabs:
 //   - regen (default): regen + delete summaries / advice / quizzes / reports
 //   - prompt: subject-default + course-override prompt editor
+//   - glossary: term-correction candidate review (PR2.5, 字幕润色挖矿产出)
 //   - jobs: existing AIWorkflow (task queue + decision-trace replay)
 //   - users: existing AIUserView (per-student observability)
 //   - providers: existing AiProvidersSection (chat backend config)
@@ -24,6 +26,8 @@ const TABS = [
   // 这个 tab 既有重新生成也有删除,叫"内容管理"比"重新生成"更准。
   { key: 'regen', label: '内容管理' },
   { key: 'prompt', label: 'Prompt 配置' },
+  // PR2.5:字幕润色挖出的术语候选,admin 在这里审核进 TermDict。
+  { key: 'glossary', label: '术语候选' },
   { key: 'jobs', label: '任务队列' },
   { key: 'users', label: '学生数据' },
   { key: 'providers', label: 'Provider' },
@@ -70,6 +74,7 @@ export function AIConsole() {
       <div>
         {tab === 'regen' && <RegenTab />}
         {tab === 'prompt' && <PromptConfigTab />}
+        {tab === 'glossary' && <GlossaryTab />}
         {/* embedded=true 让 AIWorkflow/AIUserView 跳过自己的 PageHeader,
             由 AIConsole 顶部统一提供"AI 控制台"标题,避免双 header。 */}
         {tab === 'jobs' && <AIWorkflow embedded />}

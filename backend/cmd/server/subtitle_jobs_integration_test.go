@@ -408,8 +408,8 @@ func TestSubtitleJobCompleteRejectsStaleCompletion(t *testing.T) {
 	if len(subs) != 1 {
 		t.Fatalf("expected exactly 1 subtitle (worker B's), got %d", len(subs))
 	}
-	if !strings.Contains(subs[0].SrtContent, "worker B") {
-		t.Fatalf("persisted subtitle is not worker B's: %q", subs[0].SrtContent)
+	if !strings.Contains(subs[0].VttContent, "worker B") {
+		t.Fatalf("persisted subtitle is not worker B's: %q", subs[0].VttContent)
 	}
 }
 

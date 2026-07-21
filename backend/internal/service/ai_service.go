@@ -3,16 +3,21 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 
 	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/ai/agent"
+	"studyquest/backend/internal/ai/polish"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/subtitle"
 )
 
 // AIService is the facade for the AI subsystem's business logic: enqueueing and
@@ -32,6 +37,13 @@ type AIService interface {
 	// ── job enqueue (admin-triggered) ──
 	EnqueueSegment(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error)
 	EnqueueSummary(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error)
+	// EnqueuePolish re-runs the subtitle polish pipeline on episodes that have a
+	// whisper-sourced primary subtitle. Use case: admin accepts glossary
+	// candidates → Course.TermDict grows → they want the new terminology applied
+	// to already-polished episodes. Polish reads from RawVttContent (not the
+	// current VttContent) so re-runs don't compound LLM drift. Episodes without
+	// a whisper subtitle, or with an in-flight polish job, are skipped.
+	EnqueuePolish(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error)
 	// EnqueueSegmentForCourse enqueues segment jobs for every episode of a
 	// course that already has a subtitle (the agent needs source material). Used
 	// when an admin flips a course's AI switch from off→on: previously-arrived
@@ -188,7 +200,42 @@ type AIService interface {
 	// they want to re-run. Returns repository.ErrJobNotFailed if the job isn't
 	// currently failed (so the handler can 409 cleanly).
 	RetryJob(jobID uint) error
+	// SkipPolish is the polish-specific escape hatch: when a polish job is
+	// failed and the admin decides the raw subtitle is good enough (or the
+	// provider issue can't be fixed), they skip polish entirely. The job is
+	// marked done ("admin skipped"), the subtitle stays at its current state
+	// (raw whisper text), and segment is chained so downstream AI proceeds.
+	// Only valid on a FAILED POLISH job — other states/types return a 409-mapped
+	// error (ErrJobNotFailed / ErrJobNotPolish).
+	SkipPolish(jobID uint) error
+
+	// ── glossary candidate review (PR2.5) ──
+	// The polish job mines term-correction rules (军→车 in a xiangqi course) and
+	// leaves them as pending GlossaryCandidate rows. These methods are the admin
+	// review surface: list, accept (which promotes the rule into the course's
+	// TermDict so future polish runs apply it), and reject.
+
+	// ListGlossaryCandidates returns the course's candidates, optionally
+	// filtered by status ("" = all). Ordered by confidence desc.
+	ListGlossaryCandidates(courseID uint, status string) ([]model.GlossaryCandidate, error)
+	// AcceptGlossaryCandidate promotes one pending candidate into the course's
+	// TermDict. corrected/context are optional admin edits (the admin can fix a
+	// wrong LLM suggestion before accepting). If applyToSubjectSiblings is true,
+	// the same rule is appended to every other course under the same subject,
+	// sparing the admin from repeating the review for each course. Returns
+	// ErrGlossaryNotPending if the candidate isn't reviewable.
+	AcceptGlossaryCandidate(id uint, corrected, context string, applyToSubjectSiblings bool) error
+	// RejectGlossaryCandidate marks one candidate rejected so it stops surfacing
+	// in the default review list. The row is kept (not deleted) so the polish
+	// job's UpsertCandidate won't re-create it next time. Returns
+	// ErrGlossaryNotPending if the candidate isn't reviewable.
+	RejectGlossaryCandidate(id uint) error
 }
+
+// ErrGlossaryNotPending is returned by Accept/RejectGlossaryCandidate when the
+// target row is already accepted or rejected (the admin double-clicked, or two
+// admins reviewed concurrently). Non-fatal: the handler surfaces 409.
+var ErrGlossaryNotPending = errors.New("glossary candidate is not pending")
 
 type aiService struct {
 	db            *gorm.DB
@@ -201,6 +248,13 @@ type aiService struct {
 	// userRepo feeds advice agent 的 list_user_courses 工具(查学生被授权的课程 id)。
 	// nil 时该工具回退返回空(advice agent 据此降级)。quiz 路径不用它。
 	userRepo aiUserCourseLister
+	// glossaryRepo stores term-correction candidates mined by the polish job.
+	// nil-safe: when nil, polish still runs but skips persisting candidates
+	// (PR2.5 admin UI reads this; tests that don't care about glossary pass nil).
+	glossaryRepo repository.GlossaryRepository
+	// subjectRepo reads Subject rows for the polish job's TermDict lookup
+	// (Course.EffectiveTermDict takes a Subject). nil in tests that don't run polish.
+	subjectRepo repository.SubjectRepository
 }
 
 // aiUserCourseLister 是 aiService 对 userRepo 的窄依赖:只暴露 advice 工具需要的
@@ -256,6 +310,8 @@ func NewAIService(
 	resolver *ai.ProviderResolver,
 	unlockService UnlockService,
 	userRepo aiUserCourseLister,
+	glossaryRepo repository.GlossaryRepository,
+	subjectRepo repository.SubjectRepository,
 ) AIService {
 	s := &aiService{
 		db:            db,
@@ -265,6 +321,8 @@ func NewAIService(
 		resolver:      resolver,
 		unlockService: unlockService,
 		userRepo:      userRepo,
+		glossaryRepo:  glossaryRepo,
+		subjectRepo:   subjectRepo,
 	}
 	go s.runWorker() // single in-process worker goroutine; see runWorker
 	return s
@@ -332,6 +390,10 @@ const (
 	prioritySegment = 2
 	prioritySummary = 1
 	priorityAdvice  = 1
+	// priorityPolish: polish 是 segment 的上游(字幕先润色再切片),所以略高于
+	// segment(2)。但低于 quiz(10)——学生在屏幕前等出题永远最优先。后台批量任务,
+	// 不在屏幕前干等。
+	priorityPolish = 3
 	// priorityCourseSummary:和 advice/summary 同级——admin 手动触发,客户端轮询显示
 	// generating,不在屏幕前干等,低优先级不饿死 quiz。
 	priorityCourseSummary = 1
@@ -365,6 +427,66 @@ func (s *aiService) enqueue(episodeIDs []uint, jobType string, priority int) ([]
 			CourseID:  &courseID,
 			Status:    "queued",
 			Priority:  priority,
+		}
+		if err := s.contentRepo.CreateJob(job); err != nil {
+			skipped[epID] = "入队失败: " + err.Error()
+			continue
+		}
+		enqueued = append(enqueued, epID)
+	}
+	return enqueued, skipped, nil
+}
+
+// EnqueuePolish re-runs the polish pipeline on the given episodes. Unlike
+// EnqueueSegment/Summary (which are "first time" triggers), polish has extra
+// preconditions:
+//   - The episode must have a PRIMARY subtitle whose source is "whisper" — the
+//     raw transcript is what polish corrects. source=embedded/manual rows are
+//     human-corrected and polish skips them (runPolishJob enforces this too).
+//     source=llm_optimized (already polished) IS allowed here — that's the
+//     whole point: re-polish with an updated TermDict.
+//   - No in-flight polish job (dedup, mirrors the summary chain's hasPendingJob).
+//
+// Re-polish is drift-safe because runPolishJob reads RawVttContent (the
+// immutable whisper snapshot), not the current (possibly already-polished)
+// VttContent. See model.Subtitle.RawVttContent doc.
+func (s *aiService) EnqueuePolish(episodeIDs []uint) ([]uint, map[uint]string, error) {
+	enqueued := make([]uint, 0, len(episodeIDs))
+	skipped := make(map[uint]string)
+	for _, epID := range episodeIDs {
+		ep, err := s.episodeRepo.FindByID(epID)
+		if err != nil {
+			skipped[epID] = "查询课时失败: " + err.Error()
+			continue
+		}
+		if ep == nil {
+			skipped[epID] = "课时不存在"
+			continue
+		}
+		// Must have a whisper-sourced primary subtitle to polish. embedded/
+		// manual tracks are human-corrected; polishing them is a no-op at best
+		// and confusing at worst (the admin didn't ask whisper to re-transcribe).
+		// llm_optimized IS allowed (re-polish with richer TermDict).
+		sub, _ := s.episodeRepo.GetSubtitle(epID)
+		if sub == nil {
+			skipped[epID] = "无字幕"
+			continue
+		}
+		if sub.Source != "whisper" && sub.Source != "llm_optimized" {
+			skipped[epID] = "字幕来源为 " + sub.Source + "（仅 whisper 转录可润色）"
+			continue
+		}
+		if s.hasPendingJob("polish", epID) {
+			skipped[epID] = "已有在途 polish 作业"
+			continue
+		}
+		epIDCopy, courseIDCopy := epID, ep.CourseID
+		job := &model.AIJob{
+			JobType:   "polish",
+			EpisodeID: &epIDCopy,
+			CourseID:  &courseIDCopy,
+			Status:    "queued",
+			Priority:  priorityPolish,
 		}
 		if err := s.contentRepo.CreateJob(job); err != nil {
 			skipped[epID] = "入队失败: " + err.Error()
@@ -436,28 +558,41 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	if !course.AISummaryEnabled && !course.AIQuizEnabled {
 		return // AI off for this course — leave it as a plain subtitled video.
 	}
-	// Dedup: if a segment job is already queued/processing for this episode,
-	// don't stack another. The same episode can complete twice in quick
-	// succession (e.g. a reaper race resets a stale job that then also
-	// completes), and the segment result is idempotent anyway
-	// (ReplaceChunksForEpisode is DELETE+INSERT), so a duplicate only wastes
-	// LLM/embedding budget. Mirrors the guard already present in
-	// EnqueueSegmentForCourse and the segment→summary chain.
-	if s.hasPendingJob("segment", episodeID) {
+	// Branch on the subtitle's source:
+	//   whisper → enqueue polish first; polish's chain will enqueue segment
+	//            once the transcript is corrected. This avoids segmenting
+	//            (and embedding) a raw transcript full of homophones.
+	//   embedded / manual → already human-corrected, skip polish and go
+	//            straight to segment.
+	// We also gate polish on a resolver being configured: if AI isn't set up
+	// at all, polishing would just fail-and-block, so we skip straight to
+	// segment (which will itself skip cleanly on no-embedder) rather than
+	// leave the chain stuck on a job that can't succeed yet.
+	sub, _ := s.episodeRepo.GetSubtitle(episodeID)
+	shouldPolish := sub != nil && sub.Source == "whisper" && s.resolver != nil
+	// Dedup guard target depends on the branch: polish branch dedups on polish
+	// jobs (we're about to enqueue one), segment branch on segment jobs.
+	// Either way, if the relevant next step is already queued/processing we
+	// don't stack another. The chain (polish→segment, or direct segment) is
+	// idempotent in result, so a duplicate only wastes budget.
+	if shouldPolish {
+		if s.hasPendingJob("polish", episodeID) {
+			return
+		}
+		epID, courseID := episodeID, ep.CourseID
+		job := &model.AIJob{
+			JobType:   "polish",
+			EpisodeID: &epID,
+			CourseID:  &courseID,
+			Status:    "queued",
+			Priority:  priorityPolish,
+		}
+		if err := s.contentRepo.CreateJob(job); err != nil {
+			log.Printf("AI: failed to enqueue polish job for episode %d: %v", episodeID, err)
+		}
 		return
 	}
-	epID := episodeID
-	courseID := ep.CourseID
-	job := &model.AIJob{
-		JobType:   "segment",
-		EpisodeID: &epID,
-		CourseID:  &courseID,
-		Status:    "queued",
-		Priority:  prioritySegment,
-	}
-	if err := s.contentRepo.CreateJob(job); err != nil {
-		log.Printf("AI: failed to enqueue segment job for episode %d: %v", episodeID, err)
-	}
+	s.enqueueSegmentForPolish(episodeID, ep.CourseID)
 }
 
 // hasPendingJob reports whether a queued/processing job of jobType exists for
@@ -487,9 +622,28 @@ func (s *aiService) hasPendingJob(jobType string, episodeID uint) bool {
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
 func (s *aiService) runWorker() {
-	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report"}
+	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report", "polish"}
 	for {
-		s.processOneJob(jobTypes)
+		// recover guard: a panic in any job handler (nil deref on a deleted
+		// row, a bug in a new job type, etc.) MUST NOT kill the worker
+		// goroutine — that would silently halt ALL background AI processing
+		// (segment/summary/quiz/polish/...) until the process is restarted.
+		// We mark the panicking job failed (so it surfaces in the admin UI
+		// instead of vanishing) and keep draining the queue. The panic's stack
+		// is logged so it's still debuggable.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("AI worker: PANIC recovered (worker stays alive): %v", r)
+					// Best-effort failJob on whatever job was in flight; we don't
+					// know which one here (processOneJob claimed it internally),
+					// so we can't stamp a specific error. The job stays
+					// 'processing' and the reaper will reset it after 30min.
+					// That's acceptable — the point is keeping the worker alive.
+				}
+			}()
+			s.processOneJob(jobTypes)
+		}()
 		// Poll every 3s. A real impl might use a channel signaled on enqueue,
 		// but a poll is simpler and the 3s latency is invisible to the admin
 		// (jobs take 5-30s to run anyway).
@@ -521,6 +675,8 @@ func (s *aiService) processOneJob(jobTypes []string) {
 		s.runCourseSummaryJob(job)
 	case "user_report":
 		s.runUserReportJob(job)
+	case "polish":
+		s.runPolishJob(job)
 	default:
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "unknown job_type: "+job.JobType, nil)
 	}
@@ -554,8 +710,9 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 		s.failJob(job, "no subtitle for this episode")
 		return
 	}
-	// 2. Parse + segment.
-	cues, err := ai.ParseSRT(sub.SrtContent)
+	// 2. Parse + segment. The subtitle is stored as VTT; convert to SRT for
+	// the existing parser (VTT styling/settings stripped — AI doesn't need them).
+	cues, err := ai.ParseSRT(subtitle.VttToSrt(sub.VttContent))
 	if err != nil {
 		s.failJob(job, "parse SRT: "+err.Error())
 		return
@@ -624,7 +781,249 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 				}
 			}
 		}
+}
+
+// runPolishJob runs the subtitle-homophone-correction pipeline on an episode's
+// primary whisper subtitle. This is the first link of the post-Complete chain
+// (polish → segment → summary): a whisper transcript lands raw and full of
+// homophone errors (军/局→车, 金→进 in xiangqi), so before the segmenter cuts
+// it into chunks we let an LLM fix the obvious ones using a course-specific
+// term dictionary.
+//
+// Failure semantics are deliberately "block, don't skip": a failed polish job
+// HALTS the chain — segment is NOT auto-enqueued. The admin sees the failed
+// job in the AI Console and chooses: Retry (re-run polish with the same or a
+// fixed provider) or SkipPolish (give up on polish, fall back to the raw
+// subtitle, and let segment/summary proceed off the un-corrected text). This
+// matches the user's explicit requirement that polish problems surface for
+// human judgement rather than silently degrading downstream quality.
+//
+// Only whisper-sourced primary subtitles are polished. Embedded/manual tracks
+// are already human-corrected; OnSubtitleCompleted routes them straight to
+// segment, never enqueueing a polish job in the first place. The source check
+// here is defense-in-depth (a misrouted job skips cleanly instead of polishing
+// a track that shouldn't be).
+func (s *aiService) runPolishJob(job *model.AIJob) {
+	ctx := context.Background()
+	if s.resolver == nil {
+		// No resolver = AI entirely off. Block (failed) so the admin notices
+		// once they configure a provider; they can retry or skip then.
+		s.failJob(job, "AI not configured (no resolver)")
+		return
 	}
+	if job.EpisodeID == nil || job.CourseID == nil {
+		s.failJob(job, "polish job missing episode_id/course_id")
+		return
+	}
+	episodeID, courseID := *job.EpisodeID, *job.CourseID
+
+	sub, err := s.episodeRepo.GetSubtitle(episodeID)
+	if err != nil {
+		s.failJob(job, "load subtitle: "+err.Error())
+		return
+	}
+	if sub == nil {
+		s.failJob(job, "no primary subtitle for this episode")
+		return
+	}
+	if sub.Source != "whisper" {
+		// Shouldn't happen (OnSubtitleCompleted gates on source), but if a
+		// misrouted job slips through, skip it cleanly rather than polishing
+		// a track that's already human-corrected. This is NOT a failure —
+		// chain to segment so downstream proceeds.
+		s.contentRepo.UpdateJobStatus(job.ID, "skipped",
+			"source="+sub.Source+" not eligible for polish", nil)
+		s.enqueueSegmentForPolish(episodeID, courseID)
+		return
+	}
+
+	llm, err := s.resolver.ResolveChatByPurpose("polish")
+	if err != nil {
+		// Provider not configured / misconfigured. Block — admin fixes the
+		// provider config and retries. We do NOT fall through to segment,
+		// because the whole point of polish is to fix the raw transcript
+		// before AI consumes it.
+		s.failJob(job, "resolve chat provider: "+err.Error())
+		return
+	}
+	modelName := s.resolver.ChatModelNameByPurpose("polish")
+
+	// Build the polish request: TermDict comes from Course + Subject merge
+	// (Course.EffectiveTermDict). Subject is also passed to the LLM as domain
+	// context ("xiangqi" vs "math" primes it toward the right terminology).
+	course, err := s.courseRepo.FindByID(courseID)
+	if err != nil {
+		s.failJob(job, "load course: "+err.Error())
+		return
+	}
+	if course == nil {
+		// courseRepo.FindByID returns (nil, nil) when the row was deleted
+		// between enqueue and run. Split from the err branch above so we don't
+		// dereference a nil err — that panic would kill the AI worker goroutine
+		// (runWorker has no recover).
+		s.failJob(job, fmt.Sprintf("course %d not found (deleted after polish enqueue?)", courseID))
+		return
+	}
+	var subject model.Subject
+	if s.subjectRepo != nil {
+		if subj, serr := s.subjectRepo.FindByID(course.SubjectID); serr == nil && subj != nil {
+			subject = *subj
+		}
+	}
+	termDict := course.EffectiveTermDict(subject)
+	subjectLabel := subject.Label
+	if subjectLabel == "" {
+		// Fall back to the key (e.g. "math") when Label is empty — the
+		// polish prompt just needs SOME domain hint.
+		subjectLabel = subject.Key
+	}
+
+	// Polish deadline: the PoC ran 7m13s for a 157k-char episode at concurrency 3.
+	// 20 min is a generous ceiling that still catches a stuck relay.
+	polishCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+
+	// Source the polish input from RawVttContent (the immutable pre-polish
+	// snapshot) when it exists, falling back to VttContent for legacy rows
+	// that predate the RawVttContent column. This is the WHOLE POINT of
+	// RawVttContent (see model.Subtitle doc): re-running polish must start
+	// from the original whisper transcript each time, not from a prior polish
+	// result — otherwise LLM drift compounds across re-polishes. The snapshot
+	// is written by SaveSubtitleWithSource (Complete/upload/embedded extract
+	// paths) and never overwritten by polish itself.
+	polishInput := sub.RawVttContent
+	if strings.TrimSpace(polishInput) == "" {
+		polishInput = sub.VttContent
+	}
+
+	result, err := polish.Polish(polishCtx, llm, modelName, polish.PolishRequest{
+		VttContent: polishInput,
+		TermDict:   termDict,
+		Subject:    subjectLabel,
+	})
+	if err != nil {
+		s.failJob(job, "polish: "+err.Error())
+		return
+	}
+
+	// Persist the polished subtitle. We write ONLY VttContent + Optimized +
+	// Source — RawVttContent stays empty here so episodeRepo.SaveSubtitle's
+	// "non-empty only" guard leaves the original snapshot untouched. IsPrimary
+	// is echoed back from the loaded sub so the upsert doesn't accidentally
+	// demote the primary track.
+	if err := s.episodeRepo.SaveSubtitle(&model.Subtitle{
+		ID:            sub.ID,
+		EpisodeID:     sub.EpisodeID,
+		Language:      sub.Language,
+		Label:         sub.Label,
+		VttContent:    result.PolishedVtt,
+		Source:        "llm_optimized",
+		Optimized:     true,
+		IsPrimary:     sub.IsPrimary,
+	}); err != nil {
+		s.failJob(job, "persist polished subtitle: "+err.Error())
+		return
+	}
+
+	// Mine term candidates for the admin review queue (PR2.5 UI). Best-effort:
+	// a failure here doesn't unwind the polish itself (the subtitle is already
+	// corrected and useful); we just log and move on. nil glossaryRepo in tests.
+	if s.glossaryRepo != nil && len(result.Glossary) > 0 {
+		candidates := polishGlossaryToModel(courseID, result.Glossary)
+		if err := s.glossaryRepo.UpsertCandidates(candidates); err != nil {
+			log.Printf("AI: polish job %d: glossary upsert failed (non-fatal): %v", job.ID, err)
+		}
+	}
+
+	detail := fmt.Sprintf("polished: %d/%d cues changed, %d glossary candidates, cost≈%s",
+		result.Stats.ChangedCues, result.Stats.TotalCues, len(result.Glossary),
+		result.Stats.Duration.Truncate(time.Second))
+	if result.Stats.PartialOptimized {
+		// List which chunks failed + their last error, capped so a pathological
+		// relay doesn't blow up the error column. The chunk index is 0-based
+		// and maps to a contiguous cue range, so the admin can tell which part
+		// of the subtitle wasn't polished.
+		detail += fmt.Sprintf(" (partial: %d/%d chunks failed", result.Stats.FailedChunks, result.Stats.ChunkCount)
+		// Collect + sort by chunk idx NUMERICALLY (not lexically — "chunk#10"
+		// would sort before "chunk#2" under string sort). Cap each error at 120
+		// runes so one verbose parse failure doesn't dominate the job detail.
+		type failEntry struct {
+			idx int
+			err string
+		}
+		entries := make([]failEntry, 0, len(result.Stats.FailedChunkErrors))
+		for idx, e := range result.Stats.FailedChunkErrors {
+			// Truncate by RUNE count, not bytes — error strings carry Chinese
+			// (ffmpeg/relay messages localized) and a byte cut would produce
+			// invalid UTF-8 mid-character.
+			if rs := []rune(e); len(rs) > 120 {
+				e = string(rs[:120]) + "…"
+			}
+			entries = append(entries, failEntry{idx, e})
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
+		if len(entries) > 0 {
+			parts := make([]string, len(entries))
+			for i, e := range entries {
+				parts[i] = fmt.Sprintf("chunk#%d: %s", e.idx, e.err)
+			}
+			detail += "; " + strings.Join(parts, "; ")
+		}
+		detail += ")"
+	}
+	s.contentRepo.UpdateJobStatus(job.ID, "done", detail, nil)
+
+	// Chain to segment NOW that the polished subtitle is in place. Mirrors
+	// runSegmentJob's chain-to-summary: same priority, same hasPendingJob guard.
+	s.enqueueSegmentForPolish(episodeID, courseID)
+}
+
+// enqueueSegmentForPolish chains a segment job after a successful polish (or
+// after a non-whisper subtitle completed, or after the admin skips polish).
+// Centralized so runPolishJob, SkipPolish, and OnSubtitleCompleted's non-whisper
+// branch all share the exact same gate logic. The hasPendingJob guard prevents
+// stacking: if a segment job is already queued/processing (e.g. a previous run
+// left one), this is a no-op.
+func (s *aiService) enqueueSegmentForPolish(episodeID, courseID uint) {
+	if s.hasPendingJob("segment", episodeID) {
+		return
+	}
+	epID, cID := episodeID, courseID
+	job := &model.AIJob{
+		JobType:   "segment",
+		EpisodeID: &epID,
+		CourseID:  &cID,
+		Status:    "queued",
+		Priority:  prioritySegment,
+	}
+	if err := s.contentRepo.CreateJob(job); err != nil {
+		log.Printf("AI: failed to chain-enqueue segment job for episode %d: %v", episodeID, err)
+	}
+}
+
+// polishGlossaryToModel converts the polish package's mined candidates into
+// model rows ready for UpsertCandidates. EvidenceCount is seeded from the
+// number of cue ids the LLM cited, so the first sighting of a rule starts at
+// the right count instead of 1. EvidenceSample is left empty for now — the
+// polish package carries cue ids (not text), and PR2.5's accept UI will
+// re-derive sample text from the persisted diff if the admin wants to see
+// examples. The schema field is kept ready for that.
+func polishGlossaryToModel(courseID uint, in []polish.GlossaryCandidate) []model.GlossaryCandidate {
+	out := make([]model.GlossaryCandidate, 0, len(in))
+	for _, g := range in {
+		out = append(out, model.GlossaryCandidate{
+			CourseID:      courseID,
+			Original:      g.Original,
+			Corrected:     g.Corrected,
+			Context:       g.Context,
+			Confidence:    g.Confidence,
+			EvidenceCount: len(g.EvidenceIDs),
+			Status:        "pending",
+		})
+	}
+	return out
+}
+
 
 // runSummaryJob reads an episode's chunks and asks the summarizer to summarize.
 // Requires chunks to exist (a segment job must have run first). If none exist,
@@ -672,12 +1071,12 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 		summaryHint = course.EffectiveSummaryHint(subj)
 		termDict = course.EffectiveTermDict(subj)
 	}
-	llm, err := s.resolver.ResolveChat()
+	llm, err := s.resolver.ResolveChatByPurpose("summary")
 	if err != nil {
 		s.failJob(job, "resolve chat provider: "+err.Error())
 		return
 	}
-	modelName := s.resolver.ChatModelName()
+	modelName := s.resolver.ChatModelNameByPurpose("summary")
 	summarizer := agent.NewSummarizer(llm, s.contentRepo, modelName)
 	_, err = summarizer.Summarize(ctx, agent.SummarizerRequest{
 		EpisodeID:   episodeID,
@@ -877,7 +1276,213 @@ func (s *aiService) RetryJob(jobID uint) error {
 	return s.contentRepo.RetryJob(jobID)
 }
 
-// jobNameCache holds batch-resolved id→title maps for a set of jobs, so the list
+// SkipPolish is the admin escape hatch for a stuck (failed) polish job. It:
+//  1. validates the job is a polish job AND currently failed — anything else
+//     is a misuse (409 to the admin, not a silent success).
+//  2. marks the job done with "admin skipped polish" so it leaves the failed
+//     queue and stops showing as an error.
+//  3. chains a segment job so downstream AI proceeds off the raw subtitle.
+//
+// The subtitle itself is left untouched (still raw whisper text, optimized=
+// false). If the admin later wants polish after all, they enqueue a fresh
+// polish job via EnqueueSegmentForCourse-style batch (or the future regen UI).
+// There's no "un-skip" — re-running polish is just a new polish job.
+func (s *aiService) SkipPolish(jobID uint) error {
+	job, err := s.contentRepo.GetJob(jobID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return repository.ErrJobNotFound
+	}
+	if job.JobType != "polish" {
+		return repository.ErrJobNotPolish
+	}
+	if job.Status != "failed" {
+		return repository.ErrJobNotFailed
+	}
+	s.contentRepo.UpdateJobStatus(jobID, "done", "admin skipped polish", nil)
+	if job.EpisodeID != nil && job.CourseID != nil {
+		s.enqueueSegmentForPolish(*job.EpisodeID, *job.CourseID)
+	}
+	return nil
+}
+
+// --- glossary candidate review (PR2.5) ---
+//
+// The polish job mines term-correction rules and leaves them as pending
+// candidates. The admin reviews them in the AI Console: accept promotes a rule
+// into the course TermDict (so future polish runs apply it automatically),
+// reject hides it from the default review list. Accepted/rejected rows are
+// kept so UpsertCandidate won't re-create them next polish run.
+
+// formatTermDictEntry renders one candidate as the TermDict format the polish
+// prompt understands: "original→corrected（context）". Parens + context are
+// omitted when context is empty (the prompt tolerates both forms). This is the
+// exact shape Course.EffectiveTermDict returns to the polish job, so what the
+// admin accepts is byte-identical to what the next polish run receives.
+func formatTermDictEntry(original, corrected, context string) string {
+	context = strings.TrimSpace(context)
+	if context == "" {
+		return original + "→" + corrected
+	}
+	return original + "→" + corrected + "（" + context + "）"
+}
+
+// appendTermDict appends one entry to a course's TermDict string, respecting
+// the ';' separator. Handles the empty-existing case (no leading separator)
+// and dedup: if the exact entry is already present (admin re-accepting after a
+// context edit), it's a no-op.
+func appendTermDict(existing, entry string) string {
+	existing = strings.TrimSpace(existing)
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return existing
+	}
+	// Dedup: scan existing semicolon-separated entries for an exact match.
+	for _, e := range strings.Split(existing, ";") {
+		if strings.TrimSpace(e) == entry {
+			return existing
+		}
+	}
+	if existing == "" {
+		return entry
+	}
+	return existing + ";" + entry
+}
+
+// applyGlossaryToCourse mutates one course's AIConfig.TermDict in place by
+// appending the entry, then persists the course. Centralized so the accept and
+// the apply-to-siblings paths share the exact same write logic.
+func (s *aiService) applyGlossaryToCourse(courseID uint, entry string) error {
+	course, err := s.courseRepo.FindByID(courseID)
+	if err != nil {
+		return fmt.Errorf("load course %d: %w", courseID, err)
+	}
+	if course == nil {
+		return nil // course deleted between polish and review — skip silently
+	}
+	cfg := course.AIConfig()
+	cfg.TermDict = appendTermDict(cfg.TermDict, entry)
+	course.SetAIConfig(cfg)
+	return s.courseRepo.Update(course)
+}
+
+// ListGlossaryCandidates delegates to the repo. The handler passes "" for
+// status to show all, or "pending" for the default review list.
+func (s *aiService) ListGlossaryCandidates(courseID uint, status string) ([]model.GlossaryCandidate, error) {
+	if s.glossaryRepo == nil {
+		return nil, errors.New("glossary subsystem not configured")
+	}
+	return s.glossaryRepo.ListByCourse(courseID, status)
+}
+
+// AcceptGlossaryCandidate promotes one pending candidate into TermDict. The
+// admin may override corrected/context (e.g. the LLM suggested 居 but the admin
+// knows it should be 車) — the overrides are applied both to the candidate row
+// (so the record reflects what was actually accepted) and to the TermDict entry.
+// applyToSubjectSiblings repeats the TermDict append on every other course
+// under the same subject, sparing the admin from per-course review.
+func (s *aiService) AcceptGlossaryCandidate(id uint, correctedOverride, contextOverride string, applyToSubjectSiblings bool) error {
+	if s.glossaryRepo == nil {
+		return errors.New("glossary subsystem not configured")
+	}
+	c, err := s.glossaryRepo.FindByID(id)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return repository.ErrGlossaryNotFound
+	}
+	if c.Status != "pending" {
+		return ErrGlossaryNotPending
+	}
+	// Apply admin overrides (empty = keep the LLM's values).
+	corrected := strings.TrimSpace(correctedOverride)
+	if corrected == "" {
+		corrected = c.Corrected
+	}
+	context := strings.TrimSpace(contextOverride)
+	if context == "" {
+		context = c.Context
+	}
+	// Stamp the row as accepted with the FINAL (possibly admin-edited) values.
+	c.Corrected = corrected
+	c.Context = context
+	c.Status = "accepted"
+	now := time.Now()
+	c.AcceptedAt = &now
+	if err := s.glossaryRepo.Update(c); err != nil {
+		return err
+	}
+
+	// Promote to the originating course's TermDict.
+	entry := formatTermDictEntry(c.Original, corrected, context)
+	if err := s.applyGlossaryToCourse(c.CourseID, entry); err != nil {
+		return err
+	}
+
+	// Optional cross-course推广: same subject, every other course gets the rule
+	// too. Best-effort — a failure on one sibling course doesn't unwind the
+	// accept itself (the candidate is already marked accepted on the origin
+	// course); we log and continue so one bad course doesn't block the rest.
+	if applyToSubjectSiblings {
+		origin, err := s.courseRepo.FindByID(c.CourseID)
+		// Guard against SubjectID==0: courseRepo.List("", 0, ...) skips the
+		// subject filter entirely (0 means "no filter" in that query), so
+		// without this check we'd推广 the rule to EVERY course in the DB — a
+		// xiangqi term would land in math/english/... TermDicts. A course with
+		// no subject has no siblings by definition; skip the推广 silently.
+		if err == nil && origin != nil && origin.SubjectID != 0 {
+		// contentType=ContentLearning: 推广只覆盖同学科的学习课程。
+		// entertainment 课程（动画片/电影）即使共享学科 key，其术语需求和
+		// 学习课也不同——象棋术语不该被强加给一部电影。接受的术语进的是
+		// 每门课独立的 TermDict（admin 在 Prompt 配置 tab 可随时改/删），
+		// 所以如果某门娱乐课确实需要该术语，admin 可手动去那门课加。
+		// 用具体的 ContentLearning 而非 ""，因为后者也会 fallback 到 learning
+		// 但语义不显式；显式更清晰且未来想放开时只改这一处。
+		siblings, lerr := s.courseRepo.List("", origin.SubjectID, model.ContentLearning, nil)
+			if lerr != nil {
+				log.Printf("glossary accept: list subject %d siblings failed (non-fatal): %v", origin.SubjectID, lerr)
+			}
+			for i := range siblings {
+				sib := &siblings[i]
+				if sib.ID == origin.ID {
+					continue
+				}
+				if err := s.applyGlossaryToCourse(sib.ID, entry); err != nil {
+					log.Printf("glossary accept: apply to sibling course %d failed (non-fatal): %v", sib.ID, err)
+				}
+			}
+		} else if err == nil && origin != nil && origin.SubjectID == 0 {
+			log.Printf("glossary accept: course %d has no subject; skipping sibling推广", origin.ID)
+		}
+	}
+	return nil
+}
+
+// RejectGlossaryCandidate marks one candidate rejected. The row stays (it's
+// the dedup anchor that stops UpsertCandidate re-creating it), it just leaves
+// the default review list (which filters status=pending).
+func (s *aiService) RejectGlossaryCandidate(id uint) error {
+	if s.glossaryRepo == nil {
+		return errors.New("glossary subsystem not configured")
+	}
+	c, err := s.glossaryRepo.FindByID(id)
+	if err != nil {
+		return err
+	}
+	if c == nil {
+		return repository.ErrGlossaryNotFound
+	}
+	if c.Status != "pending" {
+		return ErrGlossaryNotPending
+	}
+	c.Status = "rejected"
+	return s.glossaryRepo.Update(c)
+}
+
+
 // view can render names without an N+1 (one query per distinct episode/course/
 // user, not one per job). Titles are best-effort: a missing id (deleted row)
 // simply isn't in the map, and forJob returns "" for it.

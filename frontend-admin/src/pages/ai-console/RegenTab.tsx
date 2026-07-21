@@ -67,6 +67,8 @@ function CourseRegenColumn() {
   });
   const episodes = episodesQ.data ?? [];
   const selectedCourse = courses.find((c) => c.id === courseId);
+  // 课程下是否有任何字幕——给课程总结按钮做 gate(无字幕则禁用)。
+  const noSubtitleAtAll = episodes.length > 0 && episodes.every((ep) => (ep.subtitle_count ?? 0) === 0);
 
   // 课程总结状态(三态):ready / generating / ''(未生成)。
   // 生成中自动轮询;ready 时 gate 删除按钮 + 显示文本预览 + 陈旧提示。
@@ -137,6 +139,22 @@ function CourseRegenColumn() {
     },
     onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '入队失败'),
   });
+  // Per-episode polish regen: re-run the subtitle polish pipeline. The typical
+  // trigger is "I just accepted glossary candidates → TermDict grew → apply the
+  // new terminology to this episode's already-polished subtitle". Drift-safe:
+  // the backend reads RawVttContent (original whisper transcript), not the
+  // current polished text, so re-polishing doesn't compound LLM changes.
+  const regenPolishMut = useMutation({
+    mutationFn: (episodeId: number) => api.enqueueAiJobs('polish', [episodeId]),
+    onSuccess: (_d, _episodeId) => {
+      toast.success('已入队润色,进度见「任务队列」标签');
+      qc.invalidateQueries({ queryKey: ['ai-jobs'] });
+      // The episode's subtitle_count / source may change once polish finishes;
+      // invalidate courses so the badge + source label refresh on next read.
+      qc.invalidateQueries({ queryKey: ['courses'] });
+    },
+    onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '入队失败'),
+  });
   const deleteEpisodeSummaryMut = useMutation({
     mutationFn: (episodeId: number) => api.deleteSummary(episodeId),
     onSuccess: () => {
@@ -189,14 +207,22 @@ function CourseRegenColumn() {
                 <button
                   className="btn-ghost btn-sm"
                   onClick={() => triggerSummaryMut.mutate()}
-                  disabled={triggerSummaryMut.isPending || summaryStatus === 'generating'}
-                  title={summaryStatus === 'ready' ? '重新生成(覆盖当前总结)' : '生成课程总结(异步入队)'}
+                  disabled={noSubtitleAtAll || triggerSummaryMut.isPending || summaryStatus === 'generating'}
+                  title={
+                    noSubtitleAtAll
+                      ? '该课程下没有任何字幕，无法生成总结'
+                      : summaryStatus === 'ready'
+                        ? '重新生成(覆盖当前总结)'
+                        : '生成课程总结(异步入队)'
+                  }
                 >
                   {triggerSummaryMut.isPending
                     ? '提交中…'
-                    : summaryStatus === 'ready'
-                      ? '重新生成'
-                      : '生成总结'}
+                    : noSubtitleAtAll
+                      ? '无字幕'
+                      : summaryStatus === 'ready'
+                        ? '重新生成'
+                        : '生成总结'}
                 </button>
                 {/* 删除只在有总结时显示。无总结时点删除是无效的幂等 no-op,显示出来反而误导。 */}
                 {summaryStatus === 'ready' && (
@@ -254,6 +280,7 @@ function CourseRegenColumn() {
               <ul className="space-y-1">
                 {episodes.map((ep) => {
                   const hasSummary = episodesWithSummary.has(ep.id);
+                  const noSubtitle = (ep.subtitle_count ?? 0) === 0;
                   return (
                     <li
                       key={ep.id}
@@ -263,18 +290,38 @@ function CourseRegenColumn() {
                         <div className="truncate text-sm text-txt">{ep.title}</div>
                         <div className="text-[10px] text-muted">
                           #{ep.id}
-                          {hasSummary ? null : <span className="ml-1.5 text-muted/70">· 未生成</span>}
+                          {noSubtitle ? (
+                            <span className="ml-1.5 text-muted/70">· 无字幕</span>
+                          ) : hasSummary ? null : (
+                            <span className="ml-1.5 text-muted/70">· 未生成</span>
+                          )}
                         </div>
                       </div>
                       <div className="flex flex-shrink-0 items-center gap-1">
                         <button
                           className="btn-ghost btn-sm"
                           onClick={() => regenEpisodeMut.mutate(ep.id)}
-                          disabled={regenEpisodeMut.isPending}
-                          title={hasSummary ? '重新生成该课时总结(异步入队)' : '生成该课时总结(异步入队)'}
+                          disabled={noSubtitle || regenEpisodeMut.isPending}
+                          title={
+                            noSubtitle
+                              ? '该课时没有字幕，无法生成总结'
+                              : hasSummary
+                                ? '重新生成该课时总结(异步入队)'
+                                : '生成该课时总结(异步入队)'
+                          }
                         >
-                          {hasSummary ? '重新生成' : '生成'}
+                          {noSubtitle ? '无字幕' : hasSummary ? '重新生成' : '生成'}
                         </button>
+                        {!noSubtitle && (
+                          <button
+                            className="btn-ghost btn-sm"
+                            onClick={() => regenPolishMut.mutate(ep.id)}
+                            disabled={regenPolishMut.isPending}
+                            title="重新润色该课时字幕(从原始 whisper 文本重跑,不会越润越偏)。典型场景:刚在「术语候选」接受了新术语,想应用到这节课。"
+                          >
+                            {regenPolishMut.isPending ? '入队中…' : '重新润色'}
+                          </button>
+                        )}
                         {hasSummary && (
                           <button
                             className="btn-ghost btn-sm text-bad hover:bg-bad/10"

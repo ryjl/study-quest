@@ -51,6 +51,12 @@ class AudioCfg:
     # doesn't re-download from the netdisk. Default ~/.cache/sq-whisper/wav.
     wav_cache_dir: str = ""
     wav_cache_max_age_days: float = 7.0
+    # Where final SRTs are cached (keyed by filename+size+model). This is the
+    # fastest path: a previous whisper run already produced the SRT, so a retry
+    # skips even the transcription. Default ~/.cache/sq-whisper/srt.
+    # (Lives under AudioCfg to mirror wav_cache_dir — both are extracted/derived
+    # artifacts cached on the worker.) TTL is fixed at 30 days in srt_cache.py.
+    srt_cache_dir: str = ""
 
 
 @dataclasses.dataclass
