@@ -7,6 +7,7 @@ import { fmtTime } from '../lib/format';
 import { SUBTITLE_STATUS_META as STATUS_META, STATUS_FILTERS } from '../lib/jobStatus';
 import { pollWhileActive, pollWhen } from '../lib/query';
 import { PageHeader } from '../components/PageHeader';
+import { SubtitleRow } from '../components/SubtitleRow';
 
 export function SubtitleQueue() {
   const qc = useQueryClient();
@@ -45,6 +46,19 @@ export function SubtitleQueue() {
     mutationFn: api.retrySubtitleJob,
     onSuccess: () => {
       toast.success('已重新排队');
+      qc.invalidateQueries({ queryKey: ['subtitle-jobs'] });
+      qc.invalidateQueries({ queryKey: ['subtitle-jobs-stats'] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+  // reset is the manual counterpart of the auto-reaper: un-stick a processing
+  // job that's wedged on a hung relay/network call before the stale timeout.
+  // Mirrors ai.resetAiJob in AIWorkflow. Cleared claimed_at/error means the
+  // next worker poll re-claims it cleanly.
+  const resetMut = useMutation({
+    mutationFn: api.resetSubtitleJob,
+    onSuccess: () => {
+      toast.success('已复位到排队');
       qc.invalidateQueries({ queryKey: ['subtitle-jobs'] });
       qc.invalidateQueries({ queryKey: ['subtitle-jobs-stats'] });
     },
@@ -114,7 +128,14 @@ export function SubtitleQueue() {
               </tr>
             )}
             {jobs.map((j) => (
-              <JobRow key={j.id} job={j} onSkip={skipMut.mutate} onRetry={retryMut.mutate} busy={skipMut.isPending || retryMut.isPending} />
+              <JobRow
+                key={j.id}
+                job={j}
+                onSkip={skipMut.mutate}
+                onRetry={retryMut.mutate}
+                onReset={resetMut.mutate}
+                busy={skipMut.isPending || retryMut.isPending || resetMut.isPending}
+              />
             ))}
           </tbody>
         </table>
@@ -127,50 +148,93 @@ function JobRow({
   job,
   onSkip,
   onRetry,
+  onReset,
   busy,
 }: {
   job: SubtitleJob;
   onSkip: (id: number) => void;
   onRetry: (id: number) => void;
+  onReset: (id: number) => void;
   busy: boolean;
 }) {
   const meta = STATUS_META[job.status];
   const actionable = job.status === 'failed' || job.status === 'queued' || job.status === 'processing';
+  // Expand-on-view for done jobs with a generated subtitle. The expanded area
+  // reuses the shared SubtitleRow component (the same one SubtitleDrawer uses),
+  // so the queue page gets version toggle + polish diff for free. Pre-2026-07-21
+  // the queue only showed status — the admin had to navigate to the course tree
+  // to see what a finished job actually produced.
+  const [showSubtitle, setShowSubtitle] = useState(false);
+  const canViewSubtitle = job.status === 'done' && job.subtitle_id != null;
   return (
-    <tr className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
-      <td className="px-4 py-3">
-        <div className="font-medium">{job.episode_title || `#${job.episode_id}`}</div>
-      </td>
-      <td className="px-4 py-3">
-        <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
-        {job.status === 'processing' && job.progress != null && (
-          <span className="ml-1.5 text-xs text-muted">{Math.round(job.progress * 100)}%</span>
-        )}
-      </td>
-      <td className="px-4 py-3 text-xs text-muted">
-        {job.claimed_by ? <span title="正在/曾经处理此任务的 worker">{job.claimed_by}</span> : '—'}
-      </td>
-      <td className="px-4 py-3 text-muted">{job.priority}</td>
-      <td className="px-4 py-3 text-muted">{job.attempt}</td>
-      <td className="px-4 py-3 text-xs text-muted">{fmtTime(job.updated_at)}</td>
-      <td className="max-w-[280px] px-4 py-3">
-        {job.error ? <span className="line-clamp-2 text-xs text-bad" title={job.error}>{job.error}</span> : '—'}
-      </td>
-      <td className="px-4 py-3 text-right">
-        {actionable && (
+    <>
+      <tr className="border-b border-border/60 last:border-0 hover:bg-card-2/50">
+        <td className="px-4 py-3">
+          <div className="font-medium">{job.episode_title || `#${job.episode_id}`}</div>
+        </td>
+        <td className="px-4 py-3">
+          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>{meta.label}</span>
+          {job.status === 'processing' && job.progress != null && (
+            <span className="ml-1.5 text-xs text-muted">{Math.round(job.progress * 100)}%</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-xs text-muted">
+          {job.claimed_by ? <span title="正在/曾经处理此任务的 worker">{job.claimed_by}</span> : '—'}
+        </td>
+        <td className="px-4 py-3 text-muted">{job.priority}</td>
+        <td className="px-4 py-3 text-muted">{job.attempt}</td>
+        <td className="px-4 py-3 text-xs text-muted">{fmtTime(job.updated_at)}</td>
+        <td className="max-w-[280px] px-4 py-3">
+          {job.error ? <span className="line-clamp-2 text-xs text-bad" title={job.error}>{job.error}</span> : '—'}
+        </td>
+        <td className="px-4 py-3 text-right">
           <div className="flex justify-end gap-1.5">
+            {canViewSubtitle && (
+              <button className="btn-ghost btn-sm" onClick={() => setShowSubtitle((v) => !v)}>
+                {showSubtitle ? '收起字幕' : '查看字幕'}
+              </button>
+            )}
+            {job.status === 'processing' && (
+              // Reset button only on processing — the manual un-stick action.
+              // Mirrors ai jobs' reset button (visible only when stuck-able).
+              <button
+                className="btn-ghost btn-sm"
+                disabled={busy}
+                onClick={() => onReset(job.id)}
+                title="把这个卡住的任务复位到排队（手动 reaper）"
+              >
+                复位
+              </button>
+            )}
             {job.status === 'failed' && (
               <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onRetry(job.id)}>
                 重试
               </button>
             )}
-            <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onSkip(job.id)}>
-              跳过
-            </button>
+            {actionable && (
+              <button className="btn-ghost btn-sm" disabled={busy} onClick={() => onSkip(job.id)}>
+                跳过
+              </button>
+            )}
           </div>
-        )}
-      </td>
-    </tr>
+        </td>
+      </tr>
+      {showSubtitle && canViewSubtitle && (
+        // Expanded subtitle row: spans all columns, renders the shared SubtitleRow
+        // (which itself lazy-loads VTT on first open and provides the version
+        // toggle + polish diff for llm_optimized tracks). onDelete omitted — the
+        // queue view is read-only; deleting a subtitle is a CourseTree action.
+        <tr className="border-b border-border/60 bg-card-2/30">
+          <td colSpan={8} className="px-4 py-3">
+            <SubtitleRow
+              id={job.subtitle_id!}
+              language={job.language}
+              label={`${job.episode_title ?? `#${job.episode_id}`} · ${job.language}`}
+            />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 

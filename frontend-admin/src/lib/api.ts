@@ -22,6 +22,7 @@ import { users } from './api/users';
 import { badges } from './api/badges';
 import { subjects } from './api/subjects';
 import { tags } from './api/tags';
+import { grades } from './api/grades';
 import { subtitles } from './api/subtitles';
 import { imports } from './api/imports';
 import { storage } from './api/storage';
@@ -47,6 +48,7 @@ export const api = {
   ...badges,
   ...subjects,
   ...tags,
+  ...grades,
   ...subtitles,
   ...imports,
   ...storage,

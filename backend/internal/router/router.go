@@ -28,6 +28,7 @@ func RegisterRoutes(
 	badge handler.BadgeHandler,
 	subject handler.SubjectHandler,
 	tag handler.TagHandler,
+	grade handler.GradeHandler,
 	unlock handler.UnlockHandler,
 	release handler.ReleaseHandler,
 	reading handler.ReadingHandler,
@@ -308,6 +309,9 @@ func RegisterRoutes(
 		adm.GET("/api/subtitle-jobs", admin.ListSubtitleJobs)
 		adm.POST("/api/subtitle-jobs/:id/skip", admin.SkipSubtitleJob)
 		adm.POST("/api/subtitle-jobs/:id/retry", admin.RetrySubtitleJob)
+		// reset is the manual counterpart of the automatic reaper — for when the
+		// admin has judged a processing job stuck (hung relay, dead worker).
+		adm.POST("/api/subtitle-jobs/:id/reset", admin.ResetSubtitleJob)
 		adm.GET("/api/subtitle-jobs/stats", admin.SubtitleJobStats)
 
 		// Attachments
@@ -330,6 +334,14 @@ func RegisterRoutes(
 		adm.POST("/api/tags", tag.AdminCreateTag)
 		adm.PUT("/api/tags/:id", tag.AdminUpdateTag)
 		adm.DELETE("/api/tags/:id", tag.AdminDeleteTag)
+
+		// Grade tag management (open-tag-system CRUD: list with usage counts,
+		// rename custom tags, merge duplicates, delete unused). Distinct from the
+		// per-course GradePicker (which only creates tags implicitly).
+		adm.GET("/api/grades", grade.ListGrades)
+		adm.PUT("/api/grades/:key", grade.RenameGrade)
+		adm.POST("/api/grades/merge", grade.MergeGrades)
+		adm.DELETE("/api/grades/:key", grade.DeleteGrade)
 
 		// Unlock templates (course-level default strategy)
 		adm.GET("/api/courses/:id/unlock-template", unlock.GetTemplate)

@@ -22,4 +22,10 @@ export const subtitleJobs = {
   async retrySubtitleJob(id: number): Promise<{ status: string }> {
     return request(`/admin/api/subtitle-jobs/${id}/retry`, { method: 'POST' });
   },
+  /** Reset a stuck processing job back to queued — manual reaper. Mirrors
+   * ai.resetAiJob. Use when the worker is alive but a relay/network call hung
+   * and the admin has judged the job stuck before the auto-reaper kicks in. */
+  async resetSubtitleJob(id: number): Promise<{ status: string }> {
+    return request(`/admin/api/subtitle-jobs/${id}/reset`, { method: 'POST' });
+  },
 };

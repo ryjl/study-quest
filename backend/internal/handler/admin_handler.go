@@ -102,6 +102,8 @@ type AdminHandler interface {
 	ListSubtitleJobs(c *gin.Context)
 	SkipSubtitleJob(c *gin.Context)
 	RetrySubtitleJob(c *gin.Context)
+	// ResetSubtitleJob un-sticks a stuck processing job (manual reaper).
+	ResetSubtitleJob(c *gin.Context)
 	SubtitleJobStats(c *gin.Context)
 
 	// Attachments + Uploads

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"studyquest/backend/internal/repository"
@@ -28,6 +29,10 @@ type subtitleJobDTO struct {
 	// when none has been reported. The queue view shows it for processing jobs.
 	Progress        *float64   `json:"progress,omitempty"`
 	DurationSeconds *int       `json:"duration_seconds,omitempty"`
+	// SubtitleID is the id of the subtitle row this job produced (matched by
+	// episode_id + language), or null when none exists. The queue UI uses this
+	// to offer a "view generated subtitle" action on done rows.
+	SubtitleID      *uint      `json:"subtitle_id,omitempty"`
 	CreatedAt       string     `json:"created_at"`
 	UpdatedAt       string     `json:"updated_at"`
 }
@@ -45,6 +50,7 @@ func toSubtitleJobDTO(r repository.SubtitleJobWithEpisode) subtitleJobDTO {
 		Progress:        r.Progress,
 		DurationSeconds: r.DurationSeconds,
 		CourseID:        r.EpisodeCourseID,
+		SubtitleID:      r.SubtitleID,
 		CreatedAt:       formatTime(r.CreatedAt),
 		UpdatedAt:       formatTime(r.UpdatedAt),
 	}
@@ -127,6 +133,33 @@ func (h *adminHandler) RetrySubtitleJob(c *gin.Context) {
 	}
 	if err := h.subtitleJobService.Retry(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "queued"})
+}
+
+// ResetSubtitleJob is the admin "un-stick a processing job" action — the manual
+// counterpart of the automatic reaper. Use case: the worker is alive but a
+// relay/network call hung without crashing, so the job isn't stale enough for
+// the reaper yet, but the admin has judged it stuck. Only valid on processing
+// jobs; the service returns an error for other states which we surface as 409
+// (so the UI can say "nothing to reset" rather than silently succeeding).
+// POST /admin/api/subtitle-jobs/:id/reset
+func (h *adminHandler) ResetSubtitleJob(c *gin.Context) {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid job id"})
+		return
+	}
+	if err := h.subtitleJobService.Reset(id); err != nil {
+		// "only processing jobs can be reset" → 409; anything else → 500.
+		// String match is brittle but mirrors the existing retry path's style;
+		// a typed error would be cleaner but is out of scope for this addition.
+		if strings.Contains(err.Error(), "only processing jobs") {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "queued"})
