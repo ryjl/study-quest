@@ -29,12 +29,19 @@ class GradeTag {
   }
 }
 
-/// 5 个预设 grade tag 的 fallback 列表。当 /grade-tags 端点请求失败时用这个
+/// 预设 grade tag 的 fallback 列表。当 /grade-tags 端点请求失败时用这个
 /// 兜底,保证过滤栏始终可用。
+///
+/// 2026-07-21: 「成人」(adult) 替换为「大学」(college) + 「其它」(other)。
+/// "成人"一词在中文教育语境联想偏向成人教育/夜校,与产品定位(中小学 + 大学/进修)
+/// 不搭;新增 "其它" 作为进修/职场/考研等不归类人群的兜底。
+/// 必须与 backend 的 model.PresetGrades + frontend-admin 的 lib/grades.ts 保持同步
+/// (跨层契约:Go model ↔ TS grades.ts ↔ Dart grade_tag.dart)。
 const List<GradeTag> kPresetGradeTags = [
   GradeTag(key: 'primary', label: '小学', preset: true),
   GradeTag(key: 'junior', label: '初中', preset: true),
   GradeTag(key: 'senior', label: '高中', preset: true),
-  GradeTag(key: 'adult', label: '成人', preset: true),
+  GradeTag(key: 'college', label: '大学', preset: true),
+  GradeTag(key: 'other', label: '其它', preset: true),
   GradeTag(key: 'universal', label: '通用', preset: true),
 ];

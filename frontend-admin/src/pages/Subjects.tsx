@@ -143,8 +143,17 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
   const [label, setLabel] = useState('');
   const [color, setColor] = useState(COLOR_CHOICES[0]);
   const [sortOrder, setSortOrder] = useState(0);
+  // Category: academic (学习课用) or entertainment (娱乐课用). The backend
+  // stores this on Subject.Category and uses it to filter the CourseModal /
+  // ImportDialog subject dropdowns by content type. Pre-2026-07-21 this field
+  // was set only at seed time and never editable — admin-created subjects were
+  // stuck at the default 'academic' forever, so an admin who created 动画片
+  // then realized they'd miscategorized it had to delete + recreate. The
+  // backend handler (subject_handler.go) already accepts category on PUT; the
+  // form just wasn't sending it.
+  const [category, setCategory] = useState<'academic' | 'entertainment'>('academic');
   // 学科级 AI 提示(5 字段 hint)已迁移到「AI 控制台 → Prompt 配置」tab。
-  // 这里只保留学科基本信息(key/label/color/sort_order)。save 时 ai_config 原值回传。
+  // 这里只保留学科基本信息(key/label/color/sort_order/category)。save 时 ai_config 原值回传。
 
   useEffect(() => {
     if (subject) {
@@ -152,11 +161,13 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
       setLabel(subject.label);
       setColor(subject.color || COLOR_CHOICES[0]);
       setSortOrder(subject.sort_order ?? 0);
+      setCategory(subject.category === 'entertainment' ? 'entertainment' : 'academic');
     } else {
       setKey('');
       setLabel('');
       setColor(COLOR_CHOICES[0]);
       setSortOrder(0);
+      setCategory('academic');
     }
   }, [subject]);
 
@@ -167,6 +178,7 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
         label: label.trim(),
         color,
         sort_order: sortOrder,
+        category,
         // ai_config 原值回传 —— 本表单不再编辑 hint(已挪到 AI 控制台)。回传保证
         // PUT 不把这 5 字段误清。新建学科时 subject 为 null,ai_config 为 undefined。
         ai_config: subject?.ai_config,
@@ -260,6 +272,28 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
               onChange={(e) => setColor(e.target.value)}
             />
           </div>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted">分类（决定该科目出现在哪种课程的下拉里）</label>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setCategory('academic')}
+              className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${category === 'academic' ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
+            >
+              学术（学习课用）
+            </button>
+            <button
+              type="button"
+              onClick={() => setCategory('entertainment')}
+              className={`flex-1 rounded-md border px-3 py-2 text-sm transition-colors ${category === 'entertainment' ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
+            >
+              娱乐（娱乐课用）
+            </button>
+          </div>
+          <p className="mt-1 text-[11px] text-muted">
+            注意：切换分类不会自动迁移已用该科目的课程。已建好的课程仍保留原 ContentType，需逐个编辑。
+          </p>
         </div>
         <div>
           <label className="mb-1 block text-xs text-muted">排序权重（数字越小越靠前）</label>

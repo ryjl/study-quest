@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Folder, FolderInput, Film, Check } from 'lucide-react';
+import { Folder, FolderInput, Film, Check, BookOpen } from 'lucide-react';
 import { api } from '../../lib/api';
 import type { ImportPreviewNode } from '../../lib/types';
 import { EmptyState, Modal, Tag } from '../../components/ui';
@@ -37,6 +37,7 @@ export function ImportDialog({ open, onClose, onImported }: { open: boolean; onC
   const [newTitle, setNewTitle] = useState('');
   const [newGrade, setNewGrade] = useState('');
   const [newSubject, setNewSubject] = useState('');
+  const [newContentType, setNewContentType] = useState<'learning' | 'entertainment'>('learning');
   const [newCover, setNewCover] = useState('');
   const [newTagIDs, setNewTagIDs] = useState<number[]>([]);
 
@@ -52,6 +53,7 @@ export function ImportDialog({ open, onClose, onImported }: { open: boolean; onC
       setNewTitle('');
       setNewGrade('');
       setNewSubject('');
+      setNewContentType('learning');
       setNewCover('');
       setNewTagIDs([]);
       setTree(null);
@@ -59,10 +61,30 @@ export function ImportDialog({ open, onClose, onImported }: { open: boolean; onC
     prevOpen.current = open;
   }, [open]);
 
-  // Default the subject select once the catalog loads.
+  // Default the subject select once the catalog loads OR when the admin
+  // switches content type. The latter matters because the subject dropdown is
+  // filtered by content type (academic vs entertainment) — if we didn't
+  // re-default here, switching 学习→娱乐 would leave newSubject pointing at
+  // an academic subject that's no longer in the filtered dropdown, producing
+  // an empty <select> value that silently submits the wrong subject. Pick the
+  // first subject of the matching category; if none exists, clear it so the
+  // admin sees the gap (rather than submitting a hidden stale value).
   useEffect(() => {
-    if (!newSubject && subjects.length > 0) setNewSubject(subjects[0].key);
-  }, [subjects, newSubject]);
+    if (subjects.length === 0) return;
+    const wantCategory = newContentType === 'entertainment' ? 'entertainment' : 'academic';
+    const match = subjects.find((s) => s.category === wantCategory) ??
+                  subjects.find((s) => !s.category && wantCategory === 'academic') ??
+                  subjects[0];
+    // Only overwrite if the current subject doesn't fit the new filter —
+    // avoids clobbering an admin's manual selection when the catalog refreshes.
+    const current = subjects.find((s) => s.key === newSubject);
+    const currentFits =
+      current &&
+      (newContentType === 'entertainment'
+        ? current.category === 'entertainment'
+        : current.category === 'academic' || !current.category);
+    if (!currentFits) setNewSubject(match.key);
+  }, [subjects, newContentType, newSubject]);
 
   // Default sourceId to the default source (or the first one) once the catalog
   // loads, so the very first scan picks a real source instead of the global
@@ -221,14 +243,50 @@ export function ImportDialog({ open, onClose, onImported }: { open: boolean; onC
                 <label className="mb-1 block text-xs text-muted">适用年级</label>
                 <GradePicker value={newGrade} onChange={setNewGrade} />
               </div>
+              {/* Content type toggle: 学习 / 娱乐. Filters the 科目 dropdown below
+                  the same way CourseModal does, so the admin picks a subject of
+                  the matching category. The backend derives Course.ContentType
+                  from the chosen subject's Category (import_service.go), so we
+                  don't send content_type explicitly — getting the subject right
+                  is what matters. Pre-2026-07-21 this form showed ALL subjects
+                  unfiltered, mixing 动画片/电影 (entertainment) with 数学/语文
+                  (academic) in one list — confusing and error-prone. */}
               <div>
-                <label className="mb-1 block text-xs text-muted">科目</label>
+                <label className="mb-1 block text-xs text-muted">内容类型</label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNewContentType('learning')}
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${newContentType === 'learning' ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
+                  >
+                    <BookOpen size={14} /> 学习
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewContentType('entertainment')}
+                    className={`flex flex-1 items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm transition-colors ${newContentType === 'entertainment' ? 'border-txt bg-card-2 text-txt font-medium' : 'border-border text-muted hover:text-txt'}`}
+                  >
+                    <Film size={14} /> 娱乐
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-muted">
+                  {newContentType === 'entertainment' ? '娱乐分类' : '类别 / 科目'}
+                </label>
                 <select className="input" value={newSubject} onChange={(e) => setNewSubject(e.target.value)}>
-                  {subjects.map((s) => (
-                    <option key={s.key} value={s.key}>
-                      {s.label}
-                    </option>
-                  ))}
+                  {subjects
+                    .filter((s) => {
+                      // 学习: academic (or unlabeled legacy — default academic).
+                      // 娱乐: entertainment only. Same filter rule as CourseModal.
+                      if (newContentType === 'entertainment') return s.category === 'entertainment';
+                      return s.category === 'academic' || !s.category;
+                    })
+                    .map((s) => (
+                      <option key={s.key} value={s.key}>
+                        {s.label} ({s.key})
+                      </option>
+                    ))}
                 </select>
               </div>
               <ImageUpload label="封面" value={newCover} onChange={setNewCover} />

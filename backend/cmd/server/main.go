@@ -211,6 +211,11 @@ func main() {
 	badgeHandler := handler.NewBadgeHandler(badgeService)
 	subjectHandler := handler.NewSubjectHandler(subjectService)
 	tagHandler := handler.NewTagHandler(tagService)
+	// gradeService manages the open-tag-system grade CRUD (rename/merge/delete
+	// across the four grade tables). Constructed against the same db as every
+	// other repo; nil-safe in degenerate builds.
+	gradeService := service.NewGradeService(repository.NewGradeRepository(db))
+	gradeHandler := handler.NewGradeHandler(gradeService)
 	unlockHandler := handler.NewUnlockHandler(unlockService)
 	aiHandler := handler.NewAIHandler(aiService, unlockService)
 	releaseHandler := handler.NewReleaseHandler(releaseRepo)
@@ -248,6 +253,7 @@ func main() {
 		badgeHandler,
 		subjectHandler,
 		tagHandler,
+		gradeHandler,
 		unlockHandler,
 		releaseHandler,
 		readingHandler,

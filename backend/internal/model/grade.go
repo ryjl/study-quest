@@ -7,26 +7,33 @@ import "strings"
 
 // Grade 是课程/阅读资源的适用人群 tag。历史上是 1-9 年级硬编码 enum,2026-07-20
 // 改成开放 tag 体系:GradeValid 不再校验具体值,admin 可以填任意自定义 tag
-// (如 "小学""初中""成人""考研""职场")。
+// (如 "小学""初中""大学""考研""职场")。
 //
-// 推荐使用语义化预设常量 GradePrimary/Junior/Senior/Adult/Universal,admin
-// 表单默认显示这 5 个 + 允许自定义补充。历史 Grade1-9 常量已删除,DB 中遗留
-// 的 "1"-"9" 字面值会作为普通自定义 tag 回显(Grade 本身是 string,不受影响)。
+// 推荐使用语义化预设常量 GradePrimary/Junior/Senior/College/Other/Universal,
+// admin 表单默认显示这几个 + 允许自定义补充。历史 Grade1-9 常量已删除,DB 中
+// 遗留的 "1"-"9" 字面值会作为普通自定义 tag 回显(Grade 本身是 string,不受影响)。
+//
+// 2026-07-21:GradeAdult("成人")已删除,替换为 GradeCollege("大学")和
+// GradeOther("其它")。"成人"一词在中文教育语境下联想偏向成人教育/夜校,与
+// 产品定位(中小学生 + 大学/进修)不太搭。历史 DB 里仍存的 "adult" 字面值会
+// 作为普通自定义 tag 回显,admin 可在 Grade 管理页用「合并」功能一次性迁到
+// "college" 或 "other"(详见 admin_grade.go / Grades.tsx)。
 type Grade string
 
 const (
-	// 2026-07-20 新预设(推荐值)。这 5 个 + admin 自定义组成实际可用 tag 集。
+	// 2026-07-20 新预设(推荐值)。这几个 + admin 自定义组成实际可用 tag 集。
 	GradePrimary   Grade = "primary"   // 小学
 	GradeJunior    Grade = "junior"    // 初中
 	GradeSenior    Grade = "senior"    // 高中
-	GradeAdult     Grade = "adult"     // 成人
+	GradeCollege   Grade = "college"   // 大学
+	GradeOther     Grade = "other"     // 其它(进修 / 职场 / 考研 等不归类的兜底)
 	GradeUniversal Grade = "universal" // 通用(匹配任何过滤)
 )
 
 // PresetGrades 是 admin 表单默认显示的预设 tag(顺序即展示顺序)。
 // 历史 Grade1-9 常量已删除:DB 里若有 "1"-"9" 字面值会以"自定义 tag"形式
 // 回显在 admin 表单上,可删可改(Grade 类型本身是 string,存储/读取不受影响)。
-var PresetGrades = []Grade{GradePrimary, GradeJunior, GradeSenior, GradeAdult, GradeUniversal}
+var PresetGrades = []Grade{GradePrimary, GradeJunior, GradeSenior, GradeCollege, GradeOther, GradeUniversal}
 
 // PresetGradeLabel 返回预设 grade 的中文 label。非预设值(自定义 tag)返回空串
 // —— 调用方应该 fallback 到原样展示。
@@ -38,8 +45,10 @@ func PresetGradeLabel(g Grade) string {
 		return "初中"
 	case GradeSenior:
 		return "高中"
-	case GradeAdult:
-		return "成人"
+	case GradeCollege:
+		return "大学"
+	case GradeOther:
+		return "其它"
 	case GradeUniversal:
 		return "通用"
 	}
