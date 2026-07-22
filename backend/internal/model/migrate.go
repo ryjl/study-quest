@@ -72,6 +72,12 @@ func AutoMigrate(db *gorm.DB) error {
 		// PR2 — 字幕润色挖出的术语候选(admin 审核后进 TermDict)。pending 池,
 		// 由 polish job 写入,PR2.5 的 admin UI 消费。
 		&GlossaryCandidate{},
+		// 断点续润 — polish job 的 chunk 级检查点(子表)。每个 chunk 完成落库一行,
+		// job 重试时跳过已 done 的 chunk,不再重烧 token。复合唯一索引 (job_id, chunk_index)。
+		&AIPolishChunk{},
+		// 轻量结构化日志(TODO.md P1)。failJob/reaper/polishStats/provider/worker panic
+		// 5 个集中点写入,admin 在 /admin/logs 页看,不再依赖 SSH 看 stderr。
+		&LogEntry{},
 	)
 	if err != nil {
 		return err

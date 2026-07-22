@@ -6,7 +6,7 @@
 > 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、
 > **工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
 >
-> 最后更新：2026-07-21（全项目重构 + 文档整理后）
+> 最后更新：2026-07-22（轻量 log 系统已落地 + polish 写 ai_runs）
 
 ## P0 — 高价值，建议下一轮做
 
@@ -36,7 +36,18 @@
 
 ## P1 — 中等价值
 
-### 轻量 log 系统（作业级事件落库 + admin 可视化）
+### ✓ 轻量 log 系统（作业级事件落库 + admin 可视化）—— 已完成（2026-07-22）
+
+已落地：新表 `log_entries`（level/source/message/fields_json/job_id/episode_id/course_id/
+created_at）+ `LogRepository` + service 层 `appendLog`（nil-safe + best-effort，失败只
+`log.Printf`、绝不 derail 业务）+ 5 点接线（`failJob`/error、`ReapStaleJobs`/warn、
+`polishStats`/info、provider resolve 失败/error、worker panic/error）+ `GET /admin/api/logs`
+端点 + `/admin/logs` 前端页（仿 AIWorkflow 的 useQuery + 轮询）。不引第三方 log 库、不全量
+替换 81 处 `log.Printf`（渐进迁移），边界声明全部兑现。详见 `docs/modules/ai/subtitle-queue.md`
+§12.7。
+
+<details>
+<summary>原条目（保留供参考）</summary>
 
 当前所有日志走 stderr（`log.Printf`，81 处，前缀不统一）。AI/subtitle worker 的关键事件（job 开始/结束/失败、relay 调用、reaper）只在 server 日志里，admin 看不到。加一个轻量结构化 log 层让运维可见性不再依赖 SSH 看日志。
 
@@ -44,6 +55,8 @@
 - **价值**：运维可见性。下次出现"AI worker 前面卡住了，不知道为什么"这类问题，admin 能直接在控制台看事件流定位，而不是等你 SSH 进去看日志。
 - **工作量预估**：中（一个中等 PR）。MVP = `log_entries` 表（仿 `AIRun`：id/level/source/message/fields_json/job_id/created_at）+ 仿 AIRun 的 repo/handler（约 200 行后端）+ `/admin/logs` 页（仿 AIWorkflow 的 useQuery + pollWhen，约 200 行前端）+ 改 5 个集中点（failJob/httperr/两个 reaper/polishStats）。**不引第三方 log 库**（自己写 wrapper，避免 go.mod 改动 + 全仓 81 处替换）；**不做 SSE 实时流**（项目无 SSE 基建，轮询够用）；**不全量替换 81 处 log.Printf**（新代码用新 wrapper，旧代码渐进迁移）。
 - **依赖**：无。可独立 PR。
+
+</details>
 
 ### streaming 输出（SSE）
 
@@ -78,7 +91,7 @@ agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
 
 - **场景**：admin 想发现"某个学科的 quiz fail-rate 突然升高"或"换模型后质量下降"，现在只能逐条 run 看。
 - **价值**：质量治理。能及时发现 prompt/模型/prompt 版本的输出质量回归。
-- **工作量预估**：中。数据全在 `ai_runs` 表（self_check_result + capability + model_used + system_prompt_text），缺聚合 UI：按学科/题型/self-check 结果分组的 fail-rate 趋势图。杠杆在 UI 不在数据采集。
+- **工作量预估**：中。数据全在 `ai_runs` 表（self_check_result + capability + model_used + system_prompt_text），缺聚合 UI：按学科/题型/self-check 结果分组的 fail-rate 趋势图。杠杆在 UI 不在数据采集。（2026-07-22 补：polish 现在也写 `ai_runs` 了——`recordPolishRun` capability="polish"——所以仪表盘能覆盖全部 AI 能力，不再漏 polish。）
 - **依赖**：无。
 
 ### 知识点命名标准化（chunk 打标签 / 本体库）

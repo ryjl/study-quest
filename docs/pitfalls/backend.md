@@ -89,6 +89,30 @@ worker 里一个 job 的 panic（nil deref、bug）**不能杀整个 worker goro
 静默 halt 所有后台 AI 处理直到重启。`runWorker` 里包了 `defer func(){ recover() }()`
 保护，job panic 时标失败、log stack，worker 继续轮询。
 
+### 并发可见字段：中间写单调守卫，终态钉死（别靠 nil）
+
+`UpdateJobStatus`（`repository/ai_job_repo.go`）的 `progress` 字段栽过两个相连
+的 bug，都是把"并发可见、有中间态又有终态"的字段当普通列写：
+
+**(a) 并发进度倒退。** polish 的 chunk 回调是 3-way 并发，每个 goroutine
+`atomic.Add(1)` 后算出的 `done` 值本身单调递增，但随后的 `UPDATE ... SET progress=?`
+提交顺序不定——B(done=0.8) 可能先 commit、A(done=0.6) 后 commit，DB 停在 0.6，
+进度条倒退/抖。**修法**：非终态路径加 `WHERE progress IS NULL OR progress < ?`
+单调守卫，只有更大的值能写入。
+
+**(b) 失败残留高进度。** `failJob` 之前写 `status=failed` 时 `progress=nil`（map
+里不带 progress 键 = 不更新该列），导致 failed job 残留 processing 末期写入的
+`progress≈0.9`，前端同时读 `status=failed` + `progress=0.9` 自相矛盾，失败页闪
+一下满进度条。**修法**：终态钉死——`done` 写 1.0，`failed`/`skipped` 写 NULL。
+
+**规则**：任何"中间态可被并发写、终态要收尾"的字段（progress、attempts、计数器），
+中间写加单调守卫，终态写明确归零/钉死，**绝不靠 nil（不更新列）**——nil 等于
+"保留旧值"，而旧值在终态下几乎一定是错的。
+
+**回归保护**：`repository/ai_job_status_test.go`，含
+`TestUpdateJobStatus_ConcurrentProgressNoRegression`（真 20-goroutine 并发，
+跑 `-race`）+ `TestUpdateJobStatus_FailedNullsProgress` / `_DonePinsProgressOne`。
+
 ## HTTP handler
 
 ### `ShouldBindJSON` 失败时禁返 `err.Error()`
@@ -145,6 +169,32 @@ SQLite 跨连接共享 DB。
 ```bash
 cp backend/data/studyquest.db backend/data/studyquest.db.bak.$(date +%Y%m%d)
 ```
+
+### GORM AutoMigrate 会静默跳过建表（FK 关系字段 + uniqueIndex 组合）
+
+GORM 的 SQLite migrator 在某些 struct 配置下**建表失败不报错**，`AutoMigrate`
+返回 `nil` 但表根本没建。已知触发组合：**FK 关系字段**（`X Parent
+\`gorm:"foreignKey:...;constraint:OnDelete:CASCADE"\``）**叠加该 FK 列上的
+`uniqueIndex`**。
+
+`AIPolishChunk` 就栽在这——`Job AIJob` FK 字段 + `JobID` 列的
+`uniqueIndex:idx_polish_chunk_job_idx`，AutoMigrate 静默跳过，
+`sqlite_master` 查无此表，后续 `ON CONFLICT DO NOTHING` 找不到唯一约束失效，
+断点续润在生产完全不工作（重试重烧全部 chunk）。而全量测试全绿——因为测试
+用 in-memory DB 且只 seed 一次，重复 seed 的 bug 没被覆盖，是 code review
+抓出来的不是测试抓出来的。
+
+**规则**：
+- 加任何新 model 后，**验证表真建出来**：`db.Migrator().HasTable("新表")`
+  或 `SELECT count(*) FROM sqlite_master WHERE name='新表'`，不能只信
+  `AutoMigrate` 的 `nil` error。
+- 能用裸 FK 列（`ParentID uint`）就**不要** FK 关系字段——`GlossaryCandidate`、
+  `LogEntry`、`AIPolishChunk`（修复后）都这么做。CASCADE 清理在代码层做（删父行
+  时手动删子行），不依赖 DB FK constraint。
+
+**回归保护**：service 的 `TestRunPolishJob_Resume_SeedIsIdempotent`（同一个
+job 跑两次，断言 chunk 行数不翻倍）能直接抓到建表/unique index 失效——前提是
+测试用 file-backed DB 且真跑两次 seed。
 
 ## Unlock / Progress
 

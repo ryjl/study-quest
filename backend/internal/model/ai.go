@@ -498,6 +498,76 @@ type GlossaryCandidate struct {
 	UpdatedAt      time.Time
 }
 
+// AIPolishChunk is one chunk's persisted state within a polish job — the
+// checkpoint/resume (断点续润) substrate. A polish job splits its VttContent
+// into deterministic 150-cue chunks (step=147, so chunk boundaries are stable
+// for a given input); each chunk that completes is written here. When the job
+// is retried after a partial failure, runPolishJob reads back the done chunks
+// and feeds them to polish.Polish as PriorOutcomes — so only the FAILED chunks
+// re-call the LLM, instead of re-burning the whole episode's tokens.
+//
+// Lifecycle mirrors the parent job:
+//   - seeded as Status="queued" when the job starts (SeedChunksForJob, idempotent)
+//   - flipped to "done" / "failed" as each chunk finishes (MarkChunkDone/Failed,
+//     driven by polish.Polish's OnChunkDone callback)
+//   - cleared only by deleting the parent job (FK OnDelete:CASCADE). A successful
+//     job keeps its chunk rows as a token-spend record + the resume anchor for
+//     a future re-polish retry.
+//
+// PolishedChunkJSON stores the chunk's {changes,glossary} so a resume can rebuild
+// the final VTT without re-calling the LLM. It's the serialized form of the
+// in-memory chunkOutcome (CueChange + GlossaryCandidate slices).
+type AIPolishChunk struct {
+	ID                 uint   `gorm:"primaryKey;autoIncrement"`
+	JobID              uint   `gorm:"uniqueIndex:idx_polish_chunk_job_idx;not null"`
+	ChunkIndex         int    `gorm:"uniqueIndex:idx_polish_chunk_job_idx;not null"` // 0-based, matches polish chunk layout
+	ChunkFirstGlobalIdx int   // first global cue idx in this chunk (audit / debug)
+	ChunkLastGlobalIdx  int   // last global cue idx in this chunk (inclusive)
+	Status             string `gorm:"size:16;default:'queued';index"` // queued | done | failed
+	PromptTokens       int    // accumulated across this chunk's attempts (incl. validation-rejected)
+	CompletionTokens   int
+	Retries            int    // retry attempts spent before this chunk settled
+	HighEditDistanceCount int // changes in this chunk flagged suspicious (informational)
+	ChangedCues        int    // cues this chunk actually modified
+	FirstErr           string `gorm:"size:256"` // on failed: the last retry's error (truncated)
+	PolishedChunkJSON  string `gorm:"type:text"` // on done: {"changes":[...],"glossary":[...]} for resume
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	// NOTE: deliberately NO FK relation field (Job AIJob). Adding one alongside
+	// the uniqueIndex on JobID made GORM's AutoMigrate silently skip creating
+	// this table (the FK-constraint path + a custom unique index on the FK
+	// column is a combination GORM's SQLite migrator bails on without error).
+	// GlossaryCandidate follows the same no-relation-field pattern and migrates
+	// fine. CASCADE cleanup on job delete isn't a real concern here (polish jobs
+	// are essentially never deleted), and the uniqueIndex on (JobID, ChunkIndex)
+	// — the thing SeedChunksForJob's ON CONFLICT depends on — now creates
+	// cleanly because the table creates cleanly.
+}
+
+// LogEntry is one row in the lightweight structured log layer (TODO.md P1).
+// Unlike AIRun (one per LLM call's full trace), LogEntry captures operational
+// EVENTS across the AI/subtitle worker: job failed, reaper reset a stale job,
+// provider resolve error, worker panic recovered. The point is admin
+// observability WITHOUT SSH-ing in to read stderr — these land in the DB and
+// surface on the /admin/logs page.
+//
+// Intentionally a thin wrapper, not a full logging framework (TODO.md: 不引第三
+// 方 log 库). The 5 write sites (failJob / reaper / polishStats / provider
+// resolve / worker panic) are the high-signal events; the other ~80 log.Printf
+// calls in the codebase are NOT bulk-migrated (渐进迁移). FieldsJSON carries
+// structured context (token counts, chunk ids, etc.) as a JSON blob.
+type LogEntry struct {
+	ID         uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	Level      string    `gorm:"size:16;not null;index" json:"level"`           // info | warn | error
+	Source     string    `gorm:"size:32;not null;index" json:"source"`         // ai_worker | reaper | polish | provider | segment ...
+	Message    string    `gorm:"type:text;not null" json:"message"`
+	FieldsJSON string    `gorm:"type:text" json:"fields_json"`                 // optional structured context (JSON object)
+	JobID      *uint     `gorm:"index" json:"job_id,omitempty"`                // optional: the job this event concerns
+	EpisodeID  *uint     `gorm:"index" json:"episode_id,omitempty"`            // optional: resolved at enrich time too
+	CourseID   *uint     `json:"course_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // AIConfig is the parsed form of Course.AIConfigJSON. Add new fields here to
 // extend the course's AI configuration WITHOUT a DB migration — the whole
 // config is stored as one JSON blob (forward-compatible, same pattern as

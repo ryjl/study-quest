@@ -25,6 +25,8 @@ func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentReposit
 		repository.NewUserRepository(db), // advice tools need userRepo, but submit path won't call it
 		nil,                  // no glossary repo — quiz path doesn't touch it
 		nil,                  // no subject repo — polish-only
+		nil,                  // no polishChunkRepo — polish-only
+		nil,                  // no logRepo — structured-log writes not asserted
 	).(*aiService)
 	t.Cleanup(svc.Stop) // release the worker goroutine (see ai_service_test.go)
 	return svc, contentRepo

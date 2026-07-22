@@ -156,6 +156,31 @@ export function AIWorkflow({ embedded = false }: { embedded?: boolean } = {}) {
   );
 }
 
+// DetailCell renders the job's detail/error string with status-aware coloring
+// and click-to-expand. job.error carries success telemetry (polish's
+// "polished: N/M cues changed…", summary's empty) AND failure messages, so
+// coloring purely red was wrong — a green-looking polish job used to render as
+// an error. Only 'failed' is red now; everything else is neutral muted. Long
+// partial-failure detail ("(partial: 1/5 chunks failed; chunk#3: parse polish
+// json…)") collapses to 2 lines by default and expands on click so the actual
+// failure cause is reachable instead of truncated away.
+function DetailCell({ status, text }: { status: AiJobStatus; text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const isFailed = status === 'failed';
+  const cls = isFailed ? 'text-bad' : 'text-muted';
+  const long = text.length > 80;
+  return (
+    <span
+      className={`text-xs ${cls} ${expanded || !long ? 'whitespace-pre-wrap break-words' : 'line-clamp-2'} ${long ? 'cursor-pointer' : ''}`}
+      title={text}
+      onClick={long ? () => setExpanded((v) => !v) : undefined}
+    >
+      {text}
+      {long && !expanded && <span className="text-muted"> (点击展开)</span>}
+    </span>
+  );
+}
+
 function JobRow({ job }: { job: AiJob }) {
   const meta = STATUS_META[job.status];
   const showProgress = job.status === 'processing' && job.progress != null;
@@ -224,7 +249,19 @@ function JobRow({ job }: { job: AiJob }) {
       <td className="px-4 py-3 text-xs text-muted">{jobDuration(job)}</td>
       <td className="px-4 py-3 text-xs text-muted">{fmtTime(job.created_at)}</td>
       <td className="max-w-[280px] px-4 py-3">
-        {job.error ? <span className="line-clamp-2 text-xs text-bad" title={job.error}>{job.error}</span> : '—'}
+        {job.error ? (
+          // job.error carries BOTH success detail strings (e.g. polish's
+          // "polished: N/M cues changed…") and failure messages — UpdateJobStatus
+          // writes the detail into the same column for done/failed/skipped. The
+          // old code rendered all of them in text-bad (red), making a successful
+          // polish look like an error. Color by status instead: only 'failed' is
+          // red; done/skipped/processing are neutral. Expandable so the (partial:
+          // chunk#N: …) detail that explains WHY a chunk failed isn't truncated
+          // out of view.
+          <DetailCell status={job.status} text={job.error} />
+        ) : (
+          '—'
+        )}
       </td>
       <td className="px-4 py-3 text-right">
         {job.status === 'processing' && (

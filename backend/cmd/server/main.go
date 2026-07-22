@@ -160,7 +160,13 @@ func main() {
 	// glossaryRepo stores term-correction candidates mined by the polish job
 	// (PR2). Nil-safe in the service layer, but we always wire it in main.
 	glossaryRepo := repository.NewGlossaryRepository(db)
-	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo)
+	// polishChunkRepo stores the per-chunk checkpoint rows for 断点续润 (resume
+	// a partially-failed polish job without re-burning done chunks). Nil-safe.
+	polishChunkRepo := repository.NewAIPolishChunkRepository(db)
+	// logRepo stores structured log entries for the /admin/logs page (TODO.md
+	// P1). appendLog is nil-safe, but we always wire it in main.
+	logRepo := repository.NewLogRepository(db)
+	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo, polishChunkRepo, logRepo)
 	// Connect Step 2 → Step 3: when a subtitle lands, auto-enqueue a segment job
 	// (only if the course has AI enabled). The callback keeps the subtitle
 	// service free of any AI import — it just calls a function if set.

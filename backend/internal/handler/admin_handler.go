@@ -152,6 +152,9 @@ type AdminHandler interface {
 	AcceptGlossaryCandidateBatch(c *gin.Context)
 	ListAIRuns(c *gin.Context)
 	GetAIRun(c *gin.Context)
+	// Structured logs (TODO.md P1) — /admin/api/logs powers the /admin/logs page.
+	// Reads log_entries (failJob/reaper/polish/provider/worker-panic events).
+	ListLogs(c *gin.Context)
 	// Phase C — quiz observability (per-user drill-down + summary content).
 	GetAISummary(c *gin.Context)
 	ListUserQuizzes(c *gin.Context)

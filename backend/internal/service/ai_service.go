@@ -169,6 +169,12 @@ type AIService interface {
 	GetRun(id uint) (*model.AIRun, error)
 	JobStats() (map[string]int, error)
 
+	// ── structured logs (TODO.md P1 — /admin/logs page) ──
+	// ListLogEntries returns recent log entries with level/source/job filters,
+	// enriched with episode/course titles (resolved via the entry's own
+	// EpisodeID/CourseID, falling back to JobID). Newest first.
+	ListLogEntries(level, source string, jobID *uint, limit int) ([]LogEntryView, error)
+
 	// ── status / staleness helpers (内容管理 tab + 课程总览陈旧检测) ──
 	// ListEpisodeSummaryStatus 返回某课程下"已有 summary"的 episode id 列表,
 	// 给 admin 内容管理 tab gate 每集"删除"按钮用。
@@ -256,6 +262,16 @@ type aiService struct {
 	// subjectRepo reads Subject rows for the polish job's TermDict lookup
 	// (Course.EffectiveTermDict takes a Subject). nil in tests that don't run polish.
 	subjectRepo repository.SubjectRepository
+	// polishChunkRepo stores the per-chunk checkpoint rows for 断点续润 — when a
+	// polish job is retried after a partial failure, runPolishJob reads back the
+	// done chunks and feeds them to polish.Polish as PriorOutcomes, so only the
+	// FAILED chunks re-call the LLM. nil-safe: when nil, polish still runs but
+	// does no checkpointing (a retry re-burns all chunks — the pre-断点续润行为).
+	polishChunkRepo repository.AIPolishChunkRepository
+	// logRepo stores LogEntry rows for the lightweight structured-log layer
+	// (TODO.md P1). appendLog is nil-safe, so tests that don't assert on logs
+	// pass nil. Production wires NewLogRepository(db).
+	logRepo repository.LogRepository
 	// polishLLMOverride is a TEST-ONLY seam: when non-nil, runPolishJob uses
 	// this provider directly instead of resolving through `resolver`. This lets
 	// service-level tests drive the full polish→writeback→chain path with a
@@ -304,6 +320,17 @@ type AIRunView struct {
 	UserNickname string `json:"user_nickname,omitempty"`
 }
 
+// LogEntryView is one admin-facing log row WITH episode/course titles resolved.
+// LogEntry carries EpisodeID/CourseID directly (it's an event row, not a
+// per-LLM-call row), so enrichment joins on those — no job fanout needed unless
+// they're nil, in which case we fall back through JobID (failJob entries set
+// JobID but not the episode/course ids).
+type LogEntryView struct {
+	model.LogEntry
+	EpisodeTitle string `json:"episode_title,omitempty"`
+	CourseTitle  string `json:"course_title,omitempty"`
+}
+
 // NewAIService constructs an AIService. resolver may be nil in degenerate
 // builds (AI disabled); the service degrades gracefully. unlockService gates
 // client-facing quiz access (IsEpisodeVisible); the existing unlock service
@@ -320,17 +347,21 @@ func NewAIService(
 	userRepo aiUserCourseLister,
 	glossaryRepo repository.GlossaryRepository,
 	subjectRepo repository.SubjectRepository,
+	polishChunkRepo repository.AIPolishChunkRepository,
+	logRepo repository.LogRepository,
 ) AIService {
 	s := &aiService{
-		db:            db,
-		contentRepo:   contentRepo,
-		episodeRepo:   episodeRepo,
-		courseRepo:    courseRepo,
-		resolver:      resolver,
-		unlockService: unlockService,
-		userRepo:      userRepo,
-		glossaryRepo:  glossaryRepo,
-		subjectRepo:   subjectRepo,
+		db:              db,
+		contentRepo:     contentRepo,
+		episodeRepo:     episodeRepo,
+		courseRepo:      courseRepo,
+		resolver:        resolver,
+		unlockService:   unlockService,
+		userRepo:        userRepo,
+		glossaryRepo:    glossaryRepo,
+		subjectRepo:     subjectRepo,
+		polishChunkRepo: polishChunkRepo,
+		logRepo:         logRepo,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -677,11 +708,12 @@ func (s *aiService) runWorker(ctx context.Context) {
 		// is logged so it's still debuggable.
 		func() {
 			defer func() {
-				if r := recover(); r != nil {
-					log.Printf("AI worker: PANIC recovered (worker stays alive): %v", r)
-					// Best-effort failJob on whatever job was in flight; we don't
-					// know which one here (processOneJob claimed it internally),
-					// so we can't stamp a specific error. The job stays
+					if r := recover(); r != nil {
+						log.Printf("AI worker: PANIC recovered (worker stays alive): %v", r)
+						s.appendLog("error", "ai_worker", fmt.Sprintf("worker panic recovered: %v", r), "", nil)
+						// Best-effort failJob on whatever job was in flight; we don't
+						// know which one here (processOneJob claimed it internally),
+						// so we can't stamp a specific error. The job stays
 					// 'processing' and the reaper will reset it after 30min.
 					// That's acceptable — the point is keeping the worker alive.
 				}
@@ -918,9 +950,42 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 
 // failJob marks a job failed with an error message and logs it. Centralized so
 // every failure path records consistently (the admin UI shows the error string).
+// Also appends a structured log_entries row (level=error) so the failure shows
+// on /admin/logs without SSH — see appendLog (nil-safe).
 func (s *aiService) failJob(job *model.AIJob, msg string) {
 	log.Printf("AI job %d (%s) episode %d failed: %s", job.ID, job.JobType, model.PtrVal(job.EpisodeID), msg)
+	s.appendLog("error", "ai_worker", msg, "", job)
 	s.contentRepo.UpdateJobStatus(job.ID, "failed", msg, nil)
+}
+
+// appendLog writes one structured log entry. Nil-safe (no-op when s.logRepo is
+// nil, e.g. tests) and error-safe (a logging failure MUST NOT derail the caller
+// — the whole point of best-effort logging is that business logic never depends
+// on it). job is optional: when non-nil, its JobID/EpisodeID/CourseID are
+// stamped so the /admin/logs row can be filtered + enriched with titles.
+//
+// fieldsJSON is optional structured context (already-JSON-encoded string, or
+// "" for none). Callers that want a few key/values pass a json.Marshal'd map.
+func (s *aiService) appendLog(level, source, message, fieldsJSON string, job *model.AIJob) {
+	if s.logRepo == nil {
+		return
+	}
+	entry := &model.LogEntry{
+		Level:      level,
+		Source:     source,
+		Message:    message,
+		FieldsJSON: fieldsJSON,
+	}
+	if job != nil {
+		jid := job.ID
+		entry.JobID = &jid
+		entry.EpisodeID = job.EpisodeID
+		entry.CourseID = job.CourseID
+	}
+	if err := s.logRepo.Append(entry); err != nil {
+		// Fall back to stderr so we at least see it somewhere; never return.
+		log.Printf("AI: appendLog failed (non-fatal, level=%s source=%s): %v", level, source, err)
+	}
 }
 
 // --- reads ---

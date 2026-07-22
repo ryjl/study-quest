@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"time"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
@@ -99,6 +100,119 @@ func (s *aiService) ListRunsForJobEnriched(jobID uint) ([]AIRunView, error) {
 	return s.enrichRuns(runs), nil
 }
 
+// --- structured logs (TODO.md P1 — /admin/logs) ---
+
+// ListLogEntries returns recent log entries with optional level/source/job
+// filters, enriched with episode/course titles. Powers the /admin/logs page.
+// When s.logRepo is nil (feature off / tests), returns an empty slice so the
+// handler can render a blank page instead of erroring.
+func (s *aiService) ListLogEntries(level, source string, jobID *uint, limit int) ([]LogEntryView, error) {
+	if s.logRepo == nil {
+		return []LogEntryView{}, nil
+	}
+	entries, err := s.logRepo.ListRecent(level, source, jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.enrichLogs(entries), nil
+}
+
+// enrichLogs batch-resolves episode/course titles for a set of log entries.
+// LogEntry carries EpisodeID/CourseID directly, so we join on those first;
+// entries missing them fall back through JobID → AIJob (e.g. failJob entries
+// that set only JobID). Best-effort: missing lookups leave titles empty.
+func (s *aiService) enrichLogs(entries []model.LogEntry) []LogEntryView {
+	if len(entries) == 0 {
+		return []LogEntryView{}
+	}
+	// Phase 1: resolve via direct EpisodeID/CourseID columns (the common case —
+	// polishStats/reaper entries set these directly).
+	epIDs := map[uint]bool{}
+	courseIDs := map[uint]bool{}
+	for _, e := range entries {
+		if e.EpisodeID != nil {
+			epIDs[*e.EpisodeID] = true
+		}
+		if e.CourseID != nil {
+			courseIDs[*e.CourseID] = true
+		}
+	}
+	epTitle := map[uint]string{}
+	courseTitle := map[uint]string{}
+	if len(epIDs) > 0 {
+		ids := make([]uint, 0, len(epIDs))
+		for id := range epIDs {
+			ids = append(ids, id)
+		}
+		var eps []model.Episode
+		if err := s.db.Where("id IN ?", ids).Find(&eps).Error; err == nil {
+			for _, ep := range eps {
+				epTitle[ep.ID] = ep.Title
+			}
+		}
+	}
+	if len(courseIDs) > 0 {
+		ids := make([]uint, 0, len(courseIDs))
+		for id := range courseIDs {
+			ids = append(ids, id)
+		}
+		var courses []model.Course
+		if err := s.db.Where("id IN ?", ids).Find(&courses).Error; err == nil {
+			for _, c := range courses {
+				courseTitle[c.ID] = c.Title
+			}
+		}
+	}
+	// Phase 2: entries still missing context (no direct ids) fall back through
+	// JobID → AIJob → episode/course, reusing resolveJobNames like enrichRuns.
+	needJobFallback := map[uint]bool{}
+	for _, e := range entries {
+		hasEp := e.EpisodeID != nil && epTitle[*e.EpisodeID] != ""
+		hasCourse := e.CourseID != nil && courseTitle[*e.CourseID] != ""
+		if (!hasEp || !hasCourse) && e.JobID != nil {
+			needJobFallback[*e.JobID] = true
+		}
+	}
+	jobNames := map[uint]struct{ ep, course string }{}
+	if len(needJobFallback) > 0 {
+		jobIDs := make([]uint, 0, len(needJobFallback))
+		for id := range needJobFallback {
+			jobIDs = append(jobIDs, id)
+		}
+		var jobs []model.AIJob
+		if err := s.db.Where("id IN ?", jobIDs).Find(&jobs).Error; err == nil && len(jobs) > 0 {
+			cache := s.resolveJobNames(jobs)
+			for _, j := range jobs {
+				ep, course, _ := cache.forJob(&j)
+				jobNames[j.ID] = struct{ ep, course string }{ep, course}
+			}
+		}
+	}
+
+	out := make([]LogEntryView, len(entries))
+	for i, e := range entries {
+		v := LogEntryView{LogEntry: e}
+		if e.EpisodeID != nil {
+			v.EpisodeTitle = epTitle[*e.EpisodeID]
+		}
+		if e.CourseID != nil {
+			v.CourseTitle = courseTitle[*e.CourseID]
+		}
+		if e.JobID != nil {
+			if n, ok := jobNames[*e.JobID]; ok {
+				if v.EpisodeTitle == "" {
+					v.EpisodeTitle = n.ep
+				}
+				if v.CourseTitle == "" {
+					v.CourseTitle = n.course
+				}
+			}
+		}
+		out[i] = v
+	}
+	return out
+}
+
 // enrichRuns batch-resolves episode/course/user titles for a set of runs by
 // joining through AIRun.JobID → AIJob → EpisodeID/CourseID/UserID. The job
 // batch is loaded in one query (not per-run), then resolveJobNames does the
@@ -168,7 +282,15 @@ func (s *aiService) CountEpisodesWithSummary(courseID uint) (int64, error) {
 // ReAct 多轮也就几分钟;claimed_at 超过半小时还停在 processing 几乎可以肯定
 // 是 worker 挂了,重置回 queued 让下一轮 poll 重新认领。
 func (s *aiService) ReapStaleJobs() (int64, error) {
-	return s.contentRepo.ReapStaleJobs(30 * time.Minute)
+	n, err := s.contentRepo.ReapStaleJobs(30 * time.Minute)
+	if err == nil && n > 0 {
+		// Reaped jobs are an operational signal (a worker crashed mid-LLM, or a
+		// relay hung). Log it so the admin sees WHEN reaping fired + how many jobs
+		// it touched, instead of silently resetting rows.
+		s.appendLog("warn", "reaper", fmt.Sprintf("reaped %d stale job(s) (claimed > 30min)", n),
+			fmt.Sprintf(`{"count":%d}`, n), nil)
+	}
+	return n, err
 }
 
 // ResetJob 委托给 repo:把单条 processing 任务重置回 queued。repo 会校验当前

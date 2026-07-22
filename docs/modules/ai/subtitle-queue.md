@@ -5,7 +5,8 @@
 >
 > 后端 VPS（2c2g）只做协调；whisper 重计算跑在带 GPU 的用户台式机上。本文档描述
 > 后端这一侧的队列、协议、状态机与并发设计。字幕系统的**改造决策**（VTT 统一、
-> 字幕润色分块+diff、词汇表挖矿）见 §12；跨模块踩坑见 `docs/pitfalls/`。
+> 字幕润色分块+diff、find/replace 输出、断点续润、词汇表挖矿、轻量 log 层）见 §12；
+> 跨模块踩坑见 `docs/pitfalls/`。
 
 ---
 
@@ -494,8 +495,9 @@ export，才能让动态链接器看到。
 ## 11. 演进方向
 
 - **字幕润色 LLM**：SRT 落库后过一遍 LLM 修 whisper 错别字（象棋等专业领域术语错字
-  明显）。已部分实现——summary/quiz/advice LLM 在输出时按 `quiz_hint` 术语字典纠正
-  （只改输出不改字幕，见 `docs/modules/ai/overview.md` §9/§14）。字幕本身的纠错仍待做。
+  明显）。已实现——见 §12.2（分块 + diff 输出 + find/replace 格式 + 断点续润）。summary/
+  quiz/advice LLM 在输出时按 `quiz_hint` 术语字典纠正（只改输出不改字幕，见
+  `docs/modules/ai/overview.md` §9/§14）也已就位。
 - **字幕切片 + embedding（RAG）**：为出题 agent 准备语料，Step 3。
 - **多语言**：当前默认 zh-CN，`Language` 字段已支持扩展。
 - ~~**worker 主动推送进度**~~：已实现（§9.3）。
@@ -531,10 +533,11 @@ export，才能让动态链接器看到。
 - 块重叠 3 cue（前后各 1.5 句上下文）
 - 并发 3 路（用户要求，很多中转站限速严格）
 - MaxTokens 8000
-- 单块 3 次重试（网络/parse 失败时）；仍失败则整 job 标 `failed`（2026-07-21 改，
-  详见下方「验证策略与 partial 语义」），不写回字幕、不链式推进 segment
+- 单块 **2 次重试**（网络/parse 失败时，2026-07-22 从 3 降到 2——见下方「重试次数
+  3→2」）；仍失败则整 job 标 `failed`（2026-07-21 改，详见下方「验证策略与 partial
+  语义」），不写回字幕、不链式推进 segment
 
-**验证策略与 partial 语义**（2026-07-21 重构）：
+**验证策略与 partial 语义**（2026-07-21 重构，2026-07-22 提示词对齐）：
 
 早期版本用三道硬规则拦 LLM 输出（长度差 ≤ 2、标点不变、字符重合度 Jaccard ≥ 0.6），
 任何一条不过就整 chunk 重试。这导致**正常术语纠错被误杀**——真实数据里 `考算→口算`、
@@ -543,17 +546,31 @@ partial。而 glossary 候选全是真术语（车/炮/马/被减数/位值原�
 
 重构后改为**放行 + 信息性提示**：
 - 验证只剩**结构校验**（JSON 能 parse、id 在 chunk 范围内）—— 这两个失败才重试
-- 长度差 > 5、标点变化、Levenshtein/maxLen > 0.5 的条目**照常应用**，只计入
-  `PolishStats.HighEditDistanceCount` 作为信息性统计（job detail 里显示
+- 长度差 > **5**（`maxLenDelta`，从 2 放宽）、标点变化、Levenshtein/maxLen > 0.5 的条目
+  **照常应用**，只计入 `PolishStats.HighEditDistanceCount` 作为信息性统计（job detail 里显示
   `high_edit_distance=N`，提示 admin 去字幕版本 UI 复核）
 - 审核职责移到 UI：字幕行的「对比」视图（润色版/原始版 toggle + cue 级 diff 高亮 +
   token 级 +/- 色块）让 admin 一眼看出 LLM 改了什么、改得对不对
 
+**提示词与代码对齐**（2026-07-22，这一轮最重要的修复）：
+2026-07-21 放松了 `validateChanges` 但**没改系统提示词**，导致提示词和代码脱节——原
+提示词标题写「违反则整批结果作废」、规则 3 写「改动前后字符数差距 ≤ 2」，而代码已经
+只警告不拦。模型按提示词自我审查，把代码允许的 3-5 字修正咽下去不输出，放松根本没
+生效。本轮重写提示词：标题改成「id 错误会作废，其他违规由 admin 复核」，**删掉字符数
+规则**（代码只警告不拦，提示词就不承诺），并加入 find/replace 输出格式（见下方「find/
+replace 输出格式」）。原则：**提示词描述的行为必须和代码实际执行的一致**，否则模型的
+自我审查会和代码的门控打架。
+
 **partial 语义收窄**：`PartialOptimized=true`（有 chunk 耗尽重试仍失败）现在标 job
 **failed**，不再标 done。partial 时**不写回字幕**（保持 source=whisper 原状，避免半成品
-污染下游）、**不链式 segment**。admin 可 RetryJob 重跑整条，或 SkipPolish 跳过走原版。
-partial 的唯一成因现在是「LLM 没返回有效结果」（网络/parse 失败），不再包含「返回了但
-规则不信」（因为不再拦截）。
+污染下游）、**不链式 segment**。admin 可 RetryJob 重跑整条（配合断点续润只重烧失败 chunk，
+见下方「断点续润」），或 SkipPolish 跳过走原版。partial 的唯一成因现在是「LLM 没返回有效
+结果」（网络/parse 失败），不再包含「返回了但规则不信」（因为不再拦截）。
+
+**重试次数 3→2**（2026-07-22）：`maxRetries` 从 3 降到 2。第 3 次重试几乎从不成功
+（relay 垃圾响应原样重复、unknown-id 漂移原样重复），只是白烧计费 token。配合断点续润，
+一个耗尽重试的 chunk 会 fail 掉整 job，但它已 done 的兄弟 chunk 会留下——下次 retry 时
+只重烧这一个 chunk，比内联多打一次近乎无用的第 3 次更便宜。
 
 **llm_optimized 一致性**：`isPolishableSource` 单一真源，入队（EnqueuePolish）和执行
 （runPolishJob）共享。允许 whisper（首次润色）和 llm_optimized（re-polish，admin 接受
@@ -561,6 +578,87 @@ partial 的唯一成因现在是「LLM 没返回有效结果」（网络/parse �
 
 **时间戳保证**：后端维护 `id → 时间戳` 映射，LLM 只输出 `id → 修正文本`。
 时间戳根本不进 prompt，物理上不会错。
+
+#### 12.2.1 find/replace 输出格式（2026-07-22）
+
+原来每个 change 只能整句替换：`{"id":147,"text":"修正后的整句"}`。问题是一个 cue 里
+只错一个字（最常见情形），却要模型把整句重输出——多出来的 completion token 全花在抄
+没改的字上。现在新增 **find/replace 子串替换**格式：
+
+```json
+{"id":147,"edits":[{"find":"出军","replace":"出车"}]}
+```
+
+- **`edits` 优先**：有 `edits` 就按子串替换处理，忽略 `text`；没有 `edits` 才回退到
+  `text`（整句替换）。`text` 字段保留是为了**向后兼容**（老模型 / 格式漂移 / 现有测试
+  的返回格式）。
+- **唯一性由 apply 层兜底**：`find` 必须在该 cue 内唯一（`strings.Count(final, find) == 1`）。
+  不唯一或找不到时，**跳过该 edit**（计入 `PolishStats.SkippedEdits`），**不 retry**——
+  retry 模型大概率原样返回同样的 find，只是白烧配额。一条 change 的其余 edits、或 `text`
+  fallback，照常应用。
+- `SkippedEdits` 是信息性统计（非正确性门控），job detail 里能看到，让 admin 区分「模型
+  的 find 不精确」和「模型根本没改这条 cue」。
+- 同一 cue 多处错字用数组：`edits:[{find,replace},{find,replace}]`。
+
+统一用 `CueChange.resolveText(orig)` 计算 final text，validate 和 apply 两处共享同一路径，
+不会漂移。
+
+#### 12.2.2 断点续润 / checkpoint-resume（2026-07-22）
+
+polish 是最贵的 AI 能力（单集 7-13 分钟、几万 token）。早期版本一个 chunk 失败 → 整 job
+failed → RetryJob 把**所有 chunk** 重烧一遍，哪怕大部分 chunk 上次已成功。本轮加断点续润：
+新表 `ai_polish_chunks`（`ai_jobs` 子表，FK OnDelete:CASCADE）记录每个 chunk 的状态。
+
+**表结构**（`model.AIPolishChunk`）：`job_id` + `chunk_index`（0-based，和 chunk 布局对齐）
++ `chunk_first/last_global_idx`（审计用）+ `status`（queued/done/failed）+ 累计 token +
+`retries` + `high_edit_distance_count` + `changed_cues` + `first_err`（失败时）+
+`polished_chunk_json`（成功时存 `{"changes":[...],"glossary":[...]}`，resume 时反序列化）。
+
+**流程**（`setupPolishCheckpoint` + `polish.Polish` 的 `PriorOutcomes`/`OnChunkDone`）：
+
+1. job 开始时按 `polish.ChunkLayout(numCues)` 算出每个 chunk 的全局 cue 范围，幂等 seed
+   一批 `queued` 骨架行（retry 重跑不会覆盖上次已写 done/failed 的行）。
+2. 读回上次已 done 的 chunk，反序列化成 `PriorChunkOutcome` 喂给 `polish.Polish`——它对
+   这些 chunk **不调 LLM**，只把它们的 changes/glossary/tokens 折进最终 reassembly + stats
+   （token 是上次真烧了的，stats 必须反映）。
+3. 每个新跑完的 chunk 通过 `OnChunkDone` 回调落库（done 写 JSON + token，failed 写 errStr）。
+4. **进度上报**：`onChunkDone` 里 `progress = doneChunks/totalChunks`，写进 job status，
+   admin 队列页能看到 polish 的真实进度（而不是 20 分钟一直转圈）。
+
+**设计要点**：
+- chunk 边界对给定 VTT 是确定的（step=147 固定），所以 retry 时 chunk index 稳定、能对上。
+- `polishChunkRepo` 为 nil（测试 / 关闭断点续润）时退化为普通全量跑，不影响正确性。
+- 成功的 job 保留 chunk 行，既是 token 花费记录，也是未来 re-polish retry 的 resume 锚点。
+- chunk 落库失败是**非致命**的：best-effort log，polish 本身照常产出正确字幕，只是丢了
+  resume 能力。
+
+#### 12.2.3 挖矿开关 SkipGlossaryMining（2026-07-22）
+
+re-polish（source=llm_optimized）时字幕内容未变（从不可变的 `RawVttContent` 重跑），上次
+能挖的术语这次还能挖到，再挖既白烧 completion token 又分散模型注意力。`PolishRequest.
+SkipGlossaryMining bool` 让 re-polish 用**精简系统提示词**（无「术语挖矿」段，省约 120
+prompt token/chunk），模型不再输出 glossary 字段。
+
+`runPolishJob` 用 `sub.Source == "llm_optimized"` 判定是否开（首次润色 source=whisper
+照常挖矿）。`SystemPrompt(skipMining)` 是单一真源：既被 `polishChunk` 选用，也被
+`recordPolishRun` 写进 `ai_runs.system_prompt_text`，保证 admin 在「查看回放」里看到的
+prompt 就是模型实际收到的版本。
+
+#### 12.2.4 token 统计 bug 修复 + polish 写 ai_runs（2026-07-22）
+
+**token 累加 bug**：retry 循环里原来用一个 `usage` 变量，每次 retry 时 `usage = resp.usage`
+**覆盖**，导致前面 HTTP 成功 attempt 的 token 被丢掉（尤其被 validation 拒掉的 attempt，
+token 已经计费但没统计）。改成 per-chunk `promptAccum`/`completionAccum` **累加所有 HTTP
+成功 attempt 的 token**（含最终被 validation 拒掉的）。失败的 chunk 也照样加（它们同样
+消耗了 token，账单不会因为标 failed 就免单）。这直接影响 `recordPolishRun` 写进 `ai_runs`
+的 token 数是否反映真实账单。
+
+**`recordPolishRun`**：polish 之前是**唯一不写 `ai_runs` 表的 AI 能力**（summary/quiz/
+advice/course_summary 都写）。本轮补上：`capability="polish"`，带 prompt/completion tokens、
+耗时（`duration_ms`）、model、system prompt（按 skipMining 取正确版本）、以及 preview
+（changed/total/glossary/high_edit_distance/skipped_edits/failed_chunks）。成功记 `pass`、
+partial 记 `fail`（复用 `self_check_result` 列）。这让 AI 控制台的 RunList 和「查看回放」
+能看到 polish 的 token 花费和 prompt——运维可见性和其他 AI 能力对齐。
 
 ### 12.3 润色用便宜模型
 
@@ -590,6 +688,10 @@ provider 配置里 `tags` 字段（JSON 数组），润色任务优先找 tags �
 
 单向流：candidates → TermDict（接受）。TermDict 手改不影响 candidates。
 
+**re-polish 关闭挖矿**：admin 接受新 glossary 后 re-polish（source=llm_optimized）时，
+字幕内容未变（从 `RawVttContent` 重跑），能挖的术语上次已挖。此时 `SkipGlossaryMining=true`
+跳过挖矿、用精简系统提示词省 token，详见 §12.2.3。
+
 ### 12.5 字幕格式全覆盖
 
 统一走 ffmpeg `-c:s webvtt` 转换。文本格式（SRT/ASS/SSA/SUB/SMI/WebVTT）全能转。
@@ -602,6 +704,40 @@ provider 配置里 `tags` 字段（JSON 数组），润色任务优先找 tags �
 AI 管线（segmenter/summarizer/prompt）都深度依赖 SRT 结构，转 ASS 会断链。**保持
 VTT 存储**。若未来要"重点高亮"，让润色 LLM 在 VTT 里给术语包 `<b>` 标签（VTT 原生
 支持），零额外架构成本。
+
+### 12.7 轻量结构化日志层（2026-07-22）
+
+之前所有日志走 stderr（`log.Printf`，全仓 ~81 处，前缀不统一）。AI/subtitle worker 的
+关键事件（job 失败、reaper 回收、provider 解析失败、worker panic、polish 完工）只在
+server 日志里，admin 看不到——出现「AI worker 前面卡住了，不知道为什么」这类问题，只能
+SSH 进去看 stderr。本轮加一个**轻量结构化 log 层**，让运维可见性不再依赖 SSH。
+
+**数据模型**（`model.LogEntry`）：`level`（info/warn/error）+ `source`（ai_worker/reaper/
+polish/provider/segment…）+ `message` + `fields_json`（可选的结构化上下文，JSON blob，如
+token 计数、chunk id、reaped 数量）+ `job_id`/`episode_id`/`course_id`（可选关联）+
+`created_at`。`AutoMigrate` 自动建表。
+
+**设计取舍**（对应 TODO.md 原 P1 条目的边界声明）：
+- **不引第三方 log 库**：自己写 wrapper（`LogRepository` + service 层 `appendLog`），避免
+  go.mod 改动 + 全仓 81 处替换。
+- **best-effort + nil-safe**：`appendLog` 在 `logRepo==nil`（测试）时是 no-op；写入失败只
+  `log.Printf` 一行，**绝不** derail 业务逻辑。log 是观测层，不是业务路径。
+- **不全量替换 81 处 `log.Printf`**：只接 5 个高信号点，其余旧代码渐进迁移。
+
+**5 个接线点**（高信号运维事件）：
+
+| 点 | level | source | 触发 |
+|---|---|---|---|
+| `failJob` | error | ai_worker | 任何 AI job 走到失败终态（含 provider 解析失败，经 failJob 落 error） |
+| `ReapStaleJobs` | warn | reaper | 认领超 30 分钟的任务被回收（worker 崩溃/relay 挂起的信号） |
+| `polishStats` | info | polish | polish 完工，带 chunk/llm_calls/retries/token/duration 结构化字段 |
+| provider resolve 失败 | error | ai_worker | 润色任务找不到 provider（经 failJob 落 error，带原始 resolve 错误） |
+| worker panic | error | ai_worker | AI worker goroutine recover 到 panic（防整条 worker 静默死掉） |
+
+**Admin 可视化**：`GET /admin/api/logs?level=&source=&job_id=&limit=`（`admin_logs.go`）+
+`/admin/logs` 前端页（`pages/Logs.tsx`，仿 AIWorkflow 的 useQuery + 轮询）。返回 enriched
+view（带 episode/course 标题，避免 N+1）。admin 能直接在控制台按 level/source/job 过滤看
+事件流定位故障，而不是 SSH 翻 stderr。
 
 ---
 

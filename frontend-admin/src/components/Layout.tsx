@@ -24,6 +24,7 @@ import {
   LogOut,
   ChevronRight,
   Loader2,
+  ScrollText,
 } from 'lucide-react';
 
 interface NavItem {
@@ -78,6 +79,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/admin/badges', label: '荣誉徽章', icon: <Medal size={16} /> },
       { to: '/admin/releases', label: '版本发布', icon: <Package size={16} /> },
       { to: '/admin/settings', label: '系统设置', icon: <Settings size={16} /> },
+      { to: '/admin/logs', label: '系统日志', icon: <ScrollText size={16} /> },
     ],
   },
 ];

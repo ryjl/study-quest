@@ -32,6 +32,11 @@ type fakeLLM struct {
 type fakeResp struct {
 	content string
 	err     error
+	// usage, when non-zero, is returned as the call's token accounting. Defaults
+	// to zero (the common case — most tests don't care about tokens). The token-
+	// accounting test sets distinct values per attempt to verify the retry-loop
+	// accumulator counts every HTTP-successful attempt, not just the last.
+	usage ai.Usage
 }
 
 func (m *fakeLLM) Chat(ctx context.Context, req ai.ChatRequest) (*ai.ChatResponse, error) {
@@ -48,7 +53,7 @@ func (m *fakeLLM) Chat(ctx context.Context, req ai.ChatRequest) (*ai.ChatRespons
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &ai.ChatResponse{Content: r.content, FinishReason: "stop"}, nil
+	return &ai.ChatResponse{Content: r.content, FinishReason: "stop", Usage: r.usage}, nil
 }
 
 func (m *fakeLLM) Ping(ctx context.Context) error { return nil }
@@ -70,6 +75,13 @@ func makeVTT(n int) string {
 
 func cubeVTT(idx, startMs, endMs int, text string) string {
 	return itoa(idx) + "\n" + msToVTT(startMs) + " --> " + msToVTT(endMs) + "\n" + text + "\n\n"
+}
+
+// cubeVTTWrap builds a single-cue VTT (idx 1, 0–0.9s) with the given text —
+// for tests that need a specific cue body (e.g. "aa aa" to exercise non-unique
+// find substrings) without the makeVTT "lineN" naming.
+func cubeVTTWrap(idx int, text string) string {
+	return "WEBVTT\n\n" + cubeVTT(idx, 0, 900, text)
 }
 
 func msToVTT(ms int) string {
@@ -299,6 +311,304 @@ func TestPolish_RetriesThenSucceeds(t *testing.T) {
 	}
 	if res.Stats.Retries < 1 {
 		t.Errorf("Retries = %d, want >= 1", res.Stats.Retries)
+	}
+}
+
+// TestPolish_TokenAccounting_RetryNotLost is the regression test for the
+// per-chunk token accounting bug: the retry loop used to overwrite `usage` on
+// each attempt, so an HTTP-successful-but-validation-failing attempt's tokens
+// were silently dropped from PolishStats (real bill > reported bill).
+//
+// Here attempt 1 returns a VALID parse but with an unknown cue id (→ structural
+// validation fails → retry) and carries 100 prompt tokens; attempt 2 succeeds
+// with 200 prompt tokens. PolishStats.PromptTokens must be 300 (both attempts
+// billed), not 200 (last attempt only). Completion side is checked the same way.
+func TestPolish_TokenAccounting_RetryNotLost(t *testing.T) {
+	vtt := makeVTT(2)
+	// id=99 is outside the chunk (only 2 cues) → validateChanges returns the
+	// "unknown id" structural error → retry. The call itself "succeeded" (HTTP
+	// ok, JSON parsed) so its tokens ARE billed by the relay.
+	attempt1 := `{"changes":[{"id":99,"text":"x"}],"glossary":[]}`
+	attempt2 := `{"changes":[{"id":1,"text":"lina1"}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{
+		{content: attempt1, usage: ai.Usage{PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110}},
+		{content: attempt2, usage: ai.Usage{PromptTokens: 200, CompletionTokens: 20, TotalTokens: 220}},
+	}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if res.Stats.PromptTokens != 300 {
+		t.Errorf("PromptTokens = %d, want 300 (both attempts billed; bug would give 200)",
+			res.Stats.PromptTokens)
+	}
+	if res.Stats.CompletionTokens != 30 {
+		t.Errorf("CompletionTokens = %d, want 30 (both attempts billed; bug would give 20)",
+			res.Stats.CompletionTokens)
+	}
+	if res.Stats.ChangedCues != 1 {
+		t.Errorf("ChangedCues = %d, want 1", res.Stats.ChangedCues)
+	}
+}
+
+// TestPolish_AppliesEditsFormat: the new find/replace output format. LLM
+// returns {"id":2,"edits":[{"find":"line","replace":"lina"}]} — only the
+// matched substring changes, the rest of the cue is untouched.
+func TestPolish_AppliesEditsFormat(t *testing.T) {
+	vtt := makeVTT(2) // cue texts: "line1", "line2"
+	resp := `{"changes":[{"id":2,"edits":[{"find":"line","replace":"lina"}]}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if !strings.Contains(res.PolishedVtt, "lina2") {
+		t.Errorf("edits should turn line2 → lina2; VTT=%s", res.PolishedVtt)
+	}
+	if strings.Contains(res.PolishedVtt, "line2") {
+		t.Errorf("line2 should be gone after edit; VTT=%s", res.PolishedVtt)
+	}
+	if res.Stats.SkippedEdits != 0 {
+		t.Errorf("SkippedEdits = %d, want 0 (find was unique)", res.Stats.SkippedEdits)
+	}
+}
+
+// TestPolish_EditFindNotUnique_Skipped: when find appears 2+ times in the cue,
+// the edit is dropped (ambiguity) and counted in SkippedEdits. Not retried.
+func TestPolish_EditFindNotUnique_Skipped(t *testing.T) {
+	vtt := cubeVTTWrap(1, "aa aa") // cue has "aa" twice → find not unique
+	resp := `{"changes":[{"id":1,"edits":[{"find":"aa","replace":"bb"}]}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if res.Stats.SkippedEdits != 1 {
+		t.Errorf("SkippedEdits = %d, want 1 (find not unique)", res.Stats.SkippedEdits)
+	}
+	// Cue text unchanged (edit dropped), and no retry burned on it.
+	if !strings.Contains(res.PolishedVtt, "aa aa") {
+		t.Errorf("ambiguous edit should leave cue unchanged; VTT=%s", res.PolishedVtt)
+	}
+	if res.Stats.LLMCalls != 1 {
+		t.Errorf("LLMCalls = %d, want 1 (no retry for ambiguous find)", res.Stats.LLMCalls)
+	}
+}
+
+// TestPolish_EditFindNotFound_Skipped: find absent from cue → edit dropped.
+func TestPolish_EditFindNotFound_Skipped(t *testing.T) {
+	vtt := cubeVTTWrap(1, "hello")
+	resp := `{"changes":[{"id":1,"edits":[{"find":"world","replace":"earth"}]}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if res.Stats.SkippedEdits != 1 {
+		t.Errorf("SkippedEdits = %d, want 1 (find absent)", res.Stats.SkippedEdits)
+	}
+	if !strings.Contains(res.PolishedVtt, "hello") {
+		t.Errorf("absent-find edit should leave cue unchanged; VTT=%s", res.PolishedVtt)
+	}
+}
+
+// TestPolish_MixedEditsAndTextFallback: one cue uses edits, another uses the
+// Text fallback (e.g. the model couldn't pick a unique substring). Both should
+// apply. This locks in that Edits is preferred when present but Text still works.
+func TestPolish_MixedEditsAndTextFallback(t *testing.T) {
+	vtt := makeVTT(3)
+	resp := `{"changes":[
+		{"id":1,"edits":[{"find":"line","replace":"lina"}]},
+		{"id":3,"text":"whole new sentence"}
+	],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if res.Stats.ChangedCues != 2 {
+		t.Errorf("ChangedCues = %d, want 2 (edit + text)", res.Stats.ChangedCues)
+	}
+	if !strings.Contains(res.PolishedVtt, "lina1") {
+		t.Errorf("edits cue should be lina1; VTT=%s", res.PolishedVtt)
+	}
+	if !strings.Contains(res.PolishedVtt, "whole new sentence") {
+		t.Errorf("text-fallback cue should be applied; VTT=%s", res.PolishedVtt)
+	}
+}
+
+// TestPolish_Resume_SkipsPriorDoneChunks is the unit test for 断点续润: when
+// PriorOutcomes carries chunk 0's result, Polish must NOT call the LLM for it
+// (the token saver) but MUST still fold its changes into the final VTT. The
+// fakeLLM is given exactly ONE response (for chunk 1 only) — if Polish wrongly
+// called the LLM for chunk 0 too, fakeLLM would run out of responses and error.
+//
+// With chunkSize=150 and overlap=3 (step=147), a 151-cue VTT yields exactly 2
+// chunks: chunk 0 = cues[0..149], chunk 1 = cues[147..150] (3-cue overlap). We
+// feed chunk 0 as prior, script chunk 1's response, and assert only 1 LLM call.
+func TestPolish_Resume_SkipsPriorDoneChunks(t *testing.T) {
+	vtt := makeVTT(151) // → 2 chunks
+	layout := ChunkLayout(151)
+	if len(layout) != 2 {
+		t.Fatalf("test premise: expected 2 chunks for 151 cues, got %d", len(layout))
+	}
+
+	// Chunk 0 already done on a prior attempt: it fixed cue 1 (line1→lina1).
+	// We hand it in as a prior outcome so Polish reuses it without an LLM call.
+	prior := map[int]PriorChunkOutcome{
+		0: {
+			Changes:          []CueChange{{ID: 1, Text: "lina1"}},
+			PromptTokens:     500, // spent on the prior attempt — must still count
+			CompletionTokens: 50,
+		},
+	}
+	// ONE scripted response for chunk 1 only. If Polish calls the LLM for chunk
+	// 0 too, this slice underflows → "no more scripted responses" error.
+	// Chunk 1 spans global cues 148..151; its chunk-local id 1 = global cue 148.
+	chunk1Resp := `{"changes":[{"id":1,"text":"lina148"}],"glossary":[]}`
+	var callbacks int
+	llm := &fakeLLM{responses: []fakeResp{{content: chunk1Resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{
+		VttContent:    vtt,
+		PriorOutcomes: prior,
+		OnChunkDone:   func(int, ChunkOutcome) { callbacks++ },
+	})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+
+	// Only chunk 1 called the LLM (chunk 0 was skipped via PriorOutcomes).
+	if llm.calls != 1 {
+		t.Errorf("LLM calls = %d, want 1 (chunk 0 must be skipped on resume)", llm.calls)
+	}
+	// Both chunks' changes folded into the final VTT: prior's lina1 + chunk1's lina148.
+	if !strings.Contains(res.PolishedVtt, "lina1") {
+		t.Errorf("prior chunk 0's change (lina1) must appear in VTT; got=%s", res.PolishedVtt)
+	}
+	if !strings.Contains(res.PolishedVtt, "lina148") {
+		t.Errorf("chunk 1's change (lina148) must appear in VTT; got=%s", res.PolishedVtt)
+	}
+	// Prior chunk's tokens counted in stats (they WERE spent, on the prior attempt).
+	if res.Stats.PromptTokens < 500 {
+		t.Errorf("PromptTokens = %d, must include prior chunk 0's 500 (got less)", res.Stats.PromptTokens)
+	}
+	// OnChunkDone fires only for chunks actually run (chunk 1), not priors.
+	if callbacks != 1 {
+		t.Errorf("OnChunkDone callbacks = %d, want 1 (priors don't re-fire)", callbacks)
+	}
+	if res.Stats.ChunkCount != 2 {
+		t.Errorf("ChunkCount = %d, want 2", res.Stats.ChunkCount)
+	}
+}
+
+// TestPolish_EmptyChangeRetried_NotBlanked: regression for the empty-change
+// data-loss bug. If the model returns a change with no text AND no usable
+// edits (e.g. {"id":2} or {"id":2,"edits":[]}), validateChanges must reject it
+// as structural corruption and retry — NOT let an empty string reach the apply
+// step and blank the cue's subtitle text. Without the guard, cue 2 ("line2")
+// would be wiped to "" in the final VTT.
+//
+// Here attempt 1 returns a bare-id change (→ empty resolved text → retry),
+// attempt 2 returns a real fix. The cue must end up fixed (lina2), not blanked,
+// and the retry must have fired (Retries >= 1).
+func TestPolish_EmptyChangeRetried_NotBlanked(t *testing.T) {
+	vtt := makeVTT(2)
+	bareID := `{"changes":[{"id":2}],"glossary":[]}`   // no text, no edits → empty
+	good := `{"changes":[{"id":2,"text":"lina2"}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{
+		{content: bareID}, // attempt 1: empty → structural reject → retry
+		{content: good},   // attempt 2: valid fix
+	}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	// Cue 2 fixed, NOT blanked.
+	if strings.Contains(res.PolishedVtt, "\"") && !strings.Contains(res.PolishedVtt, "lina2") {
+		t.Errorf("cue 2 should be lina2, not blanked; VTT=%s", res.PolishedVtt)
+	}
+	if !strings.Contains(res.PolishedVtt, "lina2") {
+		t.Errorf("cue 2 should contain lina2 after retry; VTT=%s", res.PolishedVtt)
+	}
+	// The bare-id attempt triggered a retry.
+	if res.Stats.Retries < 1 {
+		t.Errorf("Retries = %d, want >= 1 (empty change should retry)", res.Stats.Retries)
+	}
+}
+
+// TestPolish_EmptyEditsArray_FallsBackToText confirms an explicit empty edits
+// array `[]` is treated as "no edits" and falls through to the Text field,
+// rather than resolving to empty. (Distinct from the bare-id case above: here
+// the model DID provide text, just with a redundant empty edits:[].)
+func TestPolish_EmptyEditsArray_FallsBackToText(t *testing.T) {
+	vtt := makeVTT(2)
+	resp := `{"changes":[{"id":1,"edits":[],"text":"lina1"}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if !strings.Contains(res.PolishedVtt, "lina1") {
+		t.Errorf("empty edits:[] should fall back to text → lina1; VTT=%s", res.PolishedVtt)
+	}
+}
+
+// TestPolish_SkipGlossaryMining_UsesLeanPrompt: when SkipGlossaryMining=true the
+// system prompt must be the glossary-free variant (no "术语挖矿" section), and
+// the model's glossary output (if any) still parses harmlessly. Verifies the
+// prompt actually swapped, not just that the flag plumbed through.
+func TestPolish_SkipGlossaryMining_UsesLeanPrompt(t *testing.T) {
+	vtt := makeVTT(2)
+	resp := `{"changes":[{"id":1,"text":"lina1"}],"glossary":[]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	_, err := Polish(context.Background(), llm, "fake-model", PolishRequest{
+		VttContent:         vtt,
+		SkipGlossaryMining: true,
+	})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	sysPrompt := llm.lastReq.Messages[0].Content // system is first message
+	if strings.Contains(sysPrompt, "术语挖矿") {
+		t.Errorf("skipMining=true should drop the 术语挖矿 section; system prompt still has it")
+	}
+	if strings.Contains(sysPrompt, "glossary") {
+		t.Errorf("skipMining=true system prompt should not mention glossary")
+	}
+
+	// Sanity: the full prompt DOES contain those, so the branch is real.
+	if !strings.Contains(systemPrompt, "术语挖矿") {
+		t.Fatalf("test premise broken: default systemPrompt no longer has 术语挖矿")
+	}
+}
+
+// TestSystemPrompt_NoCharCountRule_NoBatchInvalidation: pins the 2026-07-22
+// prompt/code realignment. The old prompt falsely told the model "字符数差距 ≤ 2"
+// and "违反则整批结果作废" while the code (maxLenDelta=5, validation only
+// warns) did neither — the model self-censored legit 3-5 char fixes. The new
+// prompt must NOT contain those stale, misleading claims.
+func TestSystemPrompt_NoCharCountRule_NoBatchInvalidation(t *testing.T) {
+	for name, p := range map[string]string{
+		"systemPrompt":          systemPrompt,
+		"systemPromptNoGlossary": systemPromptNoGlossary,
+	} {
+		if strings.Contains(p, "≤ 2") {
+			t.Errorf("%s: must not promise ≤2 char delta (code allows up to %d, warning-only)",
+				name, maxLenDelta)
+		}
+		if strings.Contains(p, "整批结果作废") {
+			t.Errorf("%s: '违反则整批结果作废' was removed — only unknown cue id invalidates a batch now",
+				name)
+		}
 	}
 }
 

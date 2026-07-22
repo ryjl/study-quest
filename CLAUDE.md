@@ -75,7 +75,7 @@ Always run `make test` before declaring backend work done.
 ## Hard-won rules (each exists because a bug violated it)
 
 > Full details and other pitfalls in `docs/pitfalls/`. Only the most critical
-> 6 rules live here.
+> 7 rules live here.
 
 1. **Cross-layer contract changes cannot be parallelized.** Go `json:` tags ↔
    TS interfaces ↔ Dart classes are an implicit hand-maintained 3-way contract
@@ -131,6 +131,11 @@ Always run `make test` before declaring backend work done.
 6. **AI is a pure附加层.** If no provider is configured or the course has AI
    disabled, system behavior is identical to pre-AI. Clients treat 404 as
    "no AI data" and hide the cards.
+
+7. **Bug 当轮就修，不要因为"可能是小问题"就拖到下次。** review 标出来的问题
+   （哪怕是 MAJOR 不是 BLOCKER、哪怕"终态正确"、哪怕看起来像 UX 瑕疵）都是真
+   bug，用户看得到、会困惑。别用"小问题""可观测性层面"给自己找台阶。踩坑细节
+   和具体修法进 `docs/pitfalls/`，不堆在 CLAUDE.md。
 
 ## Where things live (quick map)
 

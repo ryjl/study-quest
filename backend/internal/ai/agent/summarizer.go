@@ -150,7 +150,7 @@ func (s *Summarizer) Summarize(ctx context.Context, req SummarizerRequest, jobID
 	// ai_runs.system_prompt_text / user_prompt_text 供 admin "查看回放"。
 	runInput := buildRunInput(req)
 	if chatResp != nil {
-		s.recordRun(jobID, runInput, chatResp, elapsed, "", SummarizerSystemPrompt, userPrompt)
+		s.recordRun(jobID, runInput, chatResp, elapsed, SummarizerSystemPrompt, userPrompt)
 	} else {
 		s.recordRunErr(jobID, runInput, err, elapsed, SummarizerSystemPrompt, userPrompt)
 	}
@@ -239,7 +239,7 @@ func buildRunInput(req SummarizerRequest) string {
 
 // recordRun 写一条成功的 summary ai_run。systemPrompt/userPrompt 是本次发给 LLM 的
 // 开场 prompt,写进 ai_runs.system_prompt_text / user_prompt_text 供 admin "查看回放"。
-func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatResponse, elapsed time.Duration, selfCheck, systemPrompt, userPrompt string) {
+func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatResponse, elapsed time.Duration, systemPrompt, userPrompt string) {
 	s.repo.CreateRun(&model.AIRun{
 		JobID:            jobID,
 		Capability:       "summary",
@@ -248,8 +248,11 @@ func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatRespon
 		CompletionTokens: resp.Usage.CompletionTokens,
 		ModelUsed:        s.model,
 		ResponseText:     resp.Content,
-		SelfCheckResult:  "skipped", // summarizer has no self-check; quizzer (Phase C) does
-		DurationMs:       int(elapsed.Milliseconds()),
+		// summary 无自检环节(quiz 才有),复用 SelfCheckResult 字段记生成结果:
+		// pass=成功生成,fail=调用失败。和 advice/course_summary/polish 统一,
+		// 不再用"skipped"(成功失败都写 skipped,前端无法区分)。
+		SelfCheckResult: "pass",
+		DurationMs:      int(elapsed.Milliseconds()),
 		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt
 		// (原来只存精简 InputJSON 快照,调 prompt 是盲调)。失败时也记——看是哪个 prompt
 		// 导致的失败同样有价值。
@@ -267,7 +270,7 @@ func (s *Summarizer) recordRunErr(jobID uint, inputJSON string, err error, elaps
 		InputJSON:        inputJSON,
 		ModelUsed:        s.model,
 		ResponseText:     "(call failed) " + err.Error(),
-		SelfCheckResult:  "skipped",
+		SelfCheckResult:  "fail",
 		DurationMs:       int(elapsed.Milliseconds()),
 		SystemPromptText: systemPrompt,
 		UserPromptText:   userPrompt,

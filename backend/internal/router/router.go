@@ -260,6 +260,8 @@ func RegisterRoutes(
 		adm.POST("/api/glossary-candidates/accept-batch", admin.AcceptGlossaryCandidateBatch)
 		adm.GET("/api/ai/runs", admin.ListAIRuns)
 		adm.GET("/api/ai/runs/:id", admin.GetAIRun)
+		// Structured logs (TODO.md P1) — operational event stream for /admin/logs.
+		adm.GET("/api/logs", admin.ListLogs)
 		// Phase C — quiz observability (per-user drill-down + summary content).
 		adm.GET("/api/ai/summaries/:episodeID", admin.GetAISummary)
 		adm.GET("/api/ai/users/:userID/quizzes", admin.ListUserQuizzes)

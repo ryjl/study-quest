@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -47,6 +48,8 @@ func polishTestEnv(t *testing.T, withResolver bool) (*aiService, repository.Epis
 		nil, nil,
 		glossaryRepo,
 		subjectRepo,
+		nil, // no polishChunkRepo — this env covers non-LLM polish paths only
+		nil, // no logRepo — structured-log writes not asserted
 	).(*aiService)
 	t.Cleanup(svc.Stop) // release the worker goroutine
 	return svc, episodeRepo, courseRepo, glossaryRepo, subjectRepo
@@ -215,6 +218,17 @@ func TestRunPolishJob_NoResolverFails(t *testing.T) {
 // seeded too (runPolishJob reads it as the polish input).
 func seedPolishEpisode(t *testing.T, episodeRepo repository.EpisodeRepository, courseRepo repository.CourseRepository, source string) (courseID, epID uint) {
 	t.Helper()
+	return seedPolishEpisodeVTT(t, episodeRepo, courseRepo, source,
+		"WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n考算\n")
+}
+
+// seedPolishEpisodeVTT is the VTT-aware variant: seeds a subtitle whose
+// VttContent + RawVttContent are the given string. Used by tests that need a
+// specific cue count (e.g. the resume test needs 151 cues → 2 chunks). Both
+// columns get the same content (runPolishJob reads RawVttContent as the polish
+// input when present).
+func seedPolishEpisodeVTT(t *testing.T, episodeRepo repository.EpisodeRepository, courseRepo repository.CourseRepository, source, vtt string) (courseID, epID uint) {
+	t.Helper()
 	course := &model.Course{Title: "Polish Test Course"}
 	if err := courseRepo.Create(course); err != nil {
 		t.Fatalf("create course: %v", err)
@@ -230,8 +244,8 @@ func seedPolishEpisode(t *testing.T, episodeRepo repository.EpisodeRepository, c
 		EpisodeID:     ep.ID,
 		Language:      "zh-CN",
 		Label:         "中文",
-		VttContent:    "WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n考算\n",
-		RawVttContent: "WEBVTT\n\n1\n00:00:00.000 --> 00:00:01.000\n考算\n",
+		VttContent:    vtt,
+		RawVttContent: vtt,
 		Source:        source,
 		IsPrimary:     true,
 	}
@@ -247,6 +261,22 @@ func seedPolishEpisode(t *testing.T, episodeRepo repository.EpisodeRepository, c
 		t.Fatalf("seed subtitle source = %q, want %q (SaveSubtitle didn't persist?)", got.Source, source)
 	}
 	return course.ID, ep.ID
+}
+
+// makePolishVTT builds a deterministic VTT with n cues, each "line<i>", 1s apart.
+// Mirrors the polish package's makeVTT but lives in the service test package
+// (the resume E2E test needs a ≥151-cue input to get 2 chunks).
+func makePolishVTT(n int) string {
+	var b strings.Builder
+	b.WriteString("WEBVTT\n\n")
+	for i := 1; i <= n; i++ {
+		start := (i - 1) * 1000
+		end := start + 900
+		b.WriteString(fmt.Sprintf("%d\n%02d:%02d:%02d.%03d --> %02d:%02d:%02d.%03d\nline%d\n\n",
+			i, start/3600000, (start/60000)%60, (start/1000)%60, start%1000,
+			end/3600000, (end/60000)%60, (end/1000)%60, end%1000, i))
+	}
+	return b.String()
 }
 
 // --- end-to-end polish tests (via polishLLMOverride seam) -------------------
@@ -306,11 +336,18 @@ func polishE2EEnv(t *testing.T, llm *fakePolishLLM) (*aiService, repository.Epis
 	// Non-nil empty resolver — runPolishJob's nil check passes, but
 	// polishLLMOverride short-circuits before any resolver call.
 	resolver := ai.NewProviderResolver(nil, "")
+	// polishChunkRepo: real repo — the E2E env drives runPolishJob end-to-end,
+	// and the resume test (断点续润) needs chunk rows to persist between the two
+	// runPolishJob calls. The repo is NOT returned (tests reach it via svc.db
+	// or via svc.polishChunkRepo), but it must be wired so checkpoint writes land.
+	polishChunkRepo := repository.NewAIPolishChunkRepository(db)
 	svc := NewAIService(
 		db, contentRepo, episodeRepo, courseRepo,
 		resolver, nil, nil,
 		repository.NewGlossaryRepository(db),
 		repository.NewSubjectRepository(db),
+		polishChunkRepo,
+		nil, // no logRepo — structured-log writes not asserted
 	).(*aiService)
 	svc.polishLLMOverride = llm
 	t.Cleanup(svc.Stop)
@@ -385,7 +422,7 @@ func TestRunPolishJob_AllSuccess_E2E(t *testing.T) {
 // This locks down the 2026-07-21 behavior change (partial used to be done-with-
 // partial; now it's a hard fail that halts the chain).
 func TestRunPolishJob_Partial_E2E(t *testing.T) {
-	// Script maxRetries (3) garbage responses so the chunk exhausts retries.
+	// Script maxRetries (2) garbage responses so the chunk exhausts retries.
 	var resps []fakePolishResp
 	for i := 0; i < maxRetriesForServiceTest; i++ {
 		resps = append(resps, fakePolishResp{content: "not json at all"})
@@ -471,8 +508,78 @@ func TestRunPolishJob_HighEditDistanceFlagged_E2E(t *testing.T) {
 	}
 }
 
-// maxRetriesForServiceTest mirrors polish.maxRetries (3). We can't import the
+// TestRunPolishJob_Resume_SeedIsIdempotent is the regression test for the
+// unique-index BLOCKER: calling runPolishJob twice on the SAME job (a failed
+// retry) must NOT double-seed chunk rows. Before the (job_id, chunk_index)
+// UNIQUE index fix, SeedChunksForJob's ON CONFLICT DO NOTHING found no constraint
+// to match, so the second run inserted duplicate queued rows next to the first
+// run's done/failed rows — and ListChunksForJob returned multiple rows per
+// chunk index, breaking resume (the retry re-burned every chunk).
+//
+// We can't deterministically drive chunk 0 success + chunk 1 failure across one
+// call (3-way concurrency makes response order nondeterministic). So this test
+// targets the DB invariant directly: two runPolishJob calls on one job, then
+// assert the chunk row count equals the chunk count (no duplicates). With the
+// unique index, the second seed is a no-op; without it, rows double.
+func TestRunPolishJob_Resume_SeedIsIdempotent(t *testing.T) {
+	// 151 cues → 2 chunks. Both calls return all-garbage so both fail fast — we
+	// only care about the seed-not-doubling invariant, not the polish outcome.
+	const numCues = 151
+	vtt := makePolishVTT(numCues) // "line1".."line151"
+	var resps []fakePolishResp
+	for i := 0; i < 4; i++ { // 2 chunks × maxRetries(2) = 4 garbage responses per call
+		resps = append(resps, fakePolishResp{content: "not json"})
+	}
+	// Each runPolishJob call pops from the SAME fakeLLM; give it enough for two
+	// full runs (8 responses) so neither call errors on "no more responses".
+	allResps := make([]fakePolishResp, 0, len(resps)*2)
+	allResps = append(allResps, resps...)
+	allResps = append(allResps, resps...)
+	llm := &fakePolishLLM{responses: allResps}
+	svc, episodeRepo, courseRepo := polishE2EEnv(t, llm)
+	courseID, epID := seedPolishEpisodeVTT(t, episodeRepo, courseRepo, "whisper", vtt)
+
+	epIDCopy, courseIDCopy := epID, courseID
+	job := &model.AIJob{
+		JobType: "polish", EpisodeID: &epIDCopy, CourseID: &courseIDCopy,
+		Status: "processing", Priority: priorityPolish,
+	}
+	if err := svc.contentRepo.CreateJob(job); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	// First run: both chunks fail → job failed, 2 chunk rows seeded (both failed).
+	svc.runPolishJob(job)
+	chunks1, err := svc.polishChunkRepo.ListChunksForJob(job.ID)
+	if err != nil {
+		t.Fatalf("list chunks after run 1: %v", err)
+	}
+	if len(chunks1) != 2 {
+		t.Fatalf("after run 1: expected 2 chunk rows, got %d (seed broken?)", len(chunks1))
+	}
+
+	// Flip the job back to processing so runPolishJob will run again (simulating
+	// a retry — RetryJob flips failed→queued, the worker reclaims to processing).
+	if _, err := svc.contentRepo.GetJob(job.ID); err != nil {
+		t.Fatalf("reload job: %v", err)
+	}
+	svc.contentRepo.UpdateJobStatus(job.ID, "processing", "", nil)
+	svc.runPolishJob(job)
+
+	// THE ASSERTION: still exactly 2 chunk rows — the second seed did NOT add
+	// duplicates. Without the unique index this would be 4 (the BLOCKER).
+	chunks2, err := svc.polishChunkRepo.ListChunksForJob(job.ID)
+	if err != nil {
+		t.Fatalf("list chunks after run 2: %v", err)
+	}
+	if len(chunks2) != 2 {
+		t.Errorf("after run 2 (retry): expected 2 chunk rows (idempotent seed), got %d — "+
+			"the (job_id,chunk_index) UNIQUE index is missing/broken, resume is broken", len(chunks2))
+	}
+}
+
+// maxRetriesForServiceTest mirrors polish.maxRetries. We can't import the
 // polish package's unexported const, so we hardcode the same value here with a
 // comment pointing at the source. If polish.maxRetries ever changes, update this
 // too — the partial test depends on scripting exactly that many failures.
-const maxRetriesForServiceTest = 3 // == polish.maxRetries
+const maxRetriesForServiceTest = 2 // == polish.maxRetries (was 3 before 2026-07-22)

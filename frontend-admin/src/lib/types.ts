@@ -713,6 +713,24 @@ export interface AiRun {
   user_prompt_text?: string;
 }
 
+/** One structured log entry (log_entries table, TODO.md P1). Operational events
+ * from the AI/subtitle worker — job failures, reaper runs, polish telemetry,
+ * provider errors, worker panics. Enriched with episode_title/course_title by
+ * the backend so the /admin/logs page shows context without a client join. */
+export interface LogEntry {
+  id: number;
+  level: string; // "info" | "warn" | "error"
+  source: string; // "ai_worker" | "reaper" | "polish" | "provider" | "segment" ...
+  message: string;
+  fields_json?: string; // optional structured context (JSON object string)
+  job_id?: number;
+  episode_id?: number;
+  course_id?: number;
+  episode_title?: string; // enriched server-side
+  course_title?: string; // enriched server-side
+  created_at: string;
+}
+
 // One step in an agent's ReAct trace (parsed from AiRun.trace_json).
 export interface AiTraceStep {
   step: number;

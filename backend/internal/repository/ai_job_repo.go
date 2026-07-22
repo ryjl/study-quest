@@ -27,22 +27,40 @@ func (r *aiContentRepo) GetJob(id uint) (*model.AIJob, error) {
 
 func (r *aiContentRepo) UpdateJobStatus(id uint, status string, errMsg string, progress *float64) error {
 	updates := map[string]interface{}{
-		"status":   status,
-		"error":    errMsg,
-		"progress": progress,
+		"status": status,
+		"error":  errMsg,
 	}
-	// 终态写入(done/failed/skipped)加 status='processing' 守卫:worker 是进程内
-	// 单 goroutine,正常情况一个 job 只有一个 writer,本不需要守卫。但 admin 可以
-	// 手动 ResetJob(或 reaper 自动复位)把 processing 改回 queued —— 如果此时 worker
-	// 正好在一个长 LLM 调用里(30s+),调用返回时的终态写入若不加守卫,会把已被
-	// 复位的 queued job 又改回 done,让 reset/reap 静默失效。守卫保证:只有仍在
-	// processing 的 job 才接受终态;已被复位的 job 此处 RowsAffected=0,本次 LLM
-	// 结果自然不落盘(它会在下一轮 poll 被重新 claim 重跑)。
-	// 非终态(中间状态)不加守卫,保持原行为。
 	query := r.db.Model(&model.AIJob{}).Where("id = ?", id)
-	if status == "done" || status == "failed" || status == "skipped" {
+
+	isTerminal := status == "done" || status == "failed" || status == "skipped"
+	if isTerminal {
+		// 终态写入(done/failed/skipped)加 status='processing' 守卫:worker 是进程内
+		// 单 goroutine,正常情况一个 job 只有一个 writer,本不需要守卫。但 admin 可以
+		// 手动 ResetJob(或 reaper 自动复位)把 processing 改回 queued —— 如果此时 worker
+		// 正好在一个长 LLM 调用里(30s+),调用返回时的终态写入若不加守卫,会把已被
+		// 复位的 queued job 又改回 done,让 reset/reap 静默失效。守卫保证:只有仍在
+		// processing 的 job 才接受终态;已被复位的 job 此处 RowsAffected=0,本次 LLM
+		// 结果自然不落盘(它会在下一轮 poll 被重新 claim 重跑)。
 		updates["completed_at"] = gorm.Expr("CURRENT_TIMESTAMP")
 		query = query.Where("status = ?", "processing")
+		// 终态时把 progress 钉死:done=1.0(圆满完成),failed/skipped=0(没有意义的中间
+		// 进度可显示,且避免 processing 阶段残留的高 progress 在失败页闪一下满进度条)。
+		// 之前终态写 progress=nil(不更新列),导致 failed job 带着 processing 末期写入的
+		// progress≈0.8/1.0 残留,前端同时读 status=failed + progress=0.9 会自相矛盾。
+		if status == "done" {
+			p := 1.0
+			updates["progress"] = &p
+		} else {
+			updates["progress"] = gorm.Expr("NULL")
+		}
+	} else if progress != nil {
+		// 非终态(processing 的中间进度更新)加单调守卫:progress 只增不减。
+		// polish 的 chunk 回调是 3-way 并发的,每个 goroutine Add(1) 后算出的 done 值本身
+		// 单调递增,但随后各自的 DB UPDATE 提交顺序不定 —— goroutine B(done=0.8)可能先
+		// commit、A(done=0.6)后 commit,无守卫的话 DB 会停在 0.6,进度条倒退/抖动。
+		// WHERE progress IS NULL OR progress < ? 保证只有更大的值能写入。
+		updates["progress"] = *progress
+		query = query.Where("progress IS NULL OR progress < ?", *progress)
 	}
 	return query.Updates(updates).Error
 }

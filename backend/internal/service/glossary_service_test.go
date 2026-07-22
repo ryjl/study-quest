@@ -27,6 +27,8 @@ func glossaryTestEnv(t *testing.T) (*aiService, repository.GlossaryRepository, r
 		nil, nil,
 		glossaryRepo,
 		subjectRepo,
+		nil, // no polishChunkRepo — glossary tests don't run polish
+		nil, // no logRepo — structured-log writes not asserted
 	).(*aiService)
 	t.Cleanup(svc.Stop) // release the worker goroutine (see ai_service_test.go)
 	return svc, glossaryRepo, courseRepo, subjectRepo

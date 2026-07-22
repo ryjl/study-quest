@@ -14,6 +14,7 @@ import { ReadingRoom } from './pages/reading-room/ReadingRoom';
 import { WatchHistory } from './pages/WatchHistory';
 import { SubtitleQueue } from './pages/SubtitleQueue';
 import { AIConsole } from './pages/AIConsole';
+import { Logs } from './pages/Logs';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="badges" element={<Badges />} />
         <Route path="releases" element={<Releases />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="logs" element={<Logs />} />
       </Route>
       <Route path="*" element={<Navigate to="/admin" replace />} />
     </Routes>

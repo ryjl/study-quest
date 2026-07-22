@@ -2,16 +2,19 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/ai/polish"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/subtitle"
 )
 
 // Code split from ai_service.go for navigability.
@@ -130,14 +133,37 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		polishInput = sub.VttContent
 	}
 
+	// SkipGlossaryMining on re-polish: when the source is already llm_optimized,
+	// the subtitle content hasn't changed (we re-polish from the immutable
+	// RawVttContent snapshot), so the term-mining the model could do here it
+	// already did last run. Turning it off uses the lean system prompt (no
+	// 术语挖矿 section) and skips the glossary completion tokens.
+	skipMining := sub.Source == "llm_optimized"
+
+	// 断点续润 (checkpoint/resume): seed + load chunk skeletons so a retry of a
+	// partially-failed job skips the chunks that already succeeded. This is the
+	// biggest token saver — without it a RetryJob re-burns ALL chunks; with it,
+	// only the failed chunks re-call the LLM. Skipped entirely when
+	// polishChunkRepo is nil (tests / pre-断点续润 behavior).
+	priorOutcomes, onChunkDone, totalChunks := s.setupPolishCheckpoint(polishCtx, job, polishInput)
+
 	result, err := polish.Polish(polishCtx, llm, modelName, polish.PolishRequest{
-		VttContent: polishInput,
-		TermDict:   termDict,
-		Subject:    subjectLabel,
+		VttContent:         polishInput,
+		TermDict:           termDict,
+		Subject:            subjectLabel,
+		SkipGlossaryMining: skipMining,
+		PriorOutcomes:      priorOutcomes,
+		OnChunkDone:        onChunkDone,
 	})
 	if err != nil {
 		s.failJob(job, "polish: "+err.Error())
 		return
+	}
+	// Stamp final progress to 100% (or close) on the way out so the progress bar
+	// lands cleanly regardless of outcome. 1.0 even on partial — the run IS over.
+	if totalChunks > 0 {
+		done := float64(totalChunks-len(result.Stats.FailedChunkErrors)) / float64(totalChunks)
+		s.contentRepo.UpdateJobStatus(job.ID, "processing", "", &done)
 	}
 
 	// Build the human-readable detail string. Shared by both the partial-fail
@@ -196,6 +222,10 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 			detail += "; " + strings.Join(parts, "; ")
 		}
 		detail += ")"
+		// Record the (partial) run before failing so the admin can see how much
+		// token/time was spent before the chunk died — mirrors course_summary's
+		// record-on-failure. note carries a short summary of which chunks failed.
+		s.recordPolishRun(job.ID, modelName, result, "fail", detail, skipMining)
 		s.failJob(job, detail)
 		return
 	}
@@ -238,11 +268,203 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		detail += fmt.Sprintf(" [注意] %d cue(s) 改动较大，建议在字幕版本 UI 复核",
 			result.Stats.HighEditDistanceCount)
 	}
+	// Record the successful run for the AI Console's RunList / 「查看回放」(token
+	// spend, model, system prompt). Polish was the only AI capability not writing
+	// ai_runs — this brings it in line with summary/quiz/advice/course_summary.
+	s.recordPolishRun(job.ID, modelName, result, "pass", detail, skipMining)
+	// Structured log entry (polishStats): lets the admin see polish runs in the
+	// /admin/logs event stream with token/chunk counts as structured fields.
+	s.appendLog("info", "polish", fmt.Sprintf("polish done: %d/%d cues", result.Stats.ChangedCues, result.Stats.TotalCues),
+		fmt.Sprintf(`{"job_id":%d,"chunks":%d,"llm_calls":%d,"retries":%d,"prompt_tokens":%d,"completion_tokens":%d,"high_edit_distance":%d,"duration_ms":%d}`,
+			job.ID, result.Stats.ChunkCount, result.Stats.LLMCalls, result.Stats.Retries,
+			result.Stats.PromptTokens, result.Stats.CompletionTokens, result.Stats.HighEditDistanceCount,
+			result.Stats.Duration.Milliseconds()),
+		job)
 	s.contentRepo.UpdateJobStatus(job.ID, "done", detail, nil)
 
 	// Chain to segment NOW that the polished subtitle is in place. Mirrors
 	// runSegmentJob's chain-to-summary: same priority, same hasPendingJob guard.
 	s.enqueueSegmentForPolish(episodeID, courseID)
+}
+
+// recordPolishRun writes the ai_run for a polish job, mirroring
+// recordCourseSummaryRun / recordQuizRun. Polish was the only AI capability
+// not persisting a run — this lets the AI Console's RunList show polish token
+// spend and 「查看回放」 show the system prompt used.
+//
+//   - result status: "pass" on full success, "fail" on partial (reuses the
+//     SelfCheckResult column the way advice/course_summary do).
+//   - note: the assembled job detail string (changed/total, glossary, partial
+//     chunk list) — capped inside the run's note column, gives the admin the
+//     outcome at a glance.
+//   - skipMining: which system prompt variant was used (so SystemPromptText
+//     matches what the model actually saw).
+func (s *aiService) recordPolishRun(jobID uint, modelName string, result *polish.PolishResult, status, note string, skipMining bool) {
+	preview, _ := json.Marshal(map[string]any{
+		"changed_cues":     result.Stats.ChangedCues,
+		"total_cues":       result.Stats.TotalCues,
+		"glossary":         len(result.Glossary),
+		"high_edit_distance": result.Stats.HighEditDistanceCount,
+		"skipped_edits":    result.Stats.SkippedEdits,
+		"failed_chunks":    result.Stats.FailedChunks,
+	})
+	// Cap the note: the detail string can get long on a partial with many failed
+	// chunks, and ai_runs is a telemetry row not a log dump. 400 runes matches
+	// the advice-preview convention.
+	if rs := []rune(note); len(rs) > 400 {
+		note = string(rs[:400]) + "…"
+	}
+	if err := s.contentRepo.CreateRun(&model.AIRun{
+		JobID:            jobID,
+		Capability:       "polish",
+		InputJSON: fmt.Sprintf(`{"job_id":%d,"chunks":%d,"llm_calls":%d,"retries":%d,"changed_cues":%d}`,
+			jobID, result.Stats.ChunkCount, result.Stats.LLMCalls, result.Stats.Retries, result.Stats.ChangedCues),
+		PromptTokens:     result.Stats.PromptTokens,
+		CompletionTokens: result.Stats.CompletionTokens,
+		ModelUsed:        modelName,
+		ResponseText:     string(preview),
+		SelfCheckResult:  status, // 复用字段：pass/fail（polish 无 self-check，记生成结果）
+		SelfCheckNote:    note,
+		DurationMs:       int(result.Stats.Duration.Milliseconds()),
+		// polish 的 user prompt 是 per-chunk 拼的（buildUserPrompt），没有单一值；
+		// 留空，RunDetail 有「(空)」兜底。system prompt 是常量，按本次实际用的版本取。
+		SystemPromptText: polish.SystemPrompt(skipMining),
+	}); err != nil {
+		log.Printf("AI: recordPolishRun failed for job %d: %v", jobID, err)
+	}
+}
+
+// polishedChunkPayload is the JSON shape stored in AIPolishChunk.PolishedChunkJSON
+// and replayed back as PriorOutcomes on resume. Kept in sync with polish's
+// CueChange + GlossaryCandidate — if those change, the JSON tags must too.
+type polishedChunkPayload struct {
+	Changes  []polish.CueChange        `json:"changes"`
+	Glossary []polish.GlossaryCandidate `json:"glossary"`
+}
+
+// setupPolishCheckpoint wires up 断点续润: seeds the chunk skeleton rows
+// (idempotent), loads any chunks already done from a prior attempt, and returns:
+//   - priorOutcomes: done chunks fed to polish.Polish so it skips re-calling the
+//     LLM for them (the token saver).
+//   - onChunkDone: callback for polish.Polish that marks each finished chunk
+//     done/failed in the DB + bumps the job's progress bar.
+//   - totalChunks: for progress math; 0 when checkpointing is off (nil repo).
+//
+// When s.polishChunkRepo is nil (tests / pre-断点续润), returns empty prior +
+// nil callback + 0 total — polish.Polish runs as a plain full job. The VTT is
+// parsed here just to count cues for chunk-layout math; polish.Polish re-parses
+// internally (cheap, and keeps the package self-contained).
+func (s *aiService) setupPolishCheckpoint(_ context.Context, job *model.AIJob, polishInput string) (map[int]polish.PriorChunkOutcome, func(int, polish.ChunkOutcome), int) {
+	if s.polishChunkRepo == nil {
+		return nil, nil, 0
+	}
+	// Count cues → chunk layout. Parse failure here is non-fatal: fall back to no
+	// checkpointing rather than failing the whole polish (the job still produces
+	// a correct subtitle, just without resume support).
+	cues, perr := ai.ParseSRT(subtitle.VttToSrt(polishInput))
+	if perr != nil || len(cues) == 0 {
+		log.Printf("AI: polish job %d: checkpoint setup parse failed (resume disabled): %v", job.ID, perr)
+		return nil, nil, 0
+	}
+	layout := polish.ChunkLayout(len(cues))
+
+	// Seed skeleton rows (queued). Idempotent: a retry re-seeding the same job's
+	// chunks won't clobber rows a prior attempt already wrote done/failed.
+	skeleton := make([]model.AIPolishChunk, len(layout))
+	for i, span := range layout {
+		skeleton[i] = model.AIPolishChunk{
+			ChunkIndex:          i,
+			ChunkFirstGlobalIdx: span[0],
+			ChunkLastGlobalIdx:  span[1],
+			Status:              "queued",
+		}
+	}
+	if err := s.polishChunkRepo.SeedChunksForJob(job.ID, skeleton); err != nil {
+		// Non-fatal: resume won't work this run, but polish itself is unaffected.
+		log.Printf("AI: polish job %d: seed chunk rows failed (resume disabled): %v", job.ID, err)
+		return nil, nil, 0
+	}
+
+	// Load done chunks → priorOutcomes. A done chunk's {changes,glossary} was
+	// serialized on the prior attempt; deserialize now so polish.Polish can fold
+	// them into the final reassembly without re-calling the LLM.
+	rows, lerr := s.polishChunkRepo.ListChunksForJob(job.ID)
+	priorOutcomes := make(map[int]polish.PriorChunkOutcome)
+	if lerr != nil {
+		log.Printf("AI: polish job %d: list chunk rows failed (resume disabled): %v", job.ID, lerr)
+		// proceed without priors — all chunks run fresh
+	} else {
+		doneCount := 0
+		for _, r := range rows {
+			if r.Status != "done" || r.PolishedChunkJSON == "" {
+				continue
+			}
+			var payload polishedChunkPayload
+			if json.Unmarshal([]byte(r.PolishedChunkJSON), &payload) == nil {
+				priorOutcomes[r.ChunkIndex] = polish.PriorChunkOutcome{
+					Changes:          payload.Changes,
+					Glossary:         payload.Glossary,
+					PromptTokens:     r.PromptTokens,
+					CompletionTokens: r.CompletionTokens,
+					HighEditDistance: r.HighEditDistanceCount,
+				}
+				doneCount++
+			}
+		}
+		if doneCount > 0 {
+			log.Printf("AI: polish job %d: resuming, %d/%d chunks already done (skipping their LLM calls)",
+				job.ID, doneCount, len(layout))
+		}
+	}
+
+	totalChunks := len(layout)
+	// progressCounter tracks done-chunks for the progress bar. Seeded with the
+	// prior-done count so the bar starts at the right place on a resume instead
+	// of jumping from 0%. atomic.Float64 (Go 1.19+) — the callback runs from
+	// polish.Polish's per-chunk goroutines (3-way concurrency).
+	progressCounter := &atomic.Int32{} // we count chunks (ints), derive float at display time
+	progressCounter.Store(int32(len(priorOutcomes)))
+
+	// onChunkDone: persist each chunk as it finishes + bump the progress bar.
+	// Runs inside polish.Polish's per-chunk goroutine — must be cheap and must
+	// not error-out the pipeline (errors here are logged, not returned).
+	onChunkDone := func(idx int, oc polish.ChunkOutcome) {
+		if idx < 0 || idx >= totalChunks {
+			return
+		}
+		if oc.Failed {
+			errStr := oc.ErrStr
+			if rs := []rune(errStr); len(rs) > 256 {
+				errStr = string(rs[:256]) + "…"
+			}
+			if err := s.polishChunkRepo.MarkChunkFailed(job.ID, idx, oc.PromptTokens, oc.CompletionTokens, oc.Retries, errStr); err != nil {
+				log.Printf("AI: polish job %d chunk %d: markFailed failed (non-fatal): %v", job.ID, idx, err)
+			}
+		} else {
+			payload, _ := json.Marshal(polishedChunkPayload{Changes: oc.Changes, Glossary: oc.Glossary})
+			if err := s.polishChunkRepo.MarkChunkDone(job.ID, idx, oc.PromptTokens, oc.CompletionTokens, oc.Retries, oc.HighEditDistance, countDistinctCueChanges(oc.Changes), string(payload)); err != nil {
+				log.Printf("AI: polish job %d chunk %d: markDone failed (non-fatal): %v", job.ID, idx, err)
+			}
+		}
+		// A chunk "settled" (done OR failed) counts toward progress — the bar
+		// measures "how far along the run is", and a failed chunk is still a
+		// chunk we're done waiting on.
+		done := float64(progressCounter.Add(1)) / float64(totalChunks)
+		s.contentRepo.UpdateJobStatus(job.ID, "processing", "", &done)
+	}
+
+	return priorOutcomes, onChunkDone, totalChunks
+}
+
+// countDistinctCueChanges counts how many distinct cue ids a chunk's changes
+// touch — stored on AIPolishChunk.ChangedCues for per-chunk telemetry. A single
+// cue with multiple edits counts once (it's one cue changed).
+func countDistinctCueChanges(changes []polish.CueChange) int {
+	seen := make(map[int]struct{}, len(changes))
+	for _, c := range changes {
+		seen[c.ID] = struct{}{}
+	}
+	return len(seen)
 }
 
 // isPolishableSource is the single source of truth for which subtitle sources

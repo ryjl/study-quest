@@ -36,6 +36,55 @@ type PolishRequest struct {
 	VttContent string // the raw WebVTT subtitle to polish
 	TermDict   string // Course.EffectiveTermDict(subject) — injected into prompt
 	Subject    string // e.g. "象棋" / "数学" — sets domain context
+	// SkipGlossaryMining 关闭术语挖矿：true 时用精简系统提示词（无 glossary 段），
+	// 模型不再输出 glossary。re-polish 场景（source=llm_optimized）下字幕内容未变，
+	// 上次已挖过术语，再挖既白烧 token 也分散注意力。runPolishJob 用 sub.Source
+	// == "llm_optimized" 判断。
+	SkipGlossaryMining bool
+
+	// --- checkpoint / resume (断点续润) -----------------------------------
+	// These three fields let runPolishJob resume an interrupted run instead of
+	// re-burning tokens on chunks that already succeeded. All optional: nil/empty
+	// means a fresh full run (the default for tests + first polish).
+	//
+	// PriorOutcomes carries the results of chunks that already completed in a
+	// prior attempt of THIS job. Polish treats them as pre-resolved: it does NOT
+	// call the LLM for them, but DOES include their changes/glossary/tokens in
+	// the final reassembly + stats. Keyed by chunk index (0-based, matches the
+	// deterministic chunk layout for a given VttContent).
+	PriorOutcomes map[int]PriorChunkOutcome
+	// OnChunkDone is invoked (from inside the per-chunk goroutine) once a chunk
+	// finishes — successfully or after exhausting retries. The service layer uses
+	// it to checkpoint the chunk to ai_polish_chunks so a crash/retry doesn't
+	// lose it. nil = no checkpointing (tests). The callback MUST NOT block long
+	// (it's inside the concurrency-limited goroutine) and MUST NOT panic-die the
+	// pipeline (panics propagate to the Polish caller).
+	OnChunkDone func(idx int, oc ChunkOutcome)
+}
+
+// PriorChunkOutcome is one chunk's persisted result fed back into Polish for
+// resume. It's the serialized form of a chunkOutcome (the in-memory type has
+// unexported fields). Service builds these from ai_polish_chunks rows.
+type PriorChunkOutcome struct {
+	Changes           []CueChange
+	Glossary          []GlossaryCandidate
+	PromptTokens      int
+	CompletionTokens  int
+	HighEditDistance  int
+}
+
+// ChunkOutcome is the exported per-chunk result passed to OnChunkDone. Mirrors
+// the unexported chunkOutcome; service persists it to ai_polish_chunks.
+type ChunkOutcome struct {
+	Idx             int
+	Changes         []CueChange
+	Glossary        []GlossaryCandidate
+	PromptTokens    int
+	CompletionTokens int
+	Failed          bool
+	Retries         int
+	HighEditDistance int
+	ErrStr          string
 }
 
 // PolishResult is the output of Polish.
@@ -68,7 +117,14 @@ type PolishStats struct {
 	TotalCues        int           `json:"total_cues"`
 	ChangedCues      int           `json:"changed_cues"`
 	ChunkCount       int           `json:"chunk_count"`
-	LLMCalls         int           `json:"llm_calls"` // successful only
+	// LLMCalls counts chunks that PRODUCED A VALID RESPONSE this run, plus
+	// prior-done chunks resumed from checkpoint (each counts as one). It is NOT
+	// the raw HTTP request count — a chunk that retried twice (2 extra HTTP
+	// calls) before succeeding bumps Retries, not LLMCalls. Failed chunks that
+	// never produced valid output aren't counted here either (their tokens are
+	// still in PromptTokens/CompletionTokens, since they billed regardless).
+	// Read it as "how many chunks yielded usable output", not "API request count".
+	LLMCalls         int           `json:"llm_calls"`
 	FailedChunks     int           `json:"failed_chunks"` // chunks that exhausted retries
 	Retries          int           `json:"retries"` // total retry attempts across chunks
 	PromptTokens     int           `json:"prompt_tokens"`
@@ -85,6 +141,13 @@ type PolishStats struct {
 	// rather than the previous strict rules that rejected legitimate homophone
 	// fixes on short cues (考算→口算, 合不变→和不变, etc.).
 	HighEditDistanceCount int `json:"high_edit_distance_count"`
+	// SkippedEdits counts find/replace edits that were dropped because their
+	// find substring was absent or not unique in the cue. Informational only:
+	// the rest of the change (other edits, or the Text fallback) still applies.
+	// A non-zero number means the model's find was imprecise, not that polish
+	// failed. Surfaced so the admin can tell imprecise finds apart from "the
+	// model didn't try to fix this cue".
+	SkippedEdits int `json:"skipped_edits"`
 	// FailedChunkErrors maps failed chunk index → its last error string. Empty
 	// unless PartialOptimized. Surfaced to the admin job detail so polish
 	// failures are actionable (JSON parse vs network). Note: after the
@@ -100,23 +163,59 @@ const (
 	chunkSize    = 150 // cues per chunk
 	chunkOverlap = 3   // overlap cues between adjacent chunks
 	concurrency  = 3   // in-flight LLM calls (user-imposed, relays limit hard)
-	maxRetries   = 3   // retries per chunk before giving up (uses raw text)
-	maxTokens    = 8000
+	// maxRetries is attempts per chunk before giving up. Was 3; dropped to 2
+	// (2026-07-22): the 3rd retry almost never helps (relay garbage repeats,
+	// unknown-id drift repeats) and just burns billed tokens. With checkpoint/
+	// resume, a chunk that exhausts retries fails the job but its done siblings
+	// survive — so a failed chunk is cheap to retry on demand rather than paying
+	// for a near-useless 3rd attempt inline.
+	maxRetries = 2
+	maxTokens  = 8000
 )
+
+// ChunkLayout returns the global cue-index span [first, last] (inclusive) of
+// each chunk Polish would produce for numCues cues. Exposed so the service
+// layer can seed ai_polish_chunks rows with the same boundaries Polish will
+// use (the two MUST agree, or a chunk's persisted result won't line up with
+// the cue index it's replayed against on resume). Mirrors the chunking math
+// inside Polish exactly — if you change one, change the other.
+func ChunkLayout(numCues int) [][2]int {
+	step := chunkSize - chunkOverlap
+	var out [][2]int
+	for startIdx := 0; startIdx < numCues; startIdx += step {
+		end := startIdx + chunkSize
+		if end > numCues {
+			end = numCues
+		}
+		out = append(out, [2]int{startIdx, end - 1})
+		if end == numCues {
+			break
+		}
+	}
+	return out
+}
 
 // --- the entry point -----------------------------------------------------
 
 // Polish runs the full pipeline:
 //  1. VttToSrt + ParseSRT → flat cue list
 //  2. chunk into 150-cue windows with 3-cue overlap
-//  3. concurrently (3-way) call the LLM per chunk, retry failed chunks 3x
-//  4. validate every returned change (length Δ ≤ 2, punctuation untouched,
-//     id set matches)
+//  3. concurrently (3-way) call the LLM per chunk, retry failed chunks (see
+//     maxRetries); chunks present in req.PriorOutcomes are SKIPPED (resume)
+//  4. validate every returned change (only unknown cue id rejects+retries;
+//     length/punctuation just flag HighEditDistance, applied anyway — the
+//     2026-07-21 relaxation)
 //  5. apply validated changes back to the cues (timestamps untouched)
 //  6. reassemble SRT → VTT
 //
 // Timestamps are guaranteed byte-identical: the prompt never contains them,
 // and reassembly rebuilds the SRT from the parsed cues' StartMs/EndMs.
+//
+// Checkpoint/resume (断点续润): if req.PriorOutcomes is non-empty, those chunks
+// are NOT re-called — their changes/glossary/tokens are folded straight into
+// the reassembly + stats. req.OnChunkDone (if set) fires per finished chunk so
+// the caller can persist it; that's how a retry of a partially-failed job
+// avoids re-burning tokens on the chunks that already succeeded.
 func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishRequest) (*PolishResult, error) {
 	start := time.Now()
 	if llm == nil {
@@ -158,11 +257,48 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 	// 3. Concurrent LLM calls with a 3-way semaphore.
 	sem := make(chan struct{}, concurrency)
 	outcomes := make([]chunkOutcome, len(chunks))
+
+	// Resume (断点续润): fold in any prior-completed chunks BEFORE the loop so
+	// the loop only fires goroutines for chunks still needing LLM work. Their
+	// tokens/changes/glossary count toward the final stats + reassembly exactly
+	// as if they'd run this turn — that's the whole point (no re-burn).
+	priorDone := make(map[int]bool, len(req.PriorOutcomes))
+	// priorPrompt/priorCompletion accumulate the prior chunks' tokens so they're
+	// folded into the run's totals — the tokens WERE spent (on the prior attempt),
+	// so the run's cost stat must reflect them. Counted via atomics below.
+	var priorPrompt, priorCompletion, priorLLMCalls int32
+	for idx, p := range req.PriorOutcomes {
+		if idx < 0 || idx >= len(chunks) {
+			continue // stale chunk index from a different VttContent shape — ignore
+		}
+		outcomes[idx] = chunkOutcome{
+			idx:              idx,
+			changes:          p.Changes,
+			glossary:         p.Glossary,
+			promptTokens:     p.PromptTokens,
+			completionTokens: p.CompletionTokens,
+			highEditDistance: p.HighEditDistance,
+		}
+		priorDone[idx] = true
+		priorPrompt += int32(p.PromptTokens)
+		priorCompletion += int32(p.CompletionTokens)
+		priorLLMCalls++ // a prior-done chunk counts as one completed LLM call
+	}
+
 	var wg sync.WaitGroup
 
 	var totalPrompt, totalCompletion, totalLLMCalls, totalRetries, failedChunks int32
+	// Seed the run totals with prior chunks' tokens + call count. Done AFTER the
+	// var decls (atomics need to exist before we Add into them). The chunk loop
+	// below only adds newly-run chunks on top.
+	atomic.AddInt32(&totalPrompt, priorPrompt)
+	atomic.AddInt32(&totalCompletion, priorCompletion)
+	atomic.AddInt32(&totalLLMCalls, priorLLMCalls)
 
 	for i, blk := range chunks {
+		if priorDone[i] {
+			continue // resume: this chunk already has an outcome, skip the LLM call
+		}
 		wg.Add(1)
 		go func(i int, blk []cueRef) {
 			defer wg.Done()
@@ -172,7 +308,12 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 			var (
 				parsed            *polishResponse
 				pErr              error
-				usage             ai.Usage
+				// promptAccum/completionAccum 累计本 chunk 所有 HTTP 成功 attempt 的
+				// token（含最终被 validation 拒掉的那些）。之前用一个 `usage` 变量在
+				// 每次 retry 时覆盖，会把前面 attempt 的 token 丢掉，导致实际花费被
+				// 漏算少计（账单比 PolishStats 显示的更高）。改成累加后统计才反映真实账单。
+				promptAccum       int
+				completionAccum   int
 				retries           int
 				chunkHighEditDist int
 			)
@@ -200,12 +341,15 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 						break retryLoop
 					}
 				}
-				resp, callErr := polishChunk(ctx, llm, model, blk, req.TermDict, req.Subject)
+				resp, callErr := polishChunk(ctx, llm, model, blk, req.TermDict, req.Subject, req.SkipGlossaryMining)
 				if callErr != nil {
 					pErr = callErr
 					continue
 				}
-				usage = resp.usage
+				// HTTP 成功就要算账 —— 即使下一步 validation 会拒掉这次结果，token
+				// 也已经被计费了。累加而不是覆盖（见 promptAccum 注释）。
+				promptAccum += resp.usage.PromptTokens
+				completionAccum += resp.usage.CompletionTokens
 				hed, validateErr := validateChanges(blk, resp.changes)
 				if validateErr != nil {
 					pErr = validateErr
@@ -221,7 +365,8 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 			if parsed != nil {
 				oc.changes = parsed.changes
 				oc.glossary = parsed.glossary
-				oc.usage = usage
+				oc.promptTokens = promptAccum
+				oc.completionTokens = completionAccum
 				atomic.AddInt32(&totalLLMCalls, 1)
 			} else {
 				oc.failed = true
@@ -238,11 +383,30 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 				oc.changes = nil
 			}
 			atomic.AddInt32(&totalRetries, int32(retries))
-			if usage.PromptTokens > 0 || usage.CompletionTokens > 0 {
-				atomic.AddInt32(&totalPrompt, int32(usage.PromptTokens))
-				atomic.AddInt32(&totalCompletion, int32(usage.CompletionTokens))
-			}
+			// 用累加值落账（覆盖了 retry 间被丢掉的 token）。失败的 chunk 也加：
+			// 它们同样消耗了 token（HTTP 成功但 validation 失败），账单不会因为
+			// 我们标记 failed 就免单。
+			atomic.AddInt32(&totalPrompt, int32(promptAccum))
+			atomic.AddInt32(&totalCompletion, int32(completionAccum))
 			outcomes[i] = oc
+			// Checkpoint hook: let the caller persist this chunk so a crash/retry
+			// of the job resumes from here instead of re-burning tokens. Runs
+			// inside the per-chunk goroutine (holding the semaphore) — the caller's
+			// impl (service MarkChunkDone) is a quick single-row upsert, fine to
+			// inline. Guarded so a nil callback (tests / no checkpointing) is free.
+			if req.OnChunkDone != nil {
+				req.OnChunkDone(i, ChunkOutcome{
+					Idx:              oc.idx,
+					Changes:          oc.changes,
+					Glossary:         oc.glossary,
+					PromptTokens:     oc.promptTokens,
+					CompletionTokens: oc.completionTokens,
+					Failed:           oc.failed,
+					Retries:          oc.retries,
+					HighEditDistance: oc.highEditDistance,
+					ErrStr:           oc.errStr,
+				})
+			}
 		}(i, blk)
 	}
 	wg.Wait()
@@ -251,7 +415,14 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 	// (the later chunk has more right-side context and is preferred). We also
 	// record before/after for the diff. Validation already ran per chunk;
 	// we additionally dedup glossary entries here.
+	//
+	// find/replace (2026-07-22): each change resolves to its final text via
+	// CueChange.resolveText (edits applied with uniqueness check, or Text
+	// fallback). We count how many edits got skipped (find not unique/absent)
+	// into skippedEdits so the admin can tell the model's find/replace wasn't
+	// precise — not a correctness gate, the rest of the change still applies.
 	editedText := make(map[int]string, len(cues))
+	var skippedEdits int
 	for _, oc := range outcomes {
 		for _, ch := range oc.changes {
 			// ch.ID is the chunk-local 1-based id → resolve to global idx.
@@ -261,7 +432,9 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 				continue
 			}
 			globalIdx := chunks[oc.idx][ch.ID-1].GlobalIdx
-			editedText[globalIdx] = ch.Text
+			final, _, skipped, _ := ch.resolveText(cues[globalIdx].Text)
+			skippedEdits += skipped
+			editedText[globalIdx] = final
 		}
 	}
 
@@ -325,6 +498,7 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 		Duration:              time.Since(start),
 		PartialOptimized:      atomic.LoadInt32(&failedChunks) > 0,
 		HighEditDistanceCount: totalHighEditDistance,
+		SkippedEdits:          skippedEdits,
 		FailedChunkErrors: failedErrs,
 	}
 
@@ -352,8 +526,13 @@ type chunkOutcome struct {
 	idx      int
 	changes  []CueChange
 	glossary []GlossaryCandidate
-	usage    ai.Usage
-	failed   bool
+	// promptTokens/completionTokens 是本 chunk 累计 token（含被 validation 拒掉的
+	// attempt）。改为字段名（不再用 ai.Usage）是断点续润时 per-chunk 落库所需 ——
+	// AIPolishChunk 行要存自己的 token，而累计值天然就在 outcome 上。usage 只在
+	// polishChunk 返回时短暂存在（per-attempt），不该穿透到 outcome。
+	promptTokens     int
+	completionTokens int
+	failed           bool
 	retries  int
 	// highEditDistance is the count of changes in this chunk flagged as
 	// suspicious by validateChanges (length delta > maxLenDelta, punctuation
@@ -369,9 +548,55 @@ type chunkOutcome struct {
 }
 
 // CueChange is one LLM-returned change in the chunk-local id space.
+//
+// Two output shapes are accepted (the prompt tells the model to prefer Edits):
+//
+//	{"id":147,"edits":[{"find":"出军","replace":"出车"}]}   // find/replace 子串
+//	{"id":147,"text":"修正后的整句"}                        // 整句（fallback）
+//
+// Edits 优先：有 Edits 就按子串替换处理，忽略 Text；没有 Edits 才用 Text。保留
+// Text 是为了向后兼容（老模型/格式漂移）—— 也是现有测试的返回格式。find 的唯一性
+// 由 apply 层兜底（strings.Count != 1 时跳过该 edit 并计入 SkippedEdits），不 retry
+// （retry 会原样返回浪费配额）。
 type CueChange struct {
-	ID   int    `json:"id"`
-	Text string `json:"text"`
+	ID    int       `json:"id"`
+	Text  string    `json:"text,omitempty"`
+	Edits []CueEdit `json:"edits,omitempty"`
+}
+
+// CueEdit is one find/replace pair within a cue. Find must be a unique substring
+// of the cue's original text (apply layer enforces uniqueness, else the edit is
+// dropped — see CueChange doc).
+type CueEdit struct {
+	Find    string `json:"find"`
+	Replace string `json:"replace"`
+}
+
+// resolveText applies this change to the cue's original text and returns the
+// final text. hasEdits reports whether Edits drove the change (vs a Text fall-
+// back). applyUniqueEdits=1 means every edit was uniquely located (the common
+// case); <1 means at least one edit was dropped for being absent/ambiguous.
+//
+// This centralizes the edits-vs-text resolution so validateChanges and apply
+// can't drift apart (both compute the final text the same way).
+func (c CueChange) resolveText(orig string) (final string, appliedEdits, skippedEdits int, hasEdits bool) {
+	if len(c.Edits) > 0 {
+		hasEdits = true
+		final = orig
+		for _, e := range c.Edits {
+			if e.Find == "" || strings.Count(final, e.Find) != 1 {
+				// 找不到 / 多次出现（不唯一）→ 跳过该 edit，不替换。比 retry 便宜：
+				// retry 模型大概率原样返回同样的 find。
+				skippedEdits++
+				continue
+			}
+			final = strings.Replace(final, e.Find, e.Replace, 1)
+			appliedEdits++
+		}
+		return final, appliedEdits, skippedEdits, true
+	}
+	// Text fallback：整句替换。allowed iff 与 orig 不同（apply 层再判一次）。
+	return c.Text, 0, 0, false
 }
 
 // polishResponse is the LLM's expected JSON output for one chunk.
@@ -387,9 +612,10 @@ type callResult struct {
 }
 
 // polishChunk builds the prompt for one chunk and calls the LLM once. Returns
-// a parsed polishResponse plus the token usage from the call.
-func polishChunk(ctx context.Context, llm ai.LLMProvider, model string, blk []cueRef, termDict, subject string) (*callResult, error) {
-	sys := systemPrompt
+// a parsed polishResponse plus the token usage from the call. skipMining picks
+// the glossary-free system prompt (see SystemPrompt).
+func polishChunk(ctx context.Context, llm ai.LLMProvider, model string, blk []cueRef, termDict, subject string, skipMining bool) (*callResult, error) {
+	sys := SystemPrompt(skipMining)
 	user := buildUserPrompt(blk, termDict, subject)
 
 	resp, err := llm.Chat(ctx, ai.ChatRequest{
@@ -472,20 +698,28 @@ const highEditDistanceRatio = 0.5
 
 // validateChanges checks structural integrity of a chunk's returned changes
 // and counts how many are "suspicious" (high edit distance). It returns:
-//   - highEditDistance: count of changes that exceed the soft warning threshold
-//     (length delta > maxLenDelta, punctuation changed, or Levenshtein ratio
-//     > highEditDistanceRatio). These are STILL applied — just flagged.
+//   - highEditDistance: count of changes whose resolved final text exceeds the
+//     soft warning threshold (length delta > maxLenDelta, punctuation changed,
+//     or Levenshtein ratio > highEditDistanceRatio). These are STILL applied —
+//     just flagged.
 //   - error: non-nil ONLY for structural corruption that warrants a retry:
-//     an id outside the chunk's cue range. The LLM returning a bogus id means
-//     it lost alignment with the prompt, and retrying may help; rejecting
-//     suspicious-but-in-range text does not (the LLM will just return the
-//     same correction).
+//     an id outside the chunk's cue range, OR a change that resolves to empty
+//     text (no text + no usable edits — see the empty-text guard below). Both
+//     mean the LLM lost something; retrying may help. Rejecting suspicious-but-
+//     in-range text does not (the LLM will just return the same correction).
 //
 // Design shift (2026-07-21): the previous version rejected length/punctuation
 // violations and retried. This caused legitimate homophone fixes on short cues
 // to fail repeatedly (考算→口算 has |Δ|=0 and same punctuation but the old
 // charOverlap gate killed it). Now we trust the LLM's corrections by default
 // and let humans review questionable ones via the subtitle diff UI.
+//
+// find/replace (2026-07-22): changes may carry Edits (find/replace pairs) or a
+// Text field (whole-sentence). We resolve the final text via CueChange.
+// resolveText — which applies edits with uniqueness checks — so the high-edit-
+// distance check sees the SAME final text the apply step will produce. An empty
+// resolved text (bare id, or edits that all missed) is treated as structural
+// corruption and retried — applying it would blank the cue's subtitle text.
 func validateChanges(blk []cueRef, changes []CueChange) (highEditDistance int, err error) {
 	// Build a set of valid ids and the original text for each.
 	byID := make(map[int]string, len(blk))
@@ -497,7 +731,18 @@ func validateChanges(blk []cueRef, changes []CueChange) (highEditDistance int, e
 		if !ok {
 			return 0, fmt.Errorf("unknown id %d in changes (chunk has %d cues)", ch.ID, len(blk))
 		}
-		if isHighEditDistance(orig, ch.Text) {
+		final, _, _, _ := ch.resolveText(orig)
+		// Empty resolved text = the model returned a change with no text AND no
+		// usable edits (e.g. {"id":5} or {"id":5,"edits":[]}). Treat as structural
+		// corruption and retry, same as unknown id: applying it would blank the
+		// cue's text. The edits format makes this more likely than before (the
+		// model may emit a bare id when it decides a cue needs no change but
+		// forgets to omit it from changes), so we guard here rather than let an
+		// empty string reach the apply step and wipe a subtitle line.
+		if final == "" {
+			return 0, fmt.Errorf("change for id %d resolved to empty text", ch.ID)
+		}
+		if isHighEditDistance(orig, final) {
 			highEditDistance++
 		}
 	}
@@ -749,38 +994,69 @@ func parsePolishJSON(raw string) (*polishJSONEnvelope, error) {
 	return &env, nil
 }
 
-// --- prompts (from docs/subtitle-system-overhaul.md §五 PR2) -------------
+// --- prompts ------------------------------------------------------------
+//
+// 2026-07-22 重写：与代码实际行为对齐 + 精简 + find/replace 输出格式。
+//
+// 历史：原提示词有「【严格规则——违反则整批结果作废】」+「3. 改动前后字符数差距
+// ≤ 2」。但 2026-07-21 那轮校验放松把 validateChanges 从「长度/标点违规 reject +
+// retry」改成「只记 HighEditDistanceCount，不拦」（唯一还 reject 的是 unknown cue
+// id），maxLenDelta 也从 2 提到 5。代码放开的那扇门，提示词还在门口拦着——模型按
+// 规则 3 自我审查，把合法的 3-5 字修正咽下去不输出，放松根本没生效。
+//
+// 现在的提示词：标题如实写「id 错误会作废，其他违规由 admin 复核」；删掉字符数
+// 规则（代码只警告不拦，提示词就不承诺）；加入 edits(find/replace) 输出格式以省
+// completion token（整句改一个字 → 只输出 find/replace 片段）。
 
-const systemPrompt = `你是一个字幕校对器。你会收到一段机器转录的字幕（JSON）以及术语字典。
-你的任务是找出其中的【同音错字和术语错误】，返回需要修正的条目，同时把本次发现的术语规律挖出来供后续课程使用。
+// systemPrompt 是默认（含术语挖矿）的系统提示词。
+const systemPrompt = `你是字幕校对器。输入：机器转录字幕(JSON, {id,text}) + 术语字典。
+任务：找同音错字和术语错误，返回需修正条目；同时挖出可复用的术语规律。
 
-【严格规则——违反则整批结果作废】
-1. 只改【术语字典】里明确列出的词，以及你能 100% 确定是同音错字的词
-2. 不改标点、不改语序、不优化表达、不纠正语法
-3. 改动前后字符数差距 ≤ 2
-4. 利用上下文判断：字典里的词在当前句中是否真的是术语
-   （如"动车"是动词+车 vs "车走到中路"是象棋术语）
-5. 没问题的条目不要放进 changes
-6. 严格只输出 JSON，不要任何额外说明文字
+规则（id 错误会导致整批作废；其他违规由 admin 复核，不拦）：
+1. 只改：术语字典里的词，或 100% 确定的同音错字
+2. 不改标点、语序、表达、语法
+3. 用上下文判断字典词是否真是术语（避免歧义）
+4. 没问题的条目不放进 changes
+5. 只输出 JSON，无任何额外文字
 
-【术语挖矿】
-把本次观察到的、有把握的术语纠错规律放进 glossary 字段。
-- 只放 confidence ≥ 0.7 的（多次观察、上下文一致）
-- evidence_ids 写观察到这个规律的 cue id 数组（1-based，对应用户给的 id）
-- 字典里已有的不要重复放
+changes 输出（两种二选一，优先用 edits）：
+- edits：子串替换，find 必须在该 cue 内唯一
+  {"id":147,"edits":[{"find":"出军","replace":"出车"}]}
+  多处错字用数组：edits:[{...},{...}]
+- text：整句替换（find 无法定位时用）
+  {"id":147,"text":"修正后的整句"}
 
-输出格式（严格遵守）：
-{
-  "changes": [
-    {"id": 147, "text": "修正后的整句文本"}
-  ],
-  "glossary": [
-    {
-      "original": "军",
-      "corrected": "车",
-      "context": "象棋术语，指棋子",
-      "confidence": 0.95,
-      "evidence_ids": [147, 152, 198]
-    }
-  ]
-}`
+术语挖矿（glossary）：放本次观察到的、confidence≥0.7 的术语纠错规律。
+- evidence_ids 填观察到该规律的 cue id
+- 字典里已有的不重复放
+{"original":"军","corrected":"车","context":"象棋术语","confidence":0.95,"evidence_ids":[147,152]}`
+
+// systemPromptNoGlossary 是 SkipGlossaryMining=true 时用的精简版（无术语挖矿段）。
+// re-polish 场景（source=llm_optimized）字幕内容没变，能挖的术语上次已挖，再让
+// 模型挖既白烧 completion token 又分散注意力。省 ~120 prompt tok/chunk。
+const systemPromptNoGlossary = `你是字幕校对器。输入：机器转录字幕(JSON, {id,text}) + 术语字典。
+任务：找同音错字和术语错误，返回需修正条目。
+
+规则（id 错误会导致整批作废；其他违规由 admin 复核，不拦）：
+1. 只改：术语字典里的词，或 100% 确定的同音错字
+2. 不改标点、语序、表达、语法
+3. 用上下文判断字典词是否真是术语（避免歧义）
+4. 没问题的条目不放进 changes
+5. 只输出 JSON，无任何额外文字
+
+changes 输出（两种二选一，优先用 edits）：
+- edits：子串替换，find 必须在该 cue 内唯一
+  {"id":147,"edits":[{"find":"出军","replace":"出车"}]}
+  多处错字用数组：edits:[{...},{...}]
+- text：整句替换（find 无法定位时用）
+  {"id":147,"text":"修正后的整句"}`
+
+// SystemPrompt 返回实际使用的系统提示词文本，供 recordPolishRun 写入
+// ai_runs.system_prompt_text（让 admin 在「查看回放」里看到本次润色发的 prompt）。
+// skipMining=true 时返回精简版（与 polishChunk 实际选择的版本一致）。
+func SystemPrompt(skipMining bool) string {
+	if skipMining {
+		return systemPromptNoGlossary
+	}
+	return systemPrompt
+}
