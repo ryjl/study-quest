@@ -88,11 +88,31 @@ Always run `make test` before declaring backend work done.
    CRUD, reorder, probe, settings save — every write must invalidate the keys
    it changes or the UI keeps reading stale data.
 
-3. **Backend: business-timezone math goes through `appclock`.** "Today /
-   yesterday / late-night hour / consecutive days" are computed in ONE fixed
-   business timezone (Asia/Shanghai), never via `time.Now()` directly or
-   SQLite's `'localtime'` modifier. Those two diverged inside containers and
-   silently zeroed streaks.
+3. **时间处理铁律：存储永远 UTC，只有人类日期语义才走 `appclock`。**
+   这个规则违反过太多次，每次都是隐性 bug + 定位极难。三条子规则：
+
+   **(a) 数据库时间戳永远是 UTC。** 写库时用 `time.Now().UTC()` 或 SQLite
+   `CURRENT_TIMESTAMP`（它本身就是 UTC），**绝不用裸 `time.Now()`**（它是
+   Go 进程的本地时区，容器里通常 UTC、宿主机可能是 +08，不一致）。手写 SQL
+   的 `CURRENT_TIMESTAMP` 和 GORM auto-managed 字段必须同一时区——目前
+   GORM DSN 没设 `_loc=UTC`，导致 auto-managed 字段用本地时区而 `CURRENT_TIMESTAMP`
+   用 UTC，同一张表混了两个时区（待清理，见 `docs/handoff-timezone-cleanup.md`）。
+
+   **(b) 业务日期语义（今天是周几、几点解锁、连续学习几天）走 `appclock`。**
+   `appclock.Now()` / `appclock.In(t)` 把 UTC 存储时间转成业务时区
+   (Asia/Shanghai) 再算 Weekday/Hour/calendar-day。`unlock_service.go` 是正例
+   （L349-434 全用 `appclock.In`）。绝不在 service 层用 `time.Now()` 算"今天"。
+
+   **(c) 任何 `time.Now()` 出现在 repository/service 层都要审。** 问自己：
+   这是存储时间戳吗？（→ 用 `time.Now().UTC()`）还是业务日期语义？（→ 用
+   `appclock`）。不确定时，宁可 `time.Now().UTC()`——至少和 `CURRENT_TIMESTAMP`
+   一致，不会产生时区 mismatch。
+
+   **血泪案例**：job reaper (`ai_job_repo.ReapStaleJobs`) 用 `time.Now().Add(-30min)`
+   算 cutoff，但 `claimed_at` 是 `CURRENT_TIMESTAMP`（UTC）。+08 生产环境下
+   cutoff 比 claimed_at 大 8 小时，导致刚 claim 的 job 每 5 分钟被误 reap，
+   polish（2-7 分钟）永远跑不完。症状是"polish 没跑"，实际是 reaper 把它
+   反复杀掉了。修复：cutoff 改 `time.Now().UTC().Add(-30min)`。
 
 4. **APK OTA: `/api/v1/app/*` contract is FROZEN.** Already-shipped APKs
    depend on these endpoints forever. Never key off DB primary key (use

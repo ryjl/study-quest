@@ -225,8 +225,12 @@ func TestSubtitleJobReapStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Push claimed_at far into the past by writing it directly (ClaimNext stamps
-	// now, so we can't age it via the API).
-	old := time.Now().Add(-2 * time.Hour)
+	// now, so we can't age it via the API). Use UTC to match what SQLite
+	// CURRENT_TIMESTAMP stores in production — the reaper computes its cutoff in
+	// UTC too (see subtitle_job_repo.ReapStale), so seeding local time here would
+	// diverge from the reaper's comparison on non-UTC machines and mask the very
+	// timezone bug this test exists to guard against.
+	old := time.Now().UTC().Add(-2 * time.Hour)
 	if err := env.db.Model(&model.SubtitleJob{}).Where("id = ?", job.ID).
 		Updates(map[string]any{"claimed_at": old}).Error; err != nil {
 		t.Fatal(err)

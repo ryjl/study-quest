@@ -73,11 +73,17 @@ type SubtitleJobRepository interface {
 }
 
 // SubtitleJobWithEpisode is a job row joined with its episode's display fields.
+// SubtitleID is the id of the subtitle row the job produced (matched by
+// episode_id + the job's target language), or nil when no such row exists
+// (job not done yet, or the subtitle was deleted). Used by the admin queue UI
+// to offer a "view generated subtitle" action on done rows — without this
+// the queue page had no way to jump from a finished job to its output.
 type SubtitleJobWithEpisode struct {
 	model.SubtitleJob
 	EpisodeTitle    *string
 	EpisodeCourseID *uint
 	DurationSeconds *int
+	SubtitleID      *uint
 }
 
 type subtitleJobRepo struct {
@@ -241,7 +247,13 @@ func (r *subtitleJobRepo) TouchClaim(jobID uint, progress *float64) error {
 }
 
 func (r *subtitleJobRepo) ReapStale(staleAfter time.Duration) (int, error) {
-	cutoff := time.Now().Add(-staleAfter)
+	// claimed_at is written by ClaimNext as SQLite CURRENT_TIMESTAMP, which is
+	// UTC. The cutoff MUST be computed in UTC too — using time.Now() (local)
+	// here used to make the comparison off by the local UTC offset (8h in
+	// production), causing freshly-claimed jobs to be reaped within minutes.
+	// This is the appclock-class bug CLAUDE.md rule #3 warns about, just in a
+	// different spot than the streak math. Same fix: go through UTC explicitly.
+	cutoff := time.Now().UTC().Add(-staleAfter)
 	res := r.db.Exec(`UPDATE subtitle_jobs
 		SET status = ?, claimed_at = NULL, claimed_by = '', progress = NULL, updated_at = CURRENT_TIMESTAMP
 		WHERE status = ? AND claimed_at IS NOT NULL AND claimed_at < ?`,
@@ -292,15 +304,28 @@ func (r *subtitleJobRepo) CountByStatus() (map[string]int, error) {
 	return out, nil
 }
 
-// ListWithEpisode joins subtitle_jobs to episodes for the admin list view.
-// status=="" means "all". Ordering keeps actionable rows on top: processing,
-// then queued, then failed/skipped, then done — each block by recency.
+// ListWithEpisode joins subtitle_jobs to episodes (and, when the job is done,
+// to the subtitle row it produced) for the admin list view. status=="" means
+// "all". Ordering keeps actionable rows on top: processing, then queued, then
+// failed/skipped, then done — each block by recency.
+//
+// The subtitle join is keyed on (episode_id, language) — the same key
+// episodeRepo.SaveSubtitle upserts by. We match the PRIMARY subtitle when one
+// exists (the common case: one zh-CN whisper track per episode); if there are
+// multiple non-primary rows for the same language we pick the lowest id (oldest,
+// which is the whisper-original the worker wrote). NULL when no subtitle row
+// matches (job not done yet, or the subtitle was deleted). The LATERAL-style
+// subselect is emulated via a correlated subquery in the SELECT so we get
+// exactly one row per job without a fanout.
 func (r *subtitleJobRepo) ListWithEpisode(status string, limit int) ([]SubtitleJobWithEpisode, error) {
 	// Ordering keeps actionable rows on top: processing, then queued, then
 	// failed/skipped, then done — each block by recency.
 	q := r.db.Table("subtitle_jobs AS j").
 		Select(`j.*, e.title AS episode_title, e.course_id AS episode_course_id,
-			e.duration_seconds AS duration_seconds`).
+			e.duration_seconds AS duration_seconds,
+			(SELECT s.id FROM subtitles s
+			 WHERE s.episode_id = j.episode_id AND s.language = j.language
+			 ORDER BY s.is_primary DESC, s.id ASC LIMIT 1) AS subtitle_id`).
 		Joins("LEFT JOIN episodes e ON e.id = j.episode_id").
 		Order("CASE j.status " +
 			"WHEN 'processing' THEN 0 " +

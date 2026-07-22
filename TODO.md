@@ -36,6 +36,15 @@
 
 ## P1 — 中等价值
 
+### 轻量 log 系统（作业级事件落库 + admin 可视化）
+
+当前所有日志走 stderr（`log.Printf`，81 处，前缀不统一）。AI/subtitle worker 的关键事件（job 开始/结束/失败、relay 调用、reaper）只在 server 日志里，admin 看不到。加一个轻量结构化 log 层让运维可见性不再依赖 SSH 看日志。
+
+- **场景**：polish 卡住、relay 挂了、worker 死锁等"看不见的故障"，admin 只能从 job 状态间接推断。2026-07-21 这轮调研时确认 polish partial 的诊断盲点主要靠 job detail 字符串 + 字幕 diff UI 已经覆盖，但通用事件流（reaper 触发、provider 切换、heartbeat 丢失）仍无 admin 视图。
+- **价值**：运维可见性。下次出现"AI worker 前面卡住了，不知道为什么"这类问题，admin 能直接在控制台看事件流定位，而不是等你 SSH 进去看日志。
+- **工作量预估**：中（一个中等 PR）。MVP = `log_entries` 表（仿 `AIRun`：id/level/source/message/fields_json/job_id/created_at）+ 仿 AIRun 的 repo/handler（约 200 行后端）+ `/admin/logs` 页（仿 AIWorkflow 的 useQuery + pollWhen，约 200 行前端）+ 改 5 个集中点（failJob/httperr/两个 reaper/polishStats）。**不引第三方 log 库**（自己写 wrapper，避免 go.mod 改动 + 全仓 81 处替换）；**不做 SSE 实时流**（项目无 SSE 基建，轮询够用）；**不全量替换 81 处 log.Printf**（新代码用新 wrapper，旧代码渐进迁移）。
+- **依赖**：无。可独立 PR。
+
 ### streaming 输出（SSE）
 
 agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。

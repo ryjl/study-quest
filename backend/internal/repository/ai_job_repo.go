@@ -119,8 +119,13 @@ func (r *aiContentRepo) JobStats() (map[string]int, error) {
 // 回 'queued',并清空 claimed_at/error。AI worker 是进程内单 goroutine,正常情
 // 况不会滞留,但进程被 hard-kill(SIGKILL/断电)时会留下这种僵尸行——没有 reaper
 // 的话它们就永远卡在 processing,既占统计又永不重跑。参照 subtitle reaper。
+//
+// claimed_at 由 ClaimNextQueuedJob 用 SQLite CURRENT_TIMESTAMP 写入,是 UTC。cutoff
+// 必须也用 UTC 算——以前用 time.Now()(本地时间)导致差了本地 UTC offset(生产 +8h),
+// 刚 claim 的 job 5 分钟内就被误 reap,polish 这种慢 job(2-7 分钟)永远跑不完。
+// 这是 appclock 类 bug(CLAUDE.md 规则 #3 警告的同类),只是出在 reaper 而非 streak。
 func (r *aiContentRepo) ReapStaleJobs(staleTimeout time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-staleTimeout)
+	cutoff := time.Now().UTC().Add(-staleTimeout)
 	res := r.db.Exec(`UPDATE ai_jobs
 		SET status = 'queued', claimed_at = NULL, error = '', updated_at = CURRENT_TIMESTAMP
 		WHERE status = 'processing' AND claimed_at IS NOT NULL AND claimed_at < ?`,
