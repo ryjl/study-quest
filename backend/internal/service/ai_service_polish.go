@@ -411,7 +411,7 @@ func (s *aiService) AcceptGlossaryCandidate(id uint, correctedOverride, contextO
 	c.Corrected = corrected
 	c.Context = context
 	c.Status = "accepted"
-	now := time.Now()
+	now := time.Now().UTC()
 	c.AcceptedAt = &now
 	if err := s.glossaryRepo.Update(c); err != nil {
 		return err

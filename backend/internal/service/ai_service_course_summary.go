@@ -119,7 +119,7 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 		CourseID:          course.ID,
 		SummaryText:       res.SummaryText,
 		ModelUsed:         modelName,
-		GeneratedAt:       time.Now(),
+		GeneratedAt:       time.Now().UTC(),
 		EpisodeCountAtGen: int(episodeCountAtGen),
 	}
 	if err := s.contentRepo.UpsertCourseSummary(summary); err != nil {

@@ -154,7 +154,7 @@ func TestSubtitleJobEnqueueBatchReturnsSkippedReasons(t *testing.T) {
 	// 娱乐课不应该在 skipped 集合里(改回正常入队)。
 	for _, id := range skipped {
 		if id == entEp {
-			t.Errorf("entertainment episode should NOT be skipped after 2026-07-20 refactor, but was in skipped list", )
+			t.Errorf("entertainment episode should NOT be skipped after 2026-07-20 refactor, but was in skipped list")
 		}
 	}
 	if reasons[alreadySubbed] != service.SkipReasonHasSubtitle {
@@ -553,8 +553,8 @@ func TestSubtitleJobAdminHTTPEndpoints(t *testing.T) {
 func TestSubtitleJobWorkerClaimRequiresIngestKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	// Build the real handler against a throwaway in-memory DB.
-	dbName := fmt.Sprintf("file:test_ingestkey_%d?mode=memory&cache=shared", time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
+	dbName := fmt.Sprintf("file:test_ingestkey_%d?mode=memory&cache=shared&_loc=UTC", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{NowFunc: func() time.Time { return time.Now().UTC() }})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -628,8 +628,8 @@ func (e *testEnv) giveSubtitle(t *testing.T, episodeID uint, srt string) {
 // pure URL construction (no network), so the storage round-trip inside
 // ClaimNext succeeds offline and the post-download enrichment runs.
 func TestSubtitleJobClaimResponseContext(t *testing.T) {
-	dbName := fmt.Sprintf("file:test_claim_ctx_%d?mode=memory&cache=shared", time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
+	dbName := fmt.Sprintf("file:test_claim_ctx_%d?mode=memory&cache=shared&_loc=UTC", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{NowFunc: func() time.Time { return time.Now().UTC() }})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

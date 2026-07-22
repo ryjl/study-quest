@@ -263,7 +263,7 @@ func (r *readingBookRepo) UpsertProgress(userID, bookID uint, lastPage int) (*mo
 	if lastPage < 0 {
 		lastPage = 0
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	err := r.db.Exec(`
 		INSERT INTO reading_book_progresses (user_id, book_id, last_page, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?)

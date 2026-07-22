@@ -2,9 +2,9 @@ package repository
 
 import (
 	"errors"
-	"time"
 	"gorm.io/gorm"
 	"studyquest/backend/internal/model"
+	"time"
 )
 
 // Code split from ai_content_repo.go for navigability. The interface
@@ -73,7 +73,7 @@ func (r *aiContentRepo) CreateQuiz(quiz *model.Quiz, questions []model.Question)
 			// Flip the old quiz to archived in place — keep the row + its
 			// questions (the history view lists them). ArchivedAt drives the
 			// newest-first ordering of the history panel.
-			now := time.Now()
+			now := time.Now().UTC()
 			if err := tx.Model(&old).Updates(map[string]interface{}{
 				"status":      "archived",
 				"archived_at": now,
@@ -87,8 +87,8 @@ func (r *aiContentRepo) CreateQuiz(quiz *model.Quiz, questions []model.Question)
 		// idx_quiz_user_ep_active is the DB-level guard that the archive step
 		// ran first; within this single transaction the app-layer ordering above
 		// already guarantees it.
-		quiz.ID = 0        // ensure insert, not accidental update
-		quiz.Status = ""   // let the column default 'active' apply (avoid hardcoding)
+		quiz.ID = 0      // ensure insert, not accidental update
+		quiz.Status = "" // let the column default 'active' apply (avoid hardcoding)
 		if err := tx.Create(quiz).Error; err != nil {
 			return err
 		}

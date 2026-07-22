@@ -47,13 +47,26 @@ func main() {
 	// on every pooled connection except the one that ran the PRAGMA — which in
 	// practice means none of them fire, and the manual cascade deletes in the
 	// repos become the only line of defense (a known historical footgun).
+	//
+	// _loc=UTC makes the "storage is always UTC" rule (CLAUDE.md #3) explicit
+	// at the driver level: go-sqlite3 tags read-back time.Time with this zone,
+	// and writing an explicit zone here (rather than relying on the driver's
+	// nil-loc default) keeps behavior obvious and immune to upstream changes.
+	// NowFunc is the matching write-side guarantee: GORM stamps
+	// CreatedAt/UpdatedAt using it, so returning UTC keeps auto-managed columns
+	// in the same zone as raw-SQL CURRENT_TIMESTAMP (UTC) and as every explicit
+	// time.Now().UTC() in the repositories. Together they close the historical
+	// skew where a Go time.Time column and a CURRENT_TIMESTAMP column on the
+	// same row disagreed by the host's UTC offset (+8h), which once made the
+	// job reaper reap freshly-claimed jobs and silently kill every polish run.
 	dsn := cfg.DBPath
 	if strings.Contains(dsn, "?") {
-		dsn += "&_busy_timeout=5000&_foreign_keys=on"
+		dsn += "&_busy_timeout=5000&_foreign_keys=on&_loc=UTC"
 	} else {
-		dsn += "?_busy_timeout=5000&_foreign_keys=on"
+		dsn += "?_busy_timeout=5000&_foreign_keys=on&_loc=UTC"
 	}
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
 		Logger: logger.New(
 			log.New(os.Stdout, "\r\n", log.LstdFlags),
 			logger.Config{
@@ -318,4 +331,3 @@ func main() {
 		log.Fatalf("Server startup failed on '%s': %v", cfg.ServerAddr, err)
 	}
 }
-

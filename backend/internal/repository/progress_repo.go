@@ -169,7 +169,7 @@ func (r *progressRepo) UpsertAndAccumulateWatch(userID, episodeID uint, position
 
 	// ON CONFLICT upsert keyed on (user_id, episode_id). The uniqueIndex on
 	// those columns guarantees the conflict target.
-	now := time.Now()
+	now := time.Now().UTC()
 	err := r.db.Exec(`
 		INSERT INTO user_progresses (user_id, episode_id, last_position_seconds, watch_seconds, is_completed, unlocked_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, 0, ?, ?, ?)
@@ -275,7 +275,7 @@ func addPointsInTx(tx *gorm.DB, ledger *model.PointsLedger) error {
 	if ledger.ChangeAmount > 0 {
 		pt.TotalEarnedPoints += ledger.ChangeAmount
 	}
-	pt.UpdatedAt = time.Now()
+	pt.UpdatedAt = time.Now().UTC()
 
 	return tx.Save(&pt).Error
 }

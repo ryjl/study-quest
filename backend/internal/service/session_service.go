@@ -51,7 +51,10 @@ type sessionService struct {
 
 // NewSessionService creates a SessionService with the given fixed TTL.
 func NewSessionService(repo repository.SessionRepository, ttl time.Duration) SessionService {
-	return &sessionService{repo: repo, ttl: ttl, now: time.Now}
+	// Storage timestamps are UTC (CLAUDE.md #3): CreatedAt/LastSeenAt/ExpiresAt
+	// are persisted, so the clock must return UTC to match CURRENT_TIMESTAMP and
+	// every other DB timestamp. Tests override via newSessionServiceWithClock.
+	return &sessionService{repo: repo, ttl: ttl, now: func() time.Time { return time.Now().UTC() }}
 }
 
 // newSessionServiceWithClock is the testable constructor (clock injectable).

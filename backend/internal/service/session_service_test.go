@@ -202,8 +202,8 @@ func TestSessionService_SetDeviceNote(t *testing.T) {
 // erroring out — the test is about token uniqueness, not SQLite throughput.
 func TestSessionService_ConcurrentIssueNoTokenCollision(t *testing.T) {
 	dir := t.TempDir()
-	dsn := filepath.Join(dir, "test.db?_busy_timeout=30000")
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	dsn := filepath.Join(dir, "test.db?_busy_timeout=30000&_loc=UTC")
+	db, err := gorm.Open(sqlite.Open(dsn), testutil.GormConfig())
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

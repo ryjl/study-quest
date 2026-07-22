@@ -104,7 +104,7 @@ func (s *aiService) runAdviceJob(job *model.AIJob) {
 		AdviceText:          res.AdviceText,
 		MasterySnapshotJSON: agent.MarshalMasterySnapshot(res.MasterySnapshot),
 		ModelUsed:           modelName,
-		GeneratedAt:         time.Now(),
+		GeneratedAt:         time.Now().UTC(),
 	}
 	if err := s.contentRepo.UpsertAdvice(advice); err != nil {
 		s.recordAdviceRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.AdviceText, res.SystemPrompt, res.UserPrompt)

@@ -180,7 +180,7 @@ func (r *subtitleJobRepo) ClaimNext(workerID string) (*model.SubtitleJob, error)
 // completed it), RowsAffected is 0 and the caller knows its SRT is stale and
 // should be discarded. Returns ErrSubtitleJobNotClaimed when nothing matched.
 func (r *subtitleJobRepo) MarkDone(jobID uint) error {
-	now := time.Now()
+	now := time.Now().UTC()
 	res := r.db.Model(&model.SubtitleJob{}).
 		Where("id = ? AND status = ?", jobID, model.SubtitleJobProcessing).
 		Updates(map[string]interface{}{
@@ -204,7 +204,7 @@ func (r *subtitleJobRepo) MarkFailed(jobID uint, errStr string) error {
 		Updates(map[string]interface{}{
 			"status":     model.SubtitleJobFailed,
 			"error":      errStr,
-			"updated_at": time.Now(),
+			"updated_at": time.Now().UTC(),
 		}).Error
 }
 
@@ -212,7 +212,7 @@ func (r *subtitleJobRepo) MarkSkipped(jobID uint) error {
 	return r.db.Model(&model.SubtitleJob{}).Where("id = ?", jobID).
 		Updates(map[string]interface{}{
 			"status":     model.SubtitleJobSkipped,
-			"updated_at": time.Now(),
+			"updated_at": time.Now().UTC(),
 		}).Error
 }
 
@@ -230,14 +230,14 @@ func (r *subtitleJobRepo) MarkQueued(jobID uint) error {
 			"claimed_by":  "",
 			"error":       "",
 			"progress":    nil,
-			"updated_at":  time.Now(),
+			"updated_at":  time.Now().UTC(),
 		}).Error
 }
 
 func (r *subtitleJobRepo) TouchClaim(jobID uint, progress *float64) error {
 	updates := map[string]interface{}{
-		"claimed_at": time.Now(),
-		"updated_at": time.Now(),
+		"claimed_at": time.Now().UTC(),
+		"updated_at": time.Now().UTC(),
 	}
 	if progress != nil {
 		updates["progress"] = *progress

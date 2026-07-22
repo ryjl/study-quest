@@ -156,7 +156,7 @@ func (s *progressService) ReportProgress(userID, episodeID uint, positionSec, de
 		if isEnt {
 			contentType = model.ContentEntertainment
 		}
-		if _, werr := s.watchEventRepo.AppendOrMerge(userID, episodeID, ep.CourseID, string(contentType), deltaWatchSec, time.Now(), s.mergeWindow); werr != nil {
+		if _, werr := s.watchEventRepo.AppendOrMerge(userID, episodeID, ep.CourseID, string(contentType), deltaWatchSec, time.Now().UTC(), s.mergeWindow); werr != nil {
 			log.Printf("watch_event append failed (user=%d ep=%d): %v", userID, episodeID, werr)
 		}
 	}

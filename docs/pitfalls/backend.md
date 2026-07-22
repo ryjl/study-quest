@@ -37,6 +37,38 @@ agent 并行改了 DTO 契约层同时改 caller，4 个 bug 进了主干。
 涉及调用点：`badge_repo.go`、`admin_handler.go`（today cutoff）、`episode_repo.go` /
 `progress_repo.go`（recent-N-day 窗口）。
 
+### 存储时间戳必须 UTC：三层防护（DSN + NowFunc + 显式 `.UTC()`）
+
+业务时区（上一节）之外，**存储时间戳**也有独立的时区陷阱：同一张表里
+`CURRENT_TIMESTAMP`（UTC）写的列和 Go `time.Time` 写的列如果用了不同时区源，
+`claimed_at - completed_at` 这类耗时计算会静默差 8 小时。
+
+**真实事故（reaper）**：`ReapStaleJobs` 用 `time.Now().Add(-30min)`（本地时区）
+算 cutoff，和 SQLite `CURRENT_TIMESTAMP`（UTC）写的 `claimed_at` 比较。+08 生产
+下 cutoff 比 claimed_at 大 8 小时，导致**刚 claim 的 job 每 5 分钟被误 reap**，
+polish（2-7 分钟）永远跑不完——症状是"polish 没跑"，实际是 reaper 反复杀掉。
+定位极难（无可观测性，job 静默回到 queued）。
+
+**三层防护**（都已落地，缺一不可）：
+1. **DSN `_loc=UTC`** —— `cmd/server/main.go` + 所有测试 DB（经
+   `testutil.GormConfig()`）。让 go-sqlite3 用 UTC 解释 bare-text 时间戳。
+2. **GORM `NowFunc` 返回 `time.Now().UTC()`** —— auto-managed `CreatedAt`/
+   `UpdatedAt` 由此走 UTC，和 `CURRENT_TIMESTAMP` 一致。
+3. **repository/service 每一处写库 `time.Now()` 显式 `.UTC()`** —— 即使前两层
+   失效，代码层仍正确。**这些 `.UTC()` 不是冗余，删任何一处都要审。**
+
+**回归保护**：
+- `repository/reaper_timezone_test.go` —— 业务层（reaper cutoff vs UTC
+  claimed_at），在 +08 机器上能抓本地 cutoff 回退（已验证有效）。
+- `repository/timezone_storage_test.go` —— 存储层 round-trip（auto-managed
+  CreatedAt 读回 UTC window + Location）+ 同行两种写法一致（CURRENT_TIMESTAMP
+  claimed_at vs Go `.UTC()` completed_at 秒级一致）。
+
+**为什么业务时区走 appclock、存储走 UTC 是两套机制**：appclock 负责"今天/几点"
+这种人类日期语义（读出 UTC instant 后转 Asia/Shanghai 再算 Weekday/Hour）；
+存储 UTC 负责"两个时间戳之间的物理耗时"。不要混用——存储时间戳绝不走 appclock，
+业务日期语义绝不裸 `time.Now()`。
+
 ## Worker / goroutine
 
 ### `NewAIService` 启 worker 必须带 context cancellation

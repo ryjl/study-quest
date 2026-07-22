@@ -159,7 +159,7 @@ func (l *loginRateLimiter) allow(ip string) (bool, int) {
 // Uses c.ClientIP() (not c.RemoteIP()) so behind a trusted reverse proxy the
 // real client IP is used; without proxy trust, ClientIP == RemoteIP.
 func LoginRateLimitMiddleware(window time.Duration, max int) gin.HandlerFunc {
-	limiter := newLoginRateLimiter(window, max, time.Now)
+	limiter := newLoginRateLimiter(window, max, func() time.Time { return time.Now().UTC() })
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
 		ok, count := limiter.allow(ip)

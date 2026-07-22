@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/testutil"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -22,7 +23,7 @@ import (
 // setupRuleTestDB builds a fresh in-memory DB plus a student user.
 func setupRuleTestDB(t *testing.T) (*gorm.DB, *model.User) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:?_loc=UTC"), testutil.GormConfig())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

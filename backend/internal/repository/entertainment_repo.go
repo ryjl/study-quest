@@ -48,7 +48,7 @@ func (r *entertainmentRepo) UpsertProgress(userID, episodeID uint, positionSec, 
 	if deltaWatchSec < 0 {
 		deltaWatchSec = 0
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	err := r.db.Exec(`
 		INSERT INTO entertainment_progresses (user_id, episode_id, last_position_seconds, watch_seconds, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?)

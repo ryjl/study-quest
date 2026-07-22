@@ -1,10 +1,10 @@
 package service
 
 import (
-	"studyquest/backend/internal/testutil"
 	"errors"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
+	"studyquest/backend/internal/testutil"
 	"testing"
 
 	"gorm.io/driver/sqlite"
@@ -12,7 +12,7 @@ import (
 )
 
 func newSubjectTestDB(t *testing.T) *gorm.DB {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:?_loc=UTC"), testutil.GormConfig())
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

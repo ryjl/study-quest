@@ -124,7 +124,7 @@ func (s *aiService) runUserReportJob(job *model.AIJob) {
 		UserID:      userID,
 		ReportText:  res.ReportText,
 		ModelUsed:   modelName,
-		GeneratedAt: time.Now(),
+		GeneratedAt: time.Now().UTC(),
 	}
 	if err := s.contentRepo.UpsertUserStudyReport(report); err != nil {
 		s.recordUserReportRun(job.ID, modelName, res.Trace, res.Usage, res.Turns, elapsed, "fail", "persist: "+err.Error(), res.ReportText, res.SystemPrompt, res.UserPrompt)

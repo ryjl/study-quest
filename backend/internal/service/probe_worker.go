@@ -170,7 +170,7 @@ func (w *ProbeWorker) probeOne(ctx context.Context, id uint) {
 
 	_, err := w.episodeService.Probe(id)
 	w.statsMu.Lock()
-	w.stats.LastFinishedAt = time.Now().Format(time.RFC3339)
+	w.stats.LastFinishedAt = time.Now().UTC().Format(time.RFC3339)
 	if err != nil {
 		w.stats.Failed++
 		w.stats.LastError = err.Error()

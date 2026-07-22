@@ -21,6 +21,7 @@ import (
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/router"
 	"studyquest/backend/internal/service"
+	"studyquest/backend/internal/testutil"
 )
 
 // testEnv bundles a fully-wired gin engine + the underlying DB for direct
@@ -55,8 +56,8 @@ func newTestEnv(t *testing.T) *testEnv {
 	// tests and pollute state).
 	// _busy_timeout in the DSN (not a PRAGMA Exec) so EVERY pooled connection
 	// honors it — a PRAGMA Exec only sets it on the one connection it ran on.
-	dbName := fmt.Sprintf("file:test_%d?mode=memory&cache=shared&_busy_timeout=5000", time.Now().UnixNano())
-	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{})
+	dbName := fmt.Sprintf("file:test_%d?mode=memory&cache=shared&_busy_timeout=5000&_loc=UTC", time.Now().UnixNano())
+	db, err := gorm.Open(sqlite.Open(dbName), testutil.GormConfig())
 	if err != nil {
 		t.Fatalf("open in-memory sqlite: %v", err)
 	}
@@ -448,9 +449,9 @@ func (e *testEnv) grantAccess(t *testing.T, userID, courseID uint) {
 func (e *testEnv) createEpisode(t *testing.T, courseID uint, title string) uint {
 	t.Helper()
 	resp := e.do(t, http.MethodPost, "/admin/api/courses/"+strconv.FormatUint(uint64(courseID), 10)+"/episodes", map[string]any{
-		"title":                title,
-		"video_relative_path":  "/fake/" + title + ".mp4",
-		"sort_order":           1,
+		"title":               title,
+		"video_relative_path": "/fake/" + title + ".mp4",
+		"sort_order":          1,
 	})
 	if resp.Code != http.StatusOK {
 		t.Fatalf("create episode %q: expected 200, got %d (body: %s)", title, resp.Code, resp.Body.String())

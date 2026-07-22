@@ -17,12 +17,26 @@ package testutil
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
 	"studyquest/backend/internal/model"
 )
+
+// GormConfig returns the gorm.Config every test DB must use. It mirrors the
+// production config in cmd/server/main.go: NowFunc returns UTC so auto-managed
+// columns match the UTC convention and match SQLite CURRENT_TIMESTAMP in raw
+// SQL. Keeping tests on the same config as production is what lets the
+// regression tests (reaper_timezone_test.go, timezone_storage_test.go) actually
+// catch a timezone-source mismatch — a test DB that drifted to a different
+// time-handling config would silently mask the very bugs they guard (CLAUDE.md #3).
+func GormConfig() *gorm.Config {
+	return &gorm.Config{
+		NowFunc: func() time.Time { return time.Now().UTC() },
+	}
+}
 
 // NewDB returns a freshly migrated in-memory SQLite DB for a single test.
 // Fails the test (via t.Fatal) on open or migrate error.
@@ -33,7 +47,7 @@ import (
 // atomic-upsert race tests), use NewFileDB instead.
 func NewDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	db, err := gorm.Open(sqlite.Open(":memory:?_loc=UTC"), GormConfig())
 	if err != nil {
 		t.Fatalf("testutil: open in-memory sqlite: %v", err)
 	}
@@ -51,8 +65,8 @@ func NewDB(t *testing.T) *gorm.DB {
 func NewFileDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dir := t.TempDir()
-	dsn := filepath.Join(dir, "test.db")
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	dsn := filepath.Join(dir, "test.db") + "?_loc=UTC"
+	db, err := gorm.Open(sqlite.Open(dsn), GormConfig())
 	if err != nil {
 		t.Fatalf("testutil: open file-backed sqlite: %v", err)
 	}

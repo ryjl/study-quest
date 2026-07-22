@@ -175,7 +175,7 @@ func (r *badgeRepo) UnlockBadge(userID, badgeID uint) error {
 		UserID:     userID,
 		BadgeID:    badgeID,
 		Tier:       0, // single-tier badge: its one and only tier is 0
-		UnlockedAt: time.Now(),
+		UnlockedAt: time.Now().UTC(),
 	}
 	return r.db.Create(&ub).Error
 }
@@ -204,7 +204,7 @@ func (r *badgeRepo) FindUserBadge(userID, badgeID uint) (*model.UserBadge, error
 // — the database's own conflict resolution is the single source of truth, not
 // a read-then-write in Go.
 func (r *badgeRepo) UnlockBadgeTier(userID, badgeID uint, newTier int) (bool, error) {
-	now := time.Now()
+	now := time.Now().UTC()
 	// SQLite UPSERT. The (user_id, badge_id) unique index is the conflict
 	// target. On conflict, only bump tier if the stored value is lower.
 	res := r.db.Exec(`

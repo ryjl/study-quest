@@ -93,10 +93,14 @@ Always run `make test` before declaring backend work done.
 
    **(a) 数据库时间戳永远是 UTC。** 写库时用 `time.Now().UTC()` 或 SQLite
    `CURRENT_TIMESTAMP`（它本身就是 UTC），**绝不用裸 `time.Now()`**（它是
-   Go 进程的本地时区，容器里通常 UTC、宿主机可能是 +08，不一致）。手写 SQL
-   的 `CURRENT_TIMESTAMP` 和 GORM auto-managed 字段必须同一时区——目前
-   GORM DSN 没设 `_loc=UTC`，导致 auto-managed 字段用本地时区而 `CURRENT_TIMESTAMP`
-   用 UTC，同一张表混了两个时区（待清理，见 `docs/handoff-timezone-cleanup.md`）。
+   Go 进程的本地时区，容器里通常 UTC、宿主机可能是 +08，不一致）。三层防护
+   缺一不可，都已落地：① DSN 带 `_loc=UTC`（`cmd/server/main.go` + 所有测试
+   DB 经 `testutil.GormConfig()`）；② GORM `NowFunc` 返回 `time.Now().UTC()`
+   （auto-managed `CreatedAt`/`UpdatedAt` 由此走 UTC）；③ repository/service
+   里**每一处**写库的 `time.Now()` 都显式 `.UTC()`。回归保护见
+   `repository/reaper_timezone_test.go`（业务层：reaper cutoff vs UTC
+   claimed_at）和 `repository/timezone_storage_test.go`（存储层 round-trip +
+   同行两种写法一致）。**删任何一处 `.UTC()` 都要审——它不是冗余，是防线。**
 
    **(b) 业务日期语义（今天是周几、几点解锁、连续学习几天）走 `appclock`。**
    `appclock.Now()` / `appclock.In(t)` 把 UTC 存储时间转成业务时区
@@ -112,7 +116,9 @@ Always run `make test` before declaring backend work done.
    算 cutoff，但 `claimed_at` 是 `CURRENT_TIMESTAMP`（UTC）。+08 生产环境下
    cutoff 比 claimed_at 大 8 小时，导致刚 claim 的 job 每 5 分钟被误 reap，
    polish（2-7 分钟）永远跑不完。症状是"polish 没跑"，实际是 reaper 把它
-   反复杀掉了。修复：cutoff 改 `time.Now().UTC().Add(-30min)`。
+   反复杀掉了。修复：cutoff 改 `time.Now().UTC().Add(-30min)`。该 bug 暴露后，
+   全项目时区用法已系统性清理（DSN `_loc=UTC` + `NowFunc` UTC + 所有写库
+   `time.Now().UTC()`），见本规则 (a) 的三层防护。
 
 4. **APK OTA: `/api/v1/app/*` contract is FROZEN.** Already-shipped APKs
    depend on these endpoints forever. Never key off DB primary key (use

@@ -786,7 +786,7 @@ func (s *aiService) SubmitQuizAnswer(userID, questionID uint, answerIndex *int, 
 		UserAnswer:     idx,
 		UserAnswerText: txt,
 		Correct:        correct,
-		AnsweredAt:     time.Now(),
+		AnsweredAt:     time.Now().UTC(),
 	})
 
 	// Update memory (feedback loop). No-op for synthetic questions (chunkID=0).
@@ -879,7 +879,7 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 	// SQLite 的 UPDATE 自动行锁,败者 RowsAffected=0,直接拒绝,不会落重复 Answer 行
 	// 或重复扣 mastery(消除 TOCTOU)。抢到后即使后续步骤失败,quiz 也已锁定(交卷态),
 	// 符合"一次提交=一次考试"的语义。
-	now := time.Now()
+	now := time.Now().UTC()
 	claimed, err := s.contentRepo.TryMarkQuizSubmitted(quiz.ID, now)
 	if err != nil {
 		return nil, fmt.Errorf("lock quiz for submit: %w", err)

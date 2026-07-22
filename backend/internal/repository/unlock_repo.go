@@ -152,7 +152,7 @@ func (r *unlockRepo) IncrementManualUnlock(userID, courseID uint) error {
 		ON CONFLICT(user_id, course_id) DO UPDATE SET
 			manual_unlock_count = user_unlock_overrides.manual_unlock_count + 1,
 			updated_at = excluded.updated_at
-	`, userID, courseID, seedStrategy, seedInterval, seedWeekly, time.Now(), time.Now()).Error
+	`, userID, courseID, seedStrategy, seedInterval, seedWeekly, time.Now().UTC(), time.Now().UTC()).Error
 }
 
 // DecrementManualUnlock reduces manual_unlock_count by 1, floored at 0. Unlike
@@ -165,7 +165,7 @@ func (r *unlockRepo) DecrementManualUnlock(userID, courseID uint) error {
 		SET manual_unlock_count = MAX(manual_unlock_count - 1, 0),
 		    updated_at = ?
 		WHERE user_id = ? AND course_id = ?
-	`, time.Now(), userID, courseID).Error
+	`, time.Now().UTC(), userID, courseID).Error
 }
 
 func (r *unlockRepo) SetAllowedEpisodes(userID, courseID uint, ids []uint) error {
@@ -190,7 +190,7 @@ func (r *unlockRepo) SetAllowedEpisodes(userID, courseID uint, ids []uint) error
 		INSERT INTO user_unlock_overrides (user_id, course_id, strategy, interval_seconds, weekly_times_json, manual_unlock_count, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, 0, ?, ?)
 		ON CONFLICT(user_id, course_id) DO NOTHING
-	`, userID, courseID, seedStrategy, seedInterval, seedWeekly, time.Now(), time.Now()).Error; err != nil {
+	`, userID, courseID, seedStrategy, seedInterval, seedWeekly, time.Now().UTC(), time.Now().UTC()).Error; err != nil {
 		return err
 	}
 	// Replace the allowlist in the join table atomically.
