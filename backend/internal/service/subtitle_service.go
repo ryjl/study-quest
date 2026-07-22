@@ -79,6 +79,13 @@ type SubtitleJobService interface {
 	// Retry moves a failed job back to queued (attempt count is preserved so
 	// the operator can see it has been tried before).
 	Retry(jobID uint) error
+	// Reset moves a PROCESSING job back to queued — the manual counterpart of
+	// ReapStale, for when the admin has judged a job stuck (worker alive but
+	// the relay/network hung) and doesn't want to wait the full stale timeout.
+	// Mirrors aiService.ResetJob. Only valid on processing jobs; other states
+	// return an error the handler maps to 409 (so the UI can say "nothing to
+	// reset" rather than silently succeeding on an already-terminal job).
+	Reset(jobID uint) error
 
 	ReapStale() (int, error)
 
@@ -418,6 +425,26 @@ func (s *subtitleJobService) Retry(jobID uint) error {
 	}
 	if job.Status != model.SubtitleJobFailed && job.Status != model.SubtitleJobSkipped {
 		return fmt.Errorf("only failed/skipped jobs can be retried (status=%s)", job.Status)
+	}
+	return s.repo.MarkQueued(jobID)
+}
+
+// Reset is the admin "un-stick a processing job" escape hatch. ReapStale does
+// this automatically after staleTimeout, but the admin may want to force it
+// sooner (e.g. they can see the worker is wedged on a hung relay). Only
+// valid on processing jobs — anything else returns an error the handler maps
+// to 409. clears claimed_at/claimed_by/error/progress so the next worker poll
+// re-claims it cleanly, matching MarkQueued's reset semantics.
+func (s *subtitleJobService) Reset(jobID uint) error {
+	job, err := s.repo.FindByID(jobID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return ErrSubtitleJobNotFound
+	}
+	if job.Status != model.SubtitleJobProcessing {
+		return fmt.Errorf("only processing jobs can be reset (status=%s)", job.Status)
 	}
 	return s.repo.MarkQueued(jobID)
 }

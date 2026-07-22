@@ -4,21 +4,8 @@ import { Captions, Check } from 'lucide-react';
 import { api } from '../../lib/api';
 import type { Episode, MediaStream } from '../../lib/types';
 import { Drawer, LoadingState, EmptyState } from '../../components/ui';
+import { SubtitleRow } from '../../components/SubtitleRow';
 import { useToast, useConfirm } from '../../lib/toast';
-
-/** Source badge label for a subtitle's origin. Empty/whisper → none (default). */
-function sourceBadge(source?: string): { text: string; cls: string } | null {
-  switch (source) {
-    case 'embedded':
-      return { text: '内嵌', cls: 'bg-primary/15 text-primary' };
-    case 'manual':
-      return { text: '手动', cls: 'bg-card-2 text-muted' };
-    case 'llm_optimized':
-      return { text: '已润色', cls: 'bg-good/20 text-good' };
-    default:
-      return null; // whisper — the default, no badge needed
-  }
-}
 
 /**
  * Map an ffprobe ISO 639-2 language tag (e.g. "chi", "eng", "und") to the
@@ -58,65 +45,6 @@ function readSubtitleStreams(episode: Episode): MediaStream[] {
   } catch {
     return [];
   }
-}
-
-/** A single subtitle row with an expandable content preview. */
-function SubtitleRow({
-  id,
-  language,
-  label,
-  source,
-  optimized,
-  onDelete,
-}: {
-  id: number;
-  language: string;
-  label: string;
-  source?: string;
-  optimized?: boolean;
-  onDelete: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  // Fetch the VTT content only when the row is first expanded (lazy), and cache
-  // it so re-opening is instant. The list endpoint omits vtt_content on purpose.
-  const contentQ = useQuery({
-    queryKey: ['subtitle-content', id],
-    queryFn: () => api.getSubtitle(id),
-    enabled: open,
-    staleTime: Infinity,
-  });
-  const badge = sourceBadge(optimized ? 'llm_optimized' : source);
-
-  return (
-    <div className="rounded-lg border border-border bg-card-2 px-3 py-2 text-sm">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="rounded bg-good/20 px-1.5 py-0.5 text-xs text-good">{language}</span>
-          <strong className="text-txt">{label}</strong>
-          {badge && <span className={`rounded px-1.5 py-0.5 text-[10px] ${badge.cls}`}>{badge.text}</span>}
-        </div>
-        <div className="flex gap-1.5">
-          <button className="btn-ghost btn-sm" onClick={() => setOpen((v) => !v)}>
-            {open ? '收起' : '查看'}
-          </button>
-          <button className="btn-danger btn-sm" onClick={onDelete}>删除</button>
-        </div>
-      </div>
-      {open && (
-        <div className="mt-2">
-          {contentQ.isLoading ? (
-            <div className="py-4 text-center text-xs text-muted">加载中…</div>
-          ) : contentQ.isError ? (
-            <div className="py-4 text-center text-xs text-bad">加载失败</div>
-          ) : (
-            <pre className="max-h-80 overflow-auto whitespace-pre-wrap rounded bg-black/5 p-2 text-xs leading-relaxed text-txt">
-              {contentQ.data?.vtt_content || '(空)'}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function SubtitleDrawer({ episode, onClose }: { episode: Episode; onClose: () => void }) {

@@ -279,9 +279,13 @@ export interface Subtitle {
   created_at?: string;
 }
 
-/** Full subtitle including VTT text — fetched on demand when viewing content. */
+/** Full subtitle including VTT text — fetched on demand when viewing content.
+ * raw_vtt_content is the immutable pre-polish snapshot (only populated when
+ * source === 'llm_optimized'; empty otherwise). The subtitle version UI uses
+ * it to render a polished-vs-original diff so polish results are auditable. */
 export interface SubtitleDetail extends Subtitle {
   vtt_content: string;
+  raw_vtt_content?: string;
 }
 
 export interface ProbeStats {
@@ -595,6 +599,10 @@ export interface SubtitleJob {
   /** Worker-reported transcription ratio 0..1, or null when none reported. */
   progress?: number | null;
   duration_seconds?: number | null;
+  /** Subtitle row id this job produced (matched by episode_id + language), or
+   * undefined when none exists (job not done yet, or subtitle deleted). The
+   * queue UI uses this to render a "view generated subtitle" expansion. */
+  subtitle_id?: number | null;
   created_at: string;
   updated_at: string;
 }

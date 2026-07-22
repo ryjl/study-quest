@@ -93,6 +93,15 @@ func (h *adminHandler) ExtractSubtitle(c *gin.Context) {
 // preview. ListSubtitles deliberately omits vtt_content (it can be large and
 // the list view only needs metadata); this endpoint fetches one by id when the
 // admin wants to read the actual text.
+//
+// raw_vtt_content is the immutable pre-polish snapshot (see model.Subtitle
+// doc). It's populated only when the subtitle has been polished
+// (source="llm_optimized") — for whisper/embedded/manual tracks it's empty,
+// since there's no "prior version" to compare against. The admin subtitle
+// version UI uses this to render a polished-vs-original diff so polish
+// results are auditable (a polish run that introduced a hallucinated rewrite
+// is visible at a glance, even though the 2026-07-21 validation relaxation
+// no longer blocks such rewrites upstream).
 func (h *adminHandler) GetSubtitle(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)
@@ -109,15 +118,26 @@ func (h *adminHandler) GetSubtitle(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Subtitle not found"})
 		return
 	}
+	// Only surface the raw snapshot when it's meaningful — i.e. when the
+	// current VttContent is a polished version of something else. For raw
+	// whisper tracks the two would be identical (or raw is empty for legacy
+	// rows), so returning it would just bloat the response for no UI value.
+	// The frontend gates the version toggle on source=="llm_optimized" anyway,
+	// but keeping the field empty here too avoids any confusion.
+	rawVtt := ""
+	if sub.Source == "llm_optimized" {
+		rawVtt = sub.RawVttContent
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"id":          sub.ID,
-		"episode_id":  sub.EpisodeID,
-		"language":    sub.Language,
-		"label":       sub.Label,
-		"vtt_content": sub.VttContent,
-		"source":      sub.Source,
-		"optimized":   sub.Optimized,
-		"created_at":  formatTime(sub.CreatedAt),
+		"id":               sub.ID,
+		"episode_id":       sub.EpisodeID,
+		"language":         sub.Language,
+		"label":            sub.Label,
+		"vtt_content":      sub.VttContent,
+		"raw_vtt_content":  rawVtt,
+		"source":           sub.Source,
+		"optimized":        sub.Optimized,
+		"created_at":       formatTime(sub.CreatedAt),
 	})
 }
 
