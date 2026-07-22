@@ -75,9 +75,21 @@ type PolishStats struct {
 	CompletionTokens int           `json:"completion_tokens"`
 	Duration         time.Duration `json:"duration"`
 	PartialOptimized bool          `json:"partial_optimized"` // true if any chunk failed
+	// HighEditDistanceCount is the number of applied changes whose edit-distance
+	// ratio exceeds the soft warning threshold (length delta > 5 OR punctuation
+	// changed OR Levenshtein/maxLen > 0.5). These changes are STILL APPLIED —
+	// this is informational only, surfaced in the job detail so the admin knows
+	// how many cues to spot-check in the subtitle diff UI. The whole point of
+	// the relaxed validation (2026-07-21) is that we trust the LLM's corrections
+	// by default and let humans review questionable ones via the diff view,
+	// rather than the previous strict rules that rejected legitimate homophone
+	// fixes on short cues (考算→口算, 合不变→和不变, etc.).
+	HighEditDistanceCount int `json:"high_edit_distance_count"`
 	// FailedChunkErrors maps failed chunk index → its last error string. Empty
 	// unless PartialOptimized. Surfaced to the admin job detail so polish
-	// failures are actionable (validation reject vs JSON parse vs network).
+	// failures are actionable (JSON parse vs network). Note: after the
+	// validation relaxation, "validation reject" no longer exists as a failure
+	// mode — only parse/network/unknown-id structural failures remain.
 	// One entry per failed chunk; chunks that succeeded are absent.
 	FailedChunkErrors map[int]string `json:"failed_chunk_errors,omitempty"`
 }
@@ -158,15 +170,24 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 			defer func() { <-sem }()
 
 			var (
-				parsed  *polishResponse
-				pErr    error
-				usage   ai.Usage
-				retries int
+				parsed            *polishResponse
+				pErr              error
+				usage             ai.Usage
+				retries           int
+				chunkHighEditDist int
 			)
-			// Retry loop: re-call the LLM until the response parses AND validates.
-			// Labeled break (`break retryLoop`) is required because a plain `break`
-			// inside the select would only exit the select, not the for — and we'd
-			// keep re-calling polishChunk on a cancelled ctx until maxRetries ran out.
+			// Retry loop: re-call the LLM until the response parses AND passes
+			// structural validation. Since the 2026-07-21 relaxation, the only
+			// validation failures that trigger retry are STRUCTURAL (JSON parse
+			// error, unknown cue id) — suspicious-but-in-range text no longer
+			// fails, it just increments chunkHighEditDist. So a well-formed
+			// response with legit homophone fixes succeeds on attempt 1; only
+			// genuinely broken responses (relay garbage, lost id alignment)
+			// burn retries.
+			// Labeled break (`break retryLoop`) is required because a plain
+			// `break` inside the select would only exit the select, not the
+			// for — and we'd keep re-calling polishChunk on a cancelled ctx
+			// until maxRetries ran out.
 		retryLoop:
 			for attempt := 0; attempt < maxRetries; attempt++ {
 				if attempt > 0 {
@@ -185,16 +206,18 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 					continue
 				}
 				usage = resp.usage
-				if respParseErr := validateChanges(blk, resp.changes); respParseErr != nil {
-					pErr = respParseErr
+				hed, validateErr := validateChanges(blk, resp.changes)
+				if validateErr != nil {
+					pErr = validateErr
 					continue
 				}
+				chunkHighEditDist = hed
 				parsed = &polishResponse{changes: resp.changes, glossary: resp.glossary}
 				pErr = nil
 				break
 			}
 
-			oc := chunkOutcome{idx: i, retries: retries}
+			oc := chunkOutcome{idx: i, retries: retries, highEditDistance: chunkHighEditDist}
 			if parsed != nil {
 				oc.changes = parsed.changes
 				oc.glossary = parsed.glossary
@@ -204,9 +227,9 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 				oc.failed = true
 				atomic.AddInt32(&failedChunks, 1)
 				// pErr holds the last error from the retry loop (LLM error,
-				// JSON parse error, or validation rejection). Stash it so the
-				// caller can surface it in the job detail — without this the
-				// admin sees "N chunks failed" with zero context.
+				// JSON parse error, or structural validation rejection). Stash
+				// it so the caller can surface it in the job detail — without
+				// this the admin sees "N chunks failed" with zero context.
 				if pErr != nil {
 					oc.errStr = pErr.Error()
 				} else {
@@ -251,11 +274,13 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 		if !ok {
 			continue
 		}
-		// Sanity: even though per-chunk validation already enforced this,
-		// re-check at apply time too — cheap and defense-in-depth.
-		if !changeAllowed(c.Text, newText) {
-			continue
-		}
+		// Apply every LLM-returned change that actually differs from the
+		// original. The previous design re-checked changeAllowed here as
+		// defense-in-depth; that gate is gone (2026-07-21 relaxation), so the
+		// only filter left is "is it actually a change". Recording the diff
+		// unconditionally lets the subtitle version UI show every modification
+		// for admin review — which is now the primary quality control, not
+		// the validation rules.
 		if newText != c.Text {
 			changed++
 			diff = append(diff, CueDiff{
@@ -277,6 +302,7 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 	// Collect failed-chunk error strings (only when some chunk failed, so the
 	// map is nil/empty on the common all-success path — keeps JSON output clean).
 	var failedErrs map[int]string
+	var totalHighEditDistance int
 	for _, oc := range outcomes {
 		if oc.failed {
 			if failedErrs == nil {
@@ -284,19 +310,21 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 			}
 			failedErrs[oc.idx] = oc.errStr
 		}
+		totalHighEditDistance += oc.highEditDistance
 	}
 
 	stats := PolishStats{
-		TotalCues:         len(cues),
-		ChangedCues:       changed,
-		ChunkCount:        len(chunks),
-		LLMCalls:          int(atomic.LoadInt32(&totalLLMCalls)),
-		FailedChunks:      int(atomic.LoadInt32(&failedChunks)),
-		Retries:           int(atomic.LoadInt32(&totalRetries)),
-		PromptTokens:      int(atomic.LoadInt32(&totalPrompt)),
-		CompletionTokens:  int(atomic.LoadInt32(&totalCompletion)),
-		Duration:          time.Since(start),
-		PartialOptimized:  atomic.LoadInt32(&failedChunks) > 0,
+		TotalCues:             len(cues),
+		ChangedCues:           changed,
+		ChunkCount:            len(chunks),
+		LLMCalls:              int(atomic.LoadInt32(&totalLLMCalls)),
+		FailedChunks:          int(atomic.LoadInt32(&failedChunks)),
+		Retries:               int(atomic.LoadInt32(&totalRetries)),
+		PromptTokens:          int(atomic.LoadInt32(&totalPrompt)),
+		CompletionTokens:      int(atomic.LoadInt32(&totalCompletion)),
+		Duration:              time.Since(start),
+		PartialOptimized:      atomic.LoadInt32(&failedChunks) > 0,
+		HighEditDistanceCount: totalHighEditDistance,
 		FailedChunkErrors: failedErrs,
 	}
 
@@ -327,10 +355,16 @@ type chunkOutcome struct {
 	usage    ai.Usage
 	failed   bool
 	retries  int
+	// highEditDistance is the count of changes in this chunk flagged as
+	// suspicious by validateChanges (length delta > maxLenDelta, punctuation
+	// changed, or Levenshtein ratio > 0.5). The changes are still applied;
+	// this count is summed into PolishStats.HighEditDistanceCount so the
+	// admin knows how many cues to spot-check in the diff UI.
+	highEditDistance int
 	// errStr is the last error from the retry loop when failed=true. Surface
-	// this up to the job detail so admin can tell validation rejection / JSON
-	// parse failure / network error apart — polish runs 7-13 minutes and
-	// "N chunks failed" with no cause is unactionable.
+	// this up to the job detail so admin can tell JSON parse failure / network
+	// error / unknown-id structural failure apart — polish runs 7-13 minutes
+	// and "N chunks failed" with no cause is unactionable.
 	errStr string
 }
 
@@ -416,17 +450,43 @@ func buildUserPrompt(blk []cueRef, termDict, subject string) string {
 
 // --- validation ----------------------------------------------------------
 
-// validateChanges enforces the doc's three per-change rules over a chunk's
-// returned changes:
-//  1. every id is in the chunk's id range
-//  2. length delta (runes) ≤ 2
-//  3. punctuation sequence is unchanged
+// maxLenDelta is the hard ceiling on |Δrune length| between orig and corrected
+// text. Changes beyond this are considered structural corruption (the LLM lost
+// track of what it was doing) and STILL get applied — but they count toward
+// HighEditDistanceCount so the admin can spot-check them. The previous design
+// (threshold 2 + charOverlap ≥ 0.6) rejected these outright; the relaxed design
+// (2026-07-21) applies everything and defers judgement to the subtitle diff UI.
 //
-// If any change violates, the whole chunk is rejected — the retry loop will
-// re-call the LLM. This is stricter than per-change skipping: it teaches the
-// model (via retry) that violations are not tolerated, and avoids partial /
-// misleading output.
-func validateChanges(blk []cueRef, changes []CueChange) error {
+// Why 5: legitimate homophone/terminology corrections change 1-3 characters
+// (车/炮/马/被减数/位值原理...), well within ±2. A correction that adds or
+// removes a short phrase (5 runes) is unusual but plausible for a transcription
+// fix; beyond 5 the LLM is almost certainly rewriting, not correcting. 5 is
+// the "this is definitely suspicious" line — not a correctness gate.
+const maxLenDelta = 5
+
+// highEditDistanceRatio is the Levenshtein/maxLen ratio above which a change
+// is counted as "high edit distance" (informational warning). 0.5 means "at
+// least half the cue was rewritten". Real homophone fixes sit at 0.1-0.3;
+// hallucinated rewrites sit near 1.0. Used only for stats — never for blocking.
+const highEditDistanceRatio = 0.5
+
+// validateChanges checks structural integrity of a chunk's returned changes
+// and counts how many are "suspicious" (high edit distance). It returns:
+//   - highEditDistance: count of changes that exceed the soft warning threshold
+//     (length delta > maxLenDelta, punctuation changed, or Levenshtein ratio
+//     > highEditDistanceRatio). These are STILL applied — just flagged.
+//   - error: non-nil ONLY for structural corruption that warrants a retry:
+//     an id outside the chunk's cue range. The LLM returning a bogus id means
+//     it lost alignment with the prompt, and retrying may help; rejecting
+//     suspicious-but-in-range text does not (the LLM will just return the
+//     same correction).
+//
+// Design shift (2026-07-21): the previous version rejected length/punctuation
+// violations and retried. This caused legitimate homophone fixes on short cues
+// to fail repeatedly (考算→口算 has |Δ|=0 and same punctuation but the old
+// charOverlap gate killed it). Now we trust the LLM's corrections by default
+// and let humans review questionable ones via the subtitle diff UI.
+func validateChanges(blk []cueRef, changes []CueChange) (highEditDistance int, err error) {
 	// Build a set of valid ids and the original text for each.
 	byID := make(map[int]string, len(blk))
 	for i, c := range blk {
@@ -435,83 +495,85 @@ func validateChanges(blk []cueRef, changes []CueChange) error {
 	for _, ch := range changes {
 		orig, ok := byID[ch.ID]
 		if !ok {
-			return fmt.Errorf("unknown id %d in changes (chunk has %d cues)", ch.ID, len(blk))
+			return 0, fmt.Errorf("unknown id %d in changes (chunk has %d cues)", ch.ID, len(blk))
 		}
-		if !changeAllowed(orig, ch.Text) {
-			return fmt.Errorf("id %d rejected: orig=%q new=%q (len delta or punctuation changed)", ch.ID, orig, ch.Text)
+		if isHighEditDistance(orig, ch.Text) {
+			highEditDistance++
 		}
 	}
-	return nil
+	return highEditDistance, nil
 }
 
-// changeAllowed returns true if changing `orig` → `text` satisfies the
-// length-delta, punctuation-preservation, AND character-overlap rules. Used
-// both at per-chunk validation and at apply time (defense-in-depth).
-//
-// The character-overlap rule catches LLM hallucinations where the model
-// rewrites a whole cue with the same length + same punctuation but completely
-// different content (e.g. replacing "对方这个棋跟我走的向三进五" with "这个棋等一下我就给大家说一下" —
-// 14 chars each, same punctuation, totally different meaning). Requiring ≥60%
-// shared characters (by rune-frequency-set Jaccard) rejects these rewrites
-// while still allowing legitimate homophone corrections (which change 1-3
-// characters in an otherwise-identical string).
-func changeAllowed(orig, text string) bool {
+// isHighEditDistance reports whether a change exceeds the soft warning
+// threshold. True means "the admin should spot-check this in the diff view";
+// it does NOT mean "reject". Three triggers, any one of which flags the change:
+//   - |Δrune length| > maxLenDelta (structural reshaping)
+//   - punctuation sequence changed (the prompt explicitly forbids this)
+//   - Levenshtein/maxLen > highEditDistanceRatio (substantial rewrite)
+func isHighEditDistance(orig, text string) bool {
 	dLen := utf8.RuneCountInString(orig) - utf8.RuneCountInString(text)
 	if dLen < 0 {
 		dLen = -dLen
 	}
-	if dLen > 2 {
-		return false
+	if dLen > maxLenDelta {
+		return true
 	}
 	if extractPunctuation(orig) != extractPunctuation(text) {
-		return false
+		return true
 	}
-	return charOverlap(orig, text) >= 0.6
+	return editDistanceRatio(orig, text) > highEditDistanceRatio
 }
 
-// charOverlap returns the Jaccard similarity of the rune-frequency multisets
-// of a and b: |intersection| / |union|, in [0, 1]. Two strings sharing most of
-// their characters score high; a complete rewrite scores low.
+// editDistanceRatio returns Levenshtein(a,b) / max(|a|,|b|) (by rune count),
+// in [0,1]. 0 = identical; 1 = completely different. Used only for the
+// informational HighEditDistanceCount stat — never as a correctness gate.
 //
-// This is intentionally a SET-based measure, not an edit-distance one. We want
-// to catch "rewrote the sentence" while tolerating "swapped a few characters
-// around" — Jaccard on rune frequencies does exactly that, cheaply.
-func charOverlap(a, b string) float64 {
-	if a == "" && b == "" {
-		return 1.0
+// Standard DP, O(len(a)*len(b)) time and space. Polish cues are short (a few
+// dozen runes typically), so this is cheap. Both inputs are rune-sliced first
+// so multibyte CJK characters count as 1 unit each.
+func editDistanceRatio(a, b string) float64 {
+	ra := []rune(a)
+	rb := []rune(b)
+	la := len(ra)
+	lb := len(rb)
+	if la == 0 && lb == 0 {
+		return 0
 	}
-	ra := utf8.RuneCountInString(a)
-	rb := utf8.RuneCountInString(b)
-	if ra+rb == 0 {
-		return 1.0
+	maxLen := la
+	if lb > maxLen {
+		maxLen = lb
 	}
-	fa := runeFreq(a)
-	fb := runeFreq(b)
-	// Multiset intersection: sum of min counts per rune.
-	inter := 0
-	for r, ca := range fa {
-		if cb, ok := fb[r]; ok {
-			if ca < cb {
-				inter += ca
-			} else {
-				inter += cb
+	if maxLen == 0 {
+		return 0
+	}
+	// dp[i][j] = edit distance between ra[:i] and rb[:j]. Use a 1D rolling
+	// array since we only need the previous row.
+	prev := make([]int, lb+1)
+	curr := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		curr[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			curr[j] = del
+			if ins < curr[j] {
+				curr[j] = ins
+			}
+			if sub < curr[j] {
+				curr[j] = sub
 			}
 		}
+		prev, curr = curr, prev
 	}
-	// Multiset union = |a| + |b| - |intersection|.
-	union := ra + rb - inter
-	if union == 0 {
-		return 1.0
-	}
-	return float64(inter) / float64(union)
-}
-
-func runeFreq(s string) map[rune]int {
-	m := make(map[rune]int)
-	for _, r := range s {
-		m[r]++
-	}
-	return m
+	return float64(prev[lb]) / float64(maxLen)
 }
 
 // extractPunctuation returns the punctuation runes of s in order, as a string.

@@ -3,6 +3,8 @@ package polish
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"testing"
@@ -137,60 +139,121 @@ func TestPolish_AppliesValidChanges(t *testing.T) {
 	}
 }
 
-// TestPolish_RejectsLengthViolation: LLM returns a change whose length delta
-// exceeds 2. The whole chunk should fail validation; after retries it falls
-// back to raw text (PartialOptimized=true, zero changes applied).
-func TestPolish_RejectsLengthViolation(t *testing.T) {
+// TestPolish_LengthViolationAppliedAndFlagged: LLM returns a change whose
+// length delta exceeds the old hard threshold (was 2, now maxLenDelta=5 is the
+// warning line). Under the relaxed design (2026-07-21) the change is STILL
+// APPLIED — we trust the LLM by default and surface the warning via
+// HighEditDistanceCount so the admin can spot-check in the diff UI. This is
+// the inversion of the old behavior, which rejected these outright and caused
+// legitimate homophone fixes on short cues to fail repeatedly.
+func TestPolish_LengthViolationAppliedAndFlagged(t *testing.T) {
 	vtt := makeVTT(2)
-	// "line1" (5 chars) → "completely different long text" (way more than +2).
+	// "line1" (5 chars) → "completely different long text" (way more than +5).
+	// This is clearly a rewrite, not a correction — it should be flagged but
+	// STILL APPLIED (admin reviews via diff UI).
 	bad := `{"changes":[{"id":1,"text":"completely different long text"}],"glossary":[]}`
-	// Script the same bad response for every retry attempt so the chunk
-	// exhausts retries and falls back.
-	resps := []fakeResp{}
-	for i := 0; i < maxRetries; i++ {
-		resps = append(resps, fakeResp{content: bad})
-	}
-	llm := &fakeLLM{responses: resps}
+	llm := &fakeLLM{responses: []fakeResp{{content: bad}}}
 
 	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
 	if err != nil {
 		t.Fatalf("Polish: %v", err)
 	}
-	if res.Stats.ChangedCues != 0 {
-		t.Errorf("ChangedCues = %d, want 0 (length violation should be rejected)", res.Stats.ChangedCues)
+	// Change was applied (not rejected).
+	if res.Stats.ChangedCues != 1 {
+		t.Errorf("ChangedCues = %d, want 1 (relaxed design applies the change)", res.Stats.ChangedCues)
 	}
-	if res.Stats.FailedChunks != 1 {
-		t.Errorf("FailedChunks = %d, want 1", res.Stats.FailedChunks)
+	if !strings.Contains(res.PolishedVtt, "completely different long text") {
+		t.Errorf("polished VTT should contain the LLM's text: %s", res.PolishedVtt)
 	}
-	if !res.Stats.PartialOptimized {
-		t.Errorf("PartialOptimized = false, want true")
+	// Chunk did NOT fail (only structural errors fail now).
+	if res.Stats.FailedChunks != 0 {
+		t.Errorf("FailedChunks = %d, want 0 (length violation is no longer a failure)", res.Stats.FailedChunks)
 	}
-	// Polished VTT should equal the original (no changes applied).
-	if !strings.Contains(res.PolishedVtt, "line1") {
-		t.Errorf("fallback should preserve original text: %s", res.PolishedVtt)
+	if res.Stats.PartialOptimized {
+		t.Errorf("PartialOptimized = true, want false")
+	}
+	// But it WAS flagged as high edit distance for admin review.
+	if res.Stats.HighEditDistanceCount != 1 {
+		t.Errorf("HighEditDistanceCount = %d, want 1", res.Stats.HighEditDistanceCount)
 	}
 }
 
-// TestPolish_RejectsLowCharOverlap: the hallucination case — same length,
-// same punctuation, but completely different characters (a rewrite, not a
-// homophone fix). charOverlap gate must catch it.
-func TestPolish_RejectsLowCharOverlap(t *testing.T) {
+// TestPolish_HallucinationAppliedAndFlagged: the rewrite case — same length,
+// same punctuation, but completely different characters. The old charOverlap
+// gate rejected this; the relaxed design applies it and flags it. Rationale:
+// the LLM occasionally rewrites a cue, and we'd rather surface every change
+// for human review than silently drop legitimate fixes that happen to share
+// few characters with the original (the failure mode that motivated the
+// relaxation — see TestChangeAllowed_Relaxed).
+func TestPolish_HallucinationAppliedAndFlagged(t *testing.T) {
 	vtt := makeVTT(2)
-	// "line1" → "abcde": same length (5), no punctuation, but zero shared
-	// chars with "line1" → charOverlap ≈ 0, well below 0.6.
+	// "line1" → "abcde": same length (5), no punctuation, zero shared chars.
 	hallucination := `{"changes":[{"id":1,"text":"abcde"}],"glossary":[]}`
-	resps := []fakeResp{}
-	for i := 0; i < maxRetries; i++ {
-		resps = append(resps, fakeResp{content: hallucination})
-	}
-	llm := &fakeLLM{responses: resps}
+	llm := &fakeLLM{responses: []fakeResp{{content: hallucination}}}
 
 	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
 	if err != nil {
 		t.Fatalf("Polish: %v", err)
 	}
-	if res.Stats.ChangedCues != 0 {
-		t.Errorf("ChangedCues = %d, want 0 (hallucination should fail charOverlap gate)", res.Stats.ChangedCues)
+	// Applied (relaxed design).
+	if res.Stats.ChangedCues != 1 {
+		t.Errorf("ChangedCues = %d, want 1", res.Stats.ChangedCues)
+	}
+	// Flagged for review.
+	if res.Stats.HighEditDistanceCount != 1 {
+		t.Errorf("HighEditDistanceCount = %d, want 1 (hallucination should be flagged)", res.Stats.HighEditDistanceCount)
+	}
+}
+
+// TestPolish_RealHomophoneFixesPass: the regression suite for the bug that
+// motivated the relaxation. These are actual failure cases from production
+// polish runs (see ai_jobs.error in the DB) where the LLM returned CORRECT
+// terminology fixes but the old charOverlap ≥ 0.6 gate rejected them because
+// short cues have low Jaccard even for 1-character swaps. All of these must
+// now apply cleanly with HighEditDistanceCount == 0 (they're normal fixes,
+// not suspicious rewrites).
+func TestPolish_RealHomophoneFixesPass(t *testing.T) {
+	cases := []struct {
+		name string
+		orig string
+		fix  string
+	}{
+		// Real failures from polish job #1 (course 1, math) and #4 (course 2,
+		// xiangqi). The LLM was right; our rules were wrong.
+		{"考算→口算 (2字短词改1字)", "考算", "口算"},
+		{"合不变→和不变 (3字改1字)", "合不变", "和不变"},
+		{"实境制→十进制 (3字术语纠错)", "没有这个实境制", "没有这个十进制"},
+		// Plus normal cases from the glossary candidates — all should pass
+		// without being flagged.
+		{"军→车 (象棋术语,2字改1字)", "出军", "出车"},
+		{"码→马 (象棋术语)", "跳码", "跳马"},
+		{"泡→炮 (象棋术语)", "打泡", "打炮"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			vtt := cubeVTT(1, 0, 900, c.orig)
+			fix := fmt.Sprintf(`{"changes":[{"id":1,"text":%q}],"glossary":[]}`, c.fix)
+			llm := &fakeLLM{responses: []fakeResp{{content: fix}}}
+
+			res, err := Polish(context.Background(), llm, "fake-model",
+				PolishRequest{VttContent: "WEBVTT\n\n" + vtt})
+			if err != nil {
+				t.Fatalf("Polish: %v", err)
+			}
+			if res.Stats.ChangedCues != 1 {
+				t.Errorf("ChangedCues = %d, want 1 (fix should apply)", res.Stats.ChangedCues)
+			}
+			if res.Stats.FailedChunks != 0 {
+				t.Errorf("FailedChunks = %d, want 0", res.Stats.FailedChunks)
+			}
+			if res.Stats.HighEditDistanceCount != 0 {
+				t.Errorf("HighEditDistanceCount = %d, want 0 (this is a normal fix, not a rewrite)",
+					res.Stats.HighEditDistanceCount)
+			}
+			if !strings.Contains(res.PolishedVtt, c.fix) {
+				t.Errorf("polished VTT missing fix %q: %s", c.fix, res.PolishedVtt)
+			}
+		})
 	}
 }
 
@@ -311,81 +374,235 @@ func TestPolish_ChunkLocalIDs(t *testing.T) {
 
 func TestValidateChanges_UnknownIDRejected(t *testing.T) {
 	blk := []cueRef{{Cue: ai.SRTCue{Text: "a"}}, {Cue: ai.SRTCue{Text: "b"}}}
-	err := validateChanges(blk, []CueChange{{ID: 99, Text: "x"}})
+	// Unknown id is a structural failure (LLM lost alignment) — still retries.
+	hed, err := validateChanges(blk, []CueChange{{ID: 99, Text: "x"}})
 	if err == nil {
 		t.Fatal("expected error for unknown id")
 	}
+	if hed != 0 {
+		t.Errorf("highEditDistance = %d, want 0 on structural failure", hed)
+	}
 }
 
-func TestChangeAllowed_LengthBoundary(t *testing.T) {
-	// changeAllowed enforces 3 gates: |Δlen|≤2, same punctuation, and
-	// charOverlap ≥ 0.6 (rune-frequency Jaccard). These cases pin each gate.
+// TestValidateChanges_FlagsSuspiciousButAccepts: the core behavior change.
+// Suspicious changes (length delta > maxLenDelta, punctuation changed, or high
+// Levenshtein ratio) are NO LONGER rejected. They're counted in the returned
+// highEditDistance and the caller applies them — admin reviews via diff UI.
+// Only unknown-id structural corruption returns an error.
+func TestValidateChanges_FlagsSuspiciousButAccepts(t *testing.T) {
+	blk := []cueRef{{Cue: ai.SRTCue{Text: "abcde"}}}
+	// |Δ|=20 (> maxLenDelta=5) → flagged, no error.
+	hed, err := validateChanges(blk, []CueChange{{ID: 1, Text: "completely different long text"}})
+	if err != nil {
+		t.Fatalf("expected no error for suspicious change, got %v", err)
+	}
+	if hed != 1 {
+		t.Errorf("highEditDistance = %d, want 1", hed)
+	}
+
+	// Punctuation changed → flagged, no error.
+	blk2 := []cueRef{{Cue: ai.SRTCue{Text: "你好。"}}}
+	hed, err = validateChanges(blk2, []CueChange{{ID: 1, Text: "你好！"}})
+	if err != nil {
+		t.Fatalf("expected no error for punctuation change, got %v", err)
+	}
+	if hed != 1 {
+		t.Errorf("highEditDistance = %d, want 1 (punctuation change)", hed)
+	}
+
+	// Normal homophone fix → no flag, no error.
+	blk3 := []cueRef{{Cue: ai.SRTCue{Text: "考算"}}}
+	hed, err = validateChanges(blk3, []CueChange{{ID: 1, Text: "口算"}})
+	if err != nil {
+		t.Fatalf("expected no error for normal fix, got %v", err)
+	}
+	if hed != 0 {
+		t.Errorf("highEditDistance = %d, want 0 (normal homophone fix)", hed)
+	}
+
+	// Empty changes → zero flags, no error.
+	hed, err = validateChanges(blk3, []CueChange{})
+	if err != nil || hed != 0 {
+		t.Errorf("empty changes: hed=%d err=%v, want 0/nil", hed, err)
+	}
+}
+
+// TestIsHighEditDistance pins the three triggers independently. Each case is
+// crafted to trip exactly one trigger so a regression in any single check is
+// obvious.
+func TestIsHighEditDistance(t *testing.T) {
 	cases := []struct {
 		name string
 		orig string
 		text string
 		want bool
 	}{
-		// Length gate (|Δlen| ≤ 2):
-		{"delta 0 same text", "abcde", "abcde", true},
-		{"delta 2 shorter allowed by len", "abcde", "abc", true},  // |Δ|=2, overlap 1.0 → pass
-		{"delta 3 rejected by len", "abcde", "ab", false},          // |Δ|=3 → reject
-		// Char-overlap gate (catches hallucinations):
-		// "abcde"→"axcde": same len, 4/5 shared runes → overlap 0.8 → pass.
-		{"1-char swap high overlap", "abcde", "axcde", true},
-		// "abcde"→"abcdf": same len, 4/5 shared → overlap 4/6≈0.67 → pass.
-		{"1-char swap high overlap 2", "abcde", "abcdf", true},
-		// "abcde"→"abxye": shared {a,b,e}=3, union=5+5-3=7 → 3/7≈0.43 → reject.
-		// (Multiset Jaccard penalizes replaced chars on both sides.)
-		{"2-char swap below bar", "abcde", "abxye", false},
-		// "abcde"→"wxyzf": same len, 1/5 shared → overlap 0.25 → reject.
-		{"low overlap rejected", "abcde", "wxyzf", false},
-		// Punctuation gate (punctuation sequence must match):
-		{"punct added rejected", "你好", "你好。", false},
-		{"punct changed rejected", "你好。", "你好！", false},
-		// Homophone-style fix (the real use case): swap 1 of 3 chars.
-		// "车马炮"→"车马包": shared {车,马}=2, union=4 → overlap 0.5 < 0.6 → REJECT.
-		// This is INTENTIONAL: a 1-of-3 swap doesn't pass the 0.6 bar, so very
-		// short cues with a single-char fix get rejected. The polish prompt
-		// sends full cue text (usually 10+ chars), so real fixes clear the bar
-		// easily; this only bites artificial 3-char cues.
-		{"3-char 1-swap below bar", "车马炮", "车马包", false},
-		// Empty both: trivially allowed.
-		{"empty both", "", "", true},
+		// All-clear cases (normal homophone / terminology fixes):
+		{"identical", "abcde", "abcde", false},
+		{"1-char homophone swap", "考算", "口算", false},
+		{"3-char term fix", "合不变", "和不变", false},
+		{"longer sentence 1-char fix", "没有这个实境制", "没有这个十进制", false},
+		{"3-char delta (not flagged)", "abcde", "abcdefgh", false}, // |Δ|=3 ≤ 5, ratio low
+
+		// Trigger 1: |Δlen| > maxLenDelta (5). Boundary |Δ|=5 is NOT flagged
+		// (strict >); |Δ|=6 is.
+		{"delta 5 boundary not flagged", "abcde", "abcdefghij", false},  // |Δ|=5
+		{"delta 6 flagged", "abcde", "abcdefghijk", true},                // |Δ|=6
+
+		// Trigger 2: punctuation sequence changed.
+		{"punct added flagged", "你好", "你好。", true},
+		{"punct swapped flagged", "你好。", "你好！", true},
+
+		// Trigger 3: Levenshtein/maxLen > 0.5 (same length, big rewrite).
+		{"5-char rewrite flagged", "abcde", "wxyzf", true}, // dist 5, ratio 1.0
+		{"3-char 1-swap not flagged", "abc", "axc", false}, // dist 1, ratio 0.33
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := changeAllowed(c.orig, c.text)
+			got := isHighEditDistance(c.orig, c.text)
 			if got != c.want {
-				t.Errorf("changeAllowed(%q,%q) = %v, want %v", c.orig, c.text, got, c.want)
+				t.Errorf("isHighEditDistance(%q,%q) = %v, want %v", c.orig, c.text, got, c.want)
 			}
 		})
 	}
 }
 
-func TestCharOverlap(t *testing.T) {
+// TestEditDistanceRatio spot-checks the Levenshtein computation against known
+// values. This is the math underlying the HighEditDistanceCount stat — a
+// regression here would silently miscount suspicious changes. The randomized
+// cross-check in TestEditDistanceRatio_CrossCheckReference is the stronger
+// guarantee; this test pins specific cases so a regression points at the exact
+// input shape that broke.
+func TestEditDistanceRatio(t *testing.T) {
 	cases := []struct {
+		name string
 		a, b string
 		want float64
 	}{
-		{"abc", "abc", 1.0},
-		{"", "", 1.0},
-		{"abcde", "abcde", 1.0},
-		{"abc", "xyz", 0.0},
-		// hallucination case from PoC: shared 2 chars out of ~14 → low
-		{"对方这个棋", "这个棋等一下", 0.0}, // adjusted expectation
+		// Boundaries — the rolling-array DP is most likely to misbehave here.
+		{"both empty", "", "", 0},
+		{"a empty b nonempty", "", "abc", 1.0},        // 3 insertions / maxLen 3
+		{"a nonempty b empty", "abc", "", 1.0},         // 3 deletions / maxLen 3
+		{"single char same", "a", "a", 0},
+		{"single char diff", "a", "b", 1.0},
+		{"single vs double", "a", "ab", 0.5},           // 1 insertion / maxLen 2
+		// Identical strings of varying length (the DP should short-circuit via
+		// the diagonal; a buggy cost=1 substitution branch would return >0).
+		{"identical 3", "abc", "abc", 0},
+		{"identical 10", "abcdefghij", "abcdefghij", 0},
+		// Classic textbook cases.
+		{"abc abx 1-sub", "abc", "abx", 1.0 / 3},
+		{"abc xyz full-rewrite", "abc", "xyz", 1.0},
+		{"abc abcde 2-ins", "abc", "abcde", 2.0 / 5},
+		// Asymmetric lengths — exercises the rolling array swap + the maxLen
+		// denominator choice (max, not min or sum).
+		{"short vs long", "ab", "abcdefgh", 6.0 / 8},   // 6 insertions / maxLen 8
+		{"long vs short", "abcdefgh", "ab", 6.0 / 8},   // symmetric (deletions)
+		// CJK multibyte: each rune counts as 1 unit (not 3 bytes). This is the
+		// actual polish use case — a byte-based DP would give wildly wrong ratios.
+		{"考算 口算", "考算", "口算", 0.5},               // 1 of 2 runes changed
+		{"合不变 和不变", "合不变", "和不变", 1.0 / 3},
+		{"车马炮 车马包", "车马炮", "车马包", 1.0 / 3},     // 1 of 3 runes
+		// Emoji / astral plane — each codepoint is 1 rune via []rune. A byte-based
+		// DP would see 4 bytes per emoji and miscount.
+		{"emoji same", "😀ab", "😀ab", 0},
+		{"emoji swap", "😀ab", "😃ab", 1.0 / 3},
 	}
 	for _, c := range cases {
-		got := charOverlap(c.a, c.b)
-		// only assert exact for the trivial cases; for the mixed one just
-		// assert it's in a sane range.
-		if c.a == "abc" && c.b == "xyz" && got != 0 {
-			t.Errorf("charOverlap(%q,%q) = %v, want 0", c.a, c.b, got)
+		t.Run(c.name, func(t *testing.T) {
+			got := editDistanceRatio(c.a, c.b)
+			// Float compare with tolerance.
+			if got < c.want-0.001 || got > c.want+0.001 {
+				t.Errorf("editDistanceRatio(%q,%q) = %v, want %v", c.a, c.b, got, c.want)
+			}
+		})
+	}
+}
+
+// referenceLevenshtein is a naive recursive Levenshtein used ONLY as a
+// cross-check oracle for the optimized DP in editDistanceRatio. It's the
+// textbook 3-way-min recursion with no memoization — exponential, but
+// correct by construction (and obvious enough to read as a spec). The DP
+// under test must agree with it on every input; a disagreement proves the
+// rolling-array implementation has a bug (stale cell, off-by-one, wrong cost).
+//
+// We compute it over RUNES (not bytes) to match editDistanceRatio's unit.
+func referenceLevenshtein(a, b []rune) int {
+	if len(a) == 0 {
+		return len(b)
+	}
+	if len(b) == 0 {
+		return len(a)
+	}
+	if a[0] == b[0] {
+		return referenceLevenshtein(a[1:], b[1:])
+	}
+	del := 1 + referenceLevenshtein(a[1:], b)
+	ins := 1 + referenceLevenshtein(a, b[1:])
+	sub := 1 + referenceLevenshtein(a[1:], b[1:])
+	min := del
+	if ins < min {
+		min = ins
+	}
+	if sub < min {
+		min = sub
+	}
+	return min
+}
+
+// TestEditDistanceRatio_CrossCheckReference is the real correctness guarantee
+// for the DP. It generates a few thousand random string pairs (ASCII + CJK
+// mixes, varied lengths) and asserts editDistanceRatio's result matches a
+// naive recursive Levenshtein / maxLen. A rolling-array bug that passes the
+// hand-picked cases above will almost certainly fail here — the random inputs
+// hit cell combinations the hand cases don't.
+//
+// Kept deterministic via a fixed seed so a failure reproduces. The case count
+// is tuned to run in well under a second (recursion is exponential, so we
+// keep individual strings short — ≤8 runes — but draw many pairs).
+func TestEditDistanceRatio_CrossCheckReference(t *testing.T) {
+	// Alphabet mixes ASCII + CJK so we exercise the rune (not byte) counting
+	// under realistic polish-like inputs.
+	const alphabet = "abc车马炮口算和考😀😃"
+	rng := rand.New(rand.NewSource(1)) // fixed seed → reproducible
+	const numCases = 3000
+	maxLenObserved := 0
+	for i := 0; i < numCases; i++ {
+		// Draw lengths in [0, 8] — short enough that the exponential reference
+		// stays fast, long enough to exercise multi-row DP iterations.
+		la := rng.Intn(9)
+		lb := rng.Intn(9)
+		if la+lb > maxLenObserved {
+			maxLenObserved = la + lb
 		}
-		if c.a == c.b && c.a != "" && got != 1.0 {
-			t.Errorf("charOverlap(%q,%q) = %v, want 1.0", c.a, c.b, got)
+		a := randRunes(rng, la, alphabet)
+		b := randRunes(rng, lb, alphabet)
+		want := referenceLevenshtein(a, b)
+		maxLen := la
+		if lb > maxLen {
+			maxLen = lb
+		}
+		wantRatio := 0.0
+		if maxLen > 0 {
+			wantRatio = float64(want) / float64(maxLen)
+		}
+		got := editDistanceRatio(string(a), string(b))
+		if got < wantRatio-0.001 || got > wantRatio+0.001 {
+			t.Errorf("case %d: editDistanceRatio(%q,%q) = %v, reference = %v (lev=%d maxLen=%d)",
+				i, string(a), string(b), got, wantRatio, want, maxLen)
 		}
 	}
+}
+
+// randRunes draws n runes (with replacement) from the given alphabet. Used by
+// the cross-check test to build random inputs.
+func randRunes(rng *rand.Rand, n int, alphabet string) []rune {
+	runes := []rune(alphabet)
+	out := make([]rune, n)
+	for i := range out {
+		out[i] = runes[rng.Intn(len(runes))]
+	}
+	return out
 }
 
 // --- helpers ----------------------------------------------------------------

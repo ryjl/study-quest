@@ -531,7 +531,33 @@ export，才能让动态链接器看到。
 - 块重叠 3 cue（前后各 1.5 句上下文）
 - 并发 3 路（用户要求，很多中转站限速严格）
 - MaxTokens 8000
-- 单块失败 3 次后用原文，标 `partial_optimized`
+- 单块 3 次重试（网络/parse 失败时）；仍失败则整 job 标 `failed`（2026-07-21 改，
+  详见下方「验证策略与 partial 语义」），不写回字幕、不链式推进 segment
+
+**验证策略与 partial 语义**（2026-07-21 重构）：
+
+早期版本用三道硬规则拦 LLM 输出（长度差 ≤ 2、标点不变、字符重合度 Jaccard ≥ 0.6），
+任何一条不过就整 chunk 重试。这导致**正常术语纠错被误杀**——真实数据里 `考算→口算`、
+`合不变→和不变` 这类 2-3 字短词改 1 字，Jaccard 天然 < 0.6，被规则反复拒、最终整 job
+partial。而 glossary 候选全是真术语（车/炮/马/被减数/位值原理…），LLM 本身没错。
+
+重构后改为**放行 + 信息性提示**：
+- 验证只剩**结构校验**（JSON 能 parse、id 在 chunk 范围内）—— 这两个失败才重试
+- 长度差 > 5、标点变化、Levenshtein/maxLen > 0.5 的条目**照常应用**，只计入
+  `PolishStats.HighEditDistanceCount` 作为信息性统计（job detail 里显示
+  `high_edit_distance=N`，提示 admin 去字幕版本 UI 复核）
+- 审核职责移到 UI：字幕行的「对比」视图（润色版/原始版 toggle + cue 级 diff 高亮 +
+  token 级 +/- 色块）让 admin 一眼看出 LLM 改了什么、改得对不对
+
+**partial 语义收窄**：`PartialOptimized=true`（有 chunk 耗尽重试仍失败）现在标 job
+**failed**，不再标 done。partial 时**不写回字幕**（保持 source=whisper 原状，避免半成品
+污染下游）、**不链式 segment**。admin 可 RetryJob 重跑整条，或 SkipPolish 跳过走原版。
+partial 的唯一成因现在是「LLM 没返回有效结果」（网络/parse 失败），不再包含「返回了但
+规则不信」（因为不再拦截）。
+
+**llm_optimized 一致性**：`isPolishableSource` 单一真源，入队（EnqueuePolish）和执行
+（runPolishJob）共享。允许 whisper（首次润色）和 llm_optimized（re-polish，admin 接受
+新 glossary 后重跑）。re-polish 从 `RawVttContent`（不可变快照）重新开始，不会 drift 累积。
 
 **时间戳保证**：后端维护 `id → 时间戳` 映射，LLM 只输出 `id → 修正文本`。
 时间戳根本不进 prompt，物理上不会错。

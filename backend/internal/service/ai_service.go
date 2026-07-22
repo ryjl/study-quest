@@ -256,6 +256,13 @@ type aiService struct {
 	// subjectRepo reads Subject rows for the polish job's TermDict lookup
 	// (Course.EffectiveTermDict takes a Subject). nil in tests that don't run polish.
 	subjectRepo repository.SubjectRepository
+	// polishLLMOverride is a TEST-ONLY seam: when non-nil, runPolishJob uses
+	// this provider directly instead of resolving through `resolver`. This lets
+	// service-level tests drive the full polish→writeback→chain path with a
+	// fake LLM (the real resolver only builds openai_compat HTTP clients, so it
+	// can't be stubbed without a live relay). Production leaves this nil and
+	// the resolver path runs unchanged. See ai_service_polish_test.go.
+	polishLLMOverride ai.LLMProvider
 }
 
 // aiUserCourseLister 是 aiService 对 userRepo 的窄依赖:只暴露 advice 工具需要的
@@ -475,16 +482,17 @@ func (s *aiService) EnqueuePolish(episodeIDs []uint) ([]uint, map[uint]string, e
 			skipped[epID] = "课时不存在"
 			continue
 		}
-		// Must have a whisper-sourced primary subtitle to polish. embedded/
-		// manual tracks are human-corrected; polishing them is a no-op at best
-		// and confusing at worst (the admin didn't ask whisper to re-transcribe).
-		// llm_optimized IS allowed (re-polish with richer TermDict).
+		// Must have a polishable-source primary subtitle. The isPolishableSource
+		// helper is shared with runPolishJob so enqueue and execution agree on
+		// exactly which sources are admissible — the prior inline check here
+		// admitted llm_optimized while runPolishJob's separate check rejected
+		// it, leaving re-polish jobs stuck in queued→skipped loops.
 		sub, _ := s.episodeRepo.GetSubtitle(epID)
 		if sub == nil {
 			skipped[epID] = "无字幕"
 			continue
 		}
-		if sub.Source != "whisper" && sub.Source != "llm_optimized" {
+		if !isPolishableSource(sub.Source) {
 			skipped[epID] = "字幕来源为 " + sub.Source + "（仅 whisper 转录可润色）"
 			continue
 		}
@@ -558,6 +566,7 @@ func (s *aiService) EnqueueSegmentForCourse(courseID uint) (int, error) {
 func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	ep, err := s.episodeRepo.FindByID(episodeID)
 	if err != nil || ep == nil {
+		log.Printf("AI: OnSubtitleCompleted ep %d: episode lookup failed, aborting chain", episodeID)
 		return // can't do anything without the episode
 	}
 	// Only auto-segment if the course has AI enabled. This is the gate that keeps
@@ -565,6 +574,7 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	// subtitles arrive.
 	course, err := s.courseRepo.FindByID(ep.CourseID)
 	if err != nil || course == nil {
+		log.Printf("AI: OnSubtitleCompleted ep %d: course %d lookup failed, aborting chain", episodeID, ep.CourseID)
 		return
 	}
 	if !course.AISummaryEnabled && !course.AIQuizEnabled {
@@ -581,12 +591,20 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	// segment (which will itself skip cleanly on no-embedder) rather than
 	// leave the chain stuck on a job that can't succeed yet.
 	sub, _ := s.episodeRepo.GetSubtitle(episodeID)
+	// shouldPolish: only polish whisper-sourced subtitles here. This is the
+	// "fresh transcript just landed" entry point, so sub.Source is normally
+	// "whisper" anyway — but using isPolishableSource would be wrong because
+	// it also admits "llm_optimized", and a re-polish on a just-completed
+	// subtitle makes no sense (Complete writes source=whisper, never
+	// llm_optimized). Keep the explicit "whisper" check; the helper is for
+	// the EnqueuePolish/runPolishJob pair where re-polish IS the point.
 	shouldPolish := sub != nil && sub.Source == "whisper" && s.resolver != nil
-	// Dedup guard target depends on the branch: polish branch dedups on polish
-	// jobs (we're about to enqueue one), segment branch on segment jobs.
-	// Either way, if the relevant next step is already queued/processing we
-	// don't stack another. The chain (polish→segment, or direct segment) is
-	// idempotent in result, so a duplicate only wastes budget.
+	// Decision log: every input that could flip shouldPolish is named on one line.
+	// This hook had ZERO observability before — the 2026-07-22 reaper-timezone bug
+	// (jobs reaped every 5 min) took hours to diagnose precisely because there was
+	// no log saying "I decided to enqueue polish" vs "I fell through to segment".
+	log.Printf("AI: OnSubtitleCompleted ep %d: source=%q resolverNil=%v → shouldPolish=%v",
+		episodeID, subSourceForLog(sub), s.resolver == nil, shouldPolish)
 	if shouldPolish {
 		if s.hasPendingJob("polish", episodeID) {
 			return
@@ -605,6 +623,16 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 		return
 	}
 	s.enqueueSegmentForPolish(episodeID, ep.CourseID)
+}
+
+// subSourceForLog returns the subtitle's source for logging, or "<nil>" when
+// the subtitle pointer is nil. Kept as a helper so the OnSubtitleCompleted log
+// line stays readable (a bare sub.Source on a nil sub would panic).
+func subSourceForLog(sub *model.Subtitle) string {
+	if sub == nil {
+		return "<nil>"
+	}
+	return sub.Source
 }
 
 // hasPendingJob reports whether a queued/processing job of jobType exists for

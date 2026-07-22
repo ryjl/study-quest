@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/ai/polish"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
@@ -39,27 +40,47 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		s.failJob(job, "no primary subtitle for this episode")
 		return
 	}
-	if sub.Source != "whisper" {
-		// Shouldn't happen (OnSubtitleCompleted gates on source), but if a
-		// misrouted job slips through, skip it cleanly rather than polishing
-		// a track that's already human-corrected. This is NOT a failure —
+	if !isPolishableSource(sub.Source) {
+		// Shouldn't happen (EnqueuePolish and OnSubtitleCompleted gate on
+		// source via the same isPolishableSource helper), but if a misrouted
+		// job slips through, skip it cleanly rather than polishing a track
+		// that's human-corrected (embedded/manual). This is NOT a failure —
 		// chain to segment so downstream proceeds.
+		//
+		// Note (2026-07-21): isPolishableSource now accepts BOTH "whisper"
+		// (raw transcript) AND "llm_optimized" (already polished once). The
+		// latter is the re-polish path — admin accepts new glossary terms
+		// → Course.TermDict grows → they want the new terminology applied
+		// to an already-polished episode. Re-polish is drift-safe because
+		// polish reads RawVttContent (the immutable whisper snapshot), not
+		// the current VttContent. See model.Subtitle.RawVttContent doc.
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped",
 			"source="+sub.Source+" not eligible for polish", nil)
 		s.enqueueSegmentForPolish(episodeID, courseID)
 		return
 	}
 
-	llm, err := s.resolver.ResolveChatByPurpose("polish")
-	if err != nil {
-		// Provider not configured / misconfigured. Block — admin fixes the
-		// provider config and retries. We do NOT fall through to segment,
-		// because the whole point of polish is to fix the raw transcript
-		// before AI consumes it.
-		s.failJob(job, "resolve chat provider: "+err.Error())
-		return
+	// Resolve the chat provider. The polishLLMOverride seam (non-nil only in tests) lets a
+	// service-level test drive this path with a fake LLM instead of a real relay; production leaves it
+	// nil and falls through to the resolver.
+	var llm ai.LLMProvider
+	var modelName string
+	if s.polishLLMOverride != nil {
+		llm = s.polishLLMOverride
+		modelName = "test-model"
+	} else {
+		resolved, err := s.resolver.ResolveChatByPurpose("polish")
+		if err != nil {
+			// Provider not configured / misconfigured. Block — admin fixes the
+			// provider config and retries. We do NOT fall through to segment,
+			// because the whole point of polish is to fix the raw transcript
+			// before AI consumes it.
+			s.failJob(job, "resolve chat provider: "+err.Error())
+			return
+		}
+		llm = resolved
+		modelName = s.resolver.ChatModelNameByPurpose("polish")
 	}
-	modelName := s.resolver.ChatModelNameByPurpose("polish")
 
 	// Build the polish request: TermDict comes from Course + Subject merge
 	// (Course.EffectiveTermDict). Subject is also passed to the LLM as domain
@@ -119,11 +140,71 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		return
 	}
 
-	// Persist the polished subtitle. We write ONLY VttContent + Optimized +
-	// Source — RawVttContent stays empty here so episodeRepo.SaveSubtitle's
-	// "non-empty only" guard leaves the original snapshot untouched. IsPrimary
-	// is echoed back from the loaded sub so the upsert doesn't accidentally
-	// demote the primary track.
+	// Build the human-readable detail string. Shared by both the partial-fail
+	// and full-success paths so the admin sees consistent telemetry regardless
+	// of outcome. Always includes: changed/total cues, glossary count, cost,
+	// high-edit-distance count (the new informational stat from the 2026-07-21
+	// validation relaxation — how many applied changes the admin should
+	// spot-check in the diff UI).
+	detail := fmt.Sprintf("polished: %d/%d cues changed, %d glossary candidates, high_edit_distance=%d, cost≈%s",
+		result.Stats.ChangedCues, result.Stats.TotalCues, len(result.Glossary),
+		result.Stats.HighEditDistanceCount, result.Stats.Duration.Truncate(time.Second))
+
+	// Partial failure: at least one chunk exhausted retries without producing
+	// a valid response (network error, JSON parse failure, or structural
+	// corruption). This is the ONLY failure mode left after the 2026-07-21
+	// validation relaxation — "suspicious but well-formed" changes no longer
+	// fail, they apply with a high_edit_distance flag. So a partial now means
+	// "the LLM genuinely didn't return usable output for some chunks", not
+	// "we rejected the LLM's output as too aggressive".
+	//
+	// Behavior change (2026-07-21): partial now FAILS the job instead of
+	// marking it done. Rationale: a half-polished subtitle (some chunks raw,
+	// some polished) is worse than either pure-raw or pure-polished — it
+	// produces inconsistent terminology downstream and the admin has no clean
+	// way to tell which cues were corrected. Failing forces a conscious
+	// decision: RetryJob (re-run with the same/fixed provider) or SkipPolish
+	// (give up on polish, fall back to the raw subtitle via segment chain).
+	// We do NOT write back the partial result, so the subtitle stays at its
+	// pre-polish state (source=whisper, optimized=false) and no downstream
+	// segment/summary runs off a contaminated transcript.
+	if result.Stats.PartialOptimized {
+		// Append per-chunk failure detail so the admin can see WHY each chunk
+		// failed (parse error vs network vs unknown-id). Capped + sorted the
+		// same way the old done-with-partial path did it.
+		detail += fmt.Sprintf(" (partial: %d/%d chunks failed", result.Stats.FailedChunks, result.Stats.ChunkCount)
+		type failEntry struct {
+			idx int
+			err string
+		}
+		entries := make([]failEntry, 0, len(result.Stats.FailedChunkErrors))
+		for idx, e := range result.Stats.FailedChunkErrors {
+			// Truncate by RUNE count, not bytes — error strings carry Chinese
+			// (ffmpeg/relay messages localized) and a byte cut would produce
+			// invalid UTF-8 mid-character.
+			if rs := []rune(e); len(rs) > 120 {
+				e = string(rs[:120]) + "…"
+			}
+			entries = append(entries, failEntry{idx, e})
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
+		if len(entries) > 0 {
+			parts := make([]string, len(entries))
+			for i, e := range entries {
+				parts[i] = fmt.Sprintf("chunk#%d: %s", e.idx, e.err)
+			}
+			detail += "; " + strings.Join(parts, "; ")
+		}
+		detail += ")"
+		s.failJob(job, detail)
+		return
+	}
+
+	// Full success: persist the polished subtitle. We write ONLY VttContent +
+	// Optimized + Source — RawVttContent stays empty here so episodeRepo.
+	// SaveSubtitle's "non-empty only" guard leaves the original snapshot
+	// untouched. IsPrimary is echoed back from the loaded sub so the upsert
+	// doesn't accidentally demote the primary track.
 	if err := s.episodeRepo.SaveSubtitle(&model.Subtitle{
 		ID:            sub.ID,
 		EpisodeID:     sub.EpisodeID,
@@ -148,47 +229,46 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		}
 	}
 
-	detail := fmt.Sprintf("polished: %d/%d cues changed, %d glossary candidates, cost≈%s",
-		result.Stats.ChangedCues, result.Stats.TotalCues, len(result.Glossary),
-		result.Stats.Duration.Truncate(time.Second))
-	if result.Stats.PartialOptimized {
-		// List which chunks failed + their last error, capped so a pathological
-		// relay doesn't blow up the error column. The chunk index is 0-based
-		// and maps to a contiguous cue range, so the admin can tell which part
-		// of the subtitle wasn't polished.
-		detail += fmt.Sprintf(" (partial: %d/%d chunks failed", result.Stats.FailedChunks, result.Stats.ChunkCount)
-		// Collect + sort by chunk idx NUMERICALLY (not lexically — "chunk#10"
-		// would sort before "chunk#2" under string sort). Cap each error at 120
-		// runes so one verbose parse failure doesn't dominate the job detail.
-		type failEntry struct {
-			idx int
-			err string
-		}
-		entries := make([]failEntry, 0, len(result.Stats.FailedChunkErrors))
-		for idx, e := range result.Stats.FailedChunkErrors {
-			// Truncate by RUNE count, not bytes — error strings carry Chinese
-			// (ffmpeg/relay messages localized) and a byte cut would produce
-			// invalid UTF-8 mid-character.
-			if rs := []rune(e); len(rs) > 120 {
-				e = string(rs[:120]) + "…"
-			}
-			entries = append(entries, failEntry{idx, e})
-		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
-		if len(entries) > 0 {
-			parts := make([]string, len(entries))
-			for i, e := range entries {
-				parts[i] = fmt.Sprintf("chunk#%d: %s", e.idx, e.err)
-			}
-			detail += "; " + strings.Join(parts, "; ")
-		}
-		detail += ")"
+	// Surface high-edit-distance warning in the detail even on full success,
+	// so the admin knows how many cues to review in the subtitle diff UI.
+	// (The count is also in the detail prefix above; this is a more visible
+	// call-out when the number is non-zero.) Plain-text marker (not emoji) per the
+	// project's no-emoji convention — job detail is a text field, not a lucide icon.
+	if result.Stats.HighEditDistanceCount > 0 {
+		detail += fmt.Sprintf(" [注意] %d cue(s) 改动较大，建议在字幕版本 UI 复核",
+			result.Stats.HighEditDistanceCount)
 	}
 	s.contentRepo.UpdateJobStatus(job.ID, "done", detail, nil)
 
 	// Chain to segment NOW that the polished subtitle is in place. Mirrors
 	// runSegmentJob's chain-to-summary: same priority, same hasPendingJob guard.
 	s.enqueueSegmentForPolish(episodeID, courseID)
+}
+
+// isPolishableSource is the single source of truth for which subtitle sources
+// the polish pipeline will run on. Used by BOTH the enqueue path
+// (EnqueuePolish, to decide whether to admit a job) AND the execution path
+// (runPolishJob, to decide whether to skip a claimed job). Centralizing this
+// eliminates the prior contradiction where EnqueuePolish admitted
+// source=llm_optimized (for re-polish with a richer TermDict) but runPolishJob
+// rejected it — leaving re-polish jobs in a "queued → skipped" loop that
+// confused admins (see "source=llm_optimized not eligible for polish" in
+// ai_jobs.error).
+//
+// Accepted sources:
+//   - "whisper"        — the primary case: raw machine transcript full of
+//                        homophone errors, exactly what polish exists to fix.
+//   - "llm_optimized"  — re-polish: an episode already polished once, now
+//                        being re-run because admin accepted new glossary
+//                        terms. Re-polish is drift-safe because runPolishJob
+//                        reads RawVttContent (immutable whisper snapshot), so
+//                        the LLM never sees its own prior output.
+//
+// Rejected sources:
+//   - "embedded" / "manual" — human-corrected tracks; polishing them is a
+//                             no-op at best and confusing at worst.
+func isPolishableSource(source string) bool {
+	return source == "whisper" || source == "llm_optimized"
 }
 
 // enqueueSegmentForPolish chains a segment job after a successful polish (or
