@@ -15,6 +15,8 @@ import { WatchHistory } from './pages/WatchHistory';
 import { SubtitleQueue } from './pages/SubtitleQueue';
 import { AIConsole } from './pages/AIConsole';
 import { Logs } from './pages/Logs';
+import { WrongBook } from './pages/WrongBook';
+import { Exam } from './pages/Exam';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -56,6 +58,8 @@ export default function App() {
         <Route path="ai-workflow" element={<Navigate to="/admin/ai-console?tab=jobs" replace />} />
         <Route path="ai-user" element={<Navigate to="/admin/ai-console?tab=users" replace />} />
         <Route path="ai-console" element={<AIConsole />} />
+        <Route path="wrong-book" element={<WrongBook />} />
+        <Route path="exam" element={<Exam />} />
         <Route path="reading-room" element={<ReadingRoom />} />
         <Route path="classification" element={<Classification />} />
         <Route path="badges" element={<Badges />} />

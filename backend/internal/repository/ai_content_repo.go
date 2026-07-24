@@ -139,6 +139,20 @@ type AIContentRepository interface {
 	// answer/memory 之前抢,抢不到直接拒。详见实现注释。
 	TryMarkQuizSubmitted(quizID uint, at time.Time) (bool, error)
 
+	// ── 错题本 + 课程考试 抽题层 (见 question_pool_repo.go) ──
+	// ListWrongAnswersByUserCourse 列出某用户在某课程下全部做错的题(跨 episode、跨
+	// quiz generation)。错题本「按课程」视图的数据源。见 question_pool_repo.go 注释。
+	ListWrongAnswersByUserCourse(userID, courseID uint) ([]WrongBookRow, error)
+	// ListWrongAnswersByUser 列出某用户的全部错题(全平台),可按 subject/course/chunk
+	// 过滤(0 = 不过滤)。错题本顶层视图的数据源。
+	ListWrongAnswersByUser(userID, subjectID, courseID, chunkID uint) ([]WrongBookRow, error)
+	// ListQuestionsByCourseForExam 取某课程下全部 questions(跨 episode、跨用户)作为
+	// 考试抽题池。只取有 chunk_id 的题(合成题排除)。供 exam_selector 加权抽题。
+	ListQuestionsByCourseForExam(courseID uint) ([]ExamPoolQuestion, error)
+	// ListChunksByCourseForExam 取某课程下全部 subtitle chunks(跨 episode),供抽题
+	// 退化用或给 quizzer agent 做课程级出题上下文。
+	ListChunksByCourseForExam(courseID uint) ([]model.ContentChunk, error)
+
 	// ── knowledge_memories (Phase C feedback loop) ──
 	// GetMasteries returns a user's per-chunk mastery for an episode (the agent
 	// reads this to find weak points). Empty for a new student.

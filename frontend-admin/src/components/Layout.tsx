@@ -15,6 +15,8 @@ import {
   Users,
   Calendar,
   Bot,
+  BookX,
+  GraduationCap,
   Tags,
   Medal,
   Package,
@@ -70,6 +72,10 @@ const NAV_GROUPS: NavGroup[] = [
       // 2026-07-19 集中化:原 AI Workflow + AI 用户视图 + CourseModal 里的 AI 配置 +
       // Settings 里的 Provider 全部并入这个 AI 控制台。各功能用 ?tab= 切换。
       { to: '/admin/ai-console', label: 'AI 控制台', icon: <Bot size={16} /> },
+      // 错题本观测(TODO.md P0):学生做错的题聚合,高频错题榜 + 科目弱点分布。
+      { to: '/admin/wrong-book', label: '错题本', icon: <BookX size={16} /> },
+      // 课程考试观测(TODO.md P0):阶段综合测评统计 + 题源质量对比。
+      { to: '/admin/exam', label: '课程考试', icon: <GraduationCap size={16} /> },
     ],
   },
   {

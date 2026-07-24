@@ -106,6 +106,11 @@ type AdminHandler interface {
 	ResetSubtitleJob(c *gin.Context)
 	SubtitleJobStats(c *gin.Context)
 
+	// 错题本观测(TODO.md P0)。
+	WrongBookStats(c *gin.Context)
+	// 课程考试观测(TODO.md P0)。
+	ExamStats(c *gin.Context)
+
 	// Attachments + Uploads
 	ScanAttachments(c *gin.Context)
 	UploadImage(c *gin.Context)

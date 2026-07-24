@@ -103,6 +103,21 @@ func RegisterRoutes(
 		v1Restricted.GET("/subjects/:id/ai-advice", ai.GetSubjectAdvice)
 		// Phase D — 课程级总结(course-unique 纯内容总结,客户端只读,admin 触发生成)。
 		v1Restricted.GET("/courses/:id/ai-summary", ai.GetCourseSummary)
+		// 错题本(TODO.md P0)。数据按 user_id 键存,只需登录(同 advice course/subject 级)。
+		// 注意路由顺序:/wrong-book/redo 和 /wrong-book/redo/submit 必须在 /wrong-book/:id
+		// 之前注册,否则 gin 会把 "redo" 当成 :id。这里把具体路径放前,占位放后。
+		v1Restricted.GET("/wrong-book/redo", ai.GetWrongBookRedo)
+		v1Restricted.POST("/wrong-book/redo/submit", ai.SubmitWrongBookRedo)
+		v1Restricted.GET("/wrong-book", ai.GetWrongBook)
+		v1Restricted.POST("/wrong-book/:id/master", ai.MarkWrongBookMastered)
+		v1Restricted.POST("/wrong-book/:id/unmaster", ai.MarkWrongBookMastered)
+		// 课程考试(TODO.md P0)。start/submit 走 canAccessCourse 门;status/gate 只需登录。
+		// 路由顺序:/courses/:id/exam/status 和 /start 必须在 /courses/:id/exam 前
+		// 注册(gin 静态段优先于占位,但显式排前更清晰)。
+		v1Restricted.GET("/courses/:id/exam/status", ai.GetExamStatus)
+		v1Restricted.POST("/courses/:id/exam/start", ai.StartExam)
+		v1Restricted.GET("/courses/:id/exam", ai.GetActiveExam)
+		v1Restricted.POST("/exams/:id/submit", ai.SubmitExam)
 		v1Restricted.GET("/episodes/:id/attachments", episode.GetAttachments)
 		// Resolve the Nth attachment of an episode into a 302 download link.
 		v1Restricted.GET("/episodes/:id/attachments/:index/stream", episode.StreamAttachment)
@@ -295,6 +310,10 @@ func RegisterRoutes(
 		adm.GET("/api/stats/dashboard", admin.DashboardStats)
 		adm.POST("/api/probe/scan-missing", admin.ScanMissingDurations)
 		adm.GET("/api/probe/progress", admin.ProbeProgress)
+		// 错题本观测(TODO.md P0)。AI 未配置时返回零值。
+		adm.GET("/api/wrong-book/stats", admin.WrongBookStats)
+		// 课程考试观测(TODO.md P0)。
+		adm.GET("/api/exam/stats", admin.ExamStats)
 
 		// Subtitles
 		adm.GET("/api/episodes/:id/subtitles", admin.ListSubtitles)

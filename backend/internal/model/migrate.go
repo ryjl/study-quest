@@ -78,11 +78,32 @@ func AutoMigrate(db *gorm.DB) error {
 		// 轻量结构化日志(TODO.md P1)。failJob/reaper/polishStats/provider/worker panic
 		// 5 个集中点写入,admin 在 /admin/logs 页看,不再依赖 SSH 看 stderr。
 		&LogEntry{},
+		// 错题本(TODO.md P0)。交卷时对 correct=false 的题 upsert,记录学生做错的题
+		// + 重做次数 + mastered 标记。题面现查 Question 表,本表只存 curation 状态。
+		&WrongBookItem{},
+		// 课程考试(TODO.md P0)。和 Quiz 平行但 scope 是 (user, course)。
+		// 题库抽题 + agent 新出迁移题;答案写独立 ExamAnswer,不污染错题本聚合。
+		&Exam{},
+		&ExamQuestion{},
+		&ExamAnswer{},
 	)
 	if err != nil {
 		return err
 	}
-	return migrateQuizActiveUniqueIndex(db)
+	if err := migrateQuizActiveUniqueIndex(db); err != nil {
+		return err
+	}
+	return migrateExamActiveUniqueIndex(db)
+}
+
+// migrateExamActiveUniqueIndex 同 quiz 的范式:一个 (user, course) 同时只有一个
+// active exam。archived(重考时旧的转 archived)可共存做历史。GORM 表达不了 WHERE,
+// 故 raw SQL 在 AutoMigrate 后建。幂等。
+func migrateExamActiveUniqueIndex(db *gorm.DB) error {
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_exam_user_course_active ON exams(user_id, course_id) WHERE status = 'active'`).Error; err != nil {
+		return fmt.Errorf("create partial unique idx_exam_user_course_active: %w", err)
+	}
+	return nil
 }
 
 // migrateQuizActiveUniqueIndex creates the partial unique index that enforces

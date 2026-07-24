@@ -17,6 +17,7 @@ import '../widget/subject_icon.dart';
 import '../responsive.dart';
 import 'player_screen.dart';
 import 'ai_study_screen.dart';
+import 'course_exam_screen.dart';
 
 class CourseDetailScreen extends StatefulWidget {
   final int activeUserId;
@@ -529,6 +530,33 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               style: const TextStyle(color: Colors.white70, fontSize: 16, fontWeight: FontWeight.bold),
             ),
           ],
+        ),
+        const SizedBox(height: 20),
+        // 课程考试入口(TODO.md P0):综合本课知识点出一张卷子做阶段测评。
+        // 题库不足时后端 status gate 会提示,这里直接进屏由其处理灰显。
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Button3D(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => CourseExamScreen(
+                activeUserId: widget.activeUserId,
+                courseId: widget.course.id,
+                courseTitle: widget.course.title,
+              ),
+            )),
+            backgroundColor: Colors.white.withValues(alpha: 0.2),
+            shadowColor: Colors.transparent,
+            border: Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1.5),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.emoji_events_rounded, size: 18, color: Colors.white),
+                SizedBox(width: 8),
+                Text('课程考试', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ],
+            ),
+          ),
         ),
       ],
     );

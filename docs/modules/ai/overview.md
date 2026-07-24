@@ -266,6 +266,31 @@ id, user_id(unique), report_text(text), model_used, generated_at
 ```
 和 advice 的差异：advice 是给学生本人看的复习建议（单 scope），user_study_report 是给 admin（老师/家长）看的"这个学生跨所有课程学得怎么样"的画像报告。每用户一份最新报告（unique on user_id），重新生成替换。`report_text` 是 agent 的自然语言 `FinalText`。agent 走和 advice 同一套 ReAct loop，但工具集是 user_study 专用（按参数 course_id 查任意课程，见 §16）。
 
+**`wrong_book_items`** — ✅ 错题本 curation 状态（TODO.md P0）
+```
+id, user_id, question_id (unique on user_id+question_id),
+chunk_id, course_id, episode_id, subject_id (冗余,聚合省 join),
+first_wrong_at, last_attempted_at, attempt_count, correct_streak, mastered, mastered_at
+```
+错题本只存学生侧的 curation 状态（掌握标记 / 重做次数 / 连对次数），**题面永远现查 `questions` 表**（通过 `question_id` join），不冗余拷贝题面——这样题目被 regenerate 替换后错题本仍指向真实题面，题被删时 FK CASCADE 自动清孤儿行（`OnDelete:CASCADE` 到 question）。
+冗余 `course_id/episode_id/subject_id/chunk_id` 遵循 `answers.quiz_id`、`content_chunks.course_id` 的既定模式：错题本列表要按科目/课程/知识点过滤聚合，冗余这些 ID 让查询一次 WHERE 就够，不必多表 JOIN。值在交卷 hook 时从 `answer→quiz→course→subject` 的 join 链快照下来（course 改科目不回溯，可接受：错题本是学生练习流水，不是课程元数据从表）。
+
+**维护点**：交卷时（`SubmitAllQuizAnswers`）对每道 `correct=false` 的题 upsert 本表（新建则 `first_wrong_at=now, attempt_count=1`；已存在则 `attempt_count++` + `correct_streak` 清零——答错打断连对）。**漏选（multi_choice 部分对）按"错"处理**，和 mastery 同口径——2026-07-23 改的一致判定，避免旧版"漏选既算错进错题本又不算错不扣 mastery"的自相矛盾。重做流（`SubmitWrongBookRedo`）答对→`correct_streak++`（**连对 3 次**才 `mastered=true` + streak 归 0，见 `IncrementCorrectStreak`/`wrongBookMasteredThreshold`，避免一次蒙对就清除）；答错→`attempt_count++` + streak 清零。手动标记掌握（`MarkMastered`）也清零 streak（重新累计）。重做**不**落 `answers` 行、**不**改 quiz-side mastery（和正式 quiz 交卷隔离，避免污染答题流水统计）。
+**nil-safe**：`wrongBookRepo` 未注入时所有错题本方法返回空/无操作（守纯附加层铁律 #6，老测试降级）。
+
+**`exams` / `exam_questions` / `exam_answers`** — ✅ 课程考试（TODO.md P0，阶段综合测评）
+```
+exams:        id, user_id, course_id (partial unique on user_id+course_id WHERE status='active'),
+              status (active|archived), archived_at, submitted_at (交卷锁), score (0-1 得分率)
+exam_questions: id, exam_id, question_id, chunk_id (冗余), source (pool|generated), order_idx
+exam_answers:   id, exam_id, exam_question_id, user_id, question_id, chunk_id (冗余),
+                user_answer, user_answer_text, correct, answered_at
+```
+和 Quiz 完全平行，但 scope 是 (user, course) 而非 (user, episode)：一张卷综合某课程多个 episode 的知识点。**题源当前是纯题库抽**（`SelectExamQuestions`，按学生 mastery 弱点加权 + 覆盖度约束，从已有题库跨 episode 抽，不跑 LLM），`source` 字段预留 `'generated'` 给 quizzer agent 后续出迁移题。
+
+**答案写独立 `exam_answers` 表，不污染 `answers`**（错题本聚合 / quiz 答题流水统计）。mastery feedback 走同一套 `KnowledgeMemory.RecordAnswer`（考试交卷也更新掌握度，让 agent 下次出题反映阶段考试弱点）。**漏选按"错"处理**，和 quiz / 错题本同口径（2026-07-23 统一判定）。**交卷锁**复用 `TryMarkExamSubmitted` 条件 UPDATE（消除 TOCTOU）。
+**nil-safe**：`examRepo` 未注入时 `GetExamStatus` 返回 unavailable、`StartExam/SubmitExam` 报"考试功能未启用"、admin 观测返回零值（守纯附加层铁律 #6）。
+
 ## 5. 状态机（ai_jobs）
 
 ```
@@ -361,11 +386,44 @@ GET /subjects/:id/ai-advice   subject 级建议(跨多门课聚合 mastery)
 ```
 三个 advice 端点都是 lazy 生成 + 轮询（同 quiz 的 202/generating/ready 模式），`advice_text` 是 agent 自然语言输出。
 
+错题本（数据按 `user_id` 键存，只需登录，不需 course access gate——学生查无权课程只会拿到自己的空错题，绝不泄露跨用户）：
+```
+GET  /wrong-book                  列错题本(?course_id=&mastered= 过滤;0/缺省=全局/全部)
+                                  响应{items,unmastered_count}。items 每条带正确答案
+                                  (correct_index/correct_text/correct_indices)+解析,
+                                  列表卡片点开即可复习,无需进重做流。unmastered_count
+                                  是该用户未掌握总数(独立于 items 过滤,给 tab 角标)。
+POST /wrong-book/:id/master       手动标记掌握(清零 streak)
+POST /wrong-book/:id/unmaster     取消掌握(streak 归 0,重新累计)
+GET  /wrong-book/redo             取一批未掌握题做重做卷(?course_id=&limit=,默认10)
+POST /wrong-book/redo/submit      重做交卷(body:{answers:[...]})→逐题判分+更新curation
+                                  (对→correct_streak++,连对3次才mastered;错→attempt++/streak清零)
+```
+重做卷不下发正确答案（防作弊）；交卷后逐题 reveal + 解析。重做**不**落 `answers` 行、**不**改 quiz-side mastery（和正式 quiz 交卷隔离）。注意路由顺序：`/wrong-book/redo` 和 `/wrong-book/redo/submit` 必须在 `/wrong-book/:id` 前注册（否则 gin 把 "redo" 当 `:id`）。
+
+课程考试（阶段综合测评，start/submit 受 `canAccessCourse` 访问控制；status 只需登录）：
+```
+GET  /courses/:id/exam/status   是否可考(gate:题库 ≥3 道才开考)→{available,reason?}
+                                题库不足/AI 未配置→available=false
+POST /courses/:id/exam/start    开考(组卷:从题库按 mastery 弱点抽题)→返回考试卷(不下发答案)
+                                题库不足→409 ErrExamInsufficientPool
+GET  /courses/:id/exam          取已开考的 active exam(无→{status:none});已交卷回填结果
+POST /exams/:id/submit          交卷(body:{answers:[...]})→逐题判分+写exam_answers+更新mastery→报告
+                                已交卷→409 ErrExamAlreadySubmitted
+```
+题目不下发正确答案（防作弊）；交卷后逐题 reveal。答案写独立 `exam_answers` 表（不污染 `answers`）。注意路由顺序：`/courses/:id/exam/status`、`/start` 在 `/courses/:id/exam` 前注册（显式排前更清晰，虽然 gin 静态段优先）。
+
 ### Admin 观测端（Phase C 新增）
 ```
 GET /admin/api/ai/summaries/:episodeID   读已生成的总结内容（admin 回放）
 GET /admin/api/ai/users/:userID/quizzes  列出某用户所有题库（用户视图入口）
 GET /admin/api/ai/quizzes/:quizID        题库详情：题+答案+答题历史+memory+agent_feedback+ai_runs(trace)
+GET /admin/api/wrong-book/stats          错题本全局统计(TODO.md P0):总数/未掌握/本周新增/
+                                        高频错题榜(top_frequent)+科目弱点分布(by_subject)。
+                                        每聚合独立降级(对齐 DashboardStats),AI 未配置返回零值。
+GET /admin/api/exam/stats                课程考试全局统计(TODO.md P0):考试卷总数/已交卷/平均得分率/
+                                        本周新开考 + 题源质量对比(source_quality: pool vs generated
+                                        正确率,验证迁移题难度)。AI 未配置返回零值。
 ```
 
 ### Admin 生成端（第二轮新增，admin 触发 agent 跑）

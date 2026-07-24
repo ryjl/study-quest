@@ -166,7 +166,13 @@ func main() {
 	// logRepo stores structured log entries for the /admin/logs page (TODO.md
 	// P1). appendLog is nil-safe, but we always wire it in main.
 	logRepo := repository.NewLogRepository(db)
-	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo, polishChunkRepo, logRepo)
+	// wrongBookRepo stores 错题本 curation 状态(交卷时对做错的题 upsert)。Nil-safe
+	// in the service layer, but we always wire it in main.
+	wrongBookRepo := repository.NewWrongBookRepository(db)
+	// examRepo stores 课程考试(Exam/ExamQuestion/ExamAnswer)。Nil-safe in the
+	// service layer, but we always wire it in main.
+	examRepo := repository.NewExamRepository(db)
+	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo, polishChunkRepo, logRepo, wrongBookRepo, examRepo)
 	// Connect Step 2 → Step 3: when a subtitle lands, auto-enqueue a segment job
 	// (only if the course has AI enabled). The callback keeps the subtitle
 	// service free of any AI import — it just calls a function if set.

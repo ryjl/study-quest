@@ -16,6 +16,7 @@ import 'reading_room_screen.dart';
 import 'login_screen.dart';
 import 'settings_screen.dart';
 import 'growth_footprint_screen.dart';
+import 'wrong_book_screen.dart';
 
 class MainNavigation extends StatefulWidget {
   final int initialTabIndex;
@@ -30,6 +31,8 @@ class _MainNavigationState extends State<MainNavigation> {
   final TextEditingController _ipController = TextEditingController();
   UserPoint? _userPoint;
   bool _isSavingIp = false;
+  // 错题本未掌握数(tab 角标用)。0 不显示角标。
+  int _unmasteredCount = 0;
 
   /// Level derived from total points: every 100 points = +1 level, starting
   /// from Lv.1. Centralised here because the badge is rendered in two places
@@ -42,6 +45,7 @@ class _MainNavigationState extends State<MainNavigation> {
     _selectedTab = widget.initialTabIndex;
     _ipController.text = AppConfig.baseUrl;
     _loadUserPoints();
+    _loadUnmasteredCount();
     // Non-blocking OTA check: runs once after login. Errors are swallowed
     // inside the service, so this can never break app startup.
     _checkForUpdate();
@@ -93,6 +97,19 @@ class _MainNavigationState extends State<MainNavigation> {
       } catch (_) {
         // Points are best-effort; the sidebar/header fall back to Lv.1.
       }
+    }
+  }
+
+  // 取错题本未掌握数刷新 tab 角标。best-effort:失败静默(角标不是核心功能)。
+  void _loadUnmasteredCount() async {
+    final auth = Provider.of<AuthService>(context, listen: false);
+    final user = auth.currentUser;
+    if (user == null) return;
+    try {
+      final n = await ApiService.fetchUnmasteredCount(user.id);
+      if (mounted) setState(() => _unmasteredCount = n);
+    } catch (_) {
+      // 角标失败不阻塞。
     }
   }
 
@@ -174,15 +191,25 @@ class _MainNavigationState extends State<MainNavigation> {
       onTap: (i) {
         setState(() => _selectedTab = i);
         _loadUserPoints();
+        _loadUnmasteredCount();
       },
-      items: const [
-        BottomNavigationBarItem(
+      items: [
+        const BottomNavigationBarItem(
             icon: Icon(Icons.school_rounded), label: '学习大厅'),
-        BottomNavigationBarItem(
+        const BottomNavigationBarItem(
             icon: Icon(Icons.menu_book_rounded), label: '阅读室'),
-        BottomNavigationBarItem(
+        const BottomNavigationBarItem(
             icon: Icon(Icons.explore_rounded), label: '成长足迹'),
+        // 错题本:图标用 spellcheck(语义=检查/纠错),和阅读室的 menu_book 区分;
+        // 未掌握数 > 0 时带角标红点提示有题要复习。
         BottomNavigationBarItem(
+            icon: Badge(
+              isLabelVisible: _unmasteredCount > 0,
+              label: Text('$_unmasteredCount'),
+              child: const Icon(Icons.spellcheck_rounded),
+            ),
+            label: '错题本'),
+        const BottomNavigationBarItem(
             icon: Icon(Icons.settings_rounded), label: '系统设置'),
       ],
     );
@@ -542,7 +569,9 @@ class _MainNavigationState extends State<MainNavigation> {
                     _buildNavItem(0, Icons.school_rounded, '学习大厅'),
                     _buildNavItem(1, Icons.menu_book_rounded, '阅读室'),
                     _buildNavItem(2, Icons.explore_rounded, '成长足迹'),
-                    _buildNavItem(3, Icons.settings_rounded, '系统设置'),
+                    // 错题本:图标 spellcheck 区分阅读室;未掌握数 > 0 带角标。
+                    _buildNavItemWithBadge(3, Icons.spellcheck_rounded, '错题本', _unmasteredCount),
+                    _buildNavItem(4, Icons.settings_rounded, '系统设置'),
 
                     const Spacer(),
 
@@ -582,6 +611,38 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   Widget _buildNavItem(int index, IconData icon, String label) {
+    return _buildNavItemRaw(
+      index: index,
+      icon: icon,
+      label: label,
+      iconWidget: null,
+    );
+  }
+
+  // _buildNavItemWithBadge 同 _buildNavItem,但图标带未掌握数角标(错题本专用)。
+  Widget _buildNavItemWithBadge(int index, IconData icon, String label, int badge) {
+    return _buildNavItemRaw(
+      index: index,
+      icon: icon,
+      label: label,
+      iconWidget: Badge(
+        isLabelVisible: badge > 0,
+        label: Text('$badge'),
+        child: Icon(
+          icon,
+          color: _selectedTab == index ? AppTheme.blue600 : AppTheme.textMuted,
+          size: 22,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItemRaw({
+    required int index,
+    required IconData icon,
+    required String label,
+    required Widget? iconWidget,
+  }) {
     final active = _selectedTab == index;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
@@ -593,6 +654,7 @@ class _MainNavigationState extends State<MainNavigation> {
         onPressed: () {
           setState(() => _selectedTab = index);
           _loadUserPoints();
+          _loadUnmasteredCount();
         },
         child: Row(
           children: [
@@ -606,11 +668,12 @@ class _MainNavigationState extends State<MainNavigation> {
                 ),
               ),
             if (active) const SizedBox(width: 12) else const SizedBox(width: 17),
-            Icon(
-              icon,
-              color: active ? AppTheme.blue600 : AppTheme.textMuted,
-              size: 22,
-            ),
+            iconWidget ??
+                Icon(
+                  icon,
+                  color: active ? AppTheme.blue600 : AppTheme.textMuted,
+                  size: 22,
+                ),
             const SizedBox(width: 16),
             Expanded(
               child: Text(
@@ -638,6 +701,8 @@ class _MainNavigationState extends State<MainNavigation> {
       case 2:
         return _buildProgressScreen(activeUserId);
       case 3:
+        return WrongBookScreen(activeUserId: activeUserId);
+      case 4:
         return _buildSettingsScreen();
       default:
         return CourseListScreen(activeUserId: activeUserId);

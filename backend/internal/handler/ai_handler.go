@@ -46,6 +46,18 @@ type AIHandler interface {
 	// 客户端只读已生成的课程总结(不触发生成——总结是 course-unique 共享的,admin 生成)。
 	// 返回 {summary_text, model_used, generated_at}。无总结时 404(客户端隐藏课程总结卡片)。
 	GetCourseSummary(c *gin.Context)
+	// ── 错题本 (TODO.md P0) 端点 ──
+	// 数据按 user_id 键存,只需登录(同 advice course/subject 级口径)。
+	GetWrongBook(c *gin.Context)
+	MarkWrongBookMastered(c *gin.Context)
+	GetWrongBookRedo(c *gin.Context)
+	SubmitWrongBookRedo(c *gin.Context)
+	// ── 课程考试 (TODO.md P0) 端点 ──
+	// StartExam/SubmitExam 走 canAccessCourse 门;status/gate 只需登录。
+	StartExam(c *gin.Context)
+	GetActiveExam(c *gin.Context)
+	SubmitExam(c *gin.Context)
+	GetExamStatus(c *gin.Context)
 }
 
 type aiHandler struct {

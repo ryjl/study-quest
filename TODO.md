@@ -6,11 +6,22 @@
 > 每条尽量写清四样东西：**场景**（解决什么用户问题）、**价值**（为什么值得做）、
 > **工作量预估**（小/中/大）、**依赖**（前置条件 / 阻塞项）。
 >
-> 最后更新：2026-07-22（轻量 log 系统已落地 + polish 写 ai_runs）
+> 最后更新：2026-07-23（错题本 + 阶段 0 共享抽题层 + 课程考试均已落地）
 
 ## P0 — 高价值，建议下一轮做
 
-### 错题本
+### ✓ 错题本 —— 已完成（2026-07-23）
+
+已落地：新表 `wrong_book_items`（curation 状态：mastered/attempt_count/first_wrong_at + 冗余 course/episode/subject/chunk id 省聚合 join）+ 交卷 hook（`SubmitAllQuizAnswers` 对 `correct=false` 的题 upsert，部分对不算错）+ `WrongBookRepository`（upsert/master/list + admin 聚合 Stats/TopFrequent/Distribution）+ `wrong_book_service.go`（列表题面+curation 合并、重做流、mastered）+ 5 个 client 端点（list/master/unmaster/redo/redo-submit）+ admin 观测端点 `/admin/api/wrong-book/stats` + `/admin/wrong-book` 页（StatCard + 高频错题榜 + 科目弱点分布）+ Flutter 错题本屏（响应式 GridView、PAD maxWidth、TV gate）+ 重做屏（复用 quiz 渲染、ConstrainedBox 800 可读性）。
+
+题面永远现查 `questions` 表（不冗余拷贝）；重做**不**落 `answers` 行、**不**改 quiz-side mastery（隔离性，见 `docs/modules/ai/overview.md` §4/§6）。阶段 0 抽出的共享题库检索层（`question_pool_repo.go` + `exam_selector.go`）为课程考试铺好了路。UT 覆盖：repo 14 + selector 11 + service/hook 10 + 集成 5 + admin api 3 + flutter model/api 12 + flutter 屏幕级 widget 6。
+
+**附带改的一致判定**：multi_choice 漏选（部分对）从"视为掌握"改成"按错处理"，mastery / 错题本 / 显示对错三处统一为"漏选就是错"（见下方技术债章节的 2026-07-23 说明）。
+
+**体验优化（2026-07-23 同日）**：把错题本从"功能存在"打磨成完整学习闭环。后端：① 列表响应带正确答案 + 解析（`correct_index`/`correct_text`/`correct_indices`，从 `scoring` 派生）+ `unmastered_count`（tab 角标）；② 掌握机制从"重做对 1 次就清除"改成**连对 3 次**才掌握（`correct_streak` 字段 + `IncrementCorrectStreak`，答错清零）。前端：③ Tab 角标显示未掌握数 + 图标改 `spellcheck` 区分阅读室；④ 列表默认「全部」+ 课程过滤，已掌握灰显不消失；⑤ 卡片「查看答案」收起展开（正确答案绿色高亮 + 解析），不再只有裸题面；⑥ 掌握切换改成明确文字按钮（不再用隐晦圆圈误触）；⑦ 单题重做（每卡「重做本题」）+ 整批重做共存；⑧ 顶部进度「共 N 题 · 已掌握 M」；⑨ 空状态引导去学习；⑩ quiz/考试交卷后提示「N 道错题已加入，去复习」。UT 覆盖：repo +3（streak）、service +1（连对3次）、flutter model +4（答案/streak/list）、widget +3（默认全部/答案展开/单题重做）。
+
+<details>
+<summary>原条目（保留供参考）</summary>
 
 学生做错的题自动归集到一个"错题本"，按科目 / 课程 / 知识点（chunk）分类，支持重做、标记"已掌握"。
 
@@ -21,7 +32,17 @@
   - 前端：新列表页（错题本入口）+ 重做流（复用现有 quiz 渲染组件）+ "标记掌握"操作。
 - **依赖**：`questions` / `answers` 表已有数据，可直接聚合（无需新基建）。`KnowledgeMemory` 已有 chunk_id 可做知识点维度聚合。建议和"课程考试按钮"一起规划，两者共用一部分题库检索逻辑。
 
-### 课程考试按钮
+</details>
+
+### ✓ 课程考试 —— 已完成（2026-07-23）
+
+已落地：课程详情页 hero 加"课程考试"入口 → 课程考试屏（status gate / 开考 / 答题 / 交卷 / 阅卷报告）。后端三表 `exams` / `exam_questions` / `exam_answers`（和 Quiz 平行，scope 是 `(user, course)`，partial unique index 保 (user,course) 同时只有一个 active）+ `exam_repo.go`（archive-then-insert 组卷、`TryMarkExamSubmitted` 交卷锁、`ExamStats`/`ExamSourceQuality` 观测聚合）+ `exam_service.go`（`StartExam` gate→抽题→组卷、`SubmitExam` 交卷锁→逐题判分→写 ExamAnswer→更新 mastery→算 Score、4 个 DTO）+ `exam_handler.go`（4 client 端点）+ admin 观测端点 `/admin/api/exam/stats`（考试总数/已交卷/平均得分率/题源质量对比）+ `/admin/exam` 页（StatCard + pool vs generated 正确率横条）+ Flutter 考试屏（PAD maxWidth 800、复用 quiz 渲染、TV gate 隐藏做题体）。
+
+题源当前是**纯题库抽**（`SelectExamQuestions`，阶段 0 的 `question_pool_repo.go` + `exam_selector.go`：按 mastery 弱点加权 + 覆盖度约束 + 题型轮转 + 降级，从已有题库跨 episode 抽，不跑 LLM）。`source` 字段预留 `'generated'`，quizzer agent 出迁移题作为后续增强。答案写独立 `exam_answers` 表（不污染 `answers`），mastery 走同一套 `KnowledgeMemory.RecordAnswer`（考试交卷也更新掌握度）。漏选按"错"处理，和 quiz / 错题本同口径。交卷锁复用条件 UPDATE 范式（消除 TOCTOU）。UT 覆盖：repo 7 + selector 11 + service 8 + 集成 4 + admin api 3 + flutter model/api 20 + flutter 屏幕级 widget 6。
+
+---
+
+### （历史：课程考试按钮原需求，已完成，见上方 ✓）
 
 课程页一个"考试"按钮：把这门课全部学过的知识点综合出一张**有针对性**的试卷（基于 mastery 弱点抽题，不重新生成而是从已有题库抽）。
 
@@ -184,10 +205,12 @@ agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
 
 ### 多选题 mastery 加权数值微调
 
-当前 multi_choice grading 三态的 mastery 增量是固定数值：全对 +0.1 / 部分对 +0.1（质量优化轮次改成视为掌握、不扣分，避免压低 mastery 误导 advice）/ 错 -0.2。
+当前 multi_choice grading 三态的 mastery 增量是固定数值：全对 +0.1 / 部分对（漏选）按"错"处理扣 -0.2 / 错 -0.2。
 
-- **要做什么**：`RecordAnswer` 当前只支持 correct=true/false，部分对借用 true 是粗糙折中。可加 partial 参数或 Score 参数，让部分对按"勾中正确项数 / 正确项总数"给比例分（如勾中 2/3 给 +0.07），全对才 +0.1。
-- **价值**：mastery 更精确反映掌握程度。当前部分对一律 +0.1，让"勾中 1 个"和"勾中 3 个里的 2 个"同等对待，且和全等同权。
+> 2026-07-23 改动：部分对（漏选）从"视为掌握、不扣分"改成"按错扣分"。原口径（部分对不扣 mastery）是质量优化轮次为避免压低 mastery 误导 advice 而设，但 2026-07-23 错题本上线时暴露了它的自相矛盾——同一道漏选题，错题本判定和 mastery 判定相反，语义混乱。现统一为"漏选就是错"，mastery / 错题本 / 显示对错三处一致。`verdict.Partial` 字段保留用于 UI 展示"漏选X/多选Y"明细，但不再改变 mastery/错题本判定。
+
+- **要做什么**：`RecordAnswer` 当前只支持 correct=true/false，部分对按错处理是粗糙折中（漏 1 个和全错同等扣分）。可加 partial 参数或 Score 参数，让部分对按"勾中正确项数 / 正确项总数"给比例分（如勾中 2/3 给 -0.07 而非 -0.2），全错才 -0.2。
+- **价值**：mastery 更精确反映掌握程度。当前部分对一律 -0.2，让"勾中 1 个"和"勾中 3 个里的 2 个"同等对待。
 - **工作量预估**：小。`RecordAnswer` 签名扩 partial/Score + UpsertMemoryOnAnswer 的增量公式调 + 单测调阈值。
 - **触发条件**：多选题上线后观察一段时间，确认加权不会让 mastery 抖动过大。
 

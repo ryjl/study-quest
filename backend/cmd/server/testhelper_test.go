@@ -38,12 +38,30 @@ type testEnv struct {
 	// createEpisode stamps episodes with it and createUser adds non-staff users
 	// to its allow-list. Storage-specific tests override these per-case.
 	defaultSourceID uint
+	// aiStop releases the AI worker goroutine when enableAI (newTestEnvWithAI).
+	// nil for the default AI-free env. Callers using newTestEnvWithAI should
+	// t.Cleanup(env.aiStop) to avoid leaking a poller across the test binary.
+	aiStop func()
 }
 
 // newTestEnv builds a fresh server with seeded subjects/tags/badges + a logged-
 // in admin session cookie ready to use. Each call yields an independent
 // in-memory DB, so tests do not leak state into each other.
 func newTestEnv(t *testing.T) *testEnv {
+	t.Helper()
+	return newTestEnvInternal(t, false)
+}
+
+// newTestEnvWithAI is like newTestEnv but wires a real aiService (with the
+// wrong-book repo) into the AI handler, so wrong-book / quiz-submit integration
+// tests can exercise the full HTTP path. The default newTestEnv stays AI-free
+// (aiService nil → endpoints 404 cleanly) to keep the bulk of tests undisturbed.
+func newTestEnvWithAI(t *testing.T) *testEnv {
+	t.Helper()
+	return newTestEnvInternal(t, true)
+}
+
+func newTestEnvInternal(t *testing.T, enableAI bool) *testEnv {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 
@@ -138,7 +156,21 @@ func newTestEnv(t *testing.T) *testEnv {
 	progressH := handler.NewProgressHandler(progressService)
 	ingestH := handler.NewIngestHandler(episodeRepo, episodeService, probeWorker.Enqueue)
 	subtitleJobH := handler.NewSubtitleJobHandler(subtitleJobService)
-	adminH := handler.NewAdminHandlerDeps().
+	// AI service: nil by default (endpoints 404, keeps most tests AI-free); real
+	// service when enableAI (wrong-book integration tests). Built before adminH
+	// so adminH can share it (admin wrong-book stats reads via aiService).
+	var aiSvc service.AIService
+	var aiStop func()
+	if enableAI {
+		aiContentRepo := repository.NewAIContentRepository(db)
+		wrongBookRepo := repository.NewWrongBookRepository(db)
+		examRepo := repository.NewExamRepository(db)
+		aiSvc = service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo,
+			nil, unlockService, userRepo, nil, subjectRepo, nil, nil, wrongBookRepo,
+			examRepo)
+		aiStop = aiSvc.Stop
+	}
+	adminDeps := handler.NewAdminHandlerDeps().
 		WithSettings(settingsRepo).WithUsers(userRepo).WithCourses(courseRepo).
 		WithEpisodes(episodeRepo).WithChapters(chapterRepo).WithProgress(progressRepo).
 		WithSubjects(subjectRepo).WithBadges(badgeRepo).
@@ -149,7 +181,11 @@ func newTestEnv(t *testing.T) *testEnv {
 		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).WithSubtitleJobService(subtitleJobService).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).
-		WithStorageSources(storageSourceRepo).WithStorageResolver(storageResolver).Build()
+		WithStorageSources(storageSourceRepo).WithStorageResolver(storageResolver)
+	if aiSvc != nil {
+		adminDeps = adminDeps.WithAIService(aiSvc)
+	}
+	adminH := adminDeps.Build()
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
@@ -159,10 +195,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	unlockH := handler.NewUnlockHandler(unlockService)
 	releaseH := handler.NewReleaseHandler(releaseRepo)
 	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
-	// AI handler with nil service — tests don't exercise AI; the endpoints
-	// return 404/503 cleanly. Keeps the test harness AI-free. unlockService is
-	// passed so the access-gate compiles, but it's never reached (nil service).
-	aiH := handler.NewAIHandler(nil, unlockService)
+	// AI handler: nil service by default; real service when enableAI.
+	var aiH handler.AIHandler
+	if aiSvc != nil {
+		aiH = handler.NewAIHandler(aiSvc, unlockService)
+	} else {
+		aiH = handler.NewAIHandler(nil, unlockService)
+	}
 
 	r := gin.New()
 	// Ingest key is intentionally empty for the default test env — the legacy
@@ -180,7 +219,7 @@ func newTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("seed admin hash: %v", err)
 	}
 
-	env := &testEnv{engine: r, db: db, sessionService: sessionService}
+	env := &testEnv{engine: r, db: db, sessionService: sessionService, aiStop: aiStop}
 	env.adminCookie = env.loginAdmin(t)
 
 	// Seed a default storage source so default-deny doesn't break every happy-

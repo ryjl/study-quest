@@ -877,3 +877,51 @@ export interface StudyAdviceRow {
   model_used?: string;
   generated_at: string;
 }
+
+// ---------------------------------------------------------------------------
+// 错题本观测 stats (TODO.md P0). GET /admin/api/wrong-book/stats.
+// 每个聚合独立降级(对齐 DashboardStats 范式),单点失败该字段为 0/空。
+// ---------------------------------------------------------------------------
+
+export interface WrongBookFrequentRow {
+  question_id: number;
+  stem: string;
+  occur_count: number;   // 多少学生错这题(COUNT DISTINCT user_id)
+  total_attempts: number; // 所有学生重做这题的总次数
+}
+
+export interface WrongBookSubjectCount {
+  subject_key: string;
+  subject_label: string;
+  count: number;
+}
+
+export interface WrongBookStats {
+  total: number;
+  unmastered: number;
+  this_week: number;
+  master_rate: number; // (total - unmastered) / total; 0 when total=0
+  top_frequent: WrongBookFrequentRow[];
+  by_subject: WrongBookSubjectCount[];
+}
+
+// ---------------------------------------------------------------------------
+// 课程考试观测 stats (TODO.md P0). GET /admin/api/exam/stats.
+// 题源质量对比 pool(题库抽)vs generated(agent 新出)题的正确率,验证迁移题难度。
+// AI 未配置时返回零值。
+// ---------------------------------------------------------------------------
+
+export interface ExamSourceQualityRow {
+  source: string;  // pool | generated
+  total: number;
+  correct: number;
+  rate: number; // correct / total; 0 when total=0
+}
+
+export interface ExamStats {
+  total: number;      // 考试卷总数(含未交卷)
+  submitted: number;  // 已交卷数
+  avg_score: number;  // 已交卷平均得分率 0-1
+  this_week: number;  // 本周新开考数
+  source_quality: ExamSourceQualityRow[];
+}

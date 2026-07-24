@@ -14,7 +14,9 @@ package model
 //   watch.go     — WatchEvent
 //   ai.go        — AIProvider/AIJob/AISummary/Quiz/Question/Answer/AIRun/...
 //                  + AIConfig type/methods + Effective*Hint helpers
-//   migrate.go   — AutoMigrate + migrateQuizActiveUniqueIndex
+//   wrong_book.go — WrongBookItem (错题本 curation 状态)
+//   exam.go      — Exam/ExamQuestion/ExamAnswer (课程考试,平行于 Quiz/Question/Answer)
+//   migrate.go   — AutoMigrate + migrateQuizActiveUniqueIndex + migrateExamActiveUniqueIndex
 //
 // Adding a new model: pick the topical file, add the struct there, and register
 // it in migrate.go's AutoMigrate call.

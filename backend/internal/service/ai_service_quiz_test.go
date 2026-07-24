@@ -11,10 +11,12 @@ import (
 // aiServiceQuizTestEnv wires a real aiService (file-backed DB, real repos, no
 // providers) for the unified-submit flow tests. See aiServiceTestEnv for why
 // file-backed: the runWorker goroutine needs a cross-connection-shared DB.
-func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentRepository) {
+// Returns wrongBookRepo too so the 错题本 hook regression tests can assert on it.
+func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentRepository, repository.WrongBookRepository) {
 	t.Helper()
 	db := testutil.NewFileDB(t)
 	contentRepo := repository.NewAIContentRepository(db)
+	wrongBookRepo := repository.NewWrongBookRepository(db)
 	svc := NewAIService(
 		db,
 		contentRepo,
@@ -26,10 +28,12 @@ func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentReposit
 		nil,                  // no glossary repo — quiz path doesn't touch it
 		nil,                  // no subject repo — polish-only
 		nil,                  // no polishChunkRepo — polish-only
-		nil,                  // no logRepo — structured-log writes not asserted
+		nil,                  // no logRepo — structured-log writes not asserted,
+		wrongBookRepo,        // 错题本 hook — real repo so submit regression tests can assert,
+		nil,
 	).(*aiService)
 	t.Cleanup(svc.Stop) // release the worker goroutine (see ai_service_test.go)
-	return svc, contentRepo
+	return svc, contentRepo, wrongBookRepo
 }
 
 
@@ -60,7 +64,7 @@ func seedQuizWithQuestions(t *testing.T, repo repository.AIContentRepository, us
 // for every question post-submit, (c) writes answer rows only for answered
 // questions, (d) stamps SubmittedAt so a second submit is rejected.
 func TestSubmitAllQuizAnswers_GradesPersistsLocks(t *testing.T) {
-	svc, repo := aiServiceQuizTestEnv(t)
+	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(1), uint(10), uint(100)
 	quiz, questions := seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
 		{Type: "choice", Stem: "right when idx matches", Options: `["a","b","c","d"]`, Answer: 1},
@@ -125,7 +129,7 @@ func TestSubmitAllQuizAnswers_GradesPersistsLocks(t *testing.T) {
 // client view once the quiz is handed in — the frontend reads this to switch
 // from the editable answering state to read-only results.
 func TestGetQuizForClient_ReportsSubmitted(t *testing.T) {
-	svc, repo := aiServiceQuizTestEnv(t)
+	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(2), uint(20), uint(200)
 	seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
 		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Answer: 0, HasJump: true},

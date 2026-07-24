@@ -12,6 +12,8 @@ import '../model/badge.dart';
 import '../model/reading.dart';
 import '../model/quiz.dart';
 import '../model/course_summary.dart';
+import '../model/wrong_book.dart';
+import '../model/exam.dart';
 
 class ApiService {
   /// Opaque session token issued by the backend at login. Carried in the
@@ -320,6 +322,159 @@ class ApiService {
     }
     if (response.statusCode == 404) return const []; // AI off / no history
     _fail(response.statusCode, '获取历史练习失败: ${response.statusCode}');
+  }
+
+  // ── 错题本 (TODO.md P0) ──
+  // 数据按 user_id 键存,只需登录。courseId=0 表全局;mastered 为 null 不过滤,
+  // true/false 按掌握状态过滤。响应带 unmasteredCount(独立于 items 过滤,给 tab 角标)。
+  static Future<WrongBookList> fetchWrongBook(
+    int activeUserId, {
+    int courseId = 0,
+    bool? mastered,
+  }) async {
+    final params = <String>[];
+    if (courseId != 0) params.add('course_id=$courseId');
+    if (mastered == true) params.add('mastered=true');
+    if (mastered == false) params.add('mastered=false');
+    final query = params.isEmpty ? '' : '?${params.join('&')}';
+    final response = await _get('/api/v1/wrong-book$query', userId: activeUserId);
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body);
+      if (body is Map) {
+        return WrongBookList.fromJson(Map<String, dynamic>.from(body));
+      }
+      return WrongBookList(items: const [], unmasteredCount: 0);
+    }
+    if (response.statusCode == 404) return const WrongBookList(items: [], unmasteredCount: 0); // AI off
+    _fail(response.statusCode, '获取错题本失败: ${response.statusCode}');
+  }
+
+  /// 轻量取未掌握错题数(给 tab 角标用)。复用 /wrong-book 端点(mastered=false 过滤
+  /// 只拉未掌握的),用响应里的 unmastered_count 字段(后端算的全局未掌握数)。
+  static Future<int> fetchUnmasteredCount(int activeUserId) async {
+    try {
+      final list = await fetchWrongBook(activeUserId, mastered: false);
+      return list.unmasteredCount;
+    } catch (_) {
+      return 0; // 角标失败不阻塞,静默 0
+    }
+  }
+
+  /// 标记/取消掌握。mastered=true → /master,false → /unmaster。
+  static Future<bool> markWrongBookMastered(
+    int activeUserId,
+    int questionId,
+    bool mastered,
+  ) async {
+    final suffix = mastered ? 'master' : 'unmaster';
+    final response = await _post('/api/v1/wrong-book/$questionId/$suffix', userId: activeUserId);
+    if (response.statusCode == 200) return mastered;
+    if (response.statusCode == 404) return mastered; // AI off,静默降级
+    _fail(response.statusCode, '更新掌握状态失败: ${response.statusCode}');
+  }
+
+  /// 取一批未掌握错题做重做卷。limit<=0 时后端默认 10。
+  static Future<List<WrongBookRedoQuestion>> fetchWrongBookRedo(
+    int activeUserId, {
+    int courseId = 0,
+    int limit = 10,
+  }) async {
+    final params = <String>[];
+    if (courseId != 0) params.add('course_id=$courseId');
+    if (limit > 0) params.add('limit=$limit');
+    final query = params.isEmpty ? '' : '?${params.join('&')}';
+    final response = await _get('/api/v1/wrong-book/redo$query', userId: activeUserId);
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body);
+      final list = (body is Map && body['questions'] is List) ? body['questions'] as List : const [];
+      return list.map((e) => WrongBookRedoQuestion.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    if (response.statusCode == 404) return const []; // AI off
+    _fail(response.statusCode, '获取重做题失败: ${response.statusCode}');
+  }
+
+  /// 错题本重做交卷。逐题判分,后端更新 curation 状态(对→mastered,错→attempt++)。
+  /// answers 形如 [{question_id, answer_index/answer_text/answer_indices}]。
+  static Future<List<WrongBookRedoResult>> submitWrongBookRedo({
+    required int activeUserId,
+    required List<Map<String, dynamic>> answers,
+  }) async {
+    final response = await _post(
+      '/api/v1/wrong-book/redo/submit',
+      userId: activeUserId,
+      body: {'answers': answers},
+    );
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body);
+      final list = (body is Map && body['results'] is List) ? body['results'] as List : const [];
+      return list.map((e) => WrongBookRedoResult.fromJson(e as Map<String, dynamic>)).toList();
+    }
+    if (response.statusCode == 404) return const []; // AI off
+    _fail(response.statusCode, '重做判分失败: ${response.statusCode}');
+  }
+
+  // ── 课程考试 (TODO.md P0) ──
+  // 4 个端点,数据按 user_id 键存 + 题库按 course_id 聚合,只需登录。
+  // status gate:题库不足 → available=false(AI off / 题库空都算不可考)。
+  // start:组卷,409 = 题库不足;返回 ExamView(题目不带正确答案)。
+  // exam(取 active):无 active exam → 后端返回 {status:none},这里转 null。
+  // submit:交卷,409 = 已交卷;返回 ExamSubmitReport(逐题揭示正确答案)。
+  static Future<ExamStatus> fetchExamStatus(int activeUserId, int courseId) async {
+    final response = await _get('/api/v1/courses/$courseId/exam/status', userId: activeUserId);
+    if (response.statusCode == 200) {
+      return ExamStatus.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 404) {
+      return const ExamStatus(available: false, reason: '考试功能未启用');
+    }
+    _fail(response.statusCode, '检查考试状态失败: ${response.statusCode}');
+  }
+
+  static Future<ExamView> startExam(int activeUserId, int courseId) async {
+    final response = await _post('/api/v1/courses/$courseId/exam/start', userId: activeUserId);
+    if (response.statusCode == 200) {
+      return ExamView.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 409) {
+      _fail(response.statusCode, '课程题库不足,学完更多课后解锁考试');
+    }
+    _fail(response.statusCode, '组卷失败: ${response.statusCode}');
+  }
+
+  /// 取已开考的 active exam。无 active exam 返回 null(handler 返回 {status:none})。
+  static Future<ExamView?> fetchActiveExam(int activeUserId, int courseId) async {
+    final response = await _get('/api/v1/courses/$courseId/exam', userId: activeUserId);
+    if (response.statusCode == 200) {
+      final body = jsonDecode(response.body);
+      // 后端无 active exam 时返回 {status:"none"}(无 exam_id);有则返回 ExamView。
+      if (body is Map && body['status'] == 'none') return null;
+      if (body is Map) {
+        return ExamView.fromJson(Map<String, dynamic>.from(body));
+      }
+    }
+    if (response.statusCode == 404) return null; // AI off
+    _fail(response.statusCode, '加载考试卷失败: ${response.statusCode}');
+  }
+
+  /// 交卷。answers 形如 [{question_id, answer_index/answer_text/answer_indices}]。
+  /// 已交卷(409)抛异常。
+  static Future<ExamSubmitReport> submitExam({
+    required int activeUserId,
+    required int examId,
+    required List<Map<String, dynamic>> answers,
+  }) async {
+    final response = await _post(
+      '/api/v1/exams/$examId/submit',
+      userId: activeUserId,
+      body: {'answers': answers},
+    );
+    if (response.statusCode == 200) {
+      return ExamSubmitReport.fromJson(jsonDecode(response.body) as Map<String, dynamic>);
+    }
+    if (response.statusCode == 409) {
+      _fail(response.statusCode, '这套考试卷已交卷,不能重复提交');
+    }
+    _fail(response.statusCode, '交卷失败: ${response.statusCode}');
   }
 
   /// Phase C 学习建议(agent 驱动)。GET /episodes/:id/ai-advice。

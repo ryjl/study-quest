@@ -899,6 +899,12 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 		c := c
 		startByChunk[c.ID] = c.StartTime
 	}
+	// 预取 course 的 subjectID,给错题本 hook 用(错题本冗余 subject_id 供按科目过滤)。
+	// best-effort:取不到则 subjectID=0,错题本行 subject_id=0(可接受——主流程不依赖它)。
+	var subjectID uint
+	if c, cerr := s.courseRepo.FindByID(quiz.CourseID); cerr == nil && c != nil {
+		subjectID = c.SubjectID
+	}
 	// question_id → 用户作答,便于按题目顺序回放。
 	inputByQ := make(map[uint]QuizAnswerInput, len(answers))
 	for _, a := range answers {
@@ -950,15 +956,28 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 				AnsweredAt:     now,
 			})
 			// 更新 memory(feedback loop)。合成题(chunkID=0)是 no-op。
-			// memory 更新的口径:全对 +0.1(增 mastery),错 -0.2。
-			// 多选题部分对(漏选但没多选错项)的处理:RecordAnswer 只支持 correct=true/false,
-			// 没有中性态。部分对学生其实掌握了大部分知识点(漏 1 个 ≠ 全错),扣 0.2 会系统性
-			// 压低善做多选题学生的 mastery,进而误导 advice。所以这里给部分对传 true(不扣分,
-			// 视为"基本掌握")。全错才扣分。TODO.md 记了"RecordAnswer 支持 partial 加权"的演进。
-			masteryCorrect := verdict.Correct || verdict.Partial
-			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, masteryCorrect); err != nil {
+			// memory 更新的口径:全对(correct=true)+0.1(增 mastery),否则 -0.2(扣)。
+			// 多选题部分对(漏选但没多选错项)按"错"处理:漏一个正确项就是没完全掌握,
+			// 该扣 mastery 才能让弱点浮现给 advice/考试抽题。这是 2026-07-23 改的一致口径:
+			// mastery / 错题本 / 显示对错 三处对"漏选"用同一判定(漏选=错),避免同一行为
+			// 在不同地方判得相反(旧版给部分对传 true 不扣分,导致漏选既算错进错题本又不算
+			// 错不扣 mastery,自相矛盾)。verdict.Partial 字段仍保留用于 UI 展示"漏选X/多选Y"
+			// 的明细,但它不再改变 mastery/错题本的判定。
+			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, verdict.Correct); err != nil {
 				log.Printf("AI: update memory for question %d failed: %v", q.ID, err)
 				// non-fatal,同单题 submit 的处理:答案已记录,memory 没更新不阻断交卷
+			}
+			// 错题本 hook:做错的题(!correct)upsert 进 WrongBookItem,让学生能在错题本
+			// 里复习。nil-safe(wrongBookRepo 在老测试里可能为 nil,生产已注入)。
+			// best-effort:失败只记日志,不阻断交卷主流程——错题本是 nice-to-have 附加。
+			// 漏选(multi_choice 部分对)按"错"处理,和 mastery 同口径(见上注释)。
+			if s.wrongBookRepo != nil && !verdict.Correct {
+				if werr := s.wrongBookRepo.UpsertOnWrong(model.WrongBookItem{
+					UserID: userID, QuestionID: q.ID, ChunkID: q.ChunkID,
+					CourseID: quiz.CourseID, EpisodeID: quiz.EpisodeID, SubjectID: subjectID,
+				}); werr != nil {
+					log.Printf("AI: wrong-book upsert for question %d failed: %v", q.ID, werr)
+				}
 			}
 		}
 		// 交卷后阅卷,无论是否作答都揭示正确答案(学生要看错题解析)。

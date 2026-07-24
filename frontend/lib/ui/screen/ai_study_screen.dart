@@ -345,6 +345,20 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       // 交卷成功后后端链式 enqueue 了 episode 级 advice job(学生刚交完卷 memory 最新,
       // 这时跑 advice 最准)。重新拉 advice 触发轮询,让学生交卷后能很快看到复习建议。
       _loadAdvice();
+      // 提示错题已加入错题本(发现性:让学生知道有错题要复习)。
+      final wrongCount = results.where((r) => !r.correct).length;
+      if (wrongCount > 0 && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$wrongCount 道错题已加入错题本'),
+            action: SnackBarAction(
+              label: '去复习',
+              onPressed: () => Navigator.of(context).maybePop(),
+            ),
+            duration: const Duration(seconds: 5),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         setState(() => _submittingAll = false);

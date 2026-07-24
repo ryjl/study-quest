@@ -111,6 +111,21 @@ type AIService interface {
 	ListQuizzesForUser(userID uint) ([]QuizDetailQuiz, error)
 	GetQuizDetail(quizID uint) (*QuizDetail, error)
 
+	// ── 错题本 (TODO.md P0) ──
+	// GetWrongBook 列错题本。courseID=0 表全局;mastered 非空则按掌握状态过滤。
+	// nil-safe(wrongBookRepo 未注入时返回空),守 AI 附加层降级。
+	GetWrongBook(userID, courseID uint, mastered *bool) ([]WrongBookItemView, error)
+	// MarkWrongBookMastered 手动/重做正确后标记掌握。nil-safe。
+	MarkWrongBookMastered(userID, questionID uint, mastered bool) error
+	// RedoWrongBookQuiz 取一批未掌握错题当"重做卷"(复用 QuizViewQuestion 渲染)。
+	// limit<=0 默认 10。nil-safe。
+	RedoWrongBookQuiz(userID, courseID uint, limit int) ([]QuizViewQuestion, error)
+	// SubmitWrongBookRedo 错题本重做交卷。逐题判分 + 更新 curation 状态,不落 Answer
+	// 行、不改 quiz-side mastery(和正式 quiz 交卷隔离)。nil-safe。
+	SubmitWrongBookRedo(userID uint, answers []QuizAnswerInput) ([]WrongBookRedoResult, error)
+	// UnmasteredCount 返回某用户未掌握错题总数(给 tab 角标用)。nil-safe 返回 0。
+	UnmasteredCount(userID uint) (int64, error)
+
 	// ── Phase E: admin 用户学习报告(agent 驱动,跨课程画像)──
 	// EnqueueUserReport 是 admin 触发的"为某用户生成学习报告"入口。入队低优先级
 	// user_report job,返回 "generating"(无在途 job 时)或 "unavailable"(AI off)。
@@ -231,6 +246,34 @@ type AIService interface {
 	// job's UpsertCandidate won't re-create it next time. Returns
 	// ErrGlossaryNotPending if the candidate isn't reviewable.
 	RejectGlossaryCandidate(id uint) error
+
+	// Stop halts the background worker goroutine. Production never calls this
+	// (process exit reclaims it); tests call it via t.Cleanup to avoid leaking a
+	// poller per NewAIService across the test binary.
+	Stop()
+
+	// ── 课程考试 (TODO.md P0) ──
+	// StartExam 为 (user, course) 开考组卷。题库不足返回 ErrExamInsufficientPool。
+	// nil-safe(examRepo 未注入返回错误,不 panic)。
+	StartExam(userID, courseID uint) (*ExamView, error)
+	// GetActiveExamView 取 (user, course) 的 active exam 视图。无返回 (nil,nil)。
+	GetActiveExamView(userID, courseID uint) (*ExamView, error)
+	// SubmitExam 交卷。已交卷返回 ErrExamAlreadySubmitted。nil-safe。
+	SubmitExam(userID, examID uint, answers []QuizAnswerInput) (*ExamSubmitReport, error)
+	// GetExamStatus gate:课程题库够不够开考。
+	GetExamStatus(courseID uint) (ExamStatus, error)
+
+	// ── 课程考试 admin 观测(每个失败返回零值,handler log + 降级) ──
+	ExamStats() (repository.ExamStats, error)
+	ExamSourceQuality() ([]repository.ExamSourceQualityRow, error)
+
+	// ── 错题本 admin 观测(每个失败返回零值,handler log + 降级) ──
+	// WrongBookStats 返回错题本全局统计(nil-safe:wrongBookRepo 未注入返回零值)。
+	WrongBookStats() (repository.WrongBookStats, error)
+	// WrongBookTopFrequent 返回高频错题榜(nil-safe 返回空)。
+	WrongBookTopFrequent(limit int) ([]repository.FrequentWrongRow, error)
+	// WrongBookSubjectDistribution 返回按科目分组的错题量(nil-safe 返回空)。
+	WrongBookSubjectDistribution() ([]repository.SubjectWrongCount, error)
 }
 
 // ErrGlossaryNotPending is returned by Accept/RejectGlossaryCandidate when the
@@ -272,6 +315,13 @@ type aiService struct {
 	// (TODO.md P1). appendLog is nil-safe, so tests that don't assert on logs
 	// pass nil. Production wires NewLogRepository(db).
 	logRepo repository.LogRepository
+	// wrongBookRepo stores 错题本 curation 状态(交卷时对做错的题 upsert)。
+	// nil-safe: when nil, submit 不写错题本(降级,不阻断交卷主流程),quiz 闭环照常。
+	// 这保持 AI 附加层 + 零回归:老测试不传它也能跑,生产 NewAIService 注入。
+	wrongBookRepo repository.WrongBookRepository
+	// examRepo stores 课程考试(Exam/ExamQuestion/ExamAnswer)。nil-safe: when nil,
+	// StartExam/SubmitExam 返回 "考试功能未启用",其它功能照常。生产 NewAIService 注入。
+	examRepo repository.ExamRepository
 	// polishLLMOverride is a TEST-ONLY seam: when non-nil, runPolishJob uses
 	// this provider directly instead of resolving through `resolver`. This lets
 	// service-level tests drive the full polish→writeback→chain path with a
@@ -349,6 +399,8 @@ func NewAIService(
 	subjectRepo repository.SubjectRepository,
 	polishChunkRepo repository.AIPolishChunkRepository,
 	logRepo repository.LogRepository,
+	wrongBookRepo repository.WrongBookRepository,
+	examRepo repository.ExamRepository,
 ) AIService {
 	s := &aiService{
 		db:              db,
@@ -362,6 +414,8 @@ func NewAIService(
 		subjectRepo:     subjectRepo,
 		polishChunkRepo: polishChunkRepo,
 		logRepo:         logRepo,
+		wrongBookRepo:   wrongBookRepo,
+		examRepo:        examRepo,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
