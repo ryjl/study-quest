@@ -503,25 +503,19 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
           if (picked.isNotEmpty) ...[
             const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
-            Wrap(
-              spacing: 10, runSpacing: 4,
-              children: picked.map((i) {
-                final ok = correctSet.contains(i);
-                return Text('${label(i)}. ${options[i]}',
-                  style: TextStyle(fontSize: 12,
-                    color: ok ? const Color(0xFF059669) : const Color(0xFFDC2626),
-                    fontWeight: FontWeight.bold));
-              }).toList(),
-            ),
+            // 一行一项(需求#3)。
+            for (final i in picked)
+              Text('${label(i)}. ${options[i]}',
+                style: TextStyle(fontSize: 12,
+                  color: correctSet.contains(i) ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                  fontWeight: FontWeight.bold)),
           ],
           const SizedBox(height: 6),
           const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Wrap(
-            spacing: 10, runSpacing: 4,
-            children: correctIdxs.map((i) => Text('${label(i)}. ${options[i]}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold))).toList(),
-          ),
+          for (final i in correctIdxs)
+            Text('${label(i)}. ${options[i]}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
           if (wrongPicks.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',

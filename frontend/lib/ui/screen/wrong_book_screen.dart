@@ -12,8 +12,8 @@ import '../responsive.dart';
 
 /// 错题本屏(TODO.md P0)。学生做错的题自动归集于此。体验闭环:
 ///  - 列表浏览(默认「全部」:已掌握的灰显不消失;可按课程/掌握状态过滤)
-///  - 卡片点开看正确答案 + 解析(默认收起,展开复习)
-///  - 单题重做(「重做本题」)或整批重做(顶部「重做一批」,连对 3 次才掌握)
+///  - 卡片就地自测(收起态点选项回忆,展开看正确答案 + 解析 + 多选明细对比)
+///  - 整批重做(顶部「重做一批」,像一份复习卷,连对 3 次才掌握)
 ///  - 手动标记掌握 / 取消(明确按钮,不再用隐晦圆圈)
 ///
 /// PAD/TV 友好:
@@ -173,27 +173,6 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
         _expanded.add(qid);
       }
     });
-  }
-
-  Future<void> _redoSingle(WrongBookItem item) async {
-    if (TvMode.instance.isActive) return;
-    // 单题重做:取这道题的题面构造重做卷。fetchWrongBookRedo 是随机抽,单题重做用
-    // 本地已有的题面构造 WrongBookRedoQuestion,直接进重做屏。
-    final q = WrongBookRedoQuestion(
-      id: item.questionId,
-      type: item.type,
-      stem: item.stem,
-      options: item.options,
-      hasJump: item.hasJump,
-    );
-    await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => _WrongBookRedoScreen(
-        activeUserId: widget.activeUserId,
-        questions: [q],
-      ),
-    ));
-    _refresh(); // 重做可能改了 streak/mastered,刷新列表
-    widget.onWrongBookChanged?.call(); // 角标可能变
   }
 
   Future<void> _startBatchRedo() async {
@@ -573,27 +552,9 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               ),
             ),
           const SizedBox(height: 12),
-          // 底部操作行:重做本题(TV 隐藏) + 掌握切换。
+          // 底部操作行:只有掌握切换(卡片已支持就地自测,单题「重做本题」入口移除)。
           Row(
             children: [
-              if (!TvMode.instance.isActive)
-                GestureDetector(
-                  onTap: () => _redoSingle(item),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.replay_rounded, size: 15, color: AppTheme.blue600),
-                        SizedBox(width: 4),
-                        Text('重做本题', style: TextStyle(color: AppTheme.blue600, fontSize: 12, fontWeight: FontWeight.bold)),
-                      ],
-                    ),
-                  ),
-                ),
               const Spacer(),
               // 掌握切换:未掌握→「标记掌握」(灰);已掌握→「取消掌握」(绿,点一下退回未掌握)。
               // 文案明确双向(问题#5:之前已掌握态只显示「已掌握」像不可点的状态标签,没有"改回未掌握"的入口)。
@@ -762,6 +723,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
             _revealFill(item)
           else
             ..._revealChoiceOptions(item),
+          // 多选题展开:若用户在收起态自测选过,追加明细(你的选择/正确答案/多选/漏选),
+          // 用带颜色的选项文字把对错归属说清——和重做屏一致(需求#2)。
+          if (item.type == 'multi_choice' && (_multiSelf[item.questionId]?.isNotEmpty ?? false))
+            _buildSelfMultiDetail(item),
           if (item.explanation.isNotEmpty) ...[
             const SizedBox(height: 10),
             const Text('解析',
@@ -807,13 +772,13 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     });
   }
 
-  // 多选题展开:正确项绿,学生自测错选的红,漏选的正确项仍按绿展示。
+  // 多选题展开:选项区只标正确(绿);用户自测的选择在底部明细里说清。
   List<Widget> _revealMultiOptions(WrongBookItem item) {
     final correctIdxs = item.correctIndices.toSet();
-    final userSet = _multiSelf[item.questionId] ?? <int>{};
     return List.generate(item.options.length, (i) {
+      // 多选选项区只标正确(绿),不标红——红绿混在选项里分不清「我选的」和「对的」。
+      // 用户自测的选择放底部明细(_buildSelfMultiDetail)用带颜色文字说清。
       final correct = correctIdxs.contains(i);
-      final wrongPick = userSet.contains(i) && !correct;
       Color bg = Colors.white;
       Color border = AppTheme.borderMuted;
       IconData icon = Icons.check_box_outline_blank;
@@ -821,9 +786,6 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
       if (correct) {
         bg = const Color(0xFFD1FAE5); border = const Color(0xFF10B981);
         icon = Icons.check_box; iconColor = const Color(0xFF10B981);
-      } else if (wrongPick) {
-        bg = const Color(0xFFFEE2E2); border = Colors.redAccent;
-        icon = Icons.cancel; iconColor = Colors.redAccent;
       }
       return Container(
         margin: const EdgeInsets.only(bottom: 4),
@@ -854,6 +816,56 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
         Text('正确答案:${item.correctText}',
           style: const TextStyle(fontSize: 14, color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
       ],
+    );
+  }
+
+  // 错题本预览:多选题展开后的自测明细(数据源是本地自测状态 _multiSelf,非交卷)。
+  // 选项区只标正确项,这里用带颜色的选项文字列清「你的选择/正确答案/多选/漏选」,
+  // 每个选项一行(需求#3)。和重做屏的 _buildMultiDetail 视觉一致,只是数据源不同。
+  Widget _buildSelfMultiDetail(WrongBookItem item) {
+    final picks = _multiSelf[item.questionId] ?? <int>{};
+    final correctIdxs = item.correctIndices;
+    final correctSet = correctIdxs.toSet();
+    final wrongPicks = picks.where((i) => !correctSet.contains(i)).toList();
+    final missed = correctIdxs.where((i) => !picks.contains(i)).toList();
+    String label(int i) => String.fromCharCode(65 + i);
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.white, borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: AppTheme.borderMuted),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          // 每个选项一行:选对绿、选错红。
+          for (final i in picks)
+            Text('${label(i)}. ${item.options[i]}',
+              style: TextStyle(fontSize: 12,
+                color: correctSet.contains(i) ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          for (final i in correctIdxs)
+            Text('${label(i)}. ${item.options[i]}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
+          if (wrongPicks.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+          ],
+          if (missed.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('⚠ ${missed.map(label).join("、")} 漏选了',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+          ],
+        ],
+      ),
     );
   }
 
@@ -1134,30 +1146,23 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 你的选择(每项带颜色:选对绿、选错红)。
+          // 你的选择(每项带颜色:选对绿、选错红),一行一项(需求#3)。
           if (picked.isNotEmpty) ...[
             const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
             const SizedBox(height: 4),
-            Wrap(
-              spacing: 10, runSpacing: 4,
-              children: picked.map((i) {
-                final ok = correctSet.contains(i);
-                return Text('${label(i)}. ${options[i]}',
-                  style: TextStyle(fontSize: 12,
-                    color: ok ? const Color(0xFF059669) : const Color(0xFFDC2626),
-                    fontWeight: FontWeight.bold));
-              }).toList(),
-            ),
+            for (final i in picked)
+              Text('${label(i)}. ${options[i]}',
+                style: TextStyle(fontSize: 12,
+                  color: correctSet.contains(i) ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                  fontWeight: FontWeight.bold)),
           ],
-          // 正确答案(全绿)。
+          // 正确答案(全绿),一行一项(需求#3)。
           const SizedBox(height: 6),
           const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
-          Wrap(
-            spacing: 10, runSpacing: 4,
-            children: correctIdxs.map((i) => Text('${label(i)}. ${options[i]}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold))).toList(),
-          ),
+          for (final i in correctIdxs)
+            Text('${label(i)}. ${options[i]}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
           // 多选了 / 漏选了(橙字,具体到选项)。
           if (wrongPicks.isNotEmpty) ...[
             const SizedBox(height: 6),

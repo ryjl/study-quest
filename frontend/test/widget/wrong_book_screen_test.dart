@@ -147,7 +147,10 @@ void main() {
     // 已掌握 badge。
     expect(find.text('✓ 已掌握'), findsOneWidget);
     // 滚到底部看未掌握卡的 "错 3 次" + "连对 2 次"。
-    await tester.scrollUntilVisible(find.text('错 3 次'), 200);
+    // 显式指定主 Scrollable:scrollUntilVisible 默认 find.byType(Scrollable) 会匹配到多个,
+    // 卡片变矮触发滚动时抛 "Too many elements"。
+    await tester.scrollUntilVisible(find.text('错 3 次'), 200,
+        scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
     expect(find.text('错 3 次'), findsOneWidget);
     expect(find.text('连对 2 次'), findsOneWidget);
@@ -174,19 +177,6 @@ void main() {
     await tester.tap(find.text('重做一批'));
     await tester.pumpAndSettle();
     expect(find.text('暂无可重做的错题'), findsOneWidget);
-  });
-
-  testWidgets('single redo button per card navigates to redo screen', (tester) async {
-    bindMock((_) => itemsResponse([item(id: 1, stem: 'q', options: ['a', 'b'], correctIndex: 1)]));
-    await _pumpScreen(tester);
-    // 重做本题按钮可见可点(确保滚到可见再点)。
-    await tester.scrollUntilVisible(find.text('重做本题'), 100);
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('重做本题'));
-    await tester.pumpAndSettle();
-    // 进了重做屏:AppBar 标题(带题量) + 题面。
-    expect(find.textContaining('重做错题'), findsOneWidget);
-    expect(find.text('提交全部'), findsOneWidget);
   });
 
   testWidgets('redo screen shows question number and multi-detail after submit', (tester) async {
@@ -264,7 +254,8 @@ void main() {
     await _pumpScreen(tester);
     // 初始:未掌握 → 显示「标记掌握」。
     expect(find.text('标记掌握'), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('标记掌握'), 100);
+    await tester.scrollUntilVisible(find.text('标记掌握'), 100,
+        scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
     // 点一下 → 乐观翻转成「已掌握 · 点取消」,不等后端。
     await tester.tap(find.text('标记掌握'));

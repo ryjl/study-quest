@@ -68,6 +68,9 @@ class MarkdownView extends StatelessWidget {
       data: _normalizeMarkdown(data),
       extensionSet: md.ExtensionSet.gitHubFlavored,
       softLineBreak: true,
+      // selectable: 长按可选中复制正文(题面/解析/AI总结/学习建议等)。默认 false 不可选,
+      // 用户反馈想把解析、建议等文字复制出来,所以全局开启(需求#4)。
+      selectable: true,
       styleSheet: sheet,
       builders: {
         // pre 元素是围栏代码块的块级容器。在此拦截 ```svg 块;
