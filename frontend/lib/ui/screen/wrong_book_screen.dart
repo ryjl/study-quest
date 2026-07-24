@@ -21,7 +21,14 @@ import '../responsive.dart';
 ///  - TV 模式:做题交互隐藏 + 提示去平板/手机(TV 复习错题场景不成立)
 class WrongBookScreen extends StatefulWidget {
   final int activeUserId;
-  const WrongBookScreen({super.key, required this.activeUserId});
+  /// 错题本内部状态变化(掌握切换/重做交卷)后通知父级刷新 tab 角标。
+  /// 不传则不通知(默认)。main_navigation 传入 _loadUnmasteredCount。
+  final VoidCallback? onWrongBookChanged;
+  const WrongBookScreen({
+    super.key,
+    required this.activeUserId,
+    this.onWrongBookChanged,
+  });
 
   @override
   State<WrongBookScreen> createState() => _WrongBookScreenState();
@@ -136,6 +143,8 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     });
     try {
       await ApiService.markWrongBookMastered(widget.activeUserId, item.questionId, newMastered);
+      // 通知父级(main_navigation)刷新 tab 角标——未掌握数变了。
+      widget.onWrongBookChanged?.call();
     } catch (_) {
       // 失败回滚:重拉保证和后端一致。
       if (mounted) _refresh();
@@ -184,6 +193,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
       ),
     ));
     _refresh(); // 重做可能改了 streak/mastered,刷新列表
+    widget.onWrongBookChanged?.call(); // 角标可能变
   }
 
   Future<void> _startBatchRedo() async {
@@ -205,6 +215,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
       ),
     ));
     _refresh();
+    widget.onWrongBookChanged?.call(); // 重做交卷可能改了掌握状态,角标可能变
   }
 
   @override
@@ -941,7 +952,7 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
                 return _buildSubmitRow(submitted);
               }
               final q = widget.questions[index];
-              return _buildQuestionCard(q, submitted);
+              return _buildQuestionCard(q, index, submitted);
             },
           ),
         ),
@@ -986,7 +997,7 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
     );
   }
 
-  Widget _buildQuestionCard(WrongBookRedoQuestion q, bool submitted) {
+  Widget _buildQuestionCard(WrongBookRedoQuestion q, int index, bool submitted) {
     final result = _results?[q.id];
     final userAnswer = _answers[q.id];
     return Container(
@@ -1000,6 +1011,34 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 题序号 + 题型标签(对齐 quiz 层样式):让重做卷像一份正式卷子(需求#2)。
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(color: AppTheme.slate100, borderRadius: BorderRadius.circular(5)),
+              child: Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: q.type == 'fill'
+                    ? const Color(0xFFFFFBEB)
+                    : q.type == 'multi_choice' ? const Color(0xFFF5F3FF) : AppTheme.blue100,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                q.type == 'fill' ? '填空' : q.type == 'multi_choice' ? '多选' : '选择',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: q.type == 'fill'
+                      ? const Color(0xFF92400E)
+                      : q.type == 'multi_choice' ? const Color(0xFF6D28D9) : const Color(0xFF1D4ED8),
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
           MarkdownView(data: q.stem, baseTextColor: AppTheme.slate900, textScale: 1.0),
           const SizedBox(height: 10),
           if (q.type == 'multi_choice')
@@ -1055,35 +1094,125 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
   ) {
     final picked = (userAnswer?['answer_indices'] as List?)?.cast<int>() ?? const [];
     final correctIdxs = result?.correctIndices ?? const [];
-    return List.generate(q.options.length, (i) {
+    final tiles = List.generate(q.options.length, (i) {
       final selected = picked.contains(i);
+      // 多选题选项区只标正确答案(绿),不再标红——红绿混在一个选项列表里会让人分不清
+      // 「我选的」和「对的」(需求#3a)。用户的选择改到底部明细里用带颜色的文字说清楚。
       final correct = submitted && correctIdxs.contains(i);
-      final wrongPick = submitted && selected && !correct;
       return _optionTile(
         q.options[i],
         selected: selected,
         correct: correct,
-        wrongPick: wrongPick,
+        wrongPick: false,
         multi: true,
         onTap: () => _toggleMulti(q.id, i),
       );
     });
+    // 交卷后追加底部明细:把「你的选择 / 正确答案 / 多选/漏选」用带颜色的选项文字列清楚。
+    if (submitted && result != null) {
+      tiles.add(_buildMultiDetail(q.options, picked, correctIdxs));
+    }
+    return tiles;
+  }
+
+  // 多选题底部明细:选项区干净(只标正确项),这里用带颜色的选项文字把对错归属说清楚。
+  // 你选的:选对的项绿、选错的项红;正确答案:全绿;多选/漏选项橙字提示。
+  Widget _buildMultiDetail(List<String> options, List<int> picked, List<int> correctIdxs) {
+    final pickedSet = picked.toSet();
+    final correctSet = correctIdxs.toSet();
+    final wrongPicks = picked.where((i) => !correctSet.contains(i)).toList(); // 多选的
+    final missed = correctIdxs.where((i) => !pickedSet.contains(i)).toList(); // 漏选的
+    String label(int i) => String.fromCharCode(65 + i); // 0→A,1→B...
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 你的选择(每项带颜色:选对绿、选错红)。
+          if (picked.isNotEmpty) ...[
+            const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 10, runSpacing: 4,
+              children: picked.map((i) {
+                final ok = correctSet.contains(i);
+                return Text('${label(i)}. ${options[i]}',
+                  style: TextStyle(fontSize: 12,
+                    color: ok ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                    fontWeight: FontWeight.bold));
+              }).toList(),
+            ),
+          ],
+          // 正确答案(全绿)。
+          const SizedBox(height: 6),
+          const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 10, runSpacing: 4,
+            children: correctIdxs.map((i) => Text('${label(i)}. ${options[i]}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold))).toList(),
+          ),
+          // 多选了 / 漏选了(橙字,具体到选项)。
+          if (wrongPicks.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+          ],
+          if (missed.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('⚠ ${missed.map(label).join("、")} 漏选了',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _buildFillField(
     WrongBookRedoQuestion q, Map<String, dynamic>? userAnswer,
     WrongBookRedoResult? result, bool submitted,
   ) {
+    // 填空题交卷后:输入框变红/绿(留内容只读),下面给正确答案(错时)。之前提交后直接丢掉
+    // 用户填的,只显示正确答案,用户不知道自己刚填了什么(需求#3b)。
     if (submitted) {
+      final userText = (userAnswer?['answer_text'] as String?) ?? '';
+      final isCorrect = result?.correct ?? false;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (result?.correctText.isNotEmpty == true)
-            Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text('正确答案:${result!.correctText}',
-                style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
+          TextField(
+            controller: TextEditingController(text: userText),
+            readOnly: true,
+            enableInteractiveSelection: false,
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: isCorrect ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
+              ),
             ),
+            style: TextStyle(
+              fontSize: 14,
+              color: isCorrect ? const Color(0xFF059669) : const Color(0xFFDC2626),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          if (!isCorrect && result?.correctText.isNotEmpty == true) ...[
+            const SizedBox(height: 6),
+            Text('正确答案:${result!.correctText}',
+              style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
+          ],
         ],
       );
     }

@@ -166,4 +166,83 @@ void main() {
     expect(find.text('加载考试状态失败'), findsOneWidget);
     expect(find.text('重试加载'), findsOneWidget);
   });
+
+  testWidgets('多选题交卷后选项区只标正确项 + 底部明细列对错归属', (tester) async {
+    // 需求#3a:多选提交后选项区干净(只标正确绿),底部明细用带颜色文字说清「你的选择/正确答案/多选/漏选」。
+    const utf8 = {'content-type': 'application/json; charset=utf-8'};
+    ApiService.bindTestClient(MockClient((request) async {
+      final path = request.url.path;
+      if (path.endsWith('/exam/status')) {
+        return http.Response(jsonEncode({'available': true}), 200, headers: utf8);
+      }
+      if (path.endsWith('/exam')) {
+        return http.Response(jsonEncode({
+          'exam_id': 5, 'course_id': 7, 'submitted': false,
+          'questions': [
+            {'id': 1, 'type': 'multi_choice', 'stem': '多选判分', 'options': ['甲', '乙', '丙', '丁']},
+          ],
+        }), 200, headers: utf8);
+      }
+      if (path.endsWith('/submit')) {
+        // 正确是 0、2(甲、丙)。学生选了 0、1(甲、乙) → 甲对、乙多选、丙漏选。
+        return http.Response(jsonEncode({
+          'exam_id': 5, 'score': 0.0,
+          'results': [
+            {'question_id': 1, 'correct': false, 'correct_indices': [0, 2], 'explanation': ''},
+          ],
+        }), 200, headers: utf8);
+      }
+      return http.Response('', 500);
+    }));
+    await _pumpScreen(tester);
+    // 选 甲(0) 和 乙(1)。
+    await tester.tap(find.text('甲'));
+    await tester.pump();
+    await tester.tap(find.text('乙'));
+    await tester.pump();
+    await tester.tap(find.text('提交全部'));
+    await tester.pumpAndSettle();
+    // 底部明细出现:你的选择 / 正确答案 / 多选/漏选提示。
+    expect(find.text('你的选择'), findsOneWidget);
+    expect(find.text('正确答案'), findsOneWidget);
+    expect(find.textContaining('多选了'), findsOneWidget); // 乙多选
+    expect(find.textContaining('漏选了'), findsOneWidget); // 丙漏选
+  });
+
+  testWidgets('填空题交卷判错后输入框变红、内容保留、显示正确答案', (tester) async {
+    // 需求#3b:填空提交判错,输入框变红留内容(用户能看到自己刚填了什么)+ 绿色正确答案。
+    const utf8 = {'content-type': 'application/json; charset=utf-8'};
+    ApiService.bindTestClient(MockClient((request) async {
+      final path = request.url.path;
+      if (path.endsWith('/exam/status')) {
+        return http.Response(jsonEncode({'available': true}), 200, headers: utf8);
+      }
+      if (path.endsWith('/exam')) {
+        return http.Response(jsonEncode({
+          'exam_id': 6, 'course_id': 7, 'submitted': false,
+          'questions': [
+            {'id': 2, 'type': 'fill', 'stem': '填空判分', 'options': []},
+          ],
+        }), 200, headers: utf8);
+      }
+      if (path.endsWith('/submit')) {
+        return http.Response(jsonEncode({
+          'exam_id': 6, 'score': 0.0,
+          'results': [
+            {'question_id': 2, 'correct': false, 'correct_text': '5/6', 'explanation': ''},
+          ],
+        }), 200, headers: utf8);
+      }
+      return http.Response('', 500);
+    }));
+    await _pumpScreen(tester);
+    // 填一个错误答案。
+    await tester.enterText(find.byType(TextField), '12');
+    await tester.pump();
+    await tester.tap(find.text('提交全部'));
+    await tester.pumpAndSettle();
+    // 判错:正确答案展示,且输入框内容(12)还在(只读态)。
+    expect(find.textContaining('正确答案'), findsOneWidget);
+    expect(find.textContaining('5/6'), findsOneWidget);
+  });
 }

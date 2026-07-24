@@ -189,6 +189,48 @@ void main() {
     expect(find.text('提交全部'), findsOneWidget);
   });
 
+  testWidgets('redo screen shows question number and multi-detail after submit', (tester) async {
+    // 需求#2 题序号 + 需求#3a 多选明细:重做卷每题带「第N题」;多选交卷后底部明细。
+    bindMock((path) {
+      // 注意顺序:/redo/submit 必须在 /wrong-book/redo 之前判断——submit 路径
+      // (/wrong-book/redo/submit) 也 contains('/wrong-book/redo'),先判 redo 会误匹配。
+      if (path.contains('/redo/submit')) {
+        // 正确是 0、2(甲、丙)。学生选 0、1 → 乙多选、丙漏选。
+        return http.Response(jsonEncode({
+          'results': [
+            {'question_id': 10, 'correct': false, 'correct_indices': [0, 2], 'explanation': ''},
+          ],
+        }), 200, headers: utf8);
+      }
+      if (path.contains('/wrong-book/redo')) {
+        return http.Response(jsonEncode({
+          'questions': [
+            {'id': 10, 'type': 'multi_choice', 'stem': '多选重做', 'options': ['甲', '乙', '丙'], 'has_jump': false},
+          ],
+        }), 200, headers: utf8);
+      }
+      return itemsResponse([item(id: 10, stem: 'seed')]);
+    });
+    await _pumpScreen(tester);
+    await tester.tap(find.text('重做一批'));
+    await tester.pumpAndSettle();
+    // 题序号。
+    expect(find.text('第1题'), findsOneWidget);
+    // 选 甲 + 乙。
+    await tester.tap(find.text('甲'));
+    await tester.pump();
+    await tester.tap(find.text('乙'));
+    await tester.pump();
+    await tester.tap(find.text('提交全部'));
+    await tester.pumpAndSettle();
+    // 题序号仍在(题卡重渲染) + 多选明细(你的选择/正确答案/多选/漏选)。
+    expect(find.text('第1题'), findsOneWidget);
+    expect(find.text('你的选择'), findsOneWidget);
+    expect(find.text('正确答案'), findsOneWidget);
+    expect(find.textContaining('多选了'), findsOneWidget);
+    expect(find.textContaining('漏选了'), findsOneWidget);
+  });
+
   testWidgets('filtered empty state keeps filter chips (problem #2)', (tester) async {
     // 问题#2:选了未掌握过滤、但该过滤下无结果时,不应整页变空状态丢失过滤 chip。
     // 这里模拟"学生有错题(unmastered_count>0)但当前过滤返回空 items"。

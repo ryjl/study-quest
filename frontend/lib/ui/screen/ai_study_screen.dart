@@ -1049,17 +1049,14 @@ class _QuestionCard extends StatelessWidget {
   Widget _multiOptionTile(int i, Set<int> picks, Set<int> correctSet, bool hasVerdict, bool submitted) {
     final isSelected = picks.contains(i);
     final isCorrect = hasVerdict && correctSet.contains(i);
-    // 学生错选:已选 + 交卷有结果 + 不在正确集合里。
-    final isWrongPick = hasVerdict && isSelected && !isCorrect;
+    // 多选选项区只标正确答案(绿),不再标红——红绿混在选项里分不清「我选的」和「对的」(需求#3a)。
+    // 用户的选择状态仍由左侧 checkbox 体现(选中的框打紫勾),对错明细在 _buildVerdict 底部说清楚。
     Color bg = Colors.white;
     Color border = AppTheme.borderMuted;
     if (submitted && hasVerdict) {
       if (isCorrect) {
         bg = const Color(0xFFECFDF5);
         border = AppTheme.accentGreen;
-      } else if (isWrongPick) {
-        bg = const Color(0xFFFEF2F2);
-        border = const Color(0xFFEF4444);
       }
     } else if (isSelected) {
       bg = const Color(0xFFF5F3FF);
@@ -1087,9 +1084,55 @@ class _QuestionCard extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
           if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
-          if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
         ]),
       ),
+    );
+  }
+
+  // 多选题底部明细:选项区只标正确项,这里用带颜色文字把「你的选择/正确答案/多选/漏选」说清楚(需求#3a)。
+  Widget _buildMultiDetail() {
+    final picks = multiPicks ?? <int>{};
+    final correctIdxs = result?.correctIndices ?? const <int>[];
+    final correctSet = correctIdxs.toSet();
+    final wrongPicks = picks.where((i) => !correctSet.contains(i)).toList(); // 多选的
+    final missed = correctIdxs.where((i) => !picks.contains(i)).toList(); // 漏选的
+    String label(int i) => String.fromCharCode(65 + i); // 0→A,1→B...
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (picks.isNotEmpty) ...[
+          const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 10, runSpacing: 4,
+            children: picks.map((i) {
+              final ok = correctSet.contains(i);
+              return Text('${label(i)}. ${question.options[i]}',
+                style: TextStyle(fontSize: 12,
+                  color: ok ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                  fontWeight: FontWeight.bold));
+            }).toList(),
+          ),
+        ],
+        const SizedBox(height: 6),
+        const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 10, runSpacing: 4,
+          children: correctIdxs.map((i) => Text('${label(i)}. ${question.options[i]}',
+            style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold))).toList(),
+        ),
+        if (wrongPicks.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',
+            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+        ],
+        if (missed.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text('⚠ ${missed.map(label).join("、")} 漏选了',
+            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+        ],
+      ],
     );
   }
 
@@ -1196,22 +1239,23 @@ class _QuestionCard extends StatelessWidget {
         // 填空题回放学生当时填的原文(优先后端回填的 user_answer_text,回退 controller 里的
         // 当前文本——刚交卷时后端回填还没 fetch 回来,controller 仍持有输入值)。答对了也展示,
         // 让学生确认自己填对了什么;漏答(空串)不展示这行。
+        // 判错时用红字突出(需求#3b):之前灰色太弱,用户看不出自己填错了什么。
         if (question.isFill) ...[
           const SizedBox(height: 4),
           Text('你填的: ${question.userAnswerText.isNotEmpty ? question.userAnswerText : (fillController?.text ?? '')}',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textMuted)),
+              style: TextStyle(fontSize: 12,
+                color: r.correct ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                fontWeight: FontWeight.bold)),
         ],
-        // 多选题:partial 时提示漏选/多选的具体数量(选项已用绿/红高亮,这里给一句文字总结)。
-        if (question.isMultiChoice && isPartial) ...[
-          const SizedBox(height: 4),
-          Text(
-            _partialHint(r.missedCount, r.extraCount),
-            style: const TextStyle(fontSize: 12, color: Color(0xFF92400E)),
-          ),
+        // 多选题:选项区只标正确项,这里用底部明细把「你的选择/正确答案/多选/漏选」用带颜色
+        // 的选项文字列清楚(需求#3a),替换原来只给数量的 partial hint。
+        if (question.isMultiChoice) ...[
+          const SizedBox(height: 8),
+          _buildMultiDetail(),
         ],
         if (!r.correct && r.correctText.isNotEmpty) ...[
           const SizedBox(height: 4),
-          Text('正确答案: ${r.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155))),
+          Text('正确答案: ${r.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
         ],
         if (r.explanation.isNotEmpty) ...[
           const SizedBox(height: 4),
@@ -1231,22 +1275,6 @@ String _fmtJump(int seconds) {
   final m = seconds ~/ 60;
   final s = seconds % 60;
   return '$m:${s.toString().padLeft(2, '0')}';
-}
-
-// 多选题部分对的提示文案:根据漏选/多选数量给具体反馈。
-// missed>0 只有漏选(没多选错项,partial 的定义);extra>0 理论上 partial 不会出现
-// (有多选错项判错不判部分对),但兜底也处理,避免数字异常时空泛。
-String _partialHint(int missed, int extra) {
-  if (missed > 0 && extra > 0) {
-    return '你选对了部分,但漏选了 $missed 项、多选了 $extra 项。';
-  }
-  if (missed > 0) {
-    return '你已经选对了部分,但漏选了 $missed 个正确选项。';
-  }
-  if (extra > 0) {
-    return '你选对了部分,但多选了 $extra 个错误选项。';
-  }
-  return '你已经选对了部分答案。';
 }
 
 // --- History quiz card (read-only, fully revealed) ---

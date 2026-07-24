@@ -272,7 +272,7 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
             if (index == 0) return _buildScoreHeader(exam, submitted);
             if (index == exam.questions.length + 1) return _buildSubmitRow(exam, submitted);
             final q = exam.questions[index - 1];
-            return _buildQuestionCard(q, submitted);
+            return _buildQuestionCard(q, index - 1, submitted);
           },
         ),
       ),
@@ -359,7 +359,7 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
     );
   }
 
-  Widget _buildQuestionCard(ExamQuestion q, bool submitted) {
+  Widget _buildQuestionCard(ExamQuestion q, int index, bool submitted) {
     final result = _report?.results.cast<ExamSubmitResult?>().firstWhere(
           (r) => r?.questionId == q.id,
           orElse: () => null,
@@ -377,6 +377,34 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 题序号 + 题型标签(对齐 quiz/重做卷样式)。
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(color: AppTheme.slate100, borderRadius: BorderRadius.circular(5)),
+              child: Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+            ),
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: q.isFill
+                    ? const Color(0xFFFFFBEB)
+                    : q.isMultiChoice ? const Color(0xFFF5F3FF) : AppTheme.blue100,
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(
+                q.isFill ? '填空' : q.isMultiChoice ? '多选' : '选择',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: q.isFill
+                      ? const Color(0xFF92400E)
+                      : q.isMultiChoice ? const Color(0xFF6D28D9) : const Color(0xFF1D4ED8),
+                ),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 8),
           MarkdownView(data: q.stem, baseTextColor: AppTheme.slate900, textScale: 1.0),
           const SizedBox(height: 10),
           if (q.isMultiChoice)
@@ -433,34 +461,123 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   ) {
     final picked = (userAnswer?['answer_indices'] as List?)?.cast<int>() ?? const [];
     final correctIdxs = result?.correctIndices ?? const [];
-    return List.generate(q.options.length, (i) {
+    // 多选选项区只标正确答案(绿),不标红——红绿混在选项里分不清「我选的」和「对的」(需求#3a)。
+    // 用户的选择放底部明细用带颜色文字说清楚。
+    final tiles = List.generate(q.options.length, (i) {
       final selected = picked.contains(i);
       final correct = submitted && correctIdxs.contains(i);
-      final wrongPick = submitted && selected && !correct;
       return _optionTile(
         q.options[i],
         selected: selected,
         correct: correct,
-        wrongPick: wrongPick,
+        wrongPick: false,
         multi: true,
         onTap: () => _toggleMulti(q.id, i),
       );
     });
+    if (submitted && result != null) {
+      tiles.add(_buildMultiDetail(q.options, picked, correctIdxs));
+    }
+    return tiles;
+  }
+
+  // 多选题底部明细:选项区干净(只标正确项),这里用带颜色的选项文字把对错归属说清楚。
+  // 你选的:选对的项绿、选错的项红;正确答案:全绿;多选/漏选项橙字提示。
+  Widget _buildMultiDetail(List<String> options, List<int> picked, List<int> correctIdxs) {
+    final pickedSet = picked.toSet();
+    final correctSet = correctIdxs.toSet();
+    final wrongPicks = picked.where((i) => !correctSet.contains(i)).toList(); // 多选的
+    final missed = correctIdxs.where((i) => !pickedSet.contains(i)).toList(); // 漏选的
+    String label(int i) => String.fromCharCode(65 + i); // 0→A,1→B...
+
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(top: 8),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (picked.isNotEmpty) ...[
+            const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 10, runSpacing: 4,
+              children: picked.map((i) {
+                final ok = correctSet.contains(i);
+                return Text('${label(i)}. ${options[i]}',
+                  style: TextStyle(fontSize: 12,
+                    color: ok ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                    fontWeight: FontWeight.bold));
+              }).toList(),
+            ),
+          ],
+          const SizedBox(height: 6),
+          const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 10, runSpacing: 4,
+            children: correctIdxs.map((i) => Text('${label(i)}. ${options[i]}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold))).toList(),
+          ),
+          if (wrongPicks.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+          ],
+          if (missed.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('⚠ ${missed.map(label).join("、")} 漏选了',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
+          ],
+        ],
+      ),
+    );
   }
 
   Widget _buildFillField(
     ExamQuestion q, Map<String, dynamic>? userAnswer,
     ExamSubmitResult? result, bool submitted,
   ) {
+    // 填空题交卷后:输入框变红/绿(留内容只读),下面给正确答案(错时)。之前提交后丢掉
+    // 用户填的,只显示正确答案,用户不知道自己刚填了什么(需求#3b)。
     if (submitted) {
-      if (result?.correctText.isNotEmpty == true) {
-        return Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text('正确答案:${result!.correctText}',
-            style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
-        );
-      }
-      return const SizedBox.shrink();
+      final userText = (userAnswer?['answer_text'] as String?) ?? '';
+      final isCorrect = result?.correct ?? false;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: TextEditingController(text: userText),
+            readOnly: true,
+            enableInteractiveSelection: false,
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: isCorrect ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: BorderSide(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
+              ),
+            ),
+            style: TextStyle(
+              fontSize: 14,
+              color: isCorrect ? const Color(0xFF059669) : const Color(0xFFDC2626),
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          if (!isCorrect && result?.correctText.isNotEmpty == true) ...[
+            const SizedBox(height: 6),
+            Text('正确答案:${result!.correctText}',
+              style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
+          ],
+        ],
+      );
     }
     return TextField(
       decoration: const InputDecoration(border: OutlineInputBorder(), hintText: '输入答案'),

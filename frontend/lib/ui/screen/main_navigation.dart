@@ -701,7 +701,10 @@ class _MainNavigationState extends State<MainNavigation> {
       case 2:
         return _buildProgressScreen(activeUserId);
       case 3:
-        return WrongBookScreen(activeUserId: activeUserId);
+        return WrongBookScreen(
+          activeUserId: activeUserId,
+          onWrongBookChanged: _loadUnmasteredCount,
+        );
       case 4:
         return _buildSettingsScreen();
       default:
