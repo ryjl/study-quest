@@ -546,29 +546,25 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
     if (submitted) {
       final userText = (userAnswer?['answer_text'] as String?) ?? '';
       final isCorrect = result?.correct ?? false;
+      // 用 Container 模拟输入框(边框+底色+留内容),不在 build 里 new TextEditingController(泄漏)。
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          TextField(
-            controller: TextEditingController(text: userText),
-            readOnly: true,
-            enableInteractiveSelection: false,
-            decoration: InputDecoration(
-              filled: true,
-              fillColor: isCorrect ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444)),
-              ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+            decoration: BoxDecoration(
+              color: isCorrect ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444), width: 1.5),
             ),
-            style: TextStyle(
-              fontSize: 14,
-              color: isCorrect ? const Color(0xFF059669) : const Color(0xFFDC2626),
-              fontWeight: FontWeight.bold,
+            child: Text(
+              userText.isEmpty ? '(未作答)' : userText,
+              style: TextStyle(
+                fontSize: 14,
+                color: isCorrect ? const Color(0xFF059669) : const Color(0xFFDC2626),
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ),
           if (!isCorrect && result?.correctText.isNotEmpty == true) ...[
