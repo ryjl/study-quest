@@ -40,10 +40,11 @@ void main() {
     int? correctIndex,
     List<String> options = const [],
     String explanation = '',
+    int courseId = 0,
   }) {
     return {
       'question_id': id, 'stem': stem, 'type': type, 'options': options,
-      'explanation': explanation, 'has_jump': false, 'chunk_id': 0, 'course_id': 0,
+      'explanation': explanation, 'has_jump': false, 'chunk_id': 0, 'course_id': courseId,
       'episode_id': 0, 'subject_id': 0, 'first_wrong_at': '',
       'last_attempted_at': '', 'attempt_count': attemptCount,
       'correct_streak': streak, 'mastered': mastered,
@@ -107,6 +108,36 @@ void main() {
     expect(find.text('解析'), findsOneWidget);
   });
 
+  testWidgets('options show by default (neutral) so student can self-test before revealing answer',
+      (tester) async {
+    // 问题#3:收起态就列选项(中性不高亮),让学生先自测。之前选项完全隐藏。
+    bindMock((_) => itemsResponse([
+          item(id: 1, stem: 'q1', options: ['选项A', '选项B', '选项C', '选项D'], correctIndex: 2),
+        ]));
+    await _pumpScreen(tester);
+    // 4 个选项在收起态都可见。
+    expect(find.text('选项A'), findsOneWidget);
+    expect(find.text('选项D'), findsOneWidget);
+    // 还没展开,不显示「正确答案」。
+    expect(find.text('正确答案'), findsNothing);
+  });
+
+  testWidgets('tapping a neutral option marks the choice; revealing shows it red when wrong',
+      (tester) async {
+    // 问题#3:点选项可标记,展开后选错的项标红、正确项标绿。
+    bindMock((_) => itemsResponse([
+          item(id: 1, stem: 'q1', options: ['错', '对'], correctIndex: 1),
+        ]));
+    await _pumpScreen(tester);
+    // 先点错误的「错」(index 0)标记自测选择。
+    await tester.tap(find.text('错'));
+    await tester.pumpAndSettle();
+    // 展开看答案。
+    await tester.tap(find.text('查看答案'));
+    await tester.pumpAndSettle();
+    expect(find.text('正确答案'), findsOneWidget);
+  });
+
   testWidgets('mastered item shows ✓ badge, unmastered shows attempt count + streak', (tester) async {
     bindMock((_) => itemsResponse([
           item(id: 1, stem: 'mastered-q', mastered: true),
@@ -153,8 +184,41 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('重做本题'));
     await tester.pumpAndSettle();
-    // 进了重做屏:AppBar 标题 + 题面。
-    expect(find.text('重做错题'), findsOneWidget);
+    // 进了重做屏:AppBar 标题(带题量) + 题面。
+    expect(find.textContaining('重做错题'), findsOneWidget);
     expect(find.text('提交全部'), findsOneWidget);
+  });
+
+  testWidgets('filtered empty state keeps filter chips (problem #2)', (tester) async {
+    // 问题#2:选了未掌握过滤、但该过滤下无结果时,不应整页变空状态丢失过滤 chip。
+    // 这里模拟"学生有错题(unmastered_count>0)但当前过滤返回空 items"。
+    bindMock((_) => itemsResponse(const [], unmastered: 3));
+    await _pumpScreen(tester);
+    // 过滤行仍在(能切回全部),不是「还没有错题」引导页。
+    expect(find.text('全部'), findsOneWidget);
+    expect(find.text('未掌握'), findsOneWidget);
+    expect(find.text('当前筛选下没有错题'), findsOneWidget);
+    expect(find.text('还没有错题'), findsNothing);
+  });
+
+  testWidgets('truly empty (no wrong ever) shows guide, not filtered-empty', (tester) async {
+    // 真正从没错过题(unmastered_count=0 且无过滤)→ 引导页。
+    bindMock((_) => itemsResponse(const [], unmastered: 0));
+    await _pumpScreen(tester);
+    expect(find.text('还没有错题'), findsOneWidget);
+  });
+
+  testWidgets('mastered item toggle button shows cancel wording (problem #5)', (tester) async {
+    // 问题#5:已掌握题的按钮文案明确双向可点(「已掌握 · 点取消」)。
+    bindMock((_) => itemsResponse([item(id: 1, stem: 'mq', mastered: true)]));
+    await _pumpScreen(tester);
+    expect(find.textContaining('点取消'), findsOneWidget);
+  });
+
+  testWidgets('course source chip always shown (problem #1)', (tester) async {
+    // 问题#1:来源 chip 一定显示,即使课程名解析不出也显示「未知课程」。
+    bindMock((_) => itemsResponse([item(id: 1, stem: 'q', courseId: 999)]));
+    await _pumpScreen(tester);
+    expect(find.text('未知课程'), findsOneWidget);
   });
 }

@@ -227,6 +227,14 @@ func (s *aiService) RedoWrongBookQuiz(userID, courseID uint, limit int) ([]QuizV
 			Options: decodeOptions(r.Options), HasJump: r.HasJump,
 		})
 	}
+	// 重做题量可观测性(问题#7):用户反馈「重做一批只出了 1 题」,但代码路径无截断到 1 的逻辑
+	// (ListByUser 无 limit,只在本函数开头 limit>10 才截断)。这条 log 记录未掌握总数 vs 实际
+	// 返回数:两者相等说明数据就这么多(学生确实只有这几道未掌握);out < items 说明有孤儿题
+	// (wrong_book_items 有记录但题库里题已删,join 静默丢弃)。下次复现就能据此定位。
+	if len(out) != len(items) {
+		log.Printf("AI: wrong-book redo user=%d course=%d: unmastered=%d returned=%d (orphan dropped=%d)",
+			userID, courseID, len(items), len(out), len(items)-len(out))
+	}
 	return out, nil
 }
 
