@@ -215,6 +215,22 @@ void main() {
     expect(find.textContaining('点取消'), findsOneWidget);
   });
 
+  testWidgets('toggling mastered flips the UI immediately (optimistic update, problem #6)', (tester) async {
+    // 问题#6 回归守护:点「标记掌握」后,乐观更新必须即时翻转按钮文案。
+    // 之前的 bug 是乐观层被 build 用旧 future snapshot 覆盖,点了像没反应。
+    bindMock((_) => itemsResponse([item(id: 1, stem: 'mq', mastered: false)]));
+    await _pumpScreen(tester);
+    // 初始:未掌握 → 显示「标记掌握」。
+    expect(find.text('标记掌握'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('标记掌握'), 100);
+    await tester.pumpAndSettle();
+    // 点一下 → 乐观翻转成「已掌握 · 点取消」,不等后端。
+    await tester.tap(find.text('标记掌握'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('点取消'), findsOneWidget);
+    expect(find.text('标记掌握'), findsNothing);
+  });
+
   testWidgets('course source chip always shown (problem #1)', (tester) async {
     // 问题#1:来源 chip 一定显示,即使课程名解析不出也显示「未知课程」。
     bindMock((_) => itemsResponse([item(id: 1, stem: 'q', courseId: 999)]));

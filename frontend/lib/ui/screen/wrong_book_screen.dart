@@ -72,11 +72,20 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     }
     _fillSelfControllers.clear();
     _liveList = null; // 新过滤:丢弃乐观层,以服务端结果为准
-    _future = ApiService.fetchWrongBook(
+    final f = ApiService.fetchWrongBook(
       widget.activeUserId,
       courseId: _courseFilter,
       mastered: _masteredFilter,
     );
+    // 服务端结果回来后,把它设为乐观层的基底。注意:必须用 .then 在 future 完成时赋值,
+    // 而不是在 build() 里赋值——否则 toggle 触发的 rebuild 会用同一个旧 future 的 snapshot
+    // 把 _liveList 覆盖回旧数据,乐观更新瞬间失效(问题#6 修复的回归 bug)。
+    _future = f.then((list) {
+      if (mounted) {
+        setState(() => _liveList = list);
+      }
+      return list;
+    });
   }
 
   @override
@@ -214,11 +223,8 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               message: '加载错题本失败',
             );
           }
-          // 数据源:优先用乐观层(toggle 后即时反映);首次加载用 snapshot.data。
-          // 一旦服务端结果回来,把它作为新的乐观层基底(后续 toggle 在此之上改写)。
-          if (snapshot.hasData && snapshot.connectionState == ConnectionState.done) {
-            _liveList = snapshot.data;
-          }
+          // 数据源:乐观层(_liveList)优先——它在 _loadData 的 future.then 里被设为服务端结果,
+          // 之后 toggle 就地改写它。build 里不再触碰它的赋值,避免覆盖乐观更新(问题#6)。
           final list = _liveList ?? snapshot.data;
           final items = list?.items ?? const <WrongBookItem>[];
           // 空态分两种:真没有错题(全局首次)vs 当前过滤无结果。后者保留过滤行,
@@ -580,7 +586,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               const Spacer(),
               // 掌握切换:未掌握→「标记掌握」(灰);已掌握→「取消掌握」(绿,点一下退回未掌握)。
               // 文案明确双向(问题#5:之前已掌握态只显示「已掌握」像不可点的状态标签,没有"改回未掌握"的入口)。
-              // 乐观更新走 _liveLayer,点击即时翻转(问题#6)。
+              // 乐观更新走 _liveList,点击即时翻转(问题#6)。
               GestureDetector(
                 onTap: () => _toggleMastered(item),
                 child: Container(
