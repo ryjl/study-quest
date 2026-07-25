@@ -115,9 +115,9 @@ void main() {
           item(id: 1, stem: 'q1', options: ['选项A', '选项B', '选项C', '选项D'], correctIndex: 2),
         ]));
     await _pumpScreen(tester);
-    // 4 个选项在收起态都可见。
-    expect(find.text('选项A'), findsOneWidget);
-    expect(find.text('选项D'), findsOneWidget);
+    // 4 个选项在收起态都可见(选项带 A.B.C.D. 序号前缀)。
+    expect(find.text('A. 选项A'), findsOneWidget);
+    expect(find.text('D. 选项D'), findsOneWidget);
     // 还没展开,不显示「正确答案」。
     expect(find.text('正确答案'), findsNothing);
   });
@@ -129,8 +129,8 @@ void main() {
           item(id: 1, stem: 'q1', options: ['错', '对'], correctIndex: 1),
         ]));
     await _pumpScreen(tester);
-    // 先点错误的「错」(index 0)标记自测选择。
-    await tester.tap(find.text('错'));
+    // 先点错误的「错」(index 0)标记自测选择(选项带 A. 前缀)。
+    await tester.tap(find.text('A. 错'));
     await tester.pumpAndSettle();
     // 展开看答案。
     await tester.tap(find.text('查看答案'));
@@ -206,10 +206,10 @@ void main() {
     await tester.pumpAndSettle();
     // 题序号。
     expect(find.text('第1题'), findsOneWidget);
-    // 选 甲 + 乙。
-    await tester.tap(find.text('甲'));
+    // 选 甲(A) + 乙(B)。
+    await tester.tap(find.text('A. 甲'));
     await tester.pump();
-    await tester.tap(find.text('乙'));
+    await tester.tap(find.text('B. 乙'));
     await tester.pump();
     await tester.tap(find.text('提交全部'));
     await tester.pumpAndSettle();

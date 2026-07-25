@@ -10,6 +10,12 @@ import '../../theme.dart';
 import '../widget/markdown_view.dart';
 import 'player_screen.dart';
 
+// 选项序号前缀:0→"A. "、1→"B. "... 选项像试卷一样带字母序号,多选明细里的
+// 「A. xxx」「⚠ B 多选了」才能和选项列表对上号(选项只显示内容时序号对不上)。
+// 一致性不变量(前缀只依赖索引、不进库、各页面天然一致)详见
+// wrong_book_screen.dart 里 _optionTag 的完整注释——同样适用本文件。
+String _optionTag(int i) => '${String.fromCharCode(65 + i)}. ';
+
 // AiStudyScreen — the Phase C AI learning page. Three sections:
 //   1. AI summary (headline / sections / concepts / takeaway) — read from /ai-summary.
 //   2. 学习建议 (advice) — read from /ai-advice (advice agent, lazily generated +
@@ -1082,7 +1088,7 @@ class _QuestionCard extends StatelessWidget {
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
+          Expanded(child: Text('${_optionTag(i)}${question.options[i]}', style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
           if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
         ]),
       ),
@@ -1170,7 +1176,7 @@ class _QuestionCard extends StatelessWidget {
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text(question.options[i], style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
+          Expanded(child: Text('${_optionTag(i)}${question.options[i]}', style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
           if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
           if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
         ]),
@@ -1442,7 +1448,7 @@ class _HistoryQuestionTile extends StatelessWidget {
             border: Border.all(color: q.correctIndex == i ? AppTheme.accentGreen : AppTheme.borderMuted),
           ),
           child: Row(children: [
-            Expanded(child: Text(q.options[i], style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
+            Expanded(child: Text('${_optionTag(i)}${q.options[i]}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
             if (q.correctIndex == i) const Icon(Icons.check_circle, size: 14, color: AppTheme.accentGreen),
           ]),
         ),
@@ -1475,7 +1481,7 @@ class _HistoryQuestionTile extends StatelessWidget {
             ),
           ),
           child: Row(children: [
-            Expanded(child: Text(q.options[i], style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
+            Expanded(child: Text('${_optionTag(i)}${q.options[i]}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
             if (correctSet.contains(i))
               const Icon(Icons.check_circle, size: 14, color: AppTheme.accentGreen)
             else if (userSet.contains(i))

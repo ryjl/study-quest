@@ -87,8 +87,8 @@ void main() {
     });
     await _pumpScreen(tester);
     expect(find.text('题面A'), findsOneWidget);
-    expect(find.text('选项0'), findsOneWidget);
-    expect(find.text('选项1'), findsOneWidget);
+    expect(find.text('A. 选项0'), findsOneWidget);
+    expect(find.text('B. 选项1'), findsOneWidget);
     expect(find.text('提交全部'), findsOneWidget);
   });
 
@@ -147,8 +147,8 @@ void main() {
       return http.Response('', 500);
     }));
     await _pumpScreen(tester);
-    // 选索引 1("对",正确)。
-    await tester.tap(find.text('对'));
+    // 选索引 1("对",正确)——选项带 B. 前缀。
+    await tester.tap(find.text('B. 对'));
     await tester.pump();
     // 交卷。
     await tester.tap(find.text('提交全部'));
@@ -195,10 +195,10 @@ void main() {
       return http.Response('', 500);
     }));
     await _pumpScreen(tester);
-    // 选 甲(0) 和 乙(1)。
-    await tester.tap(find.text('甲'));
+    // 选 甲(A) 和 乙(B)。
+    await tester.tap(find.text('A. 甲'));
     await tester.pump();
-    await tester.tap(find.text('乙'));
+    await tester.tap(find.text('B. 乙'));
     await tester.pump();
     await tester.tap(find.text('提交全部'));
     await tester.pumpAndSettle();

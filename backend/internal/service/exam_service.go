@@ -147,10 +147,16 @@ func (s *aiService) GetActiveExamView(userID, courseID uint) (*ExamView, error) 
 		return nil, err
 	}
 	// 题面从 questions 表取(ExamQuestion 只存 question_id)。
+	// 题面取不到(题被删,见 ExamQuestion 不带 CASCADE 的设计)时塞占位而非跳过——
+	// 跳过会让卷子静默少一题、学生无感知;占位明确告诉学生"这题已删除",不漏题。
 	views := make([]QuizViewQuestion, 0, len(eqs))
 	for _, eq := range eqs {
 		var q model.Question
 		if err := s.db.First(&q, eq.QuestionID).Error; err != nil {
+			views = append(views, QuizViewQuestion{
+				ID: eq.QuestionID, Type: "choice",
+				Stem: "(本题已删除)", HasJump: false,
+			})
 			continue
 		}
 		views = append(views, QuizViewQuestion{
@@ -203,11 +209,20 @@ func (s *aiService) SubmitExam(userID, examID uint, answers []QuizAnswerInput) (
 	memory := agent.NewMemoryStore(s.contentRepo)
 	results := make([]ExamSubmitResult, 0, len(eqs))
 	correctCount := 0
+	graded := 0 // 实际判了分的题数(题被删的不计),作得分率分母
 	for _, eq := range eqs {
 		var q model.Question
 		if err := s.db.First(&q, eq.QuestionID).Error; err != nil {
+			// 题面被删(ExamQuestion 不带 CASCADE 的设计):判不了分,但要给占位结果
+			// (correct=false + 说明),不能 continue——否则 results 数量和卷子题数对不上,
+			// 前端按题号渲染会错位。这道题不计入 mastery/ExamAnswer,也不计入得分率分母。
+			results = append(results, ExamSubmitResult{
+				QuestionID: eq.QuestionID, Correct: false,
+				Source: eq.Source, Explanation: "(本题已删除,不计分)",
+			})
 			continue
 		}
+		graded++
 		input, answered := inputByQ[q.ID]
 		verdict := agent.Verdict{}
 		if answered {
@@ -249,10 +264,11 @@ func (s *aiService) SubmitExam(userID, examID uint, answers []QuizAnswerInput) (
 		results = append(results, res)
 	}
 
-	// 算得分率 + 落库 Score。
+	// 算得分率 + 落库 Score。分母用 graded(实际判了分的题数,题被删的不计),
+	// 让被删的题不拉低得分率(学生本来就没得分机会,不该扣分)。全删完则 0 分。
 	score := 0.0
-	if len(eqs) > 0 {
-		score = float64(correctCount) / float64(len(eqs))
+	if graded > 0 {
+		score = float64(correctCount) / float64(graded)
 	}
 	s.db.Model(&model.Exam{}).Where("id = ?", examID).Update("score", score)
 

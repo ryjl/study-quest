@@ -53,6 +53,14 @@ type ExamQuestion struct {
 }
 
 // ExamAnswer 是考试交卷的逐题作答。与 Answer 物理隔离,不污染错题本聚合。
+//
+// 字段语义对齐 Answer 表(见 ai.go Answer 注释):
+//   - choice: UserAnswer 存 0-based 选项索引,UserAnswerText 为空。
+//   - fill:   UserAnswerText 存学生原文,UserAnswer 为 -1(无意义)。
+//   - multi_choice: 复用 UserAnswerText 存选中索引数组的 JSON(如 "[0,2,3]"),
+//     UserAnswer 存 -1。复用同一列存两种格式是刻意的(和 Answer 表同口径,
+//     避免加专门的多选列要迁移 schema);判分时按 type 解析,见 exam_service.go
+//     的 GradeAnswerV + encodeMultiAnswer/decodeMultiAnswer。
 type ExamAnswer struct {
 	ID            uint `gorm:"primaryKey;autoIncrement"`
 	ExamID        uint `gorm:"index;not null"`
@@ -60,8 +68,8 @@ type ExamAnswer struct {
 	UserID        uint `gorm:"index;not null"`
 	QuestionID    uint `gorm:"index;not null"` // 冗余自 ExamQuestion,聚合省 join
 	ChunkID       uint `gorm:"index"`          // 冗余,mastery 更新用
-	UserAnswer    int                          // choice: 索引; fill/multi: -1
-	UserAnswerText string `gorm:"type:text"`   // fill 原文 / multi_choice: JSON []int 索引
+	UserAnswer    int                          // choice: 选项索引; fill/multi: -1
+	UserAnswerText string `gorm:"type:text"`   // fill: 学生原文; multi_choice: JSON []int 选中索引
 	Correct       bool
 	AnsweredAt    time.Time
 	// FK:删 Exam 时 CASCADE 清本表。

@@ -9,6 +9,11 @@ import '../widget/markdown_view.dart';
 import '../widget/state_widgets.dart';
 import '../responsive.dart';
 
+// 选项序号前缀:0→"A. "、1→"B. "... 让选项带字母序号,多选明细里的 A/B 能对上。
+// 一致性不变量(前缀只依赖索引、不进库、各页面天然一致)详见
+// wrong_book_screen.dart 里 _optionTag 的完整注释——同样适用本文件。
+String _optionTag(int i) => '${String.fromCharCode(65 + i)}. ';
+
 /// 课程考试屏(TODO.md P0)。把一门课全部学过的知识点综合出一张有针对性的
 /// 试卷(后端基于 mastery 弱点从已有题库抽题,不重新生成)。
 ///
@@ -446,7 +451,7 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
       final correct = submitted && correctIdx == i;
       final wrongPick = submitted && selected && !correct;
       return _optionTile(
-        q.options[i],
+        '${_optionTag(i)}${q.options[i]}',
         selected: selected,
         correct: correct,
         wrongPick: wrongPick,
@@ -467,7 +472,7 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
       final selected = picked.contains(i);
       final correct = submitted && correctIdxs.contains(i);
       return _optionTile(
-        q.options[i],
+        '${_optionTag(i)}${q.options[i]}',
         selected: selected,
         correct: correct,
         wrongPick: false,

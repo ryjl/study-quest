@@ -52,11 +52,13 @@ type AIProvider struct {
 // TableName pins the table name to `ai_providers`. Without this, GORM's default
 // snake-casing turns `AIProvider` into `a_i_providers` (each uppercase letter
 // gets a preceding underscore, then leading/trailing underscores are trimmed →
-// `a_iproviders`), which is how the original misnamed table was born. Old
-// deployments have data under `a_iproviders`; migrateAIProvidersTableName
-// (called from AutoMigrate) renames it in place on first boot after upgrade.
-// Pinning the name explicitly also future-proofs against any GORM
-// naming-convention change.
+// `a_iproviders`), which is how the original misnamed table was born. The name
+// is pinned explicitly so current and future deployments all use `ai_providers`
+// and future-proof against any GORM naming-convention change.
+//
+// 历史背景:早期部署曾用过误名 `a_iproviders`,后来做过一次数据清零重整,
+// 现网 DB 已全部统一为 `ai_providers`,不再需要从老表名迁移。(此前注释提到的
+// migrateAIProvidersTableName 迁移函数已废弃删除,不再调用。)
 func (AIProvider) TableName() string { return "ai_providers" }
 
 // ParseTags parses the provider's Tags JSON array into a slice. Returns nil for
@@ -327,8 +329,11 @@ type Question struct {
 type Answer struct {
 	ID         uint      `gorm:"primaryKey;autoIncrement"`
 	QuestionID uint      `gorm:"index;not null"`
-	QuizID     uint      `gorm:"index"` // snapshot of the question's quiz at answer time; survives question deletion on regen
-	UserID     uint      `gorm:"index;not null"`
+	// 复合索引 (quiz_id, user_id) 服务 ListAnswersForQuiz(quizID, userID)——交卷/历史
+	// review 的主查询模式,复合索引比两个单列索引快(一次索引定位 vs 索引交集)。
+	// 保留单列 index 兜底其它按 user_id 的查询(如错题本聚合)。
+	QuizID     uint      `gorm:"index;index:idx_answer_quiz_user,priority:1"`
+	UserID     uint      `gorm:"index;not null;index:idx_answer_quiz_user,priority:2"`
 	UserAnswer int       // choice: 0-based index the user picked; fill: -1 (meaningless)
 	// UserAnswerText 是填空题学生的原文(choice 题为空)。交卷后 / 历史 review 里回放
 	// "你当时填的什么"用这个字段;判分仍走 Question.AnswerText 的归一化匹配,不依赖它。

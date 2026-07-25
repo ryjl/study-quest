@@ -10,6 +10,23 @@ import '../widget/markdown_view.dart';
 import '../widget/state_widgets.dart';
 import '../responsive.dart';
 
+// 选项序号前缀:0→"A. "、1→"B. "... 让选项像试卷一样带字母序号,多选明细里的
+// 「A. xxx」「⚠ B 多选了」才能和选项列表对上号(之前选项只显示内容没序号,明细里的
+// A/B 对不上,用户得自己数第几个)。
+//
+// 【一致性不变量——改动前必读】前缀**纯前端渲染时现拼,不进数据库**。数据库
+// questions.options 存的是裸选项数组(如 ["通分","约分",...]),后端各端点原样下发,
+// 前端 fromJson 解析成 List<String>。前缀只依赖选项在数组里的索引 i(循环下标,
+// 永远从 0 开始),所以:
+//   1. 同一道题在错题本/quiz/重做/考试任何页面,options 数组顺序固定 → options[0]
+//      永远是 "A."、options[1] 永远是 "B.",各页面天然一致,无需手动同步。
+//   2. 正确答案判定也用同一套索引:后端 correct_index/correct_indices 是 0-based
+//      选项索引(见 grading.go 的 choiceCorrectIndex),前端用同一个 i 取 options[i]
+//      + _optionTag(i) + 判对错,三者天然对齐。
+// 所以**绝对不要**把前缀写进数据库、或在数据层拼接——那会破坏单一数据源,导致
+// 不同页面、重进页面后索引漂移。前缀只能在这个渲染层函数里、按索引现拼。
+String _optionTag(int i) => '${String.fromCharCode(65 + i)}. ';
+
 /// 错题本屏(TODO.md P0)。学生做错的题自动归集于此。体验闭环:
 ///  - 列表浏览(默认「全部」:已掌握的灰显不消失;可按课程/掌握状态过滤)
 ///  - 卡片就地自测(收起态点选项回忆,展开看正确答案 + 解析 + 多选明细对比)
@@ -696,7 +713,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               size: 16, color: selected ? AppTheme.blue600 : AppTheme.textMuted,
             ),
             const SizedBox(width: 8),
-            Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
+            Expanded(child: Text('${_optionTag(i)}$label', style: const TextStyle(fontSize: 13))),
           ],
         ),
       ),
@@ -765,7 +782,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
           children: [
             Icon(icon, size: 16, color: iconColor),
             const SizedBox(width: 8),
-            Expanded(child: Text(item.options[i], style: const TextStyle(fontSize: 13))),
+            Expanded(child: Text('${_optionTag(i)}${item.options[i]}', style: const TextStyle(fontSize: 13))),
           ],
         ),
       );
@@ -795,7 +812,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
           children: [
             Icon(icon, size: 16, color: iconColor),
             const SizedBox(width: 8),
-            Expanded(child: Text(item.options[i], style: const TextStyle(fontSize: 13))),
+            Expanded(child: Text('${_optionTag(i)}${item.options[i]}', style: const TextStyle(fontSize: 13))),
           ],
         ),
       );
@@ -1091,7 +1108,7 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
       final correct = submitted && correctIdx == i;
       final wrongPick = submitted && selected && !correct;
       return _optionTile(
-        q.options[i],
+        '${_optionTag(i)}${q.options[i]}',
         selected: selected,
         correct: correct,
         wrongPick: wrongPick,
@@ -1112,7 +1129,7 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
       // 「我选的」和「对的」(需求#3a)。用户的选择改到底部明细里用带颜色的文字说清楚。
       final correct = submitted && correctIdxs.contains(i);
       return _optionTile(
-        q.options[i],
+        '${_optionTag(i)}${q.options[i]}',
         selected: selected,
         correct: correct,
         wrongPick: false,

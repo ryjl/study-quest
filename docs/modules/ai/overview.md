@@ -289,6 +289,7 @@ exam_answers:   id, exam_id, exam_question_id, user_id, question_id, chunk_id (�
 和 Quiz 完全平行，但 scope 是 (user, course) 而非 (user, episode)：一张卷综合某课程多个 episode 的知识点。**题源当前是纯题库抽**（`SelectExamQuestions`，按学生 mastery 弱点加权 + 覆盖度约束，从已有题库跨 episode 抽，不跑 LLM），`source` 字段预留 `'generated'` 给 quizzer agent 后续出迁移题。
 
 **答案写独立 `exam_answers` 表，不污染 `answers`**（错题本聚合 / quiz 答题流水统计）。mastery feedback 走同一套 `KnowledgeMemory.RecordAnswer`（考试交卷也更新掌握度，让 agent 下次出题反映阶段考试弱点）。**漏选按"错"处理**，和 quiz / 错题本同口径（2026-07-23 统一判定）。**交卷锁**复用 `TryMarkExamSubmitted` 条件 UPDATE（消除 TOCTOU）。
+**题被删兜底**：`ExamQuestion` 指向 `questions` 但不带 FK CASCADE（刻意：考试历史该保留题面快照，不被 regenerate 删题连带清）。若题真被删，取卷视图塞 `(本题已删除)` 占位（不静默跳过让卷子少题）；交卷时该题判不了分，给 `correct=false + (本题已删除,不计分)` 占位结果，且**不计入得分率分母**（用实际判了分的题数作分母，避免被删的题虚降学生得分），也不写 `exam_answers` / 不污染 SourceQuality 统计。
 **nil-safe**：`examRepo` 未注入时 `GetExamStatus` 返回 unavailable、`StartExam/SubmitExam` 报"考试功能未启用"、admin 观测返回零值（守纯附加层铁律 #6）。
 
 ## 5. 状态机（ai_jobs）
@@ -975,7 +976,7 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 - **`nil SourceID` 全局 fallback 路径**：导入现在必填源，删 episode/reading repo 的 nil-source 查询分支 + import 的 nil-source 分支
 
 **删死代码/死迁移**：
-- `migrateAIProvidersTableName`（a_iproviders→ai_providers 重命名）+ `tableExists` helper + `migrate_table_rename_test.go` 整个文件——fresh install 直接生成 `ai_providers`，无需重命名
+- `migrateAIProvidersTableName`（a_iproviders→ai_providers 重命名）+ `tableExists` helper + `migrate_table_rename_test.go` 整个文件——fresh install 直接生成 `ai_providers`，无需重命名。现网 DB 已在数据清零重整时统一为 `ai_providers`，`AIProvider.TableName()` 固定返回该名，不再需要迁移函数（历史曾有，已删；`a_iproviders` 老表名如仍残留在极老部署，属废弃数据，不自动迁移）。
 - `migrateQuizActiveUniqueIndex` 的「DROP legacy idx_quiz_user_ep」步骤（保留 CREATE partial unique index）
 - `RemoveDeprecatedDefaults` 空存根
 - `ReasonParentGrant` 未实现常量 + Flutter 对应 case
@@ -1027,9 +1028,9 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 
 1. **FK 约束真正生效**（`cmd/server/main.go`）：DSN 加 `_foreign_keys=on`。这不是 schema 变更（约束一直在 CREATE TABLE DDL 里，只是之前 PRAGMA per-connection 导致池里大部分连接 FK 关闭、约束没触发）。修好后 GORM 声明的 20+ 个 `OnDelete:CASCADE/RESTRICT` 在所有连接生效。**升级安全**：已用真实 dev DB 副本验证 `PRAGMA foreign_key_check` 为空（零违规），AutoMigrate 不会因孤儿行失败。手动 cascade 仍保留作双保险（AI 相关表如 ai_summaries/content_chunks/quizzes 没有 GORM foreignKey 声明，只靠手动 cascade）。
 
-2. **`a_iproviders` → `ai_providers` 表重命名**（`model/migrate.go`）：GORM 默认 snake-case 把 `AIProvider` 解析成 `a_iproviders`（每个大写字母前加下划线再 trim → 难看的名字）。给 struct 加 `TableName()` 返回 `ai_providers` 固定名字，并写 `migrateAIProvidersTableName` 在 AutoMigrate **之前**用 SQLite 原生 `ALTER TABLE ... RENAME TO` 原地重命名（保留所有行 + 索引，零数据移动）。**这是定档后唯一一次"改表名"操作**——属于"改唯一索引/主键"级别的特例，但用 `ALTER TABLE RENAME` 实现所以仍是零风险无缝升级。幂等（重命名后检测到新表存在就跳过；两表都在则告警不猜）。升级安全已用真实 dev DB 副本 + 3 个单元测试验证（重命名/幂等/全新安装）。
+2. **`a_iproviders` → `ai_providers` 表重命名**（历史操作，现已完成）：GORM 默认 snake-case 把 `AIProvider` 解析成 `a_iproviders`（每个大写字母前加下划线再 trim → 难看的名字）。给 struct 加 `TableName()` 返回 `ai_providers` 固定名字。重命名当初由 `migrateAIProvidersTableName`（在 AutoMigrate 之前用 SQLite 原生 `ALTER TABLE ... RENAME TO` 原地重命名）完成；后来做过一次数据清零重整，现网 DB 已全部统一为 `ai_providers`，**该迁移函数已删除**（代码里不再保留，`AIProvider.TableName()` 固定返回 `ai_providers` 即可）。极老部署若仍残留 `a_iproviders` 表，视为废弃数据，不自动迁移。
 
-> **关于"定档"承诺的诚实说明**：这两处是定档后发生的 schema 相关操作。#1 不动 schema（只是让既有约束生效）。#2 是表重命名，技术上属于"定档"想避免的类别，但因为用 `ALTER TABLE RENAME` 实现（SQLite 原生、保留数据、幂等、AutoMigrate 前跑），实际升级路径仍是 `make deploy` 零手动干预。记录在此提醒未来：表名/列名一旦定，再改就要走这种"AutoMigrate 前 raw SQL 迁移"的路径——能做但要谨慎。
+> **关于"定档"承诺的诚实说明**：这两处是定档后发生的 schema 相关操作。#1 不动 schema（只是让既有约束生效）。#2 是表重命名，技术上属于"定档"想避免的类别，当初用 `ALTER TABLE RENAME` 实现（SQLite 原生、保留数据、幂等、AutoMigrate 前跑），实际升级路径是 `make deploy` 零手动干预；现网已迁完，迁移代码已清理。记录在此提醒未来：表名/列名一旦定，再改就要走这种"AutoMigrate 前 raw SQL 迁移"的路径——能做但要谨慎，且迁完后应及时清理迁移代码、更新本文档。
 
 > **注**：第三轮还有一块 provider UX 改造（embedding 干净化不进 DB、chat 单例表单、模型下拉拉取、docker 卷遮蔽修复）—— 这块**不动 ai_providers 表结构**（embedding 现在完全不用这张表，直接从镜像文件构造），只是改了 admin UI 怎么配 + resolver 怎么找 embedding + Dockerfile/Makefile 的模型路径。详见 §3「Round-3 Provider UX 定档」。表结构定档不受影响。
 
