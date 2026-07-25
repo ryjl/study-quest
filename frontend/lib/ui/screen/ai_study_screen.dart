@@ -214,15 +214,21 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       try {
         final resp = await ApiService.fetchEpisodeQuiz(widget.activeUserId, widget.episode.id);
         if (!mounted) return;
-        if (resp.status == QuizStatus.ready) {
+        // generating 之外的任何状态都该停轮询:
+        //   ready → 题好了,渲染;cooling → 熔断了,后端不会再入队,继续轮询无意义
+        //     (否则会每 3s 打一次 DB 永不停止);unavailable/done → 同理。
+        // 继续轮询的唯一理由是「还在 generating」,其它状态都有终态含义。
+        if (resp.status != QuizStatus.generating) {
           _pollTimer?.cancel();
           setState(() {
             _quizStatus = resp.status;
             _quiz = resp.quiz;
           });
-          // A new active quiz just landed, which means the prior one was
-          // archived server-side. Refresh history so the panel reflects it.
-          _loadHistory();
+          if (resp.status == QuizStatus.ready) {
+            // A new active quiz just landed, which means the prior one was
+            // archived server-side. Refresh history so the panel reflects it.
+            _loadHistory();
+          }
         }
       } catch (_) {
         // keep polling on transient errors
@@ -272,7 +278,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       try {
         final resp = await ApiService.fetchEpisodeAdvice(widget.activeUserId, widget.episode.id);
         if (!mounted) return;
-        if (resp.status == AdviceStatus.ready) {
+        // 同 quiz 的 _startPolling:generating 之外的状态(ready/cooling/unavailable)
+        // 都停轮询。cooling 时后端已熔断不会再生效,继续轮询只会空打 DB。
+        if (resp.status != AdviceStatus.generating) {
           _adviceTimer?.cancel();
           setState(() {
             _adviceStatus = resp.status;
@@ -781,6 +789,14 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       // 不自动出新题——渲染「已完成」入口,学生点「重新生成」才出新一套。
       return _buildDoneCard();
     }
+    if (_quizStatus == QuizStatus.cooling) {
+      // 连续多次生成失败已熔断:后端拒绝自动重试(避免反复入队烧 token)。
+      // 不静默隐藏——明确告诉学生「AI 出题卡住了」,并给手动重试入口(点重试走
+      // RegenerateQuiz,绕过冷却)。这是 cooling 区别于 unavailable 的意义:
+      // unavailable 是「AI 没开/没字幕」,静默隐藏即可;cooling 是「试过但失败了」,
+      // 需要让学生知道并给恢复手段。
+      return _buildCoolingCard();
+    }
     if (_quizStatus != QuizStatus.ready || _quiz == null) {
       // unavailable — AI off or no source material. Hide quietly (add-on layer).
       return const SizedBox.shrink();
@@ -959,6 +975,50 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                 onPressed: _regenerate,
                 icon: const Icon(Icons.refresh_rounded, size: 18),
                 label: const Text('重新生成一套题', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.violet500,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // cooling 卡片:quiz 连续失败 ≥3 次被后端熔断。和 done 卡片的关键区别——
+  // done 是「正常结束、想做了再生成」的正面状态;cooling 是「出错了、暂停了」的
+  // 异常状态,语气要承认问题、给重试出口,不静默隐藏(否则学生以为 AI 没开)。
+  // 点「重试生成」走 _regenerate → RegenerateQuiz,这条路径后端故意绕过冷却
+  // (admin/用户主动行为 = escape hatch),所以冷却中学生仍能手动恢复。
+  Widget _buildCoolingCard() {
+    return _Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const Icon(Icons.sentiment_neutral_rounded, size: 40, color: AppTheme.textMuted),
+            const SizedBox(height: 12),
+            const Text('AI 出题暂时卡住了',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+            const SizedBox(height: 6),
+            const Text(
+              '这节课的内容比较长,AI 多次尝试生成练习都没成功,已暂停自动重试。\n'
+              '可以点下面按钮手动重试一次,或联系老师检查 AI 配置。',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.5),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _regenerate,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('重试生成', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.violet500,
                   foregroundColor: Colors.white,

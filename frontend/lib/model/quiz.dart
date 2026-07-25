@@ -102,7 +102,9 @@ class PreAdventurePrompt {
 /// The status returned by GET /ai-quiz. Drives the screen's state machine.
 /// done = 有历史归档(交卷/换题归档过)但无 active quiz:不自动出新题,前端渲染
 /// 「已完成、点重新生成」入口。区别于 unavailable(AI 未开/无 chunks)。
-enum QuizStatus { ready, generating, unavailable, done }
+/// cooling = 连续多次生成失败已熔断,后端拒绝自动重试(避免反复入队烧 token)。
+/// 前端提示「AI 多次生成失败,已暂停,请联系老师或稍后重试」,并提供手动重试入口。
+enum QuizStatus { ready, generating, unavailable, done, cooling }
 
 /// One question as served to the client. Deliberately has NO answer field —
 /// the correct answer is only revealed after submit (QuizAnswerResult).
@@ -235,6 +237,7 @@ class QuizResponse {
       'ready': QuizStatus.ready,
       'generating': QuizStatus.generating,
       'done': QuizStatus.done,
+      'cooling': QuizStatus.cooling,
     }[s] ??
         QuizStatus.unavailable;
     // The quiz payload is nested under 'quiz' when present.
@@ -418,7 +421,8 @@ class ArchivedQuizView {
 // 区别于 quiz 的"单次出题"——advice 是跨知识点/跨课程读 mastery 后的综合分析。
 
 /// advice 端点的状态,和 QuizStatus 同构。
-enum AdviceStatus { ready, generating, unavailable }
+/// cooling = 连续多次生成失败已熔断(语义同 QuizStatus.cooling)。
+enum AdviceStatus { ready, generating, unavailable, cooling }
 
 /// 一条学习建议(后端 model.StudyAdvice 的客户端镜像)。advice_text 是 agent 的
 /// 自然语言输出(可能跨多个知识点),generated_at 是生成时间。
@@ -460,6 +464,7 @@ class AdviceResponse {
     final status = {
           'ready': AdviceStatus.ready,
           'generating': AdviceStatus.generating,
+          'cooling': AdviceStatus.cooling,
         }[s] ??
         AdviceStatus.unavailable;
     final a = j['advice'];

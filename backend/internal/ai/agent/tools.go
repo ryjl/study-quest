@@ -412,10 +412,15 @@ func (t *Toolbox) runGetRelatedChunks(args string) (string, error) {
 	for _, ch := range chunks {
 		if ch.ChunkIndex == idx {
 			ts := "无时间戳"
+			anchorHint := ""
 			if ch.StartTime != nil {
 				ts = mmss(*ch.StartTime)
+				// 时间锚点提示:让 quizzer 把这个时间点写进题干,这样多盘棋/多例题的
+				// 课(象棋复盘讲了 N 盘、数学课讲了 N 道例题)学生能定位到具体段落,
+				// 而不是只看到"本课讲到"这种无法区分的题干。详见 QuizzerSystemPrompt §5。
+				anchorHint = fmt.Sprintf("\n[出题时可引用时间锚点: %s]", ts)
 			}
-			return fmt.Sprintf("(片段#%d, 时间 %s)\n%s", ch.ChunkIndex, ts, ch.Text), nil
+			return fmt.Sprintf("(片段#%d, 时间 %s)\n%s%s", ch.ChunkIndex, ts, ch.Text, anchorHint), nil
 		}
 	}
 	return fmt.Sprintf("未找到片段#%d。", idx), nil

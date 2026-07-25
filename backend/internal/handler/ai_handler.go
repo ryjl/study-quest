@@ -183,6 +183,10 @@ func (h *aiHandler) GetEpisodeSummary(c *gin.Context) {
 // the client what to render:
 //   - "ready": quiz is populated; render the questions
 //   - "generating": a job was just enqueued; poll (show "正在为你生成练习…")
+//   - "done": has history (archived) but no active quiz; show "重新生成" entry
+//   - "cooling": consecutive generation failures tripped the circuit breaker;
+//     backend refuses to auto-requeue (避免烧 token). Client shows a retry entry
+//     (RegenerateQuiz bypasses cooling — admin/user escape hatch).
 //   - "unavailable": AI/quiz off or no source material; hide the quiz card
 type quizResponse struct {
 	Status        string                  `json:"status"`
@@ -196,6 +200,8 @@ type quizResponse struct {
 //
 // Status codes:
 //   - 200 {status:"ready", quiz:{...}}   — quiz exists, serve it
+//   - 200 {status:"done"}                — has history, no active quiz (show "重新生成")
+//   - 200 {status:"cooling"}             — circuit breaker tripped (show "重试" entry)
 //   - 202 {status:"generating"}          — enqueued, client should poll
 //   - 404 {status:"unavailable"}         — AI off / no chunks / not visible
 func (h *aiHandler) GetEpisodeQuiz(c *gin.Context) {
@@ -236,6 +242,11 @@ func (h *aiHandler) GetEpisodeQuiz(c *gin.Context) {
 		// 已做过(有历史 quiz)但无 active quiz:交卷即归档后或换题归档后的状态。
 		// 前端据此渲染「已完成、点重新生成」入口,不自动出新题。
 		c.JSON(http.StatusOK, quizResponse{Status: "done"})
+	case "cooling":
+		// 连续失败熔断:返回 200(不是错误,是「暂停」语义)+ cooling 状态。
+		// 不能掉进 default 的 404 unavailable——那会让客户端误判为「AI 未开」,
+		// 失去 cooling 状态的提示意义。客户端据此渲染「卡住了、可重试」卡片。
+		c.JSON(http.StatusOK, quizResponse{Status: "cooling"})
 	default:
 		c.JSON(http.StatusNotFound, quizResponse{Status: "unavailable"})
 	}
@@ -427,6 +438,7 @@ var _ = json.Marshal
 // adviceResponse 是三个 advice 端点统一的响应形状。status 字段告诉客户端:
 //   - ready:advice 已生成,advice 字段带完整内容;
 //   - generating:已入队生成中,客户端稍后轮询;
+//   - cooling:连续失败已达熔断阈值,后端拒绝自动重试(避免烧 token),客户端提示;
 //   - unavailable:AI 未配置或该 scope 不支持,客户端隐藏/降级。
 //
 // advice 字段在非 ready 时省略(omitempty)。复用 model.StudyAdvice 的 JSON(tag 已定义)。

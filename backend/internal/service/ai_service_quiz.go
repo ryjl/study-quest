@@ -261,6 +261,12 @@ const (
 	// active quiz 时返回。前端据此渲染「已完成、点重新生成」入口——不再自动 enqueue
 	// 新一套(只有从未做过才首次自动生成)。区别于 unavailable(AI 未开/无 chunks)。
 	quizStatusDone = "done"
+	// quizStatusCooling:该 (user,episode) 的 quiz 生成连续失败达到熔断阈值
+	// (maxConsecutiveFailures,见 ai_service.go)。客户端轮询触发的 lazy 入队会被
+	// 拒绝,避免反复入队烧 token(episode 31 那种惨剧:9 次失败烧 50 万 token)。
+	// 前端据此提示「AI 多次生成失败,已暂停自动重试,请联系老师处理或稍后手动重试」。
+	// admin 手动 RetryJob 不受此限(escape hatch)。
+	quizStatusCooling = "cooling"
 )
 
 // --- ToolDeps adapter ---
@@ -407,10 +413,12 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	// MaxTokens is generous on the generation turn: the final answer is a
 	// multi-question quiz JSON with per-question explanations. Round 3 raised the
 	// question count to 8-12 and demands stronger distractors + reasoning-based
-	// stems, which pushes output to ~3000-5000 tokens. Without an explicit cap the
-	// relay/model default can be small (we saw ~1197-token truncation), cutting the
-	// JSON mid-generation and breaking parsing. 6000 leaves comfortable headroom.
-	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 6, MaxTokens: 6000})
+	// stems; the 富文本 explanation 鼓励(GFM 表格 / SVG)进一步推高单题体积。
+	// 实测一套 8-12 题峰值 7000-8000 tokens。原来给 6000 偏紧:episode 31 (象棋复盘,
+	// 2.3h/108 chunks) 的多次 quiz 生成都在 4000 tokens 附近被砍断,JSON 截断在中文
+	// UTF-8 多字节字符中间,报 "invalid character 'é' after object key:value pair"。
+	// 10000 覆盖峰值并留余量。extractJSONObject 另有截断兜底,但首选还是输出不被砍断。
+	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 6, MaxTokens: 10000})
 	checkAgent := agent.NewAgent(llm, modelName, nil, agent.AgentOpts{MaxSteps: 1, MaxTokens: 800}) // self-check: short verdict
 	quizzer := agent.NewQuizzer(genAgent, checkAgent, memory, deps, llm, modelName)
 
@@ -592,6 +600,15 @@ func (s *aiService) GetOrEnqueueQuiz(userID, episodeID uint) (string, *model.Qui
 	}
 	if hasHistory {
 		return quizStatusDone, nil, nil
+	}
+	// 熔断检查:该 (user,episode) 的 quiz 连续失败 ≥ maxConsecutiveFailures 次,
+	// 不再自动入队——客户端轮询会反复触发,每次失败都烧 token(episode 31 案例:
+	// 客户端轮询 + 失败重入队 = 9 次失败烧 50 万 token)。返回 cooling 让客户端
+	// 知道是「多次失败已暂停」而非「AI 未就绪」,提示用户联系 admin。admin 手动
+	// RetryJob 会复位一条 failed job 回 queued,最近一条变成非 failed,熔断自然解除。
+	// per-user 计数:quiz 是每个学生独立一套,A 学生失败不误熔断 B 学生。
+	if s.consecutiveQuizFailures(userID, episodeID) >= maxConsecutiveFailures {
+		return quizStatusCooling, nil, nil
 	}
 	// No quiz yet. Check prerequisites before enqueuing (cheap gates).
 	if !s.quizPrerequisitesMet(episodeID) {

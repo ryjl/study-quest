@@ -23,6 +23,9 @@ const (
 	adviceStatusReady       = "ready"
 	adviceStatusGenerating  = "generating"
 	adviceStatusUnavailable = "unavailable"
+	// adviceStatusCooling:该 (user,scope,scope_id) 的 advice 生成连续失败达到熔断
+	// 阈值。语义同 quizStatusCooling(避免反复入队烧 token)。前端据此提示并给重试入口。
+	adviceStatusCooling = "cooling"
 )
 
 // runAdviceJob 是 advice 生成路径。流程(仿 runQuizJob,但更简单——无 self-check、无
@@ -299,6 +302,11 @@ func (s *aiService) GetOrEnqueueAdvice(userID uint, scope string, scopeID uint) 
 	if !s.hasAnyMasteryForScope(userID, scope, scopeID) {
 		return adviceStatusUnavailable, nil, nil
 	}
+	// 熔断检查:该 (user,scope,scope_id) 的 advice 连续失败 ≥ 阈值,拒绝自动入队
+	// (语义同 quiz 的冷却)。per-user 计数:A 学生 advice 失败不影响 B 学生。
+	if s.consecutiveAdviceFailures(userID, scope, scopeID) >= maxConsecutiveFailures {
+		return adviceStatusCooling, nil, nil
+	}
 	if err := s.enqueueAdviceJob(userID, scope, scopeID); err != nil {
 		return adviceStatusUnavailable, nil, err
 	}
@@ -330,6 +338,12 @@ func (s *aiService) hasAnyMasteryForScope(userID uint, scope string, scopeID uin
 func (s *aiService) EnqueueAdviceForEpisode(userID, episodeID uint) error {
 	// 在途 advice job 就不重复入队(submit 被重试 / 重复触发时)。
 	if s.hasPendingAdviceJob(userID, agent.ScopeEpisode, episodeID) {
+		return nil
+	}
+	// 熔断检查:交卷后链式触发的 advice 也要尊重冷却——否则交卷一次就绕过熔断入队,
+	// 学生反复交卷(或 submit 重试)又会堆失败 job 烧 token。和 GetOrEnqueueAdvice 用
+	// 同一个 consecutiveAdviceFailures 判定,行为一致。
+	if s.consecutiveAdviceFailures(userID, agent.ScopeEpisode, episodeID) >= maxConsecutiveFailures {
 		return nil
 	}
 	return s.enqueueAdviceJob(userID, agent.ScopeEpisode, episodeID)
@@ -426,20 +440,10 @@ func (s *aiService) hasPendingAdviceJob(userID uint, scope string, scopeID uint)
 		"advice", userID, []string{"queued", "processing"}).
 		Find(&jobs)
 	for _, j := range jobs {
-		if j.PayloadJSON == "" {
-			// 无 PayloadJSON 的 advice job 默认是 episode 级(buildAdviceRequest
-			// 的回退路径),用 job.EpisodeID 比较。EpisodeID 是 *uint,subject 级 job 为 nil
-			// (绝不会进 episode 分支,scope=subject 已在上面 if 处过滤),所以 deref 安全。
-			if scope == agent.ScopeEpisode && j.EpisodeID != nil && *j.EpisodeID == scopeID {
-				return true
-			}
-			continue
-		}
-		var p struct {
-			Scope   string `json:"scope"`
-			ScopeID uint   `json:"scope_id"`
-		}
-		if json.Unmarshal([]byte(j.PayloadJSON), &p) == nil && p.Scope == scope && p.ScopeID == scopeID {
+		// scope/scope_id 匹配规则(无 PayloadJSON 默认 episode 级用 EpisodeID,
+		// 有则解码 PayloadJSON 比较)抽到了 adviceJobMatchesScope,供这里和
+		// consecutiveAdviceFailures 复用——保持两处判定完全一致。
+		if adviceJobMatchesScope(j, scope, scopeID) {
 			return true
 		}
 	}

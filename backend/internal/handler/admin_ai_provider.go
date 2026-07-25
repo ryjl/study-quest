@@ -379,9 +379,9 @@ func (h *adminHandler) RealTestAIProvider(c *gin.Context) {
 			{Role: ai.RoleSystem, Content: realTestSystemPrompt},
 			{Role: ai.RoleUser, Content: realTestUserPrompt},
 		},
-		// 6000 直接抄 ai_service_quiz.go 的 quiz 生成 MaxTokens——要复现业务场景就必须
+		// 10000 直接抄 ai_service_quiz.go 的 quiz 生成 MaxTokens——要复现业务场景就必须
 		// 用业务级输出上限,否则测不出真实负载。
-		MaxTokens: 6000,
+		MaxTokens: 10000,
 	})
 	latency := time.Since(start).Milliseconds()
 

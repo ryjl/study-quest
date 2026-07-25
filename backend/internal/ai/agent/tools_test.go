@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"studyquest/backend/internal/model"
@@ -225,16 +228,76 @@ func TestGetRelatedChunksNotFound(t *testing.T) {
 }
 
 func TestExtractJSONObject(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{`{"a":1}`, `{"a":1}`},
-		{"```json\n{\"a\":1}\n```", `{"a":1}`},
-		{"结果如下: {\"a\":1} 完毕", `{"a":1}`},
-		{"no braces here", "no braces here"},
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"balanced", `{"a":1}`, `{"a":1}`},
+		{"fenced", "```json\n{\"a\":1}\n```", `{"a":1}`},
+		{"prose-wrapped", "结果如下: {\"a\":1} 完毕", `{"a":1}`},
+		{"no-braces", "no braces here", "no braces here"},
+		// 截断兜底:走到末尾仍未平衡时,补全缺失的闭符号。这是 max_tokens 砍断输出
+		// 的真实场景(截断点常落在中文 UTF-8 多字节字符中间,报 invalid character 'é')。
+		// 补全后能被 json.Unmarshal 解析,救回前面已写完整的字段/题目。
+		{"truncated-object", `{"a":1`, `{"a":1}`},
+		{"truncated-nested", `{"a":{"b":1`, `{"a":{"b":1}}`},
+		{"truncated-array", `{"q":["x","y"`, `{"q":["x","y"]}`},
+		{"truncated-string-value", `{"a":"hel`, `{"a":"hel"}`},
 	}
 	for _, c := range cases {
 		if got := extractJSONObject(c.in); got != c.want {
 			t.Errorf("extractJSONObject(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestExtractJSONObjectTruncationRecoverable 验证截断兜底产出的 JSON 能被标准库
+// json.Unmarshal 解析——即救回来的不是「仍是半截」,而是结构上完整的数据。这是
+// parseQuizGeneration 在被截断的输出上能救回前面题目的前提。
+func TestExtractJSONObjectTruncationRecoverable(t *testing.T) {
+	// 模拟被 max_tokens 砍断的 quiz 输出:第一道完整、第二道只写了半个 stem。
+	truncated := `{"questions":[{"stem":"Q1","options":["A"],"answer":0},{"stem":"Q2`
+	recovered := extractJSONObject(truncated)
+	var v struct {
+		Questions []struct {
+			Stem string `json:"stem"`
+		} `json:"questions"`
+	}
+	if err := json.Unmarshal([]byte(recovered), &v); err != nil {
+		t.Fatalf("recovered JSON still unparseable: %v\nrecovered=%s", err, recovered)
+	}
+	if len(v.Questions) < 1 || v.Questions[0].Stem != "Q1" {
+		t.Errorf("expected to salvage Q1, got %+v (recovered=%s)", v.Questions, recovered)
+	}
+}
+
+// TestParseQuizGenerationRecoversTruncatedQuiz 验证 parseQuizGeneration 在被截断的
+// quiz 输出上能救回前面完整的题目、丢弃最后一道写了一半的残题——而不是整次失败。
+// 对应 episode 31 失败场景:JSON 在 4000 tokens 附近被砍断在 UTF-8 多字节字符中间。
+func TestParseQuizGenerationRecoversTruncatedQuiz(t *testing.T) {
+	// 8 道完整题 + 第 9 道只写了字段名没写值(模拟末尾截断)。
+	// extractJSONObject 会补全括号,json.Unmarshal 解析后第 9 道 stem 为空,
+	// parseQuizGeneration 的「drop empty stem」逻辑会丢弃它,保留前 8 道。
+	var b strings.Builder
+	b.WriteString(`{"questions":[`)
+	for i := 0; i < 8; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		b.WriteString(`{"type":"choice","stem":"题`)
+		b.WriteString(strconv.Itoa(i + 1))
+		b.WriteString(`","options":["A","B","C","D"],"answer":0,"explanation":"e"}`)
+	}
+	// 第 9 道:写了对象开始但字段值被截断。
+	b.WriteString(`,{"type":"choice","stem":"题`)
+	// 故意在这里截断——没有闭合 stem 字符串、对象、数组、外层对象。
+	draft, err := parseQuizGeneration(b.String())
+	if err != nil {
+		t.Fatalf("parseQuizGeneration should recover from truncation, got err: %v", err)
+	}
+	if len(draft.Questions) != 8 {
+		t.Errorf("expected 8 salvaged questions (drop the truncated 9th), got %d", len(draft.Questions))
 	}
 }
 

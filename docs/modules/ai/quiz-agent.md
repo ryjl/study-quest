@@ -100,7 +100,7 @@ concepts/key_points。文件名帮 agent 快速锁定主题，比纯靠字幕召
 ```
 messages = [system, user]
 for step in 1..maxSteps(=6):
-    resp = llm.Chat(req{messages, tools: toolbox.Specs(), max_tokens: 4000})
+    resp = llm.Chat(req{messages, tools: toolbox.Specs(), max_tokens: 10000})
     if resp.FinishReason != "tool_calls":
         return final answer  # 终止
     # 执行工具
@@ -115,9 +115,22 @@ for step in 1..maxSteps(=6):
   （实测一次出题 ~20000-40000 prompt tokens，是 Phase B 单次总结的 ~5-10 倍）。
   这是 ReAct 的固有成本，maxSteps=6 + 预召回（prompt 预填 memory/episode meta）
   控制轮次。
-- **`MaxTokens=4000`**：生成 turn 的最终答案是多题 JSON+解析，1500-2500 tokens。
-  不设上限会被中转站默认值（~1197）截断，导致 JSON 解析失败（这是端到端验证发现
-  的真实 bug）。
+- **`MaxTokens=10000`**：生成 turn 的最终答案是 8-12 题 JSON，每题含 stem + 4 options
+  + 富文本 explanation（鼓励 GFM 表格 / SVG），实测峰值 7000-8000 tokens。不设上限会被
+  中转站默认值（~1197）截断；6000 也偏紧（episode 31 象棋复盘课的多轮生成都在 4000 tokens
+  附近被砍断，截断点落在中文 UTF-8 多字节字符中间，报 `invalid character 'é' after object
+  key:value pair`）；10000 覆盖峰值并留余量。另有 `extractJSONObject` 截断兜底（见 §11）。
+- **熔断（circuit breaker）**：同一任务（quiz 按 `(user, episode)`、advice 按
+  `(user, scope, scope_id)`、summary/segment/polish 按 `episode`）连续失败达到
+  `maxConsecutiveFailures`(=3) 次后，lazy 入队路径（`GetOrEnqueueQuiz` /
+  `GetOrEnqueueAdvice` / `EnqueueAdviceForEpisode`）返回 `cooling` 状态拒绝再入队，
+  避免客户端轮询反复触发失败烧 token（episode 31 案例：9 次失败烧 50 万 prompt tokens）。
+  「连续」= 最近 `maxConsecutiveFailures` 条 job 的尾部 failed 连击，遇到 done/queued/
+  processing 即中断——所以 admin `RetryJob`（failed→queued）或学生点「重试」（走
+  `RegenerateQuiz` 强制路径）把最新一条变非 failed 后，连击自然归零、熔断解除，
+  无需单独的 reset 逻辑。admin 手动的 `EnqueueSegment`/`EnqueueSummary`/`EnqueuePolish`
+  和 `RegenerateQuiz`/`RegenerateAdvice` 故意不检查熔断——它们是 escape hatch，admin
+  判断「已改配置、要强制重试」时应能绕过。
 
 ## 4. 工具（tools.go）
 
@@ -217,7 +230,9 @@ BGE-small-zh 模型(23MB)，COPY 进 runtime 的 `/app/data/ai-models/`。
 
 | Bug | 修复 |
 |---|---|
-| 最终答案被 max_tokens 截断，JSON 解析失败 | `extractJSONObject` 改平衡括号匹配 + `MaxTokens=4000` |
+| 最终答案被 max_tokens 截断，JSON 解析失败 | `extractJSONObject` 改平衡括号匹配 + 足够大的 `MaxTokens`（见下） |
+| 多盘棋/多例题课 quiz JSON 在 4000 tokens 附近被砍断（`invalid character 'é'`，UTF-8 多字节字符被切断）；题干只写"本课讲到"无法区分是哪盘棋 | `MaxTokens` 6000→10000 覆盖峰值；`extractJSONObject` 截断兜底（开符号栈逆序补 `}`/`]`，救回前面的完整题）；prompt §5 强化要求多盘棋课带时间/盘次锚点；`get_related_chunks` 返回末尾附 `[出题时可引用时间锚点: M:SS]` 提示 |
+| 同一任务连续失败时客户端轮询反复入队烧 token（episode 31 案例：9 次失败烧 50 万 prompt tokens）| 熔断：`consecutiveQuizFailures` / `consecutiveAdviceFailures` / `consecutiveFailures` 按 (job, user/scope, 实体) 数最近 `maxConsecutiveFailures`(=3) 条 job 的尾部连续 failed 连击；lazy 入队（`GetOrEnqueueQuiz`/`GetOrEnqueueAdvice`/`EnqueueAdviceForEpisode`）连击达阈值返回 `cooling` 状态拒绝再入队；admin `RetryJob` 或学生点「重试」走 `RegenerateQuiz`（强制重生成路径，绕过冷却），把最新一条 failed 改成非 failed，连击自然归零、熔断解除 |
 | `knowledge_memory` 表名错（GORM 复数成 `knowledge_memories`）| 原生 SQL 用正确表名 |
 | 首次答题 INSERT 路径 mastery/count 全 0 | INSERT 也应用 delta |
 | 客户端轮询每次创建新 quiz job（堆 10+ 个）| `hasPendingQuizJob` 检查，且优先于 quiz 存在判断 |

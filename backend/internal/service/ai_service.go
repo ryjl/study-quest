@@ -733,6 +733,108 @@ func (s *aiService) hasPendingJob(jobType string, episodeID uint) bool {
 	return count > 0
 }
 
+// maxConsecutiveFailures 是同一任务连续失败后「熔断」的阈值。客户端轮询触发的 lazy
+// 入队(GetOrEnqueueQuiz / GetOrEnqueueAdvice / EnqueueAdviceForEpisode)在入队前会
+// 调 consecutiveFailures 检查:连续失败达到这个数就拒绝自动入队、返回 cooling 状态,
+// 避免像 episode 31 那样客户端反复入队 9 次烧 50 万 token 的惨剧。admin 手动
+// RetryJob / Regenerate* 不受此限(那是 escape hatch)。
+//
+// 取 3 次:LLM 失败有随机性(中转站偶发 502、模型偶发截断),给 3 次机会足够区分
+// 「偶发」和「确定性失败」;确定性失败(长课截断、配置错)在第 3 次后就该停下来让
+// admin 介入,而不是继续烧。
+const maxConsecutiveFailures = 3
+
+// consecutiveFailures 数该 (jobType, episode) 最近连续失败了多少次。返回最近
+// maxConsecutiveFailures 条 job(按时间倒序)里,从最新一条往回数的连续 failed
+// 条数——一旦遇到非 failed(done/skipped/queued/processing)就停。
+//
+// 「连续」是关键:不是「历史总失败数」,而是「最近一次成功之后的失败连击」。这样
+// admin RetryJob 成功一次后,失败计数自然清零(最近一条是 done,返回 0);反之只要
+// 最近 3 条全是 failed 就触发熔断,不管历史上成功过多少次(老的成功不抵消最近的问题)。
+//
+// 用途:summary/segment/polish 这种 episode 级批作业的熔断(目标实体 = episode_id,
+// 与 user 无关——这些作业的产物是全 episode 共享的)。
+//
+// limit 取 maxConsecutiveFailures:只需判断是否到阈值,多查无益(判定逻辑只看最近 N 条)。
+func (s *aiService) consecutiveFailures(jobType string, episodeID uint) int {
+	var jobs []model.AIJob
+	s.db.Where("job_type = ? AND episode_id = ?", jobType, episodeID).
+		Order("created_at DESC").Limit(maxConsecutiveFailures).Find(&jobs)
+	count := 0
+	for _, j := range jobs {
+		if j.Status == "failed" {
+			count++
+		} else {
+			break // 遇到非 failed 中断连击
+		}
+	}
+	return count
+}
+
+// consecutiveQuizFailures 是 consecutiveFailures 的 per-user quiz 版。quiz 是每个
+// 学生在每节课独立一套(A 学生失败不影响 B 学生),必须按 (job_type=quiz, user_id,
+// episode_id) 三元组计数——不能只用 episode_id(否则同节课别的学生失败会误熔断
+// 当前学生)。
+func (s *aiService) consecutiveQuizFailures(userID, episodeID uint) int {
+	var jobs []model.AIJob
+	s.db.Where("job_type = ? AND user_id = ? AND episode_id = ?", "quiz", userID, episodeID).
+		Order("created_at DESC").Limit(maxConsecutiveFailures).Find(&jobs)
+	count := 0
+	for _, j := range jobs {
+		if j.Status == "failed" {
+			count++
+		} else {
+			break
+		}
+	}
+	return count
+}
+
+// consecutiveAdviceFailures 是 consecutiveFailures 的 advice 专用版。advice 的目标
+// 实体是 (user, scope, scope_id),scope_id 存在 PayloadJSON 里(不是 SQL 列),无法
+// 用 SQL WHERE 精确过滤——复用 hasPendingAdviceJob 的查询+Go 层解码模式:按
+// (job_type=advice, user_id) 拉最近 maxConsecutiveFailures 条 advice job,Go 层
+// 匹配 scope/scope_id 后数连击。
+//
+// 注意 Limit 取的是「所有 scope 混在一起的最近 N 条」,Go 层 adviceJobMatchesScope
+// 过滤后实际同 scope 的可能 < N 条。这对「判定是否到阈值」是保守安全的:同 scope 的
+// 连击被别的 scope job 夹断时,函数返回的值偏小(少熔断,不会误熔断)。advice 无客户端
+// 高频轮询(submit-all 后链式触发一次),少熔断的代价可接受;真要精确就得查全量再过滤,
+// 但 advice job 每用户量级很小,这里 Limit 已够用。
+func (s *aiService) consecutiveAdviceFailures(userID uint, scope string, scopeID uint) int {
+	var jobs []model.AIJob
+	s.db.Where("job_type = ? AND user_id = ?", "advice", userID).
+		Order("created_at DESC").Limit(maxConsecutiveFailures).Find(&jobs)
+	count := 0
+	for _, j := range jobs {
+		if j.Status != "failed" {
+			break
+		}
+		if !adviceJobMatchesScope(j, scope, scopeID) {
+			break // 连击里混入了别的 scope 的失败,不算同任务的连续失败
+		}
+		count++
+	}
+	return count
+}
+
+// adviceJobMatchesScope 判断一条 advice job 是否属于 (scope, scope_id)。和
+// hasPendingAdviceJob 用的是同一套匹配规则(无 PayloadJSON 默认 episode 级,
+// 用 EpisodeID 比较;有 PayloadJSON 解码比较 scope/scope_id)。抽出来供两处复用。
+func adviceJobMatchesScope(j model.AIJob, scope string, scopeID uint) bool {
+	if j.PayloadJSON == "" {
+		return scope == agent.ScopeEpisode && j.EpisodeID != nil && *j.EpisodeID == scopeID
+	}
+	var p struct {
+		Scope   string `json:"scope"`
+		ScopeID uint   `json:"scope_id"`
+	}
+	if json.Unmarshal([]byte(j.PayloadJSON), &p) != nil {
+		return false
+	}
+	return p.Scope == scope && p.ScopeID == scopeID
+}
+
 // --- in-process worker ---
 
 // runWorker is the single goroutine that drains AI jobs. It polls every few
@@ -902,7 +1004,12 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 		// summary,admin 应走手动 EnqueueSummary(强制重跑,不经此链式门)。
 		if course, cerr := s.courseRepo.FindByID(courseID); cerr == nil && course != nil && course.AISummaryEnabled {
 			if existing, serr := s.contentRepo.GetSummary(episodeID); serr == nil && existing == nil {
-				if !s.hasPendingJob("summary", episodeID) {
+				// 熔断门:summary 连续失败 ≥ 阈值就不再链式入队。这是「白烧 token」的
+				// 第二条潜在路径(第一条是 quiz 客户端轮询,已在 GetOrEnqueueQuiz 拦住):
+				// 若某节课的 summary 反复失败(内容超长截断等),admin 每次重新 segment
+				// 都会触发这里再入队一次 summary 烧 token。admin 仍可走手动
+				// EnqueueSummary 强制重跑(那条路径不查熔断,是 escape hatch)。
+				if !s.hasPendingJob("summary", episodeID) && s.consecutiveFailures("summary", episodeID) < maxConsecutiveFailures {
 					sjob := &model.AIJob{
 						JobType:   "summary",
 						EpisodeID: &episodeID,
