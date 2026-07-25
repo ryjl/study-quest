@@ -232,6 +232,10 @@ func (h *aiHandler) GetEpisodeQuiz(c *gin.Context) {
 		c.JSON(http.StatusOK, quizResponse{Status: "ready", Quiz: view, AgentFeedback: view.AgentFeedback})
 	case "generating":
 		c.JSON(http.StatusAccepted, quizResponse{Status: "generating"})
+	case "done":
+		// 已做过(有历史 quiz)但无 active quiz:交卷即归档后或换题归档后的状态。
+		// 前端据此渲染「已完成、点重新生成」入口,不自动出新题。
+		c.JSON(http.StatusOK, quizResponse{Status: "done"})
 	default:
 		c.JSON(http.StatusNotFound, quizResponse{Status: "unavailable"})
 	}

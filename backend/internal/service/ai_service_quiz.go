@@ -257,6 +257,10 @@ const (
 	quizStatusReady       = "ready"
 	quizStatusGenerating  = "generating"
 	quizStatusUnavailable = "unavailable"
+	// quizStatusDone:某 (user,episode) 有历史 quiz(交卷归档/换题归档过)但没有当前
+	// active quiz 时返回。前端据此渲染「已完成、点重新生成」入口——不再自动 enqueue
+	// 新一套(只有从未做过才首次自动生成)。区别于 unavailable(AI 未开/无 chunks)。
+	quizStatusDone = "done"
 )
 
 // --- ToolDeps adapter ---
@@ -576,6 +580,19 @@ func (s *aiService) GetOrEnqueueQuiz(userID, episodeID uint) (string, *model.Qui
 	if quiz != nil {
 		return quizStatusReady, quiz, nil
 	}
+	// 没有 active quiz。区分两种情况:
+	//   - 首次(从未做过,没有任何 quiz 行)→ 满足前提就自动 enqueue 生成第一套。
+	//   - 已做过(有历史 quiz,交卷/换题归档过)→ 返回 done,不自动出新题。
+	//     学生下次进入页面看到「已完成」入口,点重新生成才出新一套。
+	// 不自动出的理由:交卷即归档后,若这里仍自动 enqueue,学生每交一次卷下次进入就被
+	// 迫做新一套(且耗 LLM),违背「交卷后停一停、想做了再生成」的预期。
+	hasHistory, herr := s.contentRepo.HasAnyQuiz(userID, episodeID)
+	if herr != nil {
+		return quizStatusUnavailable, nil, herr
+	}
+	if hasHistory {
+		return quizStatusDone, nil, nil
+	}
 	// No quiz yet. Check prerequisites before enqueuing (cheap gates).
 	if !s.quizPrerequisitesMet(episodeID) {
 		return quizStatusUnavailable, nil, nil
@@ -869,6 +886,15 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 		return nil, err
 	}
 	if quiz == nil {
+		// 没有 active quiz。交卷即归档后这是常态(刚交完的卷子已 archived,当前无 active)。
+		// 区分两种情况给更贴切的错误:
+		//   - 该 (user,episode) 有历史 quiz(交卷归档过)→ 已交卷,返回 ErrQuizAlreadySubmitted
+		//     (handler 转 409,前端友好提示「这套题已交卷」)。
+		//   - 完全没有任何 quiz → 真没有可交的卷子,返回 quiz not found(handler 转 404)。
+		hasHistory, _ := s.contentRepo.HasAnyQuiz(userID, episodeID)
+		if hasHistory {
+			return nil, ErrQuizAlreadySubmitted
+		}
 		return nil, fmt.Errorf("quiz not found")
 	}
 	if quiz.SubmittedAt != nil {
@@ -988,6 +1014,17 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 	// 注:submitted_at 已在函数开头 TryMarkQuizSubmitted 抢占盖戳,这里不再重复盖。
 	// 旧实现把盖戳放最后(前面 error 时 quiz 保持未交卷),但那留下了 TOCTOU 窗口;
 	// 现在盖戳提前到所有副作用之前,quiz 一开始就锁定,更安全。
+
+	// 交卷即归档:把这套卷子翻成 archived(设 archived_at=交卷时刻)。这样它立即进入
+	// 历史面板(可点开 review 逐题结果),下次进入当前练习区不再卡在「上次结果只读态」——
+	// GetOrEnqueueQuiz 看到「无 active 但有历史」会返回 done,学生点重新生成才出新一套。
+	// 复用前面 TryMarkQuizSubmitted 的 now,保证 archived_at 和 submitted_at 一致
+	// (历史面板按 archived_at newest-first 排序,刚交卷的会排最前)。
+	// best-effort:归档失败只记日志,不阻断交卷主流程——quiz 已交卷锁(submitted_at 已盖),
+	// 最坏情况是该卷子仍 active(下次进入看到旧只读态),可接受的降级。
+	if aerr := s.contentRepo.ArchiveQuizByID(quiz.ID, now); aerr != nil {
+		log.Printf("AI: archive quiz %d after submit failed: %v", quiz.ID, aerr)
+	}
 
 	// Phase C 链式触发:交卷成功后异步入队 episode 级 advice job。理由——学生刚交完
 	// 卷,memory 已是最新(本次答题已更新),这时跑 advice 最准;且"复习建议"和"错题

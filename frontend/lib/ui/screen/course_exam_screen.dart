@@ -5,14 +5,9 @@ import '../../service/api_service.dart';
 import '../../service/tv_mode.dart';
 import '../../theme.dart';
 import '../widget/button_3d.dart';
-import '../widget/markdown_view.dart';
+import '../widget/quiz_card.dart';
 import '../widget/state_widgets.dart';
 import '../responsive.dart';
-
-// 选项序号前缀:0→"A. "、1→"B. "... 让选项带字母序号,多选明细里的 A/B 能对上。
-// 一致性不变量(前缀只依赖索引、不进库、各页面天然一致)详见
-// wrong_book_screen.dart 里 _optionTag 的完整注释——同样适用本文件。
-String _optionTag(int i) => '${String.fromCharCode(65 + i)}. ';
 
 /// 课程考试屏(TODO.md P0)。把一门课全部学过的知识点综合出一张有针对性的
 /// 试卷(后端基于 mastery 弱点从已有题库抽题,不重新生成)。
@@ -50,6 +45,9 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   ExamView? _exam;
   // questionId → 作答。choice: {answer_index}, multi: {answer_indices}, fill: {answer_text}。
   final Map<int, Map<String, dynamic>> _answers = {};
+  // 填空题用 controller 持有输入(QuizReviewCard 的 fill 走 controller),onChanged 同步到
+  // _answers['answer_text'] 供交卷读取。和 ai_study_screen 的 _fillControllers 同模式。
+  final Map<int, TextEditingController> _fillControllers = {};
   // 交卷后整体报告。
   ExamSubmitReport? _report;
   bool _busy = false; // start / submit 进行中
@@ -58,6 +56,14 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   void initState() {
     super.initState();
     _loadStatus();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _fillControllers.values) {
+      c.dispose();
+    }
+    super.dispose();
   }
 
   Future<void> _loadStatus() async {
@@ -273,12 +279,15 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
         child: ListView.builder(
           padding: const EdgeInsets.all(16),
           itemCount: exam.questions.length + 2, // header(得分) + 题目 + 提交/完成
-          itemBuilder: (context, index) {
-            if (index == 0) return _buildScoreHeader(exam, submitted);
-            if (index == exam.questions.length + 1) return _buildSubmitRow(exam, submitted);
-            final q = exam.questions[index - 1];
-            return _buildQuestionCard(q, index - 1, submitted);
-          },
+              itemBuilder: (context, index) {
+                if (index == 0) return _buildScoreHeader(exam, submitted);
+                if (index == exam.questions.length + 1) return _buildSubmitRow(exam, submitted);
+                final q = exam.questions[index - 1];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 14),
+                  child: _examCard(q, index - 1, submitted),
+                );
+              },
         ),
       ),
     );
@@ -364,265 +373,49 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
     );
   }
 
-  Widget _buildQuestionCard(ExamQuestion q, int index, bool submitted) {
+  // 试卷的逐题卡:复用全站统一的 QuizReviewCard(代码/视觉与 quiz/错题本/历史一致)。
+  // 适配 ExamQuestion + ExamSubmitResult + 本地 _answers:
+  //   - _answers[q.id] 是 Map:choice→answer_index, multi→answer_indices, fill→answer_text。
+  //   - 考试题不下发正确答案(防作弊),result 只在交卷后揭示。
+  Widget _examCard(ExamQuestion q, int index, bool submitted) {
     final result = _report?.results.cast<ExamSubmitResult?>().firstWhere(
           (r) => r?.questionId == q.id,
           orElse: () => null,
         );
     final userAnswer = _answers[q.id];
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderMuted),
+    final userChoice = userAnswer?['answer_index'] as int?;
+    final userMulti = (userAnswer?['answer_indices'] as List?)?.cast<int>().toSet() ?? <int>{};
+    final userFill = (userAnswer?['answer_text'] as String?) ?? '';
+    return QuizReviewCard(
+      stem: QuizStemData(
+        index: index,
+        type: q.type,
+        stem: q.stem,
+        options: q.options,
+        chunkStartTime: null, // 考试题不下发 chunk 锚点,无跳转
+        hasJump: false,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 题序号 + 题型标签(对齐 quiz/重做卷样式)。
-          Row(children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-              decoration: BoxDecoration(color: AppTheme.slate100, borderRadius: BorderRadius.circular(5)),
-              child: Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-            ),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: q.isFill
-                    ? const Color(0xFFFFFBEB)
-                    : q.isMultiChoice ? const Color(0xFFF5F3FF) : AppTheme.blue100,
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(
-                q.isFill ? '填空' : q.isMultiChoice ? '多选' : '选择',
-                style: TextStyle(
-                  fontSize: 10,
-                  color: q.isFill
-                      ? const Color(0xFF92400E)
-                      : q.isMultiChoice ? const Color(0xFF6D28D9) : const Color(0xFF1D4ED8),
-                ),
-              ),
-            ),
-          ]),
-          const SizedBox(height: 8),
-          MarkdownView(data: q.stem, baseTextColor: AppTheme.slate900, textScale: 1.0),
-          const SizedBox(height: 10),
-          if (q.isMultiChoice)
-            ..._buildMultiOptions(q, userAnswer, result, submitted)
-          else if (q.isFill)
-            _buildFillField(q, userAnswer, result, submitted)
-          else
-            ..._buildChoiceOptions(q, userAnswer, result, submitted),
-          // 交卷后揭示解析。
-          if (submitted && result != null && result.explanation.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: MarkdownView(
-                data: result.explanation,
-                baseTextColor: AppTheme.slate600,
-                textScale: 0.95,
-              ),
-            ),
-          ],
-        ],
+      verdict: QuizVerdictData(
+        submitted: submitted,
+        userChoiceIndex: userChoice,
+        userMultiIndices: userMulti,
+        userFillText: userFill,
+        correctIndex: result?.correctIndex,
+        correctIndices: result?.correctIndices.toSet() ?? const {},
+        correctText: result?.correctText ?? '',
+        explanation: result?.explanation ?? '',
+        correct: result?.correct,
+        partial: false,
       ),
-    );
-  }
-
-  List<Widget> _buildChoiceOptions(
-    ExamQuestion q, Map<String, dynamic>? userAnswer,
-    ExamSubmitResult? result, bool submitted,
-  ) {
-    final selectedIdx = userAnswer?['answer_index'] as int?;
-    final correctIdx = result?.correctIndex;
-    return List.generate(q.options.length, (i) {
-      final selected = selectedIdx == i;
-      final correct = submitted && correctIdx == i;
-      final wrongPick = submitted && selected && !correct;
-      return _optionTile(
-        '${_optionTag(i)}${q.options[i]}',
-        selected: selected,
-        correct: correct,
-        wrongPick: wrongPick,
-        onTap: () => _setChoice(q.id, i),
-      );
-    });
-  }
-
-  List<Widget> _buildMultiOptions(
-    ExamQuestion q, Map<String, dynamic>? userAnswer,
-    ExamSubmitResult? result, bool submitted,
-  ) {
-    final picked = (userAnswer?['answer_indices'] as List?)?.cast<int>() ?? const [];
-    final correctIdxs = result?.correctIndices ?? const [];
-    // 多选选项区只标正确答案(绿),不标红——红绿混在选项里分不清「我选的」和「对的」(需求#3a)。
-    // 用户的选择放底部明细用带颜色文字说清楚。
-    final tiles = List.generate(q.options.length, (i) {
-      final selected = picked.contains(i);
-      final correct = submitted && correctIdxs.contains(i);
-      return _optionTile(
-        '${_optionTag(i)}${q.options[i]}',
-        selected: selected,
-        correct: correct,
-        wrongPick: false,
-        multi: true,
-        onTap: () => _toggleMulti(q.id, i),
-      );
-    });
-    if (submitted && result != null) {
-      tiles.add(_buildMultiDetail(q.options, picked, correctIdxs));
-    }
-    return tiles;
-  }
-
-  // 多选题底部明细:选项区干净(只标正确项),这里用带颜色的选项文字把对错归属说清楚。
-  // 你选的:选对的项绿、选错的项红;正确答案:全绿;多选/漏选项橙字提示。
-  Widget _buildMultiDetail(List<String> options, List<int> picked, List<int> correctIdxs) {
-    final pickedSet = picked.toSet();
-    final correctSet = correctIdxs.toSet();
-    final wrongPicks = picked.where((i) => !correctSet.contains(i)).toList(); // 多选的
-    final missed = correctIdxs.where((i) => !pickedSet.contains(i)).toList(); // 漏选的
-    String label(int i) => String.fromCharCode(65 + i); // 0→A,1→B...
-
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (picked.isNotEmpty) ...[
-            const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 4),
-            // 一行一项(需求#3)。
-            for (final i in picked)
-              Text('${label(i)}. ${options[i]}',
-                style: TextStyle(fontSize: 12,
-                  color: correctSet.contains(i) ? const Color(0xFF059669) : const Color(0xFFDC2626),
-                  fontWeight: FontWeight.bold)),
-          ],
-          const SizedBox(height: 6),
-          const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          for (final i in correctIdxs)
-            Text('${label(i)}. ${options[i]}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
-          if (wrongPicks.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',
-              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
-          ],
-          if (missed.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text('⚠ ${missed.map(label).join("、")} 漏选了',
-              style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
-          ],
-        ],
-      ),
-    );
-  }
-
-  Widget _buildFillField(
-    ExamQuestion q, Map<String, dynamic>? userAnswer,
-    ExamSubmitResult? result, bool submitted,
-  ) {
-    // 填空题交卷后:输入框变红/绿(留内容只读),下面给正确答案(错时)。之前提交后丢掉
-    // 用户填的,只显示正确答案,用户不知道自己刚填了什么(需求#3b)。
-    if (submitted) {
-      final userText = (userAnswer?['answer_text'] as String?) ?? '';
-      final isCorrect = result?.correct ?? false;
-      // 用 Container 模拟输入框(边框+底色+留内容),不在 build 里 new TextEditingController(泄漏)。
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-            decoration: BoxDecoration(
-              color: isCorrect ? const Color(0xFFECFDF5) : const Color(0xFFFEF2F2),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: isCorrect ? const Color(0xFF10B981) : const Color(0xFFEF4444), width: 1.5),
-            ),
-            child: Text(
-              userText.isEmpty ? '(未作答)' : userText,
-              style: TextStyle(
-                fontSize: 14,
-                color: isCorrect ? const Color(0xFF059669) : const Color(0xFFDC2626),
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          if (!isCorrect && result?.correctText.isNotEmpty == true) ...[
-            const SizedBox(height: 6),
-            Text('正确答案:${result!.correctText}',
-              style: const TextStyle(color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
-          ],
-        ],
-      );
-    }
-    return TextField(
-      decoration: const InputDecoration(border: OutlineInputBorder(), hintText: '输入答案'),
-      onChanged: (v) => _answers[q.id] = {'answer_text': v},
-    );
-  }
-
-  Widget _optionTile(String label, {
-    required bool selected, required bool correct, required bool wrongPick,
-    bool multi = false, required VoidCallback onTap,
-  }) {
-    Color bg = Colors.white;
-    Color border = AppTheme.borderMuted;
-    Color iconColor = AppTheme.textMuted;
-    IconData icon = multi ? Icons.check_box_outline_blank : Icons.radio_button_unchecked;
-    if (selected) {
-      bg = const Color(0xFFEFF6FF);
-      border = AppTheme.blue600;
-      icon = multi ? Icons.check_box : Icons.radio_button_checked;
-      iconColor = AppTheme.blue600;
-    }
-    if (correct) {
-      bg = const Color(0xFFD1FAE5);
-      border = const Color(0xFF10B981);
-      icon = Icons.check_circle;
-      iconColor = const Color(0xFF10B981);
-    }
-    if (wrongPick) {
-      bg = const Color(0xFFFEE2E2);
-      border = Colors.redAccent;
-      icon = Icons.cancel;
-      iconColor = Colors.redAccent;
-    }
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(
-          color: bg, borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: border),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: iconColor),
-            const SizedBox(width: 8),
-            Expanded(child: Text(label, style: const TextStyle(fontSize: 14))),
-          ],
-        ),
-      ),
+      mode: submitted ? QuizReviewMode.submitted : QuizReviewMode.interactive,
+      onPickChoice: (i) => _setChoice(q.id, i),
+      onToggleMulti: (i) => _toggleMulti(q.id, i),
+      // 填空题:lazy 建 controller,onChange 同步到 _answers 供交卷读取。
+      fillController: q.isFill ? (_fillControllers[q.id] ??= TextEditingController()) : null,
+      onFillChanged: () {
+        setState(() {});
+        _answers[q.id] = {'answer_text': _fillControllers[q.id]?.text ?? ''};
+      },
     );
   }
 }

@@ -98,14 +98,15 @@ void main() {
           item(id: 1, stem: 'q1', options: ['错', '对'], correctIndex: 1, explanation: '解析文本'),
         ]));
     await _pumpScreen(tester);
-    // 默认收起:不显示「正确答案」标签,也不显示解析。
-    expect(find.text('正确答案'), findsNothing);
-    expect(find.text('解析'), findsNothing);
+    // 默认收起:正确选项不高亮(无绿色 check),也不显示解析。
+    expect(find.byIcon(Icons.check_circle), findsNothing);
+    expect(find.text('解析文本'), findsNothing);
     // 点「查看答案」展开。
     await tester.tap(find.text('查看答案'));
     await tester.pumpAndSettle();
-    expect(find.text('正确答案'), findsOneWidget);
-    expect(find.text('解析'), findsOneWidget);
+    // 正确选项「对」揭示为绿色高亮(check_circle),解析文本可见。
+    expect(find.byIcon(Icons.check_circle), findsOneWidget);
+    expect(find.text('解析文本'), findsOneWidget);
   });
 
   testWidgets('options show by default (neutral) so student can self-test before revealing answer',
@@ -118,8 +119,8 @@ void main() {
     // 4 个选项在收起态都可见(选项带 A.B.C.D. 序号前缀)。
     expect(find.text('A. 选项A'), findsOneWidget);
     expect(find.text('D. 选项D'), findsOneWidget);
-    // 还没展开,不显示「正确答案」。
-    expect(find.text('正确答案'), findsNothing);
+    // 还没展开,正确项不高亮(无 check_circle)。
+    expect(find.byIcon(Icons.check_circle), findsNothing);
   });
 
   testWidgets('tapping a neutral option marks the choice; revealing shows it red when wrong',
@@ -135,7 +136,10 @@ void main() {
     // 展开看答案。
     await tester.tap(find.text('查看答案'));
     await tester.pumpAndSettle();
-    expect(find.text('正确答案'), findsOneWidget);
+    // 正确项「对」标绿(check_circle),自测选错的「错」标红(cancel 图标)。
+    // 自测判错时还会出一个对错横幅(也带 cancel/check 图标),所以这里断言「至少一个」。
+    expect(find.byIcon(Icons.check_circle), findsWidgets);
+    expect(find.byIcon(Icons.cancel), findsWidgets);
   });
 
   testWidgets('mastered item shows ✓ badge, unmastered shows attempt count + streak', (tester) async {

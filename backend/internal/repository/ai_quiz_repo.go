@@ -191,4 +191,28 @@ func (r *aiContentRepo) TryMarkQuizSubmitted(quizID uint, at time.Time) (bool, e
 	return res.RowsAffected > 0, nil
 }
 
+// ArchiveQuizByID 把一条 quiz 翻成 archived(status='archived' + 设 archived_at)。
+// 用 map Updates 只写这两列(避免 GORM 把零值字段一起带写),按 id 精确定位单行。
+// 幂等:重复调用只刷新 archived_at(不影响正确性)。archived_at 用调用方传入的时间
+// (交卷场景复用 submit-all 的 now,保证和 submitted_at 一致 + 历史排序 newest-first 对)。
+func (r *aiContentRepo) ArchiveQuizByID(quizID uint, at time.Time) error {
+	return r.db.Model(&model.Quiz{}).Where("id = ?", quizID).
+		Updates(map[string]interface{}{
+			"status":      "archived",
+			"archived_at": at,
+		}).Error
+}
+
+// HasAnyQuiz 报告某 (user, episode) 是否存在任何 quiz 行(不限 status)。一条 COUNT 查询,
+// 不取数据。GetOrEnqueueQuiz 用它区分首次(无 quiz→自动生成)和已做过(有历史→done 态)。
+func (r *aiContentRepo) HasAnyQuiz(userID, episodeID uint) (bool, error) {
+	var count int64
+	if err := r.db.Model(&model.Quiz{}).
+		Where("user_id = ? AND episode_id = ?", userID, episodeID).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // --- knowledge_memories (Phase C feedback loop) ---

@@ -258,8 +258,12 @@ func TestRedoWrongBookSubmit_CorrectMarksMastered(t *testing.T) {
 		t.Errorf("after mastered: streak = %d; want 0 (reset)", item.CorrectStreak)
 	}
 	// 隔离性:Answer 行数不变(只有第一次交卷的 1 行,重做不新增)。
-	quiz, _ := repo.GetQuiz(userID, episodeID)
-	answers, _ := repo.ListAnswersForQuiz(quiz.ID, userID)
+	// 交卷即归档后 quiz 已 archived,从历史里取它的 id。
+	archived, _ := repo.ListArchivedQuizzes(userID, episodeID)
+	if len(archived) != 1 {
+		t.Fatalf("archived quizzes = %d; want 1", len(archived))
+	}
+	answers, _ := repo.ListAnswersForQuiz(archived[0].ID, userID)
 	if len(answers) != 1 {
 		t.Errorf("redo should NOT add Answer rows; got %d (want 1 from original submit)", len(answers))
 	}

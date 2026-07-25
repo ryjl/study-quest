@@ -219,8 +219,8 @@ question.chunk_id → content_chunk.start_time 实现题目跳转视频时间点
 - **`answers.user_answer_text`**：填空题学生原文持久化（第三轮加），`multi_choice` 题型的多选答案走 `user_answer` 编码（见 §17）。
 
 第二轮新增/变化的字段：
-- **`quizzes.status` / `archived_at`** — quiz 历史保留。`regenerate`（换题）不再删旧 quiz，而是把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 `active` 行。旧卷子只读保留，学生可在历史面板 review。单 active 不变量靠**部分唯一索引**强制（`WHERE status='active'`，GORM 表达不了 partial index，AutoMigrate 后用 raw SQL 建，见 `migrateQuizActiveUniqueIndex`）。
-- **`quizzes.submitted_at`** — 统一交卷标记。第二轮做题流程改成"全部做完一次提交 = 一次考试"，点"提交全部"后填这个时间戳，quiz 锁定不可再改。用专门字段（而不是"是否存在 answer 行"）判断交卷状态（历史上单题 submit 端点也产生 answer 行会干扰判断，该端点已在第四轮数据清零重整中删除，见 §18）。
+- **`quizzes.status` / `archived_at`** — quiz 历史保留。quiz 变 archived 有两个触发点:① `regenerate`（换题）把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 `active` 行;② **`submit-all` 交卷成功后也立即归档**(`ArchiveQuizByID`,2026-07-25 加)——交卷的卷子进历史面板可点开 review,重进当前练习区不再卡在"上次结果只读态"。旧卷子只读保留,学生可在历史面板 review。单 active 不变量靠**部分唯一索引**强制（`WHERE status='active'`，GORM 表达不了 partial index，AutoMigrate 后用 raw SQL 建，见 `migrateQuizActiveUniqueIndex`）。
+- **`quizzes.submitted_at`** — 统一交卷标记。第二轮做题流程改成"全部做完一次提交 = 一次考试"，点"提交全部"后填这个时间戳，quiz 锁定不可再改。用专门字段（而不是"是否存在 answer 行"）判断交卷状态（历史上单题 submit 端点也产生 answer 行会干扰判断，该端点已在第四轮数据清零重整中删除，见 §18）。交卷即归档后,该 quiz 的 `submitted_at`(交卷锁)和 `archived_at`(归档时间)用同一个时间戳(`SubmitAllQuizAnswers` 里复用 `now`),保证历史面板 newest-first 排序正确。
 - **`questions.has_jump`** — agent 出题时判断每题是否对应明确视频片段。能锚定到具体 chunk 的题 `has_jump=true`（答错可跳视频复习）；贯穿全文/综合性的题 `has_jump=false`（无单一跳转锚点，不出跳转按钮）。默认 false 兼容老数据。前端据此决定渲染不渲染跳转按钮。
 - **`answers.quiz_id`** — denormalized snapshot，让历史答题列表在 regen 删旧 question 后仍能展示（详见 §14）。
 
@@ -367,13 +367,17 @@ GET /courses/:id/ai-summary    读课程级总结（course-unique，无总结→
 ```
 quiz（受 `IsEpisodeVisible` 访问控制）：
 ```
-GET  /episodes/:id/ai-quiz            拉题（无题→202 generating 懒生成；ready 返回题,不下发答案）
-                                       已交卷(submitted_at!=nil)时回填逐题结果(correct/correct_index/
-                                       explanation/user_answer_index),重进能 review
+GET  /episodes/:id/ai-quiz            拉题。状态机:
+                                       - 202 generating:懒生成中(首次无 quiz 时入队,或换题后轮询)
+                                       - 200 ready:有 active quiz,返回题(不下发答案);已交卷回填逐题结果
+                                       - 200 done:有历史归档(交卷/换题归档过)但无 active quiz——不自动出新题,
+                                         前端渲染「已完成、点重新生成」入口(只有从未做过才首次自动 enqueue)
+                                       - 404 unavailable:AI 未开/无 chunks
 POST /episodes/:id/ai-quiz/submit     单题即时判分(兼容保留)→更新 memory→返回结果+解析+跳转时间
 POST /episodes/:id/ai-quiz/submit-all 统一交卷(一次考试):一次性判分全部题→逐题返回结果→锁定 quiz
                                        body:{answers:[{question_id, answer_index? | answer_text?}]}
-                                       已交卷→409 ErrQuizAlreadySubmitted
+                                       成功后立即归档该 quiz(交卷即归档,进历史面板可 review)
+                                       已交卷(或归档后无 active 但有历史)→409 ErrQuizAlreadySubmitted
 POST /episodes/:id/ai-quiz/regenerate 换题(标 archived 只读保留旧 quiz→基于最新 memory 重新生成→202 generating)
 GET  /episodes/:id/ai-quiz/history    历史卷子(archived quiz 只读 review,含正确答案+逐题对错)
 ```
@@ -679,6 +683,7 @@ React 18 + TS + Vite + TanStack Query + Tailwind。无 UI 库（原生 input + �
 - 「一个学生一节课**始终只有一套 active 题**」靠部分唯一索引强制（`WHERE status='active'`），不再是早期文档里的"删旧插新"——见下
 - 「重做」=同一套题再答（`Answer` append-only，每次答题加新行；mastery 累积更新）
 - 「换题」=`CreateQuiz` 事务内把当前 quiz 标 `archived`（设 `archived_at`）+ 插新的 active quiz（基于最新 memory 重新生成）。**旧卷子不删，只读保留**，学生可在历史面板 review（`GET /ai-quiz/history`）。这是第二轮 quiz 历史功能的基础（详见 §17）
+- 「交卷即归档」(2026-07-25):`submit-all` 成功后也立即把该 quiz 标 `archived`(`ArchiveQuizByID`)——交卷的卷子进历史面板可点开 review,重进当前练习区返回 `done` 状态(不自动出新题,学生点重新生成才出)。和换题归档复用同一套 archived 机制 + 历史面板。
 - `Answer` 和 `KnowledgeMemory` 在换题时**不删**——mastery 代表长期学习状态
 
 **2. 按用户独立 + 懒生成**

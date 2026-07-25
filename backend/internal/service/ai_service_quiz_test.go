@@ -110,12 +110,16 @@ func TestSubmitAllQuizAnswers_GradesPersistsLocks(t *testing.T) {
 		t.Errorf("answer rows = %d; want 2 (skipped question has no answer)", len(answers))
 	}
 
-	// SubmittedAt stamped → second submit must be rejected with ErrQuizAlreadySubmitted.
-	refreshed, err := repo.GetQuiz(userID, episodeID)
-	if err != nil || refreshed == nil {
-		t.Fatalf("GetQuiz after submit: %v %v", refreshed, err)
+	// 交卷即归档:quiz 翻成 archived。验证它在历史里 + SubmittedAt 已盖戳(交卷锁),
+	// 且再次 submit 被拒为 ErrQuizAlreadySubmitted(无 active quiz 但有历史 → 409)。
+	archived, err := repo.ListArchivedQuizzes(userID, episodeID)
+	if err != nil {
+		t.Fatalf("ListArchivedQuizzes after submit: %v", err)
 	}
-	if refreshed.SubmittedAt == nil {
+	if len(archived) != 1 || archived[0].ID != quiz.ID {
+		t.Fatalf("archived = %+v; want the just-submitted quiz %d", archived, quiz.ID)
+	}
+	if archived[0].SubmittedAt == nil {
 		t.Fatal("SubmittedAt is nil after submit; want a timestamp (quiz should be locked)")
 	}
 	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, []QuizAnswerInput{
@@ -125,9 +129,11 @@ func TestSubmitAllQuizAnswers_GradesPersistsLocks(t *testing.T) {
 	}
 }
 
-// TestGetQuizForClient_ReportsSubmitted confirms the Submitted flag flips on the
-// client view once the quiz is handed in — the frontend reads this to switch
-// from the editable answering state to read-only results.
+// TestGetQuizForClient_ReportsSubmitted confirms the Submitted flag is false on
+// the client view before submit, and that HasJump passes through. After submit
+// the quiz is archived (交卷即归档), so GetQuizForClient returns nil — the
+// post-submit review is served via ListQuizHistory instead (covered by
+// TestSubmitAllQuizAnswers_ArchivesQuiz).
 func TestGetQuizForClient_ReportsSubmitted(t *testing.T) {
 	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(2), uint(20), uint(200)
@@ -149,11 +155,77 @@ func TestGetQuizForClient_ReportsSubmitted(t *testing.T) {
 	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, nil); err != nil {
 		t.Fatalf("SubmitAllQuizAnswers (all-skipped): %v", err)
 	}
+	// 交卷即归档:quiz 已 archived,GetQuiz(只查 active)返回 nil → 客户端只读复习视图
+	// 也跟着 nil。复习视图改由历史面板(ListQuizHistory)承载。
 	view, err = svc.GetQuizForClient(userID, episodeID)
 	if err != nil {
 		t.Fatalf("GetQuizForClient after submit: %v", err)
 	}
-	if !view.Submitted {
-		t.Error("Submitted = false after submit; want true (frontend uses this to lock)")
+	if view != nil {
+		t.Errorf("GetQuizForClient after submit = %+v; want nil (quiz archived → review via history)", view)
+	}
+}
+
+// TestSubmitAllQuizAnswers_ArchivesQuiz verifies the 交卷即归档 contract: after a
+// successful submit-all, the quiz is flipped to archived (no longer active) and
+// shows up in ListQuizHistory for read-only review. archived_at equals the
+// submit timestamp so newest-first ordering puts it on top.
+func TestSubmitAllQuizAnswers_ArchivesQuiz(t *testing.T) {
+	svc, repo, _ := aiServiceQuizTestEnv(t)
+	const userID, episodeID, courseID = uint(3), uint(30), uint(300)
+	seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
+		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Answer: 0},
+	})
+
+	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, nil); err != nil {
+		t.Fatalf("SubmitAllQuizAnswers: %v", err)
+	}
+
+	// No longer active — GetQuiz returns nil.
+	if got, err := repo.GetQuiz(userID, episodeID); err != nil || got != nil {
+		t.Errorf("GetQuiz after submit = %v %v; want nil (archived)", got, err)
+	}
+	// Shows up in history, fully revealed.
+	history, err := svc.ListQuizHistory(userID, episodeID)
+	if err != nil {
+		t.Fatalf("ListQuizHistory: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("history len = %d; want 1 (just-submitted quiz)", len(history))
+	}
+	if history[0].QuestionCount != 1 {
+		t.Errorf("history[0].QuestionCount = %d; want 1", history[0].QuestionCount)
+	}
+	// A re-submit of the same (user, episode) is rejected as already-submitted
+	// (there's no active quiz, but history exists → ErrQuizAlreadySubmitted → 409).
+	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, nil); err != ErrQuizAlreadySubmitted {
+		t.Errorf("re-submit err = %v; want ErrQuizAlreadySubmitted", err)
+	}
+}
+
+// TestGetOrEnqueueQuiz_DoneAfterSubmit verifies the 不自动出新题 contract: after a
+// quiz has been handed in (archived), GetOrEnqueueQuiz returns "done" instead of
+// enqueuing a fresh generation — the student must tap 重新生成 to start a new set.
+// Only the very first visit (no quiz rows at all) auto-enqueues.
+func TestGetOrEnqueueQuiz_DoneAfterSubmit(t *testing.T) {
+	svc, repo, _ := aiServiceQuizTestEnv(t)
+	const userID, episodeID, courseID = uint(4), uint(40), uint(400)
+	seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
+		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Answer: 0},
+	})
+
+	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, nil); err != nil {
+		t.Fatalf("SubmitAllQuizAnswers: %v", err)
+	}
+
+	status, quiz, err := svc.GetOrEnqueueQuiz(userID, episodeID)
+	if err != nil {
+		t.Fatalf("GetOrEnqueueQuiz after submit: %v", err)
+	}
+	if status != "done" {
+		t.Errorf("status = %q; want \"done\" (no auto-regen after submit)", status)
+	}
+	if quiz != nil {
+		t.Errorf("quiz = %+v; want nil (done returns no active quiz)", quiz)
 	}
 }

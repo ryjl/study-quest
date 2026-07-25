@@ -8,13 +8,8 @@ import '../../service/ui_prefs.dart';
 import '../../service/tv_mode.dart';
 import '../../theme.dart';
 import '../widget/markdown_view.dart';
+import '../widget/quiz_card.dart';
 import 'player_screen.dart';
-
-// 选项序号前缀:0→"A. "、1→"B. "... 选项像试卷一样带字母序号,多选明细里的
-// 「A. xxx」「⚠ B 多选了」才能和选项列表对上号(选项只显示内容时序号对不上)。
-// 一致性不变量(前缀只依赖索引、不进库、各页面天然一致)详见
-// wrong_book_screen.dart 里 _optionTag 的完整注释——同样适用本文件。
-String _optionTag(int i) => '${String.fromCharCode(65 + i)}. ';
 
 // AiStudyScreen — the Phase C AI learning page. Three sections:
 //   1. AI summary (headline / sections / concepts / takeaway) — read from /ai-summary.
@@ -26,7 +21,12 @@ String _optionTag(int i) => '${String.fromCharCode(65 + i)}. ';
 //           草稿(未提交的选择/填空)按 (uid, eid) 缓存到本地,防止切后台丢失。
 //        b) submitted(已交卷):点"提交全部" → 调 submit-all 一次性判分 → 锁定所有题,
 //           逐题显示对错 + 正确答案 + 解析 + 跳转按钮(仅 has_jump=true 的题)。
-//        已交卷的 quiz 重新进入本页时直接进入 submitted 只读态(quiz.submitted)。
+//
+// 交卷即归档(2026-07-25):submit-all 成功后后端把该 quiz 翻成 archived,它立即进入
+// 「历史练习」面板(可点开 review 逐题结果)。重进页面时 GetOrEnqueueQuiz 因「无 active
+// 但有历史」返回 done——当前练习区渲染「已完成、点重新生成」入口,不自动出新题;只有
+// 首次(从未做过)才自动 enqueue 生成。学生点「重新生成」才生成新一套。已交卷卷子的
+// 复习视图只在历史面板里(交卷态下当前区仍展示本次阅卷结果,返回再进则进历史)。
 //
 // Navigation: pushed from course_detail_screen's "AI 重点总结" button and from
 // the player. 跳转按钮改为 push 一个标准 PlayerScreen(带 disableAiTab:true +
@@ -130,10 +130,10 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         _quizLoading = false;
       });
       // 已交卷(后端 quiz.SubmittedAt 非零):直接进入只读态,本页不需要草稿,
-      // 清掉残留草稿防错乱(例如学生交卷后没返回就切走,草稿可能还在)。
-      // 同时从后端回填的 user_answer_index 恢复 _choicePicks,让重进时错项红框
-      // 能高亮(否则 _choicePicks 空,只显示正确项绿框,看不出"我选错了哪个")。
-      // 未交卷:尝试恢复本地草稿(防切后台丢答案)。
+      // 清掉残留草稿防错乱。交卷即归档后,重进页面通常返回 done(无 active quiz),
+      // 这条分支是防御性兜底——若后端因故仍回 active+submitted 的卷子(比如刚交完卷
+      // 还没切走、本地 _quiz 仍在内存,但后续若重 fetch),也能正确回填学生当时的选择
+      // 让错项红框高亮。未交卷:尝试恢复本地草稿(防切后台丢答案)。
       if (resp.quiz != null && resp.quiz!.submitted) {
         QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
         for (final q in resp.quiz!.questions) {
@@ -348,6 +348,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       });
       // 交卷成功,草稿作废。
       QuizDraftStore.clearDraft(widget.activeUserId, widget.episode.id);
+      // 交卷即归档:后端已把这套卷子翻成 archived。刷新历史面板,让它立即出现在
+      // 「历史练习」里(返回再进页面也能从历史点开 review)。best-effort,不阻断。
+      _loadHistory();
       // 交卷成功后后端链式 enqueue 了 episode 级 advice job(学生刚交完卷 memory 最新,
       // 这时跑 advice 最准)。重新拉 advice 触发轮询,让学生交卷后能很快看到复习建议。
       _loadAdvice();
@@ -464,9 +467,11 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           const SizedBox(height: 16),
           _buildAdviceCard(effectiveScale),
           const SizedBox(height: 16),
-          _buildQuizSection(effectiveScale),
-          const SizedBox(height: 16),
+          // 历史练习在上(默认折叠):交卷即归档后,已交卷的卷子进这里,重进页面先看到
+          // 历史可点开 review,当前练习区在下面才是「做新题」入口。
           _buildHistorySection(effectiveScale),
+          const SizedBox(height: 16),
+          _buildQuizSection(effectiveScale),
         ],
       ),
     );
@@ -771,6 +776,11 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         ),
       );
     }
+    if (_quizStatus == QuizStatus.done) {
+      // 已做过(有历史归档)但无 active quiz:交卷即归档后或换题归档后的状态。
+      // 不自动出新题——渲染「已完成」入口,学生点「重新生成」才出新一套。
+      return _buildDoneCard();
+    }
     if (_quizStatus != QuizStatus.ready || _quiz == null) {
       // unavailable — AI off or no source material. Hide quietly (add-on layer).
       return const SizedBox.shrink();
@@ -816,47 +826,71 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                         extraCount: e.value.extraCount,
                       )
                     : null);
+            // 作答态:choice 用 _choicePicks,multi 用 _multiPicks,fill 用 controller。
+            // 交卷态:优先用回填的 userAnswerIndex/userAnswerIndices/userAnswerText。
+            final userChoice = _choicePicks[e.value.id] ?? e.value.userAnswerIndex;
+            final userMulti = e.value.isMultiChoice
+                ? (_multiPicks[e.value.id] ?? e.value.userAnswerIndices.toSet())
+                : <int>{};
+            final userFill = e.value.isFill
+                ? (e.value.userAnswerText.isNotEmpty
+                    ? e.value.userAnswerText
+                    : (_fillControllers[e.value.id]?.text ?? ''))
+                : '';
             return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _QuestionCard(
-              index: e.key,
-              question: e.value,
-              pick: _choicePicks[e.value.id],
-              multiPicks: _multiPicks[e.value.id],
-              fillController: e.value.isFill ? (_fillControllers[e.value.id] ??= TextEditingController()) : null,
-              result: result,
-              submitted: submitted,
-              textScale: textScale,
-              onPick: (i) {
-                setState(() => _choicePicks[e.value.id] = i);
-                _persistDraft();
-              },
-              onMultiToggle: (i) {
-                // 多选切换:已选则移除,未选则加入。空集也保留 key(便于落盘语义一致)。
-                setState(() {
-                  final set = _multiPicks[e.value.id] ?? <int>{};
-                  if (set.contains(i)) {
-                    set.remove(i);
-                  } else {
-                    set.add(i);
-                  }
-                  _multiPicks[e.value.id] = set;
-                });
-                _persistDraft();
-              },
-              onFillChanged: () {
-                // 只触发 rebuild 让按钮状态更新;实际落盘由 onChanged 里 debounce 调用。
-                setState(() {});
-                _persistDraft();
-              },
-              // 跳转按钮:只对 hasJump=true 的题渲染,且仅交卷态展示(看错题时才有用)。
-              onJump: (e.value.hasJump && e.value.chunkStartTime == null)
-                  ? null
-                  : (e.value.hasJump && e.value.chunkStartTime != null)
-                      ? () => _jumpTo(e.value.chunkStartTime!)
-                      : null,
-            ),
-          );
+              padding: const EdgeInsets.only(bottom: 12),
+              child: QuizReviewCard(
+                stem: QuizStemData(
+                  index: e.key,
+                  type: e.value.type,
+                  stem: e.value.stem,
+                  options: e.value.options,
+                  chunkStartTime: e.value.chunkStartTime,
+                  hasJump: e.value.hasJump,
+                ),
+                verdict: QuizVerdictData(
+                  submitted: submitted,
+                  userChoiceIndex: userChoice,
+                  userMultiIndices: userMulti,
+                  userFillText: userFill,
+                  correctIndex: result?.correctIndex ?? e.value.correctIndex,
+                  correctIndices: (result?.correctIndices ?? e.value.correctIndices).toSet(),
+                  correctText: result?.correctText ?? e.value.correctText,
+                  explanation: result?.explanation ?? e.value.explanation,
+                  correct: result?.correct ?? (submitted ? e.value.correct : null),
+                  partial: result?.partial ?? e.value.partial,
+                ),
+                mode: submitted ? QuizReviewMode.submitted : QuizReviewMode.interactive,
+                textScale: textScale,
+                onPickChoice: (i) {
+                  setState(() => _choicePicks[e.value.id] = i);
+                  _persistDraft();
+                },
+                onToggleMulti: (i) {
+                  // 多选切换:已选则移除,未选则加入。空集也保留 key(便于落盘语义一致)。
+                  setState(() {
+                    final set = _multiPicks[e.value.id] ?? <int>{};
+                    if (set.contains(i)) {
+                      set.remove(i);
+                    } else {
+                      set.add(i);
+                    }
+                    _multiPicks[e.value.id] = set;
+                  });
+                  _persistDraft();
+                },
+                fillController: e.value.isFill ? (_fillControllers[e.value.id] ??= TextEditingController()) : null,
+                onFillChanged: () {
+                  // 只触发 rebuild 让按钮状态更新;实际落盘由 onChanged 里 debounce 调用。
+                  setState(() {});
+                  _persistDraft();
+                },
+                // 跳转按钮:仅 hasJump + 有 chunkStartTime + 交卷态时给(组件内已 gate onJump!=null)。
+                onJump: (e.value.hasJump && e.value.chunkStartTime != null && submitted)
+                    ? () => _jumpTo(e.value.chunkStartTime!)
+                    : null,
+              ),
+            );
           }),
       // 未交卷:底部醒目的"提交全部"按钮(交卷后不再渲染)。
       if (!submitted)
@@ -899,6 +933,46 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     }
     return n;
   }
+
+  // done 态入口卡:已做过本节练习(上次交卷已归档),但当前没有 active quiz。
+  // 不自动出新题——引导学生点「重新生成」主动做新一套,或去上方历史练习 review。
+  Widget _buildDoneCard() {
+    return _Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          children: [
+            const Icon(Icons.task_alt_rounded, size: 40, color: AppTheme.accentGreen),
+            const SizedBox(height: 12),
+            const Text('本节练习已做完一套',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+            const SizedBox(height: 6),
+            const Text(
+              '上次的成绩已存进上方「历史练习」,点开可查看对错。\n想做一套新题?点下面按钮重新生成。',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.5),
+            ),
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _regenerate,
+                icon: const Icon(Icons.refresh_rounded, size: 18),
+                label: const Text('重新生成一套题', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.violet500,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // --- Reusable card container ---
@@ -920,362 +994,6 @@ class _Card extends StatelessWidget {
   }
 }
 
-// --- One question card ---
-class _QuestionCard extends StatelessWidget {
-  final int index;
-  final QuizQuestion question;
-  final int? pick;
-  // multi_choice:当前选中索引集合(从父级 _multiPicks[qid] 透传,null 时视为空集)。
-  final Set<int>? multiPicks;
-  final TextEditingController? fillController;
-  final QuizAnswerResult? result;
-  final ValueChanged<int> onPick;
-  // 多选切换回调(点击某选项 toggle 选中态)。仅多选题用。
-  final ValueChanged<int>? onMultiToggle;
-  // 填空文本变化回调:触发 rebuild + 落盘草稿(选择用 onPick,填空用这个)。
-  final VoidCallback onFillChanged;
-  final VoidCallback? onJump;
-  // 统一提交后整张卷子锁定。submitted=true 时所有题只读,
-  // 逐题展示 result(若 result 还没到——比如重进已交卷的卷子而 fetch 没带结果——则不展示判分)。
-  final bool submitted;
-  // AI 页全局文字缩放因子,传给 MarkdownView(stem / explanation)。
-  final double textScale;
-
-  const _QuestionCard({
-    required this.index,
-    required this.question,
-    required this.pick,
-    required this.multiPicks,
-    required this.fillController,
-    required this.result,
-    required this.onPick,
-    required this.onMultiToggle,
-    required this.onFillChanged,
-    required this.onJump,
-    required this.submitted,
-    required this.textScale,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderMuted),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(color: AppTheme.slate100, borderRadius: BorderRadius.circular(5)),
-            child: Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-          ),
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              // 填空琥珀、多选紫(和 selected 主色一致)、单选蓝。
-              color: question.isFill
-                  ? const Color(0xFFFFFBEB)
-                  : question.isMultiChoice
-                      ? const Color(0xFFF5F3FF)
-                      : AppTheme.blue100,
-              borderRadius: BorderRadius.circular(5),
-            ),
-            child: Text(
-              question.isFill ? '填空' : question.isMultiChoice ? '多选' : '选择',
-              style: TextStyle(
-                fontSize: 10,
-                color: question.isFill
-                    ? const Color(0xFF92400E)
-                    : question.isMultiChoice
-                        ? const Color(0xFF6D28D9)
-                        : const Color(0xFF1D4ED8),
-              ),
-            ),
-          ),
-        ]),
-        const SizedBox(height: 8),
-        // 题干可能含 markdown(表格题、加粗关键词、代码块/SVG 图),用 MarkdownView 渲染。
-        // 原本 w600 的加粗语义交给模型用 ** 控制;MarkdownView 文字色保持深 slate-900。
-        MarkdownView(
-          data: question.stem,
-          textScale: textScale,
-          baseTextColor: AppTheme.slate900,
-        ),
-        const SizedBox(height: 10),
-        // 按题型分派选项渲染:填空 → 输入框;多选 → checkbox 风(可多选);单选 → radio 风。
-        if (question.isFill)
-          _buildFillInput(submitted)
-        else if (question.isMultiChoice)
-          _buildMultiOptions(submitted)
-        else
-          _buildChoiceOptions(submitted),
-        // 判分展示:整卷已交卷,且这道题的 result 已就绪(submit-all 成功后填的)。
-        // 重进已交卷的卷子时若 result 还没 fetch 回来,这里就不展示,保持中性只读态。
-        if (submitted && result != null) _buildVerdict(),
-        // 跳转视频:仅 hasJump=true 的题渲染(onJump 已被 caller 门控),
-        // 且仅在交卷态展示(做错题看解析时跳回去复习)。
-        if (onJump != null && submitted)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: onJump,
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 16, color: AppTheme.blue600),
-              label: Text('跳转视频 ${_fmtJump(question.chunkStartTime!)}', style: const TextStyle(fontSize: 12, color: AppTheme.blue600)),
-            ),
-          ),
-      ]),
-    );
-  }
-
-  Widget _buildChoiceOptions(bool submitted) {
-    return Column(children: [
-      for (int i = 0; i < question.options.length; i++)
-        _optionTile(i, submitted),
-    ]);
-  }
-
-  // 多选渲染:方框 checkbox 风格(区别于单选的圆形 radio),点击 toggle 选中态。
-  // 交卷后高亮:正确项绿、学生错选的红(correctIndices 之外但 multiPicks 里的)。
-  // 漏选的正确项只靠 correctIndices 高亮(学生没选的不额外标红——解析里说明漏选了哪些)。
-  Widget _buildMultiOptions(bool submitted) {
-    final picks = multiPicks ?? <int>{};
-    final hasVerdict = submitted && result != null;
-    // correctSet:交卷后揭示的正确答案集合(为空表示还没结果,保持中性只读)。
-    final correctSet = hasVerdict ? result!.correctIndices.toSet() : <int>{};
-    return Column(children: [
-      for (int i = 0; i < question.options.length; i++)
-        _multiOptionTile(i, picks, correctSet, hasVerdict, submitted),
-    ]);
-  }
-
-  Widget _multiOptionTile(int i, Set<int> picks, Set<int> correctSet, bool hasVerdict, bool submitted) {
-    final isSelected = picks.contains(i);
-    final isCorrect = hasVerdict && correctSet.contains(i);
-    // 多选选项区只标正确答案(绿),不再标红——红绿混在选项里分不清「我选的」和「对的」(需求#3a)。
-    // 用户的选择状态仍由左侧 checkbox 体现(选中的框打紫勾),对错明细在 _buildVerdict 底部说清楚。
-    Color bg = Colors.white;
-    Color border = AppTheme.borderMuted;
-    if (submitted && hasVerdict) {
-      if (isCorrect) {
-        bg = const Color(0xFFECFDF5);
-        border = AppTheme.accentGreen;
-      }
-    } else if (isSelected) {
-      bg = const Color(0xFFF5F3FF);
-      border = AppTheme.violet500;
-    }
-    return GestureDetector(
-      onTap: submitted ? null : () => onMultiToggle?.call(i),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8), border: Border.all(color: border)),
-        child: Row(children: [
-          // 方框 checkbox(区别于单选的圆形 radio),选中填紫色 + 白勾。
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: isSelected ? AppTheme.violet500 : const Color(0xFFCBD5E1)),
-              color: isSelected ? AppTheme.violet500 : Colors.transparent,
-            ),
-            alignment: Alignment.center,
-            child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
-          ),
-          const SizedBox(width: 8),
-          Expanded(child: Text('${_optionTag(i)}${question.options[i]}', style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
-          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
-        ]),
-      ),
-    );
-  }
-
-  // 多选题底部明细:选项区只标正确项,这里用带颜色文字把「你的选择/正确答案/多选/漏选」说清楚(需求#3a)。
-  Widget _buildMultiDetail() {
-    final picks = multiPicks ?? <int>{};
-    final correctIdxs = result?.correctIndices ?? const <int>[];
-    final correctSet = correctIdxs.toSet();
-    final wrongPicks = picks.where((i) => !correctSet.contains(i)).toList(); // 多选的
-    final missed = correctIdxs.where((i) => !picks.contains(i)).toList(); // 漏选的
-    String label(int i) => String.fromCharCode(65 + i); // 0→A,1→B...
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (picks.isNotEmpty) ...[
-          const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          // 一行一项(需求#3)。
-          for (final i in picks)
-            Text('${label(i)}. ${question.options[i]}',
-              style: TextStyle(fontSize: 12,
-                color: correctSet.contains(i) ? const Color(0xFF059669) : const Color(0xFFDC2626),
-                fontWeight: FontWeight.bold)),
-        ],
-        const SizedBox(height: 6),
-        const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 4),
-        for (final i in correctIdxs)
-          Text('${label(i)}. ${question.options[i]}',
-            style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
-        if (wrongPicks.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          Text('⚠ ${wrongPicks.map(label).join("、")} 多选了',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
-        ],
-        if (missed.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text('⚠ ${missed.map(label).join("、")} 漏选了',
-            style: const TextStyle(fontSize: 11, color: Color(0xFF92400E), fontWeight: FontWeight.bold)),
-        ],
-      ],
-    );
-  }
-
-  Widget _optionTile(int i, bool submitted) {
-    final isSelected = pick == i;
-    // result 可能为 null:整卷已交卷(submitted=true)但 result 还没回来
-    // (重进一张已交卷的卷子时 GET 不带结果)。此时不渲染对错高亮,保持中性只读。
-    final hasVerdict = submitted && result != null;
-    final isCorrect = hasVerdict && result!.correctIndex == i;
-    final isWrongPick = hasVerdict && isSelected && !isCorrect;
-    Color bg = Colors.white;
-    Color border = AppTheme.borderMuted;
-    if (submitted) {
-      if (isCorrect) {
-        bg = const Color(0xFFECFDF5);
-        border = AppTheme.accentGreen;
-      } else if (isWrongPick) {
-        bg = const Color(0xFFFEF2F2);
-        border = const Color(0xFFEF4444);
-      }
-    } else if (isSelected) {
-      bg = const Color(0xFFF5F3FF);
-      border = AppTheme.violet500;
-    }
-    return GestureDetector(
-      onTap: submitted ? null : () => onPick(i),
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-        decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(8), border: Border.all(color: border)),
-        child: Row(children: [
-          Container(
-            width: 20,
-            height: 20,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              border: Border.all(color: isSelected ? AppTheme.violet500 : const Color(0xFFCBD5E1)),
-              color: isSelected ? AppTheme.violet500 : Colors.transparent,
-            ),
-            alignment: Alignment.center,
-            child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
-          ),
-          const SizedBox(width: 8),
-          Expanded(child: Text('${_optionTag(i)}${question.options[i]}', style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
-          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
-          if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
-        ]),
-      ),
-    );
-  }
-
-  Widget _buildFillInput(bool submitted) {
-    return TextField(
-      controller: fillController,
-      enabled: !submitted,
-      onChanged: (_) => onFillChanged(), // 触发 rebuild(已答计数) + 落盘草稿
-      decoration: InputDecoration(
-        hintText: '输入你的答案',
-        hintStyle: const TextStyle(color: AppTheme.slate400, fontSize: 13),
-        filled: true,
-        fillColor: const Color(0xFFF8FAFC),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.borderMuted)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.borderMuted)),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-      ),
-      style: const TextStyle(fontSize: 14, color: AppTheme.slate900),
-    );
-  }
-
-  Widget _buildVerdict() {
-    final r = result!;
-    // 三态:correct 全对(绿)、partial 部分对(琥珀黄,多选漏选但没多错)、都 false 错(红)。
-    final isPartial = !r.correct && r.partial;
-    final Color bannerBg = r.correct
-        ? const Color(0xFFECFDF5)
-        : isPartial
-            ? const Color(0xFFFFFBEB)
-            : const Color(0xFFFEF2F2);
-    final Color iconColor = r.correct
-        ? AppTheme.accentGreen
-        : isPartial
-            ? const Color(0xFFF59E0B)
-            : const Color(0xFFEF4444);
-    final Color textColor = r.correct
-        ? const Color(0xFF059669)
-        : isPartial
-            ? const Color(0xFF92400E)
-            : const Color(0xFFDC2626);
-    final String title = r.correct ? '回答正确!' : isPartial ? '部分正确' : '答案不正确';
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(color: bannerBg, borderRadius: BorderRadius.circular(8)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Icon(
-            r.correct ? Icons.check_circle : isPartial ? Icons.error_outline : Icons.cancel,
-            size: 16,
-            color: iconColor,
-          ),
-          const SizedBox(width: 6),
-          Text(title, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: textColor)),
-        ]),
-        // 填空题回放学生当时填的原文(优先后端回填的 user_answer_text,回退 controller 里的
-        // 当前文本——刚交卷时后端回填还没 fetch 回来,controller 仍持有输入值)。答对了也展示,
-        // 让学生确认自己填对了什么;漏答(空串)不展示这行。
-        // 判错时用红字突出(需求#3b):之前灰色太弱,用户看不出自己填错了什么。
-        if (question.isFill) ...[
-          const SizedBox(height: 4),
-          Text('你填的: ${question.userAnswerText.isNotEmpty ? question.userAnswerText : (fillController?.text ?? '')}',
-              style: TextStyle(fontSize: 12,
-                color: r.correct ? const Color(0xFF059669) : const Color(0xFFDC2626),
-                fontWeight: FontWeight.bold)),
-        ],
-        // 多选题:选项区只标正确项,这里用底部明细把「你的选择/正确答案/多选/漏选」用带颜色
-        // 的选项文字列清楚(需求#3a),替换原来只给数量的 partial hint。
-        if (question.isMultiChoice) ...[
-          const SizedBox(height: 8),
-          _buildMultiDetail(),
-        ],
-        if (!r.correct && r.correctText.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          Text('正确答案: ${r.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669), fontWeight: FontWeight.bold)),
-        ],
-        if (r.explanation.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          // 解析正文含 markdown(对比表格/公式),用 MarkdownView 渲染;灰色保留。
-          MarkdownView(
-            data: r.explanation,
-            textScale: textScale,
-            baseTextColor: AppTheme.textMuted,
-          ),
-        ],
-      ]),
-    );
-  }
-}
-
-String _fmtJump(int seconds) {
-  final m = seconds ~/ 60;
-  final s = seconds % 60;
-  return '$m:${s.toString().padLeft(2, '0')}';
-}
 
 // --- History quiz card (read-only, fully revealed) ---
 //
@@ -1351,175 +1069,47 @@ class _HistoryQuizCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 for (int i = 0; i < quiz.questions.length; i++)
-                  _HistoryQuestionTile(index: i, q: quiz.questions[i], onJump: onJump, textScale: textScale),
+                  _historyReviewCard(quiz.questions[i], i),
               ],
             ),
           ),
       ]),
     );
   }
-}
 
-// One read-only question in a history quiz. Reveals the correct answer + a
-// per-option correctness highlight. Wrong questions get a red accent.
-class _HistoryQuestionTile extends StatelessWidget {
-  final int index;
-  final ArchivedQuizQuestion q;
-  final ValueChanged<int> onJump;
-  // AI 页全局文字缩放,透传给 stem / explanation 的 MarkdownView。
-  final double textScale;
-
-  const _HistoryQuestionTile({required this.index, required this.q, required this.onJump, required this.textScale});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 8),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border(
-          left: BorderSide(width: 3, color: q.wrong ? const Color(0xFFEF4444) : AppTheme.borderMuted),
+  // 历史题用统一的 QuizReviewCard 渲染(submitted 态,全揭示)。适配 ArchivedQuizQuestion:
+  // correct = !wrong(归档模型用反向 wrong 字段),userChoiceIndex = userIndex,
+  // userMultiIndices = userIndices。视觉和当前练习交卷态/错题本/考试完全一致。
+  Widget _historyReviewCard(ArchivedQuizQuestion q, int i) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: QuizReviewCard(
+        stem: QuizStemData(
+          index: i,
+          type: q.type,
+          stem: q.stem,
+          options: q.options,
+          chunkStartTime: q.chunkStartTime,
+          hasJump: q.hasJump,
         ),
+        verdict: QuizVerdictData(
+          submitted: true,
+          userChoiceIndex: q.userIndex,
+          userMultiIndices: q.userIndices.toSet(),
+          userFillText: q.userText,
+          correctIndex: q.correctIndex,
+          correctIndices: q.correctIndices.toSet(),
+          correctText: q.correctText,
+          explanation: q.explanation,
+          // ArchivedQuizQuestion 用 wrong(反向);correct = !wrong。未判分时(null 不可能,
+          // 归档题一定有对错结果)按 wrong 兜底为 false。
+          correct: !q.wrong,
+        ),
+        mode: QuizReviewMode.submitted,
+        textScale: textScale,
+        onJump: (q.hasJump && q.chunkStartTime != null) ? () => onJump(q.chunkStartTime!) : null,
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          Text('第${index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
-          const SizedBox(width: 6),
-          if (q.wrong)
-            const Text('错', style: TextStyle(fontSize: 10, color: Color(0xFFEF4444), fontWeight: FontWeight.w700))
-          else
-            const Text('已掌握', style: TextStyle(fontSize: 10, color: Color(0xFF059669))),
-        ]),
-        const SizedBox(height: 6),
-        // 历史题干含 markdown(表格题/加粗关键词),用 MarkdownView 渲染;深色保留。
-        MarkdownView(
-          data: q.stem,
-          textScale: textScale,
-          baseTextColor: AppTheme.slate900,
-        ),
-        const SizedBox(height: 8),
-        // 按题型分派:填空 → 文本回放;多选 → correctIndices 高亮所有正确项 + 学生错选项标红;
-        // 单选 → correctIndex 高亮单个正确项。
-        if (q.isFill)
-          _buildFillAnswer()
-        else if (q.isMultiChoice)
-          _buildMultiOptions()
-        else
-          _buildChoiceOptions(),
-        if (q.explanation.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          // 历史解析含 markdown,用 MarkdownView 渲染;灰色保留。
-          MarkdownView(
-            data: q.explanation,
-            textScale: textScale,
-            baseTextColor: AppTheme.textMuted,
-          ),
-        ],
-        if (q.chunkStartTime != null)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton.icon(
-              onPressed: () => onJump(q.chunkStartTime!),
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 14, color: AppTheme.blue600),
-              label: Text('跳转视频 ${_fmtJump(q.chunkStartTime!)}',
-                  style: const TextStyle(fontSize: 11, color: AppTheme.blue600)),
-              style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                minimumSize: const Size(0, 24),
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-            ),
-          ),
-      ]),
     );
-  }
-
-  Widget _buildChoiceOptions() {
-    return Column(children: [
-      for (int i = 0; i < q.options.length; i++)
-        Container(
-          margin: const EdgeInsets.only(bottom: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-          decoration: BoxDecoration(
-            color: q.correctIndex == i ? const Color(0xFFECFDF5) : Colors.white,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: q.correctIndex == i ? AppTheme.accentGreen : AppTheme.borderMuted),
-          ),
-          child: Row(children: [
-            Expanded(child: Text('${_optionTag(i)}${q.options[i]}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
-            if (q.correctIndex == i) const Icon(Icons.check_circle, size: 14, color: AppTheme.accentGreen),
-          ]),
-        ),
-    ]);
-  }
-
-  // 多选题历史回放:正确项绿(correctIndices),学生错选的红(userIndices 里但不在 correctIndices)。
-  // 学生选对的(交集)保持正确项的绿即可;漏选的正确项也按绿展示——视觉上正确项始终是绿。
-  Widget _buildMultiOptions() {
-    final correctSet = q.correctIndices.toSet();
-    final userSet = q.userIndices.toSet();
-    return Column(children: [
-      for (int i = 0; i < q.options.length; i++)
-        Container(
-          margin: const EdgeInsets.only(bottom: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-          decoration: BoxDecoration(
-            color: correctSet.contains(i)
-                ? const Color(0xFFECFDF5)
-                : userSet.contains(i)
-                    ? const Color(0xFFFEF2F2)
-                    : Colors.white,
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(
-              color: correctSet.contains(i)
-                  ? AppTheme.accentGreen
-                  : userSet.contains(i)
-                      ? const Color(0xFFEF4444)
-                      : AppTheme.borderMuted,
-            ),
-          ),
-          child: Row(children: [
-            Expanded(child: Text('${_optionTag(i)}${q.options[i]}', style: const TextStyle(fontSize: 12, color: Color(0xFF334155)))),
-            if (correctSet.contains(i))
-              const Icon(Icons.check_circle, size: 14, color: AppTheme.accentGreen)
-            else if (userSet.contains(i))
-              const Icon(Icons.cancel, size: 14, color: Color(0xFFEF4444)),
-          ]),
-        ),
-    ]);
-  }
-
-  Widget _buildFillAnswer() {
-    // 填空题历史回放:展示学生当时填的原文(q.userText,后端 Answer.UserAnswerText 回填)
-    // + 正确答案。漏答(userText 空)只显示正确答案,不显示空行。
-    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      if (q.userText.isNotEmpty) ...[
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-          decoration: BoxDecoration(
-            color: q.wrong ? const Color(0xFFFEF2F2) : const Color(0xFFECFDF5),
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: q.wrong ? const Color(0xFFFECACA) : const Color(0xFFBBF7D0)),
-          ),
-          child: Text('你填的: ${q.userText}',
-              style: TextStyle(fontSize: 12, color: q.wrong ? const Color(0xFFB91C1C) : const Color(0xFF15803D))),
-        ),
-        const SizedBox(height: 4),
-      ],
-      Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-        decoration: BoxDecoration(
-          color: const Color(0xFFECFDF5),
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: AppTheme.accentGreen),
-        ),
-        child: Text('正确答案: ${q.correctText}', style: const TextStyle(fontSize: 12, color: Color(0xFF059669))),
-      ),
-    ]);
   }
 }
 

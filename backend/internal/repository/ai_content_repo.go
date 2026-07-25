@@ -138,6 +138,16 @@ type AIContentRepository interface {
 	// 盖戳,返回是否抢到。供 SubmitAllQuizAnswers 消除 TOCTOU 窗口用——在落任何
 	// answer/memory 之前抢,抢不到直接拒。详见实现注释。
 	TryMarkQuizSubmitted(quizID uint, at time.Time) (bool, error)
+	// ArchiveQuizByID 把一条 quiz 翻成 archived(status='archived' + 设 archived_at)。
+	// 精确按 id 定位,不按 (user,episode) 批量,避免误伤其它行。供 SubmitAllQuizAnswers
+	// 「交卷即归档」用——交卷成功后把这套卷子移进历史面板(可点开 review),下次进入
+	// 当前练习区不再卡在「上次结果只读态」。和换题(regenerate→CreateQuiz)的归档是
+	// 同一套机制,archived_at 驱动历史面板 newest-first 排序。
+	ArchiveQuizByID(quizID uint, at time.Time) error
+	// HasAnyQuiz 报告某 (user, episode) 是否有任何 quiz 行(active 或 archived 都算)。
+	// 供 GetOrEnqueueQuiz 区分「首次」(无任何 quiz→自动 enqueue 生成) vs「已做过」
+	// (有历史→返回 done,不自动出新题,等学生点重新生成)。
+	HasAnyQuiz(userID, episodeID uint) (bool, error)
 
 	// ── 错题本 + 课程考试 抽题层 (见 question_pool_repo.go) ──
 	// ListWrongAnswersByUserCourse 列出某用户在某课程下全部做错的题(跨 episode、跨

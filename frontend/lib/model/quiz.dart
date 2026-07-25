@@ -100,7 +100,9 @@ class PreAdventurePrompt {
 }
 
 /// The status returned by GET /ai-quiz. Drives the screen's state machine.
-enum QuizStatus { ready, generating, unavailable }
+/// done = 有历史归档(交卷/换题归档过)但无 active quiz:不自动出新题,前端渲染
+/// 「已完成、点重新生成」入口。区别于 unavailable(AI 未开/无 chunks)。
+enum QuizStatus { ready, generating, unavailable, done }
 
 /// One question as served to the client. Deliberately has NO answer field —
 /// the correct answer is only revealed after submit (QuizAnswerResult).
@@ -232,6 +234,7 @@ class QuizResponse {
     final status = {
       'ready': QuizStatus.ready,
       'generating': QuizStatus.generating,
+      'done': QuizStatus.done,
     }[s] ??
         QuizStatus.unavailable;
     // The quiz payload is nested under 'quiz' when present.
