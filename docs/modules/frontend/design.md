@@ -44,13 +44,16 @@
    * **交互拦截器 1：课前探险卡 (Pre-adventure Explorer Cards)**：
      * 在视频初始化完成后，并不立即播放，而是暂停并弹出浮层。
      * 轮播展示 1~3 张“探险思考卡”（AI 预先从视频字幕中提取的引导思考题），学生必须点击“下一张”，阅读完毕后才能解锁视频播放。
-   * **互动拦截器 2：课后小挑战 (Post-watch Quiz)**：
-     * 视频播放过程中有防作弊监听，每 5 秒上报一次进度。
-     * 当视频播放进度达到 **80%** 时，视频自动暂停并弹出答题浮层。
-     * 显示由 AI 生成的选择题，包含问题描述与多个选项。
-     * 学生选择选项后立即锁定，并提供视觉反馈（正确显示绿色边框，错误显示红色边框，并标识正确答案）。
-     * 回答完毕所有问题后，显示通关喜报：展示通关关卡名称、获得的积分奖励（答对 1 题得 10 分）。
-     * 点击“关闭”后，提交进度并更新通关状态，安全退出播放器返回详情页。
+   * **防作弊进度上报**：视频播放过程中每 5 秒上报一次观看进度（仅用于进度追踪，不触发任何 UI）。
+   * **课后小挑战 (Post-watch Quiz) 入口（手动触发）**：
+     * Quiz 完全由学生主动点击入口进入，与播放进度无关。
+     * 三个入口（均先 `pause()` 视频再 `Navigator.push` 到 [AiStudyScreen](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/ai_study_screen.dart)）：
+       1. 播放器顶栏的 AI 图标（`player_screen.dart:1015` 附近）。
+       2. 播放器右侧"随堂助手"面板里的"AI 学习"卡片（`player_screen.dart:1492` 附近；卡片实体在 [helper_panel.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/widget/helper_panel.dart)）。
+       3. 课程详情页的"AI 重点总结"按钮（[course_detail_screen.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/course_detail_screen.dart) 882 附近）——不经过视频也能直接进入。
+     * 进入 `AiStudyScreen` 后，在 `initState()` 中调 `_loadQuiz()` 拉题：后端 ready 则立即渲染；返回 `generating` 则每 3 秒轮询直到就绪。
+     * 作答采用统一提交（`submit-all`），统一交卷后立即归档为历史 quiz，归档后不可再改。题目渲染走全站统一的 `QuizReviewCard`。
+     * 三态化门禁：三个入口都受 `AiAvailabilityHelper.fromEpisode(episode)` 约束（需要 `aiSummaryEnabled || aiQuizEnabled` 且该 episode 有字幕），不可用时按钮置灰、点击提示原因。
 6. **成长足迹页 (My Progress in [main_navigation.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/main_navigation.dart#L187-L326))**：
    * 统计模块：
      * 积分卡片：展示当前可用积分、累计获得积分，带星星图标。
@@ -141,6 +144,7 @@
   * **数据可视化**：首页仪表盘展示 StatCard 网格（用户数 / 课程数 / 课时数 / 视频总时长 / 待探测数）+ 各科目课时分布条形图 + 近 7 天新增课时柱状图，数据由 `/admin/api/stats/dashboard` 一次聚合返回。
 * **智能导入树的重构** ✅：三步向导（选路径 → 配置导入目标 → 预览确认），左侧目录折叠树、右侧逐节点类型下拉（课程/章节/穿透/课时/跳过），支持行内重命名。
 * **课程管理深度重构**（重点）：可折叠课程卡片、封面缩略图、章节-课时树、每课时展示 ffprobe 探测出的时长 / 分辨率 / 编码徽章 / 文件大小 / Hash 状态；批量勾选移动/删除；字幕管理从嵌套 modal 改为右侧抽屉；搜索 + 科目 + 学段三维过滤；编辑课时走 PATCH 风格接口，**不会覆盖** ffprobe 探测的媒体元数据。
+* **课后作业卷（Homework）** ✅：admin 控制台独立页面（`/admin/homework`，`pages/Homework.tsx`）。选课程 → "为本课生成作业"批量入队（整门课所有有素材的课时，去重门保证已在途的跳过）→ 左侧作业列表 + 右侧预览。预览页"显示答案"toggle 切换学生版/答案版（choice 标正确项、问答/翻译/默写标参考答案）。"打印"按钮直接 `window.print()`，纯 CSS `@media print` + `@page A4` 实现纸质版式：卷头（姓名/班级/学号/日期/得分栏）+ 大题分组（sections）+ 各题型作答区（选择 A.B.C.D.、填空横线、问答/计算横线区、抄写田字格、默写空横线、翻译横线区）+ 阅读理解先出材料再出题；田字格/四线三格用 CSS 渐变线画格，**零新依赖**。prompt 配置嵌入 AI 控制台的 Prompt 配置 tab（第三个 section），per-subject 完整 system prompt 可编辑 + 恢复默认。**作业是纯 admin 功能：学生在 pad 端不出现作业概念**（作业是打印教具，打印动作由家长在 admin 完成，学生在 pad 上的心智是学习+闯关，突然冒出个"作业"但只能看不能做会割裂体验）。
 
 ---
 

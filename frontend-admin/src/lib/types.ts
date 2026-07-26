@@ -925,3 +925,87 @@ export interface ExamStats {
   this_week: number;  // 本周新开考数
   source_quality: ExamSourceQualityRow[];
 }
+
+// ---------------------------------------------------------------------------
+// 作业卷(Homework)。后端 Stage 1 已完成,JSON 契约已冻结(snake_case)。
+//   - GET /admin/api/ai/courses/:id/homeworks → Homework[](列表项)
+//   - GET /admin/api/ai/homeworks/:id         → HomeworkView(详情,含 sections/questions)
+// 题型 scoring 是按 type 取字段的 JSON string,前端 JSON.parse 后按下表读:
+//   choice:        {correct_index: number}
+//   multi_choice:  {correct_indices: number[]}
+//   fill:          {accept: string[]}
+//   short_answer:  {reference: string}
+//   calculation:   {reference: string}
+//   copy_word:     {content: string, times: number}
+//   dictation:     {reference: string}
+//   translation:   {reference: string}
+// ---------------------------------------------------------------------------
+
+export type HomeworkStatus = 'active' | 'archived';
+
+/** 列表项。GET /courses/:id/homeworks 返回的数组元素。 */
+export interface Homework {
+  id: number;
+  episode_id: number;
+  course_id: number;
+  version: number;
+  status: HomeworkStatus;
+  archived_at?: string;       // ISO,archived 时有
+  agent_meta_json?: string;   // JSON string,前端按需 parse
+  created_at: string;         // ISO
+}
+
+/** 题型枚举(8 种)。对应后端 HomeworkQuestion.Type。 */
+export type HomeworkQuestionType =
+  | 'choice'
+  | 'multi_choice'
+  | 'fill'
+  | 'short_answer'
+  | 'calculation'
+  | 'copy_word'
+  | 'dictation'
+  | 'translation';
+
+/** 详情里的题目。GET /homeworks/:id 返回。 */
+export interface HomeworkViewQuestion {
+  id: number;
+  seq: number;
+  type: HomeworkQuestionType;
+  stem: string;
+  /** choice/multi_choice 时是 JSON []string,前端 JSON.parse;其它题型为空串。 */
+  options: string;
+  /** 各题型 JSON,按 type 取字段。前端 JSON.parse。 */
+  scoring: string;
+  explanation: string;
+}
+
+/** 详情里的大题。阅读理解大题会带 passage_title/passage_content。 */
+export interface HomeworkViewSection {
+  id: number;
+  seq: number;
+  title: string;
+  /** 阅读理解大题的材料标题(null 表示无材料)。 */
+  passage_title?: string | null;
+  /** 阅读理解材料正文(null 表示无材料)。 */
+  passage_content?: string | null;
+  questions: HomeworkViewQuestion[];
+}
+
+/** 单份作业完整内容(预览/打印)。GET /homeworks/:id。nil → 后端 404。 */
+export interface HomeworkView {
+  id: number;
+  episode_id: number;
+  course_id: number;
+  version: number;
+  status: HomeworkStatus;
+  agent_meta_json?: string;
+  created_at: string;
+  sections: HomeworkViewSection[];
+}
+
+/** prompt 配置(GET/PUT /subjects/:id/homework-prompt)。首次 GET 时后端 lazy 灌默认。 */
+export interface HomeworkPromptConfig {
+  subject_id: number;
+  system_prompt: string;
+  updated_at: string;
+}

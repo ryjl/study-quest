@@ -185,6 +185,15 @@ type AdminHandler interface {
 	DeleteCourseSummary(c *gin.Context)
 	DeleteUserStudyReport(c *gin.Context)
 	ListUserAdvice(c *gin.Context)
+	// 课后作业卷(Homework)——episode 级通用卷(admin 批量生成 + 预览打印 + per-subject
+	// prompt 配置)。纯 admin 功能,不加客户端路由。nil-safe:aiService==nil 时各方法
+	// 返回 503。详见 admin_homework.go 头注释。
+	TriggerHomework(c *gin.Context)
+	ListHomeworks(c *gin.Context)
+	GetHomework(c *gin.Context)
+	GetHomeworkPromptConfig(c *gin.Context)
+	SaveHomeworkPromptConfig(c *gin.Context)
+	ResetHomeworkPromptConfig(c *gin.Context)
 }
 
 type adminHandler struct {

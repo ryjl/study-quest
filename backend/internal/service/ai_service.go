@@ -267,6 +267,27 @@ type AIService interface {
 	ExamStats() (repository.ExamStats, error)
 	ExamSourceQuality() ([]repository.ExamSourceQualityRow, error)
 
+	// ── 课后作业卷 (TODO.md P0,episode 级通用卷,纯打印) ──
+	// EnqueueHomeworkForCourse 为某课程所有有素材(chunks)的 episode 批量入队 homework
+	// job。去重:已有在途 homework job 的 episode 跳过。返回实际入队数。nil-safe
+	// (homeworkRepo 未注入返回错误)。admin 手动触发,低优先级(=1,不饿死 quiz)。
+	EnqueueHomeworkForCourse(courseID uint) (int, error)
+	// GetHomeworkViewByID 取某 homework 完整内容(sections+questions),admin 预览/打印用。
+	// 无返回 (nil,nil)。nil-safe。
+	GetHomeworkViewByID(id uint) (*HomeworkView, error)
+	// ListHomeworksByCourse 列某课程所有 homework(admin 列表)。nil-safe。
+	ListHomeworksByCourse(courseID uint) ([]model.Homework, error)
+	// HasPendingHomeworkJob 报告某 episode 是否有在途 homework job,admin 据此区分
+	// "正在生成" vs "未生成"。
+	HasPendingHomeworkJob(episodeID uint) bool
+	// ── Homework prompt 配置(per-subject 完整 system prompt,admin 可编辑) ──
+	// GetHomeworkPromptConfig 取某 subject 的 prompt(无则 lazy 创建灌默认)。nil-safe。
+	GetHomeworkPromptConfig(subjectID uint, subjectKey string) (model.HomeworkPromptConfig, error)
+	// SaveHomeworkPromptConfig 覆盖某 subject 的 system prompt(admin 编辑)。nil-safe。
+	SaveHomeworkPromptConfig(subjectID uint, subjectKey string, prompt string) error
+	// ResetHomeworkPromptConfig 重置回默认(admin 恢复默认)。nil-safe。
+	ResetHomeworkPromptConfig(subjectID uint, subjectKey string) error
+
 	// ── 错题本 admin 观测(每个失败返回零值,handler log + 降级) ──
 	// WrongBookStats 返回错题本全局统计(nil-safe:wrongBookRepo 未注入返回零值)。
 	WrongBookStats() (repository.WrongBookStats, error)
@@ -322,6 +343,10 @@ type aiService struct {
 	// examRepo stores 课程考试(Exam/ExamQuestion/ExamAnswer)。nil-safe: when nil,
 	// StartExam/SubmitExam 返回 "考试功能未启用",其它功能照常。生产 NewAIService 注入。
 	examRepo repository.ExamRepository
+	// homeworkRepo stores 课后作业卷(Homework/HomeworkSection/HomeworkQuestion/
+	// HomeworkPromptConfig)。nil-safe: when nil, 作业相关方法返回 "作业功能未启用",
+	// 其它功能照常。生产 NewAIService 注入。
+	homeworkRepo repository.HomeworkRepository
 	// polishLLMOverride is a TEST-ONLY seam: when non-nil, runPolishJob uses
 	// this provider directly instead of resolving through `resolver`. This lets
 	// service-level tests drive the full polish→writeback→chain path with a
@@ -329,6 +354,11 @@ type aiService struct {
 	// can't be stubbed without a live relay). Production leaves this nil and
 	// the resolver path runs unchanged. See ai_service_polish_test.go.
 	polishLLMOverride ai.LLMProvider
+	// homeworkLLMOverride is a TEST-ONLY seam (mirrors polishLLMOverride): when
+	// non-nil, runHomeworkJob uses this provider directly instead of resolving
+	// through `resolver`. Lets service tests drive the full RAG→LLM→parse→persist
+	// path with a fake LLM. Production leaves this nil. See ai_service_homework_test.go.
+	homeworkLLMOverride ai.LLMProvider
 }
 
 // aiUserCourseLister 是 aiService 对 userRepo 的窄依赖:只暴露 advice 工具需要的
@@ -401,6 +431,7 @@ func NewAIService(
 	logRepo repository.LogRepository,
 	wrongBookRepo repository.WrongBookRepository,
 	examRepo repository.ExamRepository,
+	homeworkRepo repository.HomeworkRepository,
 ) AIService {
 	s := &aiService{
 		db:              db,
@@ -416,6 +447,7 @@ func NewAIService(
 		logRepo:         logRepo,
 		wrongBookRepo:   wrongBookRepo,
 		examRepo:        examRepo,
+		homeworkRepo:    homeworkRepo,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -504,6 +536,11 @@ const (
 	// priorityUserReport:和 advice/summary 同级——admin 触发,页面轮询显示 generating,
 	// 不在屏幕前干等,低优先级不饿死 quiz(学生正等的最高优先级)。
 	priorityUserReport = 1
+	// priorityHomework:作业卷,admin 手动批量触发,后台跑。和 summary/advice 同级——
+	// 不在屏幕前干等,低优先级不饿死 quiz(学生正等的最高优先级)。单 goroutine worker
+	// 共享:作业 job 跑时会阻塞期间到达的 quiz(最多几十秒),但 quiz 优先级更高,队里
+	// 有 quiz 会先认领,只在"正好作业在跑且新来 quiz"的窗口有短暂阻塞,可接受。
+	priorityHomework = 1
 )
 
 // enqueue creates one job per episode. It resolves each episode's course_id and
@@ -849,7 +886,7 @@ func adviceJobMatchesScope(j model.AIJob, scope string, scopeID uint) bool {
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
 func (s *aiService) runWorker(ctx context.Context) {
-	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report", "polish"}
+	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report", "polish", "homework"}
 	// Use a 3s ticker for polling; on ctx cancellation the worker exits
 	// promptly (within the select, not after a full sleep).
 	ticker := time.NewTicker(3 * time.Second)
@@ -914,6 +951,8 @@ func (s *aiService) processOneJob(jobTypes []string) {
 		s.runUserReportJob(job)
 	case "polish":
 		s.runPolishJob(job)
+	case "homework":
+		s.runHomeworkJob(job)
 	default:
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "unknown job_type: "+job.JobType, nil)
 	}

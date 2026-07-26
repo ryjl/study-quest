@@ -292,6 +292,22 @@ exam_answers:   id, exam_id, exam_question_id, user_id, question_id, chunk_id (�
 **题被删兜底**：`ExamQuestion` 指向 `questions` 但不带 FK CASCADE（刻意：考试历史该保留题面快照，不被 regenerate 删题连带清）。若题真被删，取卷视图塞 `(本题已删除)` 占位（不静默跳过让卷子少题）；交卷时该题判不了分，给 `correct=false + (本题已删除,不计分)` 占位结果，且**不计入得分率分母**（用实际判了分的题数作分母，避免被删的题虚降学生得分），也不写 `exam_answers` / 不污染 SourceQuality 统计。
 **nil-safe**：`examRepo` 未注入时 `GetExamStatus` 返回 unavailable、`StartExam/SubmitExam` 报"考试功能未启用"、admin 观测返回零值（守纯附加层铁律 #6）。
 
+**`homeworks` / `homework_sections` / `homework_questions` / `homework_prompt_configs`** — ✅ 课后作业卷（TODO.md P0，每节课后的"回家作业"）
+```
+homeworks:        id, episode_id, course_id (冗余), version, status (active|archived),
+                  archived_at, agent_meta_json
+                  (partial unique on episode_id WHERE status='active')
+homework_sections:    id, homework_id, seq, title, passage_title*, passage_content*
+homework_questions:   id, homework_id, section_id, seq, type, stem, options (JSON),
+                      scoring (JSON), explanation
+homework_prompt_configs: id, subject_id (unique), system_prompt, updated_at
+```
+和 Quiz/Exam 平行但定位不同：**episode 级、不绑 user（通用卷，谁打印都一样）、AI 单次 LLM 生成（不走 ReAct）、纯打印纸笔做、家长手批、纯 admin 触发（pad 端不出现）**。和 Exam 的关键差异：(1) scope 是 episode 而非 (user,course)；(2) 题是 AI 现出存独立 `homework_questions` 表（**不复用** `questions` 表——作业题和这份作业强绑定，不是跨 quiz/exam 共享的题库题；复用会让 `Question.QuizID` 必填字段语义混乱）；(3) **无 Answer 表**（纯打印没人提交）；(4) AI 走单次 `llm.Chat` 不走 ReAct agent loop（作业不读 mastery、不个性化，省 token）；(5) prompt 配置走独立 `homework_prompt_configs` 表（per-subject 完整 system prompt，admin 可编辑），**不**走 `AIConfig` 的 hint 机制（admin 调的是完整 prompt 而非补充指引）。
+
+**题型 8 种**（`homework_questions.type` 开放 string，加新题型不改表，同 `Question.Scoring` 前向兼容设计）：choice/multi_choice/fill（复用现有，`scoring` 格式对齐 Question 表）+ short_answer/calculation/copy_word/dictation/translation（作业特有，存参考答案 `reference`/`content` 给家长对照，不判分）。judge 并入 choice（AI 出判断题就让它给 2 选项的 choice）；order/board_state 标 future。阅读理解用 section + passage 替代正式题组（材料挂 `homework_sections.passage_content`，下面挂该 section 的 short_answer/choice 题）。
+
+**质量保证 + 不烧 token**：admin 手动触发故**无客户端轮询、无熔断**；单次 LLM 调用（`MaxTokens=10000` + `extractJSONObject` 截断兜底，避免 quiz 那种 JSON 砍断坑）。**self-check 二次校验未做**（按需触发：实测质量不行再加，见 `TODO.md §P1`；若做则 fail 不整体 regen，标 `AIRun.SelfCheckResult=fail` 让 admin 看红色标记，最坏 2 次调用）。**nil-safe**：`homeworkRepo` 未注入时作业方法返回 `ErrHomeworkNotEnabled`（注册到 503）。
+
 ## 5. 状态机（ai_jobs）
 
 ```
@@ -309,9 +325,9 @@ exam_answers:   id, exam_id, exam_question_id, user_id, question_id, chunk_id (�
 
 **与字幕队列的区别**：AI job 是**进程内 worker**（`ai_service.go runWorker`，单 goroutine 轮询 3s），不是外部机器认领。一个 goroutine 拿到 job 就独占处理到结束。原子 claim（`ClaimNextQueuedJob`，单条 `UPDATE...RETURNING`）仍然保留，为将来并行化 worker 留余地。
 
-### 6 种 job type
+### 8 种 job type
 
-worker（`runWorker` → `processOneJob`）认领并分发以下 6 种 job（详见各 `run*Job` 方法）：
+worker（`runWorker` → `processOneJob`）认领并分发以下 8 种 job（详见各 `run*Job` 方法）：
 
 | job_type | 触发 | 优先级 | 跑什么 |
 |---|---|---|---|
@@ -321,13 +337,15 @@ worker（`runWorker` → `processOneJob`）认领并分发以下 6 种 job（详
 | `advice` | 客户端 `GET /ai-advice` 懒生成 / submit-all 后链式 | 1 | advice agent loop → study_advices |
 | `course_summary` | admin 手动触发 | 1 | course summary agent loop → ai_course_summaries |
 | `user_report` | admin 手动触发 | 1 | user_study agent loop → user_study_reports |
+| `polish` | admin 接受术语候选后链式 / admin 手动 | 3 | 字幕润色 per-chunk LLM → raw_vtt + glossary_candidates |
+| `homework` | admin 批量触发（整门课所有 episode） | 1 | 单次 LLM 调用（代码层 RAG + 8 题型）→ homeworks/sections/questions |
 
 ### Priority 排队（quiz 高优先级插队）
 
 `ClaimNextQueuedJob` 不再"先进先出"，而是按 `priority DESC` 选最高优先级的 queued job。设计意图（`ai_service.go` 的 priority 常量）：
 - **quiz=10**：学生正盯着屏幕等出题，响应延迟最刺眼，必须最先跑。
 - **segment=2**：summary/quiz 的上游，但属于后台批量，不抢在 quiz 前。
-- **summary/advice/course_summary/user_report=1**：纯派生/admin 触发，无学生在屏幕前干等（页面轮询显示 generating），低优先级不饿死 quiz。
+- **summary/advice/course_summary/user_report/homework=1**：纯派生/admin 触发，无学生在屏幕前干等（页面轮询显示 generating），低优先级不饿死 quiz。homework 是 admin 批量触发的单次 LLM 调用，同档；和现有 polish job（2-7 分钟单 job）共享单 goroutine worker——作业 job 跑时会阻塞期间到达的 quiz（最多几十秒），但 quiz 优先级更高，队里有 quiz 会先认领，只在"正好作业在跑且新来 quiz"的窗口有短暂阻塞，可接受。
 
 ### Reaper（复位卡住的 processing job）
 
@@ -439,6 +457,17 @@ POST /admin/api/ai/users/:userID/study-report  触发某用户的跨课程学习
 GET  /admin/api/ai/users/:userID/study-report  读已生成的用户报告(无→generating/404)
 ```
 这四个端点都是 admin 手动触发（入队 course_summary/user_report job）+ 轮询读。POST 返回 generating 状态，前端轮询 GET 直到 ready。和客户端 advice 端点的差异：advice 是学生自己打开页面 lazy 触发；course_summary/user_report 是 admin 主动为某课程/某学生生成（admin 可观测 + 可读性是第二轮的重点，admin 能看到 agent 怎么遍历数据）。
+
+### Admin 作业卷端（课后作业卷，admin 批量生成 + 预览打印 + prompt 配置）
+```
+POST   /admin/api/ai/courses/:id/homework/generate     批量生成该课程所有有素材的 episode 的作业(去重:已在途的跳过) → {enqueued}
+GET    /admin/api/ai/courses/:id/homeworks             列该课程所有作业(active+archived,按 created_at DESC)
+GET    /admin/api/ai/homeworks/:id                     取单份作业完整内容(sections+questions 分组,预览/打印用;无→404)
+GET    /admin/api/ai/subjects/:id/homework-prompt?key=math  取某 subject 的完整 system prompt(首次 lazy 灌默认)
+PUT    /admin/api/ai/subjects/:id/homework-prompt?key=math  覆盖某 subject 的 system prompt(admin 编辑后保存)
+POST   /admin/api/ai/subjects/:id/homework-prompt/reset?key=math  重置回默认(defaultHomeworkPrompt(subjectKey))
+```
+全 admin、纯附加层（无客户端/pad 端点——作业是打印教具，学生在 pad 上不出现）。`key` query param 传 subjectKey（math/chinese/english/physics/...），service 用它选默认 prompt 配方（题型白/黑名单 + 题量区间）。prompt 走独立表 `homework_prompt_configs`（per-subject 完整 system prompt），**不**走 `AIConfig` 的 hint 机制——admin 调的是完整出题 prompt 而非补充指引，恢复默认 = UPDATE 回 `defaultHomeworkPrompt(subjectKey)`。`nil-safe`：`homeworkRepo` 未注入时返回 `ErrHomeworkNotEnabled`（注册到 503）。
 
 ### API key 安全约定
 - GET **永不回显** api_key（DTO 里置空）
@@ -740,7 +769,6 @@ quizzer 的 self-check（`QuizSelfCheckPrompt`）原本审"答案对不对、题
 self-check 仍走"判废→重出"循环（agent.go 的 ReAct loop），不通过时让 LLM 重新生成，达步数上限用最后一次结果（记 `self_check_result=fail` + note，admin 观测可见）。
 
 ### 砍掉 / 调整的设计
-- **80% 弹题已废弃**——改为独立 AI 学习页。播放器加一个 AI 学习入口图标
 - **讨论 tab（chat）**仍留未来；advice/course_summary/user_report 已部分占用原 Phase D 的 agent 版图
 - **streaming + memory 衰减曲线**仍留未来
 - 旧 in-player quiz overlay（post_review_json mock）已清理（死代码清理，第二轮）

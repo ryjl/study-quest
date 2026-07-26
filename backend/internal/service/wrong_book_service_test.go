@@ -20,7 +20,7 @@ func seedWrongBookScenario(t *testing.T, stems ...string) (svc *aiService, repo 
 	wrongBook := repository.NewWrongBookRepository(db)
 	s := NewAIService(db, contentRepo, repository.NewEpisodeRepository(db), repository.NewCourseRepository(db),
 		nil, nil, repository.NewUserRepository(db), nil, nil, nil, nil, wrongBook,
-		nil,).(*aiService)
+		nil, nil,).(*aiService)
 	t.Cleanup(s.Stop)
 
 	subjects := testutil.SeedSubjects(t, db)
@@ -352,6 +352,7 @@ func TestWrongBook_NilRepoDegradesGracefully(t *testing.T) {
 		nil, nil, nil, nil, nil, nil, nil,
 		nil, // wrongBookRepo = nil —— 降级场景,
 		nil,
+		nil, // no homeworkRepo
 	).(*aiService)
 	t.Cleanup(svc.Stop)
 

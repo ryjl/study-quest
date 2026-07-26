@@ -37,6 +37,7 @@ import { ai } from './api/ai';
 import { logs } from './api/logs';
 import { wrongbook } from './api/wrongbook';
 import { exam } from './api/exam';
+import { homework } from './api/homework';
 
 // Flat aggregator. Method names are unique across domains (verified before the
 // split), so the spread is safe — no later domain silently shadows an earlier
@@ -66,4 +67,5 @@ export const api = {
   ...logs,
   ...wrongbook,
   ...exam,
+  ...homework,
 };

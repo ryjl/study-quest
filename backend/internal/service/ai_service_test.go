@@ -36,7 +36,8 @@ func aiServiceTestEnv(t *testing.T) (*aiService, repository.AIContentRepository,
 		nil,                             // no polishChunkRepo — 断点续润 not exercised
 		nil,                             // no logRepo — structured-log writes not asserted,
 		nil,
-	
+		nil,
+
 		nil,).(*aiService)
 	// Release the worker goroutine when the test finishes so the suite doesn't
 	// accumulate leaking pollers (one per aiServiceTestEnv call) that contend

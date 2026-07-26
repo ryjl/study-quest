@@ -1,6 +1,10 @@
 package handler
 
-import "studyquest/backend/internal/service"
+import (
+	"net/http"
+
+	"studyquest/backend/internal/service"
+)
 
 // Service sentinel → HTTP mapping registrations. Kept in a separate file so
 // httperr.go stays free of the service import (and the domain knowledge of
@@ -34,4 +38,10 @@ func init() {
 	// episode+language). Refuse with 409 so the admin can delete the old track
 	// or pick a distinct language code.
 	registerAppError(service.ErrSubtitleLanguageConflict, 409, "该语言已有字幕，请先删除或换一个语言标签")
+
+	// 作业卷(Homework)——service 在 homeworkRepo 未注入(AI 子系统装配漏了作业 repo,
+	// 或测试不传)时返回 ErrHomeworkNotEnabled。503 比 500 准:不是后端崩,而是"这个
+	// 能力当前不可用",前端据此隐藏作业入口而不是显示崩页。和 aiService==nil 的早返回
+	// 用同样的 503 + 文案,保证两条降级路径的响应一致。
+	registerAppError(service.ErrHomeworkNotEnabled, http.StatusServiceUnavailable, "作业功能未启用")
 }

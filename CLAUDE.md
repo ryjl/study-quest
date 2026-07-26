@@ -155,6 +155,14 @@ Always run `make test` before declaring backend work done.
 - **AI Prompt 可观测性:** `model.AIRun.SystemPromptText/UserPromptText` records
   every LLM call's final prompts. `POST /admin/api/ai/courses/:id/preview-prompt`
   builds (without calling LLM) the exact prompt for tuning.
+- **课后作业卷 (Homework):** episode 级通用卷(不绑 user)、AI 单次 LLM 生成(不走
+  ReAct)、纯打印纸笔做、家长手批、admin 触发。和 Quiz(user×episode 个性化小测)、
+  Exam(user×course 题库抽题)平行但定位不同。model `model/homework.go`(4 表),
+  AI 纯函数 `ai/agent/homework_*.go`,service `service/ai_service_homework.go`,
+  admin handler `handler/admin_homework.go`,admin 页 `pages/Homework.tsx`。prompt
+  配置 per-subject 存独立表 `HomeworkPromptConfig`(完整 system prompt,admin 可编辑),
+  **不**走 AIConfig 的 hint 机制。题型 8 种:choice/multi_choice/fill(复用现有)+
+  short_answer/calculation/copy_word/dictation/translation(作业特有)。
 
 ## Deeper docs
 

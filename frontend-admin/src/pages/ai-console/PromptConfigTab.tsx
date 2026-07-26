@@ -7,6 +7,7 @@ import { useToast } from '../../lib/toast';
 import { useSubjects, useInvalidateSubjects } from '../../lib/useSubjects';
 import type { Course, SubjectMeta } from '../../lib/types';
 import { AIHintFields, emptyAiHintValue, type AiHintFieldsValue } from './AIHintFields';
+import { HomeworkPromptSection } from './HomeworkPromptSection';
 
 // PromptConfigTab — the "Prompt 配置" tab on the AI Console. Two stacked
 // sections:
@@ -33,6 +34,7 @@ export function PromptConfigTab() {
     <div className="space-y-6">
       <SubjectPromptSection />
       <CoursePromptSection />
+      <HomeworkPromptSection />
     </div>
   );
 }

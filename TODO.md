@@ -40,6 +40,14 @@
 
 题源当前是**纯题库抽**（`SelectExamQuestions`，阶段 0 的 `question_pool_repo.go` + `exam_selector.go`：按 mastery 弱点加权 + 覆盖度约束 + 题型轮转 + 降级，从已有题库跨 episode 抽，不跑 LLM）。`source` 字段预留 `'generated'`，quizzer agent 出迁移题作为后续增强。答案写独立 `exam_answers` 表（不污染 `answers`），mastery 走同一套 `KnowledgeMemory.RecordAnswer`（考试交卷也更新掌握度）。漏选按"错"处理，和 quiz / 错题本同口径。交卷锁复用条件 UPDATE 范式（消除 TOCTOU）。UT 覆盖：repo 7 + selector 11 + service 8 + 集成 4 + admin api 3 + flutter model/api 20 + flutter 屏幕级 widget 6。
 
+### ✓ 课后作业卷 (Homework) —— 已完成（2026-07-26）
+
+每节课后的"回家作业"——1-2 张 A4、打印纸笔做、家长手批。和 Quiz（user×episode 个性化屏上小测）、Exam（user×course 题库抽题屏上考）平行但定位不同：**episode 级、不绑 user（通用卷）、AI 单次 LLM 生成（不走 ReAct，省 token）、纯打印不判分（无 Answer 表）、纯 admin 触发（pad 端不出现）**。
+
+已落地：admin 控制台加"作业卷"页 → 选课程 → 批量生成（整门课所有有素材的课时）→ 列表 + 预览 + 打印。后端四表 `homeworks` / `homework_sections` / `homework_questions` / `homework_prompt_configs`（和 Quiz/Exam 平行，scope 是 `episode`，partial unique index 保同 episode 同时只有一个 active）+ `homework_repo.go`（archive-then-insert 事务、GetOrCreatePromptConfig lazy 创建）+ `ai_service_homework.go`（`EnqueueHomeworkForCourse` 批量去重入队、`runHomeworkJob` 单次 LLM 调用：代码层 RAG 检索 top-K chunk → 拼 prompt → `llm.Chat` → 解析 → 持久化 + 记 AIRun；`priorityHomework=1` 低优先级不饿死 quiz）+ AI 纯函数 `ai/agent/homework_{prompts,parse,retrieve,types}.go`（默认 prompt + 5 科目配方、`ParseHomeworkGeneration` 8 题型逐题校验残题丢弃 + 截断兜底、`RetrieveTopChunks` 余弦相似度检索）+ `admin_homework.go`（6 个 admin 端点：批量生成 / 列表 / 详情 / prompt GET-PUT-reset）+ admin 前端 `pages/Homework.tsx`（课程选择 + 生成 + 预览 + 显示答案 toggle + `window.print()` 打印）+ `Homework.css`（A4 版式 + `@media print` + 田字格/四线三格 CSS）+ `HomeworkPromptSection`（嵌入 AIConsole 的 PromptConfigTab，per-subject 完整 system prompt 编辑 + 恢复默认）。
+
+题型 8 种：choice/multi_choice/fill（复用现有，ScoringJSON 格式对齐 Question 表）+ short_answer/calculation/copy_word/dictation/translation（作业特有，存参考答案 `reference`/`content` 给家长对照，不判分）。judge 并入 choice；order/board_state 标 future。阅读理解用 section + passage 替代正式题组（材料挂在 section 上，下面挂 short_answer/choice 题）。prompt 配置走独立表 `HomeworkPromptConfig`（per-subject 完整 system prompt，**不**走 AIConfig 的 hint 机制——admin 能调完整 prompt 而非补充指引）。质量保证：admin 手动触发无客户端轮询故无熔断、单次 LLM 调用（**self-check 二次校验未做，按需触发见 §P1**；若做则 fail 不整体 regen，标 `AIRun.SelfCheckResult=fail` 让 admin 看）、MaxTokens=10000 + `extractJSONObject` 截断兜底（避免 quiz 那种 JSON 砍断坑）。UT 覆盖：repo 11 + agent 纯函数 37 + service 9。
+
 ---
 
 ### （历史：课程考试按钮原需求，已完成，见上方 ✓）
@@ -56,6 +64,17 @@
 ---
 
 ## P1 — 中等价值
+
+### 作业卷 self-check 二次校验 + 局部重出（可选，按需触发）
+
+- **场景**：作业卷当前是单次 LLM 调用 + 截断兜底 + 残题丢弃，生成质量主要靠 prompt 约束（反蒙题四原则、题干自足等）+ `parseHomeworkGeneration` 的逐题校验。但没有 quiz 那种 self-check 二次校验维度（答案正确性、可推出性、干扰项合理性、答案位置均衡等 9 维）。如果实测发现 AI 出的作业偶有"答案错""干扰项太离谱""蒙题靠排除法能做对"等问题，加 self-check 能拦住。
+- **价值**：质量保险。每份作业 +1 次小 LLM 调用（`ToolChoice=none`,~800 token）校验 9 维度，fail 时**不整体 regen**（避免单次变两次烧 token）而是标 `AIRun.SelfCheckResult=fail` + admin 页红色标记，admin 可单独点"重出此题"(局部小 LLM 只重写被判 fail 的题)。
+- **触发条件**：**先实测当前生成质量再决定要不要做**。如果实测质量够好，这栏不做的边际收益是 0，反而每份作业多烧 token + 多一层 UI 复杂度（红色标记 + 局部重出按钮）。
+- **工作量预估**：中。
+  - 后端：`runHomeworkJob` 在持久化前插一道 self-check（仿 `quizzer.go:203-230` 的 `runSelfCheck` + `QuizSelfCheckPrompt`），复用现有 LLM seam；`SelfCheckResult`/`SelfCheckNote` 字段已存在于 `AIRun` 表（无需迁移）；局部重出要新加 service 方法 `RedoHomeworkQuestion(hwID, qID)` + admin 端点。
+  - 前端：Homework 页作业详情里 fail 题旁加红色标记 + "重出此题"按钮。
+- **依赖**：无新基建。复用 quiz self-check 的 prompt 模板（`prompts.go:198-215`）+ AIRun 表。
+- **参考**：实现范式见 quiz 的 `QuizSelfCheckPrompt`（9 维度）+ `runSelfCheck`。**关键差异**：作业无 mastery/无个性化，self-check 只校验"题本身质量"不校验"自适应弱点"。
 
 ### ✓ 轻量 log 系统（作业级事件落库 + admin 可视化）—— 已完成（2026-07-22）
 

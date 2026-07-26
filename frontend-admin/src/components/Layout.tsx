@@ -17,6 +17,7 @@ import {
   Bot,
   BookX,
   GraduationCap,
+  FileText,
   Tags,
   Medal,
   Package,
@@ -76,6 +77,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: '/admin/wrong-book', label: '错题本', icon: <BookX size={16} /> },
       // 课程考试观测(TODO.md P0):阶段综合测评统计 + 题源质量对比。
       { to: '/admin/exam', label: '课程考试', icon: <GraduationCap size={16} /> },
+      // 作业卷(Homework):按课程批量生成课后作业卷,支持 A4 打印。
+      { to: '/admin/homework', label: '作业卷', icon: <FileText size={16} /> },
     ],
   },
   {

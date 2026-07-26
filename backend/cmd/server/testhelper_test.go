@@ -167,7 +167,7 @@ func newTestEnvInternal(t *testing.T, enableAI bool) *testEnv {
 		examRepo := repository.NewExamRepository(db)
 		aiSvc = service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo,
 			nil, unlockService, userRepo, nil, subjectRepo, nil, nil, wrongBookRepo,
-			examRepo)
+			examRepo, nil)
 		aiStop = aiSvc.Stop
 	}
 	adminDeps := handler.NewAdminHandlerDeps().

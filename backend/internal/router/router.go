@@ -287,6 +287,16 @@ func RegisterRoutes(
 		// 2026-07-19: 课程下"哪些 episode 已有 summary"——给内容管理 tab gate
 		// 每集"删除"按钮用(无 summary 的课时不应显示删除)。前缀 :id 与上面一致。
 		adm.GET("/api/ai/courses/:id/summaries-status", admin.ListEpisodeSummaryStatus)
+		// 课后作业卷(Homework)——episode 级通用卷,纯 admin 功能(批量生成 + 预览打印
+		// + per-subject prompt 配置)。不加客户端路由。前缀 :id 与上面 course-summary
+		// 系列一致(gin 同前缀 wildcard 名必须一致);/homeworks/:id 和 /subjects/:id 是
+		// 新前缀,不冲突。单 episode 重生成故意不注册(见 admin_homework.go 头注释)。
+		adm.POST("/api/ai/courses/:id/homework/generate", admin.TriggerHomework)
+		adm.GET("/api/ai/courses/:id/homeworks", admin.ListHomeworks)
+		adm.GET("/api/ai/homeworks/:id", admin.GetHomework)
+		adm.GET("/api/ai/subjects/:id/homework-prompt", admin.GetHomeworkPromptConfig)
+		adm.PUT("/api/ai/subjects/:id/homework-prompt", admin.SaveHomeworkPromptConfig)
+		adm.POST("/api/ai/subjects/:id/homework-prompt/reset", admin.ResetHomeworkPromptConfig)
 		// Prompt 预览:admin 调优 hint 后立刻看完整 prompt 拼装效果(不调 LLM,纯文本)。
 		adm.POST("/api/ai/courses/:id/preview-prompt", admin.PreviewCoursePrompt)
 		// Phase E — admin 用户学习报告(跨课程画像,agent 驱动)。

@@ -86,6 +86,13 @@ func AutoMigrate(db *gorm.DB) error {
 		&Exam{},
 		&ExamQuestion{},
 		&ExamAnswer{},
+		// 课后作业卷。episode 级、不绑 user(通用卷)、AI 单次生成、纯打印纸笔做。
+		// 和 Quiz/Exam 平行但无 Answer 表(纯打印不判分)。prompt 配置独立表(每 subject 一份
+		// 完整 system prompt,admin 可编辑)。
+		&Homework{},
+		&HomeworkSection{},
+		&HomeworkQuestion{},
+		&HomeworkPromptConfig{},
 	)
 	if err != nil {
 		return err
@@ -93,7 +100,10 @@ func AutoMigrate(db *gorm.DB) error {
 	if err := migrateQuizActiveUniqueIndex(db); err != nil {
 		return err
 	}
-	return migrateExamActiveUniqueIndex(db)
+	if err := migrateExamActiveUniqueIndex(db); err != nil {
+		return err
+	}
+	return migrateHomeworkActiveUniqueIndex(db)
 }
 
 // migrateExamActiveUniqueIndex 同 quiz 的范式:一个 (user, course) 同时只有一个
@@ -102,6 +112,16 @@ func AutoMigrate(db *gorm.DB) error {
 func migrateExamActiveUniqueIndex(db *gorm.DB) error {
 	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_exam_user_course_active ON exams(user_id, course_id) WHERE status = 'active'`).Error; err != nil {
 		return fmt.Errorf("create partial unique idx_exam_user_course_active: %w", err)
+	}
+	return nil
+}
+
+// migrateHomeworkActiveUniqueIndex 同 quiz/exam 范式:一个 episode 同时只有一份 active
+// 作业。archived(重生成时旧的转 archived)可共存做历史。GORM 表达不了 WHERE,故 raw
+// SQL 在 AutoMigrate 后建。幂等。
+func migrateHomeworkActiveUniqueIndex(db *gorm.DB) error {
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_homework_episode_active ON homeworks(episode_id) WHERE status = 'active'`).Error; err != nil {
+		return fmt.Errorf("create partial unique idx_homework_episode_active: %w", err)
 	}
 	return nil
 }

@@ -35,7 +35,9 @@ import '../widget/pdf_viewer_dialog.dart';
 ///   2. media_kit Player opens the URL with custom HTTP headers (Referer for
 ///      115 netdisk etc.).
 ///   3. Seeks to the last saved position (断点续播) once metadata is loaded.
-///   4. Reports progress every 5s (anti-cheat) and triggers the 80% quiz gate.
+///   4. Reports progress every 5s (anti-cheat). Quiz is entered manually via
+///      the AI icon / helper panel / course detail button, not by playback
+///      progress.
 class PlayerScreen extends StatefulWidget {
   final int activeUserId;
   final Episode episode;

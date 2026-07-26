@@ -1,0 +1,284 @@
+/* Homework.css — 作业卷的 A4 卷面排版 + 打印态 CSS。
+ *
+ * 两套样式:
+ *   1. 屏上预览(.hw-paper 容器):把卷子渲染成白纸样式,嵌在 admin 卡片里。
+ *   2. @media print:隐藏页面其它元素(侧栏/操作栏/题头),只留 .print-area;
+ *      @page 定 A4 + 15mm 边距,大题不跨页。
+ *
+ * 田字格(语文 copy_word)和四线三格(英语 copy_word)用纯 CSS 渐变线画,
+ * 零图片/字体依赖(标准技巧:cross 用两条相交渐变,横线用水平渐变)。
+ *
+ * 注意:打印态强制白底黑字(@media print 里覆盖 admin 暗色主题),保证 PDF 可读。
+ */
+
+/* ---------- 屏上预览的"纸" ---------- */
+.hw-paper {
+  background: #fff;
+  color: #111;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 32px 40px;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.dark .hw-paper {
+  /* 暗色主题下卷面仍是白底黑字(卷子天然是白纸,且打印态要求白底)。
+   * 这样屏上预览和打印 PDF 视觉一致。 */
+  background: #fff;
+  color: #111;
+}
+
+/* 卷头:标题 + 姓名栏。打印态才有姓名栏(由组件控制是否渲染)。 */
+.hw-header {
+  text-align: center;
+  margin-bottom: 16px;
+}
+.hw-header h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  margin: 0 0 8px;
+}
+.hw-meta-line {
+  font-size: 12px;
+  color: #555;
+  margin-bottom: 12px;
+}
+.hw-name-row {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-bottom: 1px solid #999;
+  padding-bottom: 8px;
+  font-size: 13px;
+}
+.hw-name-row span {
+  white-space: nowrap;
+}
+
+/* 大题 */
+.hw-section {
+  margin-top: 20px;
+  page-break-inside: avoid; /* 大题不跨页 */
+  break-inside: avoid;
+}
+.hw-section-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 10px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #ccc;
+}
+
+/* 阅读理解材料 */
+.hw-passage {
+  background: #f7f7f7;
+  border-left: 3px solid #bbb;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.8;
+  page-break-inside: avoid;
+}
+.hw-passage-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+/* 题目 */
+.hw-question {
+  margin: 10px 0;
+  page-break-inside: avoid;
+}
+.hw-question-stem {
+  margin-bottom: 6px;
+}
+.hw-question-stem .hw-seq {
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+/* 选项(choice / multi_choice) */
+.hw-options {
+  list-style: none;
+  margin: 4px 0 6px;
+  padding: 0;
+}
+.hw-options li {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 3px 0;
+  padding-left: 16px;
+}
+.hw-option-mark {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 1px solid #555;
+  border-radius: 50%; /* choice 用圆圈;multi_choice 由 JS 加 .square 类变方框 */
+  flex-shrink: 0;
+  margin-top: 4px;
+  background: #fff;
+}
+.hw-options.multi li .hw-option-mark {
+  border-radius: 2px; /* 方框 */
+}
+.hw-option-label {
+  font-weight: 700;
+  min-width: 18px;
+}
+
+/* 作答区:横线(short_answer / dictation / translation) */
+.hw-answer-lines {
+  margin: 6px 0;
+}
+.hw-answer-lines .hw-line {
+  border-bottom: 1px solid #888;
+  height: 24px;
+  margin-top: 6px;
+}
+
+/* calculation:大方框供列式 */
+.hw-calc-box {
+  border: 1px solid #888;
+  border-radius: 4px;
+  min-height: 80px;
+  margin: 6px 0;
+  background: #fff;
+}
+
+/* fill:题后跟一条短横线 */
+.hw-fill-blank {
+  display: inline-block;
+  border-bottom: 1px solid #888;
+  min-width: 80px;
+  height: 16px;
+  margin: 0 4px;
+  vertical-align: bottom;
+}
+
+/* 参考答案(浅色标注,showAnswers=true 时显示) */
+.hw-answer-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.hw-answer-block {
+  margin: 4px 0 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  border-left: 3px solid #3b82f6;
+  border-radius: 2px;
+}
+
+/* ---------- 田字格(语文 copy_word) ----------
+ * 田字格 = 一个正方框 + 中间一条十字虚线。用两条渐变叠加:外边框用 border,
+ * 十字用 background 的两条相交 linear-gradient。
+ */
+.hw-tian-grid {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+.hw-tian-cell {
+  /* 单个格 = 44×44 方框 + 中间十字虚线 */
+  width: 44px;
+  height: 44px;
+  border: 1px solid #d44; /* 田字格外框传统用红 */
+  background-image:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(212, 68, 68, 0.6) calc(50% - 0.5px), rgba(212, 68, 68, 0.6) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(212, 68, 68, 0.6) calc(50% - 0.5px), rgba(212, 68, 68, 0.6) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  background-size: 100% 100%;
+}
+
+/* ---------- 四线三格(英语 copy_word) ----------
+ * 四线三格 = 三条等距水平线(顶/中/中/底 → 四线三格)。用一个 div,background
+ * 画三条水平实线(在 0% / 50% / 100%),高度 = 3 行。
+ */
+.hw-four-line-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px 0;
+}
+.hw-four-line-cell {
+  width: 132px;
+  height: 36px;
+  border: 1px solid #1d4ed8;
+  border-top: none;
+  border-bottom: none;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    #1d4ed8 0px,
+    #1d4ed8 1px,
+    transparent 1px,
+    transparent 12px
+  );
+}
+
+/* ---------- @media print ----------
+ * 触发:用户点"打印"按钮 → window.print()。
+ * 行为:隐藏所有 body 直接子元素,只显示 .print-area(及其内部)。
+ *   - .print-area 由 HomeworkPrintView 组件渲染,定 A4 卷面。
+ *   - .no-print 是辅助类,显式标在不想打印的元素上(双保险)。
+ * 强制白底黑字,覆盖 admin 暗色主题。
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 15mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  /* 隐藏 admin 框架(侧栏、操作栏、页头等)。Layout 是 body 的直接子节点,
+   * 这里用通用规则把所有非 print-area 的顶层元素藏掉,确保 PDF 干净。 */
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  /* 显式 .no-print 也藏掉(双保险) */
+  .no-print {
+    display: none !important;
+  }
+
+  /* 打印态强制卷面白底黑字 */
+  .hw-paper {
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  /* 大题/题目/材料不跨页 */
+  .hw-section,
+  .hw-question,
+  .hw-passage {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}
