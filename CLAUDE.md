@@ -158,10 +158,16 @@ Always run `make test` before declaring backend work done.
 - **课后作业卷 (Homework):** episode 级通用卷(不绑 user)、AI 单次 LLM 生成(不走
   ReAct)、纯打印纸笔做、家长手批、admin 触发。和 Quiz(user×episode 个性化小测)、
   Exam(user×course 题库抽题)平行但定位不同。model `model/homework.go`(4 表),
-  AI 纯函数 `ai/agent/homework_*.go`,service `service/ai_service_homework.go`,
-  admin handler `handler/admin_homework.go`,admin 页 `pages/Homework.tsx`。prompt
-  配置 per-subject 存独立表 `HomeworkPromptConfig`(完整 system prompt,admin 可编辑),
-  **不**走 AIConfig 的 hint 机制。题型 8 种:choice/multi_choice/fill(复用现有)+
+  AI 纯函数 `ai/agent/homework_*.go`,service `service/ai_service_homework.go`(v2:
+  `EnqueueHomework(episodeIDs)` 勾选式入队 + MaxTokens 16000 + FinishReason 截断短路),
+  admin handler `handler/admin_homework.go`(course-level 端点 v2 标废弃)+ 通用
+  `handler/admin_ai_jobs.go` switch `case "homework"`(v2 勾选式入口)。**v2 起 admin
+  入口** = AI 控制台 RegenTab 的 CourseRegenColumn(勾选课时 → 批量生成 → 行内
+  HomeworkPreviewModal 预览打印),卷面组件抽到 `frontend-admin/src/components/homework/`
+  (`HomeworkPrintView.tsx` + `homework.css` + `HomeworkPreviewModal.tsx`),旧的 standalone
+  `pages/Homework.tsx` 已删。prompt 配置 per-subject 存独立表 `HomeworkPromptConfig`
+  (完整 system prompt,admin 可编辑),**不**走 AIConfig 的 hint 机制;PromptConfigTab
+  v2 改子 tab 切换(学习/作业两套 prompt)。题型 8 种:choice/multi_choice/fill(复用现有)+
   short_answer/calculation/copy_word/dictation/translation(作业特有)。
 
 ## Deeper docs

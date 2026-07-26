@@ -1,0 +1,412 @@
+/* homework.css — 课后作业卷的 A4 卷面排版 + 打印态 CSS。
+ *
+ * v2 排版设计(2026-07-26):中性现代风 · 小学高年级。定位是「练习卷」不是「考试卷」,
+ * 所以刻意去掉所有评分压力元素(密封线/得分框/满分框/评卷人)。LLM 管内容,样式框架
+ * 由这套 CSS 定,目标是打印出来的 PDF 视觉上像真实练习卷。
+ *
+ * 排版要点:
+ *   1. 字体:中文衬线(Songti/STSong/宋体)题干 + 楷体(STKaiti)抄写范字。这是「像卷子」
+ *      的最大杠杆——默认无衬线太屏幕感。
+ *   2. 卷头:课程名 + 课时标题 + 姓名/日期简洁信息栏(不要班级学号得分)。
+ *   3. choice/multi_choice:2×2 网格(高年级题干长,纵向太占竖空间)。
+ *   4. fill:按题干 ____ 数量自动给等量横线(JS 层算)。
+ *   5. calculation:120px+ 大方框,够多位数竖式。
+ *   6. copy_word:首行范字(楷体红色,从 scoring.content 取)+ 后续空格描红。
+ *   7. 页脚页码:打印态显示「第 X 页 共 Y 页」(CSS counter)。
+ *   8. 答案版:choice 正确项背景高亮 + 蓝边框;其他题型蓝色斜体小字标在作答区上方。
+ *
+ * 打印:@media print 隐藏页面其它元素,只留 .print-area;@page A4 + 15mm 边距,大题不跨页。
+ * 田字格用纯 CSS 渐变线画,零图片/字体依赖。打印态强制白底黑字(覆盖 admin 暗色主题)。
+ */
+
+/* ---------- 字体栈(中文卷「像卷子」的关键) ---------- */
+.hw-paper,
+.hw-paper * {
+  /* 衬线字体优先:Songti SC (macOS) → STSong → SimSun (Windows 宋体) → Noto Serif SC (Linux)
+   * → 通用 serif。fallback 链覆盖主流系统,缺其一不影响渲染。 */
+  font-family: "Songti SC", "STSong", "SimSun", "宋体", "Noto Serif SC", serif;
+}
+
+/* ---------- 屏上预览的「纸」 ---------- */
+.hw-paper {
+  background: #fff;
+  color: #111;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 36px 44px;
+  font-size: 14.5px;
+  line-height: 1.85;
+  counter-reset: hwpage; /* 页码计数器,@media print 时递增 */
+}
+.dark .hw-paper {
+  /* 暗色主题下卷面仍是白底黑字(卷子天然是白纸,且打印态要求白底)。
+   * 这样屏上预览和打印 PDF 视觉一致。 */
+  background: #fff;
+  color: #111;
+}
+
+/* ---------- 卷头(克制、信息为主;无考试元素) ---------- */
+.hw-header {
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1.5px solid #333; /* 主分隔线,把卷头和正文分开 */
+}
+.hw-course-line {
+  font-size: 12.5px;
+  color: #555;
+  letter-spacing: 1px;
+  margin-bottom: 4px;
+}
+.hw-episode-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  margin-bottom: 10px;
+  text-align: left;
+}
+.hw-info-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 28px;
+  font-size: 13px;
+}
+.hw-info-row span {
+  white-space: nowrap;
+}
+.hw-info-row .hw-blank {
+  /* 姓名/日期后面的下划线 */
+  display: inline-block;
+  border-bottom: 1px solid #555;
+  min-width: 90px;
+  margin-left: 4px;
+}
+
+/* ---------- 大题 ----------
+ * 注意:大题本身不加 page-break-inside:avoid。大题含 5-10 道题接近一页高,avoid 会让
+ * 浏览器"放不下整块就推到下页",前一页留大片空白(用户报告"第一页只有标题就换页")。
+ * 大题允许跨页,只要内部的每道题(.hw-question)不被截断即可(原子单元的 avoid 在
+ * @media print 段定义)。break-after:avoid 只防大题标题孤悬页底。
+ */
+.hw-section {
+  margin-top: 22px;
+  break-after: avoid; /* 避免大题标题孤立留在页底 */
+}
+.hw-section-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  margin: 0 0 12px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #bbb;
+}
+
+/* ---------- 阅读理解材料 ---------- */
+.hw-passage {
+  background: #f7f7f7;
+  border-left: 3px solid #aaa;
+  padding: 11px 15px;
+  margin-bottom: 14px;
+  font-size: 13.5px;
+  line-height: 1.95;
+  page-break-inside: avoid;
+  text-indent: 2em; /* 中文段落首行缩进 */
+}
+.hw-passage-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  text-indent: 0;
+}
+
+/* ---------- 题目 ---------- */
+.hw-question {
+  margin: 14px 0;
+  page-break-inside: avoid;
+}
+.hw-question-stem {
+  margin-bottom: 8px;
+  line-height: 1.9;
+}
+.hw-question-stem .hw-seq {
+  font-weight: 700;
+  margin-right: 6px;
+}
+.hw-question-stem .hw-type-hint {
+  /* 题型小字提示(如「选择题」「计算题」),灰字小号 */
+  margin-left: 6px;
+  font-size: 11px;
+  color: #999;
+  font-weight: 400;
+}
+
+/* ---------- 选项(choice / multi_choice):2×2 网格 ----------
+ * v2:从纵向 list 改 2×2 网格。高年级题干长,纵向 4 选项占竖空间多;
+ * 2×2 既省纸又像真实练习卷。
+ */
+.hw-options {
+  list-style: none;
+  margin: 6px 0 8px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 24px;
+}
+.hw-options li {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 1px 0;
+}
+.hw-option-mark {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border: 1.3px solid #333;
+  border-radius: 50%; /* choice 用圆圈 */
+  flex-shrink: 0;
+  margin-top: 5px;
+  background: #fff;
+}
+.hw-options.multi li .hw-option-mark {
+  border-radius: 2px; /* multi_choice 用方框 */
+}
+.hw-option-label {
+  font-weight: 700;
+  min-width: 18px;
+  margin-top: 1px;
+}
+/* v2 答案版:正确项背景高亮 + 蓝边框(直观,不是文字标注) */
+.hw-options li.is-correct .hw-option-mark {
+  background: #3b82f6;
+  border-color: #1d4ed8;
+}
+.hw-options li.is-correct {
+  background: #eff6ff;
+  border-radius: 3px;
+  padding: 1px 4px;
+  margin: -1px -4px;
+}
+
+/* ---------- 作答区:横线(short_answer / dictation / translation) ---------- */
+.hw-answer-lines {
+  margin: 8px 0;
+}
+.hw-answer-lines .hw-prefix {
+  /* 「答:」「译文:」前缀 */
+  font-size: 14px;
+  margin-right: 4px;
+}
+.hw-answer-lines .hw-line {
+  border-bottom: 1px solid #666;
+  height: 26px;
+  margin-top: 8px;
+}
+
+/* ---------- calculation:大方框供列竖式 ----------
+ * v2:从 80px 提到 130px,够多位数竖式;顶部一条浅虚线分隔写「解:」。
+ */
+.hw-calc-box {
+  border: 1px solid #666;
+  border-radius: 3px;
+  min-height: 130px;
+  margin: 8px 0;
+  background: #fff;
+  padding: 6px 10px;
+  position: relative;
+}
+.hw-calc-box::before {
+  /* 顶部「解:」提示(浅灰,不抢眼) */
+  content: "解:";
+  font-size: 13px;
+  color: #aaa;
+  position: absolute;
+  top: 6px;
+  left: 10px;
+}
+
+/* ---------- fill:题干 ____ 数量动态给横线 ----------
+ * JS 层算 stem 里 ____ 出现次数,渲染等量 .hw-fill-blank。
+ * 单条横线 inline,跟在题干后(题干自带 ____ 时视觉冗余但无害)。
+ */
+.hw-fill-area {
+  margin: 8px 0;
+}
+.hw-fill-blank {
+  display: inline-block;
+  border-bottom: 1px solid #666;
+  min-width: 90px;
+  height: 18px;
+  margin: 0 6px;
+  vertical-align: bottom;
+}
+
+/* ---------- 参考答案(浅色标注,showAnswers=true 时显示) ----------
+ * v2:choice/multi_choice 用上面的 is-correct 高亮,不再用文字 tag;
+ * 其他题型用 .hw-answer-block 标在作答区上方(蓝色斜体,不遮挡横线)。
+ */
+.hw-answer-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 11px;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+.hw-answer-block {
+  margin: -2px 0 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  color: #1d4ed8;
+  font-style: italic;
+  background: #f0f7ff;
+  border-left: 3px solid #60a5fa;
+  border-radius: 2px;
+}
+
+/* ---------- 田字格(语文 copy_word 描红) ----------
+ * v2 强化:首行写范字(楷体红色,从 scoring.content 取字)+ 后续空格描红。
+ * 这是「像语文本」的关键。田字格 = 正方框 + 中间十字虚线(渐变叠加)。
+ */
+.hw-tian-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.hw-tian-cell {
+  width: 46px;
+  height: 46px;
+  border: 1.2px solid #d44; /* 田字格外框传统用红 */
+  background-image:
+    linear-gradient(to right, transparent calc(50% - 0.5px), rgba(212, 68, 68, 0.55) calc(50% - 0.5px), rgba(212, 68, 68, 0.55) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), rgba(212, 68, 68, 0.55) calc(50% - 0.5px), rgba(212, 68, 68, 0.55) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  background-size: 100% 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  color: rgba(212, 68, 68, 0.75); /* 范字红色半透明(描红底) */
+}
+.hw-tian-cell.hw-tian-model {
+  /* 首行范字格:楷体,更深的红色 */
+  font-family: "STKaiti", "KaiTi", "楷体", "Noto Serif SC", serif;
+  color: #b91c1c;
+  font-weight: 500;
+}
+
+/* ---------- 屏上/打印分离的容器 ----------
+ * v2 修复"3 页都是第一页"的关键:
+ *   - .hw-screen-only:屏上显示,打印态 display:none(避免和打印副本重复)。
+ *   - .hw-print-portal:portal 挂在 document.body 下的打印专用副本。屏上 display:none,
+ *     打印态 display:block。它不在 Modal 的 fixed overlay 里,是 body 直接子节点,
+ *     浏览器正常分页(每页不同内容)。
+ */
+.hw-screen-only {
+  display: block;
+}
+.hw-print-portal {
+  display: none;
+}
+
+/* ---------- @media print ----------
+ * 触发:用户点「打印」按钮 → window.print()。
+ * 策略(v2):屏上副本(.hw-screen-only)藏掉,只显示打印副本(.hw-print-portal)。
+ * 同时把 body 的其它子节点(React #root,含整个 admin app + Modal overlay)display:none,
+ * 让 .hw-print-portal 成为 body 唯一可见的直接子节点,卷面在正常文档流里自然分页。
+ *
+ * **作用域控制(v2 review 修复)**:所有规则都限定在 `body.hw-printing` 下。
+ * 打印按钮 onClick 时给 body 加 .hw-printing 类,window.print() 返回后(afterprint 事件)
+ * 移除。这样:
+ *   - 用户在作业 Modal 点「打印」:body.hw-printing 生效,#root 藏,只显示 .hw-print-portal。
+ *   - 用户在别处按 Ctrl+P(没加 .hw-printing):规则不生效,正常打印那个页面。
+ *   原来 `#root { display:none }` 无条件,导致进过 AI Console 后任何页 Ctrl+P 都空白。
+ *
+ * 为什么不直接打印 Modal 内的卷面:Modal overlay 是 position:fixed;inset:0,卷面在它
+ * 深层。打印时 fixed/absolute 祖先会让子元素脱离正常分页流,浏览器在每页重复绘制
+ * (用户报告的"3 页都是第一页")。portal 到 body 顶层绕过这个问题。
+ */
+@media print {
+  @page {
+    size: A4;
+    margin: 15mm;
+  }
+
+  /* 仅在作业打印模式(body.hw-printing)下生效,避免污染全站 Ctrl+P。 */
+  body.hw-printing {
+    background: #fff !important;
+    color: #111 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  /* 隐藏 React app 整棵树(admin 框架 + Modal overlay + 屏上预览副本)。
+   * #root 是 React 挂载点,display:none 掉它就藏了所有非打印内容。 */
+  body.hw-printing #root {
+    display: none !important;
+  }
+
+  /* 打印副本显示(它是 body 的另一个直接子节点,不在 #root 里)。 */
+  body.hw-printing .hw-print-portal {
+    display: block !important;
+  }
+  /* 屏上副本双保险藏掉(虽然 #root 已藏,但万一 portal 结构变,这里兜底)。 */
+  body.hw-printing .hw-screen-only,
+  body.hw-printing .no-print {
+    display: none !important;
+  }
+
+  /* 打印态强制卷面白底黑字 + 去掉屏上的边框/圆角 */
+  body.hw-printing .hw-paper {
+    border: none;
+    border-radius: 0;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  /* 分页策略(每道题完整不被截半行,但大题允许跨页):
+   * - .hw-question / .hw-passage / .hw-options:page-break-inside avoid —— 这些是
+   *   "原子单元"(单道题/一段材料/一组选项),不允许从中间截断。
+   * - .hw-section(大题)**不**加 avoid —— 大题可能含 5-10 道题,整体接近一页高,
+   *   若 avoid,浏览器放不下整块就会推到下一页,前一页留大片空白(用户报告"第一页
+   *   只有标题就换页"就是这个:大题标题 + 卷头占满第一页上半,大题整体 avoid 推走)。
+   *   大题允许跨页,只要它内部的每道题(.hw-question)不被截断即可。
+   * - .hw-section-title:break-after avoid —— 标题不孤立留在页底(后面必须跟内容),
+   *   但因为大题允许跨页,这个规则不会把整个大题强推到新页。
+   */
+  body.hw-printing .hw-question,
+  body.hw-printing .hw-passage,
+  body.hw-printing .hw-options {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  body.hw-printing .hw-section-title {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  /* 卷头不跨页(姓名栏等不被截断) */
+  body.hw-printing .hw-header {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* 页脚页码:position:fixed 在打印态每页重复出现,counter(page)/counter(pages)
+   * 是浏览器内置页码计数器(Chrome/Firefox/Edge 都支持)。 */
+  body.hw-printing .hw-page-footer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 11px;
+    color: #777;
+    padding-top: 6px;
+  }
+  body.hw-printing .hw-page-footer::after {
+    content: "第 " counter(page) " 页 共 " counter(pages) " 页";
+  }
+}
+
+/* 屏上预览时页脚不显示(只打印态需要) */
+.hw-page-footer {
+  display: none;
+}

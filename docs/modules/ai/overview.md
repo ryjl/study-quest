@@ -306,7 +306,7 @@ homework_prompt_configs: id, subject_id (unique), system_prompt, updated_at
 
 **题型 8 种**（`homework_questions.type` 开放 string，加新题型不改表，同 `Question.Scoring` 前向兼容设计）：choice/multi_choice/fill（复用现有，`scoring` 格式对齐 Question 表）+ short_answer/calculation/copy_word/dictation/translation（作业特有，存参考答案 `reference`/`content` 给家长对照，不判分）。judge 并入 choice（AI 出判断题就让它给 2 选项的 choice）；order/board_state 标 future。阅读理解用 section + passage 替代正式题组（材料挂 `homework_sections.passage_content`，下面挂该 section 的 short_answer/choice 题）。
 
-**质量保证 + 不烧 token**：admin 手动触发故**无客户端轮询、无熔断**；单次 LLM 调用（`MaxTokens=10000` + `extractJSONObject` 截断兜底，避免 quiz 那种 JSON 砍断坑）。**self-check 二次校验未做**（按需触发：实测质量不行再加，见 `TODO.md §P1`；若做则 fail 不整体 regen，标 `AIRun.SelfCheckResult=fail` 让 admin 看红色标记，最坏 2 次调用）。**nil-safe**：`homeworkRepo` 未注入时作业方法返回 `ErrHomeworkNotEnabled`（注册到 503）。
+**质量保证 + 不烧 token**：admin 手动触发故**无客户端轮询、无熔断**；单次 LLM 调用（`MaxTokens=16000`（v2 从 10000 上调：标准语文卷约 14400 token,余 1600;英语/啰嗦/长默写仍可能超,见下方）+ `extractJSONObject` 截断兜底 + UTF-8 防御（`strings.ToValidUTF8` 削掉残缺字节））。**v2 截断短路**：`FinishReason=="length"` 时直接 failJob（明确错误"truncated at MaxTokens",不落到 parse 报奇怪字符错）。**v2 parse 失败根治**：LLM 在 JSON 字符串值里写未转义 ASCII 双引号触发 parse 失败（非 MaxTokens 截断）——prompt 加引号转义硬规则（字符串值里的 `"` 必须 `\"` 转义,**推荐用中文引号「」或""代替**,软约束）。**+ 代码层硬兜底**:`ParseHomeworkGeneration` 第一次 `json.Unmarshal` 失败时,调 `RepairBareQuotesInJSON` 用状态机识别"明显是引语而非结构"的裸双引号(后面不跟 `, : } ]` 的)成对替换成中文「」,再 parse 一次。两层防御:prompt 强化(预防)+ repair(兜底,LLM 不听 prompt 时救回)。实测救回真实失败案例(`ai_runs` id=16,explanation 写 `"对应思想"` → 修复成「对应思想」)。**+ 观测性**:`ParseHomeworkGeneration` 返回 `(draft, wasRepaired, error)`,wasRepaired 由 parse 内部基于 trimmed(`extractJSONObject` 处理后的 JSON 主体)判断,service 层据此在 `ai_runs.self_check_note` 留痕 "recovered via bare-quote repair"(状态仍 pass)+ log,让 admin 观测 LLM 多频繁写裸引号。错误信息脱敏:repair 仍失败时只返回 "repair attempted but still failed",不拼 LLM 原文片段(诊断细节走 `ai_runs.response_text` 那条道)。**self-check 二次校验未做**（按需触发：实测质量不行再加，见 `TODO.md §P1`；若做则 fail 不整体 regen，标 `AIRun.SelfCheckResult=fail` 让 admin 看红色标记，最坏 2 次调用）。**nil-safe**：`homeworkRepo` 未注入时作业方法返回 `ErrHomeworkNotEnabled`（注册到 503）。
 
 ## 5. 状态机（ai_jobs）
 
@@ -338,7 +338,7 @@ worker（`runWorker` → `processOneJob`）认领并分发以下 8 种 job（详
 | `course_summary` | admin 手动触发 | 1 | course summary agent loop → ai_course_summaries |
 | `user_report` | admin 手动触发 | 1 | user_study agent loop → user_study_reports |
 | `polish` | admin 接受术语候选后链式 / admin 手动 | 3 | 字幕润色 per-chunk LLM → raw_vtt + glossary_candidates |
-| `homework` | admin 批量触发（整门课所有 episode） | 1 | 单次 LLM 调用（代码层 RAG + 8 题型）→ homeworks/sections/questions |
+| `homework` | admin 勾选式批量触发（v2:POST `/admin/api/ai/jobs` case=homework + episode_ids;旧 course-level 端点标废弃兜底） | 1 | 单次 LLM 调用（代码层 RAG + 8 题型 + MaxTokens 16000 + FinishReason 截断短路 + prompt 引号转义硬规则）→ homeworks/sections/questions |
 
 ### Priority 排队（quiz 高优先级插队）
 
@@ -460,7 +460,8 @@ GET  /admin/api/ai/users/:userID/study-report  读已生成的用户报告(无�
 
 ### Admin 作业卷端（课后作业卷，admin 批量生成 + 预览打印 + prompt 配置）
 ```
-POST   /admin/api/ai/courses/:id/homework/generate     批量生成该课程所有有素材的 episode 的作业(去重:已在途的跳过) → {enqueued}
+POST   /admin/api/ai/jobs  {job_type:"homework", episode_ids:[...]}   v2 勾选式批量入队(走通用 /jobs switch case=homework + service.EnqueueHomework 逐 episode 入队 + skipped map;去重:已在途/无字幕素材的跳过) → {enqueued, skipped}
+POST   /admin/api/ai/courses/:id/homework/generate     [DEPRECATED v2] course-level 整门课批量生成(保留兜底,二期清;前端 v2 起改用上面 /jobs 勾选式) → {enqueued}
 GET    /admin/api/ai/courses/:id/homeworks             列该课程所有作业(active+archived,按 created_at DESC)
 GET    /admin/api/ai/homeworks/:id                     取单份作业完整内容(sections+questions 分组,预览/打印用;无→404)
 GET    /admin/api/ai/subjects/:id/homework-prompt?key=math  取某 subject 的完整 system prompt(首次 lazy 灌默认)

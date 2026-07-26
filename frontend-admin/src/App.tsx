@@ -17,7 +17,6 @@ import { AIConsole } from './pages/AIConsole';
 import { Logs } from './pages/Logs';
 import { WrongBook } from './pages/WrongBook';
 import { Exam } from './pages/Exam';
-import { Homework } from './pages/Homework';
 import { Spinner } from './components/ui';
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
@@ -61,7 +60,6 @@ export default function App() {
         <Route path="ai-console" element={<AIConsole />} />
         <Route path="wrong-book" element={<WrongBook />} />
         <Route path="exam" element={<Exam />} />
-        <Route path="homework" element={<Homework />} />
         <Route path="reading-room" element={<ReadingRoom />} />
         <Route path="classification" element={<Classification />} />
         <Route path="badges" element={<Badges />} />

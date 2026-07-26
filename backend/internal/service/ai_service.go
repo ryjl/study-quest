@@ -39,6 +39,13 @@ type AIService interface {
 	// current VttContent) so re-runs don't compound LLM drift. Episodes without
 	// a whisper subtitle, or with an in-flight polish job, are skipped.
 	EnqueuePolish(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error)
+	// EnqueueHomework enqueues homework jobs for the given episodes (v2: the
+	// checkbox-style batch entry). Frontend POSTs /admin/api/ai/jobs with
+	// job_type=homework, handler dispatches here. Episodes without subtitle
+	// chunks (no material) or with an in-flight homework job are skipped with
+	// a reason in the skipped map. The legacy course-level entry
+	// (EnqueueHomeworkForCourse below) is retained as deprecated fallback.
+	EnqueueHomework(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error)
 	// EnqueueSegmentForCourse enqueues segment jobs for every episode of a
 	// course that already has a subtitle (the agent needs source material). Used
 	// when an admin flips a course's AI switch from off→on: previously-arrived

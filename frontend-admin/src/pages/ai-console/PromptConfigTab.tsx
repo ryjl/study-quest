@@ -6,35 +6,56 @@ import { api } from '../../lib/api';
 import { useToast } from '../../lib/toast';
 import { useSubjects, useInvalidateSubjects } from '../../lib/useSubjects';
 import type { Course, SubjectMeta } from '../../lib/types';
+import { Tabs, type TabItem } from '../../components/ui';
 import { AIHintFields, emptyAiHintValue, type AiHintFieldsValue } from './AIHintFields';
 import { HomeworkPromptSection } from './HomeworkPromptSection';
 
-// PromptConfigTab — the "Prompt 配置" tab on the AI Console. Two stacked
-// sections:
-//   1. 学科默认 (subject ai_config): pick a subject, edit its 5 fields, save.
-//   2. 课程覆盖 (course ai_config): pick a course, edit its 5 fields + two
-//      enable switches, save. Course fields override subject defaults at
-//      resolve-time; term_dict is special (concat instead of override).
+// PromptConfigTab — the "Prompt 配置" tab on the AI Console.
 //
-// This is the SAME data CourseModal/SubjectModal edit — centralizing the
-// prompt-only view here lets the admin tune prompts at a glance without
-// opening the full create/edit modal. CRITICAL: 后端 UpdateCourse/UpdateSubject
-// 都是 PUT 全量替换(Gin binding:"required" 强制 title/subject/key/label 非空),
-// 所以本 tab 的 save body 必须发完整对象(把课程/学科本体字段原值回传,只覆盖 ai_config
-// 相关字段)。否则 save 会 400,或更糟 —— 把 title/subject 等字段误清。
+// v2 重构(2026-07-26):从「三个 section 纵向堆叠」改成「两个子 tab 切换」。
+// 用户反馈:学科默认 Prompt 和作业生成 Prompt 是两个比较独立的 prompt,适合用 tab
+// 切换而非堆叠(堆叠时作业 prompt 在最底下,要滚很远)。
 //
-// Subject save shape (mirrors Subjects.tsx SubjectModal):
-//   { key, label, color, sort_order, ai_config: { 5 fields } }
-// Course save shape (mirrors CourseModal):
-//   { title, grades, grade, subject, content_type, cover_url, tag_ids,
-//     ai_config: { 5 fields }, ai_summary_enabled, ai_quiz_enabled }
+// 子 tab:
+//   1. 学习 AI Prompt:SubjectPromptSection(学科默认)+ CoursePromptSection(课程覆盖)。
+//      这两个是 quiz/summary/advice 等「学习类 AI 功能」共用的 hint prompt。
+//   2. 作业生成 Prompt:HomeworkPromptSection。作业是独立的 prompt 系统(per-subject
+//      完整 system prompt,不走 AIConfig hint 机制),所以单独一个 tab。
+//
+// Tabs 是受控组件(ui.tsx),只渲染 tab 条;panel 内容根据 value 条件渲染。
+// SubjectPromptSection/CoursePromptSection 是本文件内部 function,改 tab 不需要 export。
+//
+// 下面两个 section 编辑的是同一份数据(CourseModal/SubjectModal 也编辑):
+//   - 学科默认 (subject ai_config): pick a subject, edit its 5 fields, save.
+//   - 课程覆盖 (course ai_config): pick a course, edit its 5 fields + two
+//     enable switches, save. Course fields override subject defaults at
+//     resolve-time; term_dict is special (concat instead of override).
+//
+// CRITICAL: 后端 UpdateCourse/UpdateSubject 都是 PUT 全量替换(Gin binding:"required"
+// 强制 title/subject/key/label 非空),所以本 tab 的 save body 必须发完整对象(把课程/
+// 学科本体字段原值回传,只覆盖 ai_config 相关字段)。否则 save 会 400,或更糟 —— 把
+// title/subject 等字段误清。
+
+const PROMPT_TABS: TabItem[] = [
+  { key: 'learning', label: '学习 AI Prompt' },
+  { key: 'homework', label: '作业生成 Prompt' },
+];
 
 export function PromptConfigTab() {
+  const [tab, setTab] = useState('learning');
   return (
-    <div className="space-y-6">
-      <SubjectPromptSection />
-      <CoursePromptSection />
-      <HomeworkPromptSection />
+    <div className="space-y-4">
+      <Tabs tabs={PROMPT_TABS} value={tab} onChange={setTab} />
+      {/* v2:两个 panel 都常驻 DOM(keep-alive),用 hidden 切显隐。原条件渲染切 tab 会
+          卸载组件,丢失 SubjectPromptSection/CoursePromptSection 的 useState(选中的学科/
+          课程、正在编辑的 prompt 草稿)。常驻后切换不丢草稿。 */}
+      <div className={tab === 'learning' ? 'space-y-6' : 'hidden'}>
+        <SubjectPromptSection />
+        <CoursePromptSection />
+      </div>
+      <div className={tab === 'homework' ? '' : 'hidden'}>
+        <HomeworkPromptSection />
+      </div>
     </div>
   );
 }

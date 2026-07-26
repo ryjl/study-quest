@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
 
 // homework_parse.go 解析作业卷(Homework)生成的 LLM 返回 JSON。和 quizzer.go 的
@@ -76,14 +77,44 @@ const (
 // Scoring 规范化:校验通过后把 scoring 重新 marshal 成规范 JSON(只保留该题型 schema 关心的
 // 字段),存进 HomeworkDraftQuestion.Scoring,保证落库的是干净 JSON 而非 LLM 原样(可能
 // 多写了冗余字段)。
-func ParseHomeworkGeneration(raw string, subjectKey string) (HomeworkDraft, error) {
+// ParseHomeworkGeneration 解析 LLM 返回的作业卷 JSON,逐题校验,残题丢弃,全废才 error。
+// 返回 (draft, wasRepaired, error):wasRepaired=true 表示第一次 parse 失败、靠引号修复
+// 兜底救回(LLM 在 string value 写了裸 ASCII 双引号)。service 层据此在 ai_runs 留痕。
+func ParseHomeworkGeneration(raw string, subjectKey string) (HomeworkDraft, bool, error) {
 	_ = subjectKey // 当前实现不按科目调整校验规则(科目配方在 prompt 层已约束),保留参数供后续扩展
 
 	trimmed := extractJSONObject(raw)
 	var resp homeworkLLMResponse
 	if err := json.Unmarshal([]byte(trimmed), &resp); err != nil {
-		return HomeworkDraft{}, fmt.Errorf("invalid homework JSON: %w", err)
+		// v2 兜底:parse 失败常见根因是 LLM 在 string value 里写了未转义的裸 ASCII
+		// 双引号(如 "explanation":"用"对应思想"比较"),parser 在第一个 " 误判字符串
+		// 结束,后面中文成非法 token(报 "invalid character 'X' after object key:value
+		// pair")。prompt 强化(引号转义硬规则)是软约束,LLM 偶尔不听,这里加硬兜底:
+		// 用启发式把"明显是引语而非结构"的裸双引号替换成中文「」(成对交替),再 parse 一次。
+		// 只在第一次失败时尝试一次,不影响正常路径性能。
+		repaired := RepairBareQuotesInJSON(trimmed)
+		if repaired == trimmed {
+			return HomeworkDraft{}, false, fmt.Errorf("invalid homework JSON: %w", err)
+		}
+		var resp2 homeworkLLMResponse
+		if err2 := json.Unmarshal([]byte(repaired), &resp2); err2 != nil {
+			// v2 review MAJOR-4:错误信息不拼 err2(含修复版片段,可能泄露 LLM 原文)。
+			// 诊断细节走 ai_runs.response_text(那条本就是 admin 诊断用,设计意图)。
+			return HomeworkDraft{}, false, fmt.Errorf("invalid homework JSON (repair attempted but still failed): %w", err)
+		}
+		resp = resp2
+		// 走到这里说明 trimmed 第一次失败 + repair 后成功:标记靠修复救回。
+		// 用包级 repair Happened 标志传给 parse 内部不可行(并发),所以直接返回 true,
+		// service 层接收 wasRepaired 参数写入 ai_runs.self_check_note。
+		return parseHomeworkDraftFromResp(resp, true)
 	}
+	return parseHomeworkDraftFromResp(resp, false)
+}
+
+// parseHomeworkDraftFromResp 把已 unmarshal 的 homeworkLLMResponse 校验 + 组装成 draft。
+// 从 ParseHomeworkGeneration 抽出,让"正常路径"和"修复后重试"共用校验逻辑,wasRepaired
+// 由调用方传入(走 repair 分支 true,否则 false)。返回 (draft, wasRepaired, error)。
+func parseHomeworkDraftFromResp(resp homeworkLLMResponse, wasRepaired bool) (HomeworkDraft, bool, error) {
 
 	// 收集所有合法 section 的 seq 集合,供后续校验 question 的 section_seq 引用。
 	// section 本身只校验 seq>0(题号语义),title 空我们宽容(可能 LLM 漏写),不丢 section,
@@ -120,13 +151,13 @@ func ParseHomeworkGeneration(raw string, subjectKey string) (HomeworkDraft, erro
 	}
 
 	if len(cleaned) == 0 {
-		return HomeworkDraft{}, fmt.Errorf("all questions discarded")
+		return HomeworkDraft{}, wasRepaired, fmt.Errorf("all questions discarded")
 	}
 
 	return HomeworkDraft{
 		Sections:  validSections,
 		Questions: cleaned,
-	}, nil
+	}, wasRepaired, nil
 }
 
 // validateHomeworkQuestion 校验单道题:返回 (规范化后的题, 是否合法)。不合法返回 (zero, false),
@@ -263,6 +294,9 @@ func normalizeHomeworkScoring(typ string, opts []string, raw json.RawMessage) (s
 
 	case hwTypeCopyWord:
 		// copy_word: scoring.content 非空,times 缺省 3。
+		// v2:content 长度上限 12 字符(按 rune,中文安全)。抄写题是生字/单词/短语级别,
+		// LLM 偶尔误写整段课文(几十字),前端田字格会渲染 N×times 格撑爆 A4 卷面行,
+		// 排版失去整齐感。超长的丢这道题(判残题),不勉强截断(截断后的短语可能无意义)。
 		var s struct {
 			Content string `json:"content"`
 			Times   int    `json:"times"`
@@ -272,6 +306,9 @@ func normalizeHomeworkScoring(typ string, opts []string, raw json.RawMessage) (s
 		}
 		if strings.TrimSpace(s.Content) == "" {
 			return "", false
+		}
+		if utf8.RuneCountInString(s.Content) > 12 {
+			return "", false // 内容过长(整段课文级),丢弃
 		}
 		if s.Times < 1 {
 			s.Times = 3 // 缺省 3 遍
@@ -283,4 +320,102 @@ func normalizeHomeworkScoring(typ string, opts []string, raw json.RawMessage) (s
 		// 未知 type:丢弃。
 		return "", false
 	}
+}
+
+// RepairBareQuotesInJSON 尝试修复 LLM 在 JSON string value 里写的未转义裸 ASCII
+// 双引号(引语),把它们替换成中文「」(成对交替)。这是 parse 失败时的兜底修复,
+// 只在 ParseHomeworkGeneration 第一次 json.Unmarshal 失败时调用一次。
+//
+// 公开(Exported)是因为 service 层在 parse 成功后也会调它做"事后比对":如果
+// RepairBareQuotesInJSON(content) != content,说明本次 parse 靠修复救回(LLM 写了
+// 裸引号),据此在 ai_runs.self_check_note 留痕,让 admin 观测 LLM 多频繁写裸引号。
+//
+// 核心启发式:用状态机模拟 JSON parser,追踪 inString 状态。当在 string 内部遇到 "
+// 时,判断它是"真字符串结束"还是"引语":
+//   - 真结束:后面(跳过空白)紧跟的是 JSON 结构字符 , : } ]
+//   - 引语:后面紧跟的是其它字符(典型:中文字符,如 "用"对应思想"比较" 里的两个 ")
+// 引语 " 成对替换成「」,用一个布尔 toggle 决定当前 " 是开「还是闭」。
+//
+// 边界处理:
+//   - \" (反斜杠转义)是合法的,不动(状态机识别反斜杠转义)。
+//   - 完全合法的 JSON(无裸引号)输入,输出和输入完全相同(函数幂等,可重复调用)。
+//   - 修复不保证 100% 成功(复杂情况如嵌套引语、引号配对错误),最终仍可能 parse 失败,
+//     调用方据此决定是否用修复版。
+//
+// 字节级扫描而非 rune 级:中文 UTF-8 是 3 字节(0xE0-0xEF 开头),多字节字符的后续
+// 字节(0x80-0xBF)不会是 " (0x22),所以字节级扫描中文安全。
+func RepairBareQuotesInJSON(s string) string {
+	var out strings.Builder
+	out.Grow(len(s) + 16) // 少量余量,替换通常不增减太多字节
+
+	inString := false
+	escape := false      // 上一个字符是 \(正在转义下一个字符)
+	quoteOpen := true    // 引语 " 的开/闭 toggle:true 时下一个引语 " 替换成「,false 替换成」
+
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+
+		if escape {
+			// 上一字节是 \,当前字节是被转义的(如 \" \\ \n),原样输出,清除 escape。
+			out.WriteByte(c)
+			escape = false
+			continue
+		}
+
+		if c == '\\' && inString {
+			// string 内的反斜杠:转义下一字节。原样输出 \,下一字节走 escape 分支。
+			out.WriteByte(c)
+			escape = true
+			continue
+		}
+
+		if c == '"' {
+			if !inString {
+				// string 开始。
+				inString = true
+				out.WriteByte(c)
+				continue
+			}
+			// 在 string 内遇到 "。判断是真结束还是引语。
+			if isStringTerminator(s, i+1) {
+				// 真结束。
+				inString = false
+				// 重置引语 toggle(每个 string 独立配对,避免上一个 string 的残留影响下一个)
+				quoteOpen = true
+				out.WriteByte(c)
+				continue
+			}
+			// 引语裸双引号:替换成「或」。
+			if quoteOpen {
+				out.WriteString("「")
+			} else {
+				out.WriteString("」")
+			}
+			quoteOpen = !quoteOpen
+			// 仍在 string 内,inString 保持 true
+			continue
+		}
+
+		out.WriteByte(c)
+	}
+
+	return out.String()
+}
+
+// isStringTerminator 判断 string 内的 " 后面(从 s[i:] 开始)是否是合法的字符串结束上下文:
+// 即跳过空白后,下一个字节是 JSON 结构字符 , : } ]。若是,这个 " 是真的字符串结束;
+// 否则是引语(如 "用"对应思想"比较" 中间的 ")。
+func isStringTerminator(s string, i int) bool {
+	for ; i < len(s); i++ {
+		c := s[i]
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue // 跳过空白
+		case ',', ':', '}', ']':
+			return true // 结构字符:说明前面的 " 是真结束
+		default:
+			return false // 其它字符(典型:中文):说明 " 是引语
+		}
+	}
+	return true // 末尾:也算结束(字符串在文件末闭合)
 }

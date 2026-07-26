@@ -48,6 +48,18 @@
 
 题型 8 种：choice/multi_choice/fill（复用现有，ScoringJSON 格式对齐 Question 表）+ short_answer/calculation/copy_word/dictation/translation（作业特有，存参考答案 `reference`/`content` 给家长对照，不判分）。judge 并入 choice；order/board_state 标 future。阅读理解用 section + passage 替代正式题组（材料挂在 section 上，下面挂 short_answer/choice 题）。prompt 配置走独立表 `HomeworkPromptConfig`（per-subject 完整 system prompt，**不**走 AIConfig 的 hint 机制——admin 能调完整 prompt 而非补充指引）。质量保证：admin 手动触发无客户端轮询故无熔断、单次 LLM 调用（**self-check 二次校验未做，按需触发见 §P1**；若做则 fail 不整体 regen，标 `AIRun.SelfCheckResult=fail` 让 admin 看）、MaxTokens=10000 + `extractJSONObject` 截断兜底（避免 quiz 那种 JSON 砍断坑）。UT 覆盖：repo 11 + agent 纯函数 37 + service 9。
 
+### ✓ 课后作业卷 v2 改造 —— 已完成（2026-07-26）
+
+用户实测 v1 后反馈 4 个改进点，v2 全部落地：
+
+1. **parse 失败根治**（根因非 MaxTokens）：LLM 在 JSON 字符串值里写未转义 ASCII 双引号触发 parse 失败（真实案例：`"stem":"胡老师在课上讲到"位值原理"...` parser 在第一个 `"位值原理"` 误判字符串结束）。**两层防御**:(a) prompt 强化——`homework_prompts.go` 加引号转义硬规则（字符串值里的 `"` 必须 `\"` 转义，**推荐用中文引号「」或""代替**）+ 给明确正反例（软约束,LLM 偶尔不听）；(b) 代码层硬兜底——`ParseHomeworkGeneration` 第一次 `json.Unmarshal` 失败时调公开的 `agent.RepairBareQuotesInJSON`（状态机识别"明显是引语而非结构"的裸双引号 → 成对替换成中文「」）再 parse 一次。实测救回真实失败案例（`ai_runs` id=16,explanation 写 `"对应思想"` → 修复成「对应思想」,19 题全保）。**(c) 观测性**——parse 成功后 service 层事后比对 `RepairBareQuotesInJSON(content) != content`,不同则在 `ai_runs.self_check_note` 留痕 "recovered via bare-quote repair"（状态仍 pass）+ log,让 admin 看 LLM 多频繁写裸引号。同时把"反蒙题四原则"哲学改成"客观出题四原则"——作业是练习卷不是反蒙题（学生光看题干就能做，不依赖课程视频）；passage「老师改编的短文」改「客观材料」；explanation 标可选砍体积。
+2. **MaxTokens 10000→16000 + FinishReason 截断短路**：`ai_service_homework.go` MaxTokens 上调（标准语文卷约 14400 token，16000 余 1600；英语/啰嗦/长默写仍可能超，但 prompt 引号转义修的是另一个问题）。新增 `FinishReason=="length"` 短路检查（拿到 chatResp 后、parse 前）：截断时 failJob 给明确错误"truncated at MaxTokens"，不落到 parse 报奇怪字符错。`helpers.go` `extractJSONObject` 截断兜底加 `strings.ToValidUTF8` 防御（残缺 UTF-8 字节剔除）。
+3. **勾选式批量入队**（抄 GlossaryTab `Set<number>` 范式）：`CourseRegenColumn.tsx` 重构，每行 checkbox（无字幕禁用）+ 顶部批量操作区（生成总结/作业/润色 三按钮）+ 全选有字幕/清空 + 保留每行右侧 3 按钮（勾选=批量 + 行内=单条两套并存）。后端配套：`EnqueueHomework(episodeIDs []uint)`（照抄 `EnqueuePolish`）+ handler `admin_ai_jobs.go` switch 加 `case "homework"`，**复用现有 `POST /admin/api/ai/jobs` 端点**不新加。旧 course-level `/courses/:id/homework/generate` 标废弃兜底（二期清）。
+4. **作业预览改弹窗 + 卷面排版重设计**：standalone `/admin/homework` 页**已删**（生成+预览+打印全进 RegenTab）。抽 `components/homework/` 共享组件：`HomeworkPrintView.tsx`（卷面渲染，屏上 + 打印共用）+ `homework.css`（A4 排版）+ `HomeworkPreviewModal.tsx`（`<Modal size="xl">` 预览/打印）。**排版方案：中性现代风 · 小学高年级，刻意去掉所有评分压力元素**（无密封线/得分框/满分框/评卷人——避免给小朋友考试压力）。字体走中文衬线栈（Songti/STSong/宋体/Noto Serif SC）让卷子有印刷感；抄写范字用楷体（STKaiti）红色描红。卷头克制（课程名 + 课时标题 + 姓名/日期）。题型作答区按高年级强化：choice 2×2 网格、fill 按题干 `____` 数量动态横线、calculation 130px 大方框、copy_word 首行范字 + 描红、页脚页码（CSS counter）。答案版：choice 正确项背景高亮，其他题型蓝色斜体标作答区上方。
+5. **Prompt 配置用子 tab**（反馈 4 的另一面）：`PromptConfigTab.tsx` 顶层 `space-y-6` div 换成 `<Tabs>` 受控组件，子 tab1「学习 AI Prompt」= 学科默认 + 课程覆盖，子 tab2「作业生成 Prompt」= 作业 prompt（两套独立 prompt，tab 切换比堆叠清晰）。
+
+UT 覆盖增量：`EnqueueHomework` 去重/skip 测试 + `FinishReason=length` 截断短路测试 + `extractJSONObject` UTF-8 字节截断盲区补测。全后端 go test + 前端 npm build 绿。
+
 ---
 
 ### （历史：课程考试按钮原需求，已完成，见上方 ✓）

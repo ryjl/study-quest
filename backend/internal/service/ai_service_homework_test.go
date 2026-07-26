@@ -331,6 +331,9 @@ func TestHomeworkNilSafe(t *testing.T) {
 	if _, err := svc.EnqueueHomeworkForCourse(1); !errors.Is(err, ErrHomeworkNotEnabled) {
 		t.Errorf("Enqueue nil: err = %v; want ErrHomeworkNotEnabled", err)
 	}
+	if _, _, err := svc.EnqueueHomework([]uint{1}); !errors.Is(err, ErrHomeworkNotEnabled) {
+		t.Errorf("Enqueue(ids) nil: err = %v; want ErrHomeworkNotEnabled", err)
+	}
 	if _, err := svc.GetHomeworkViewByID(1); !errors.Is(err, ErrHomeworkNotEnabled) {
 		t.Errorf("GetByID nil: err = %v; want ErrHomeworkNotEnabled", err)
 	}
@@ -340,6 +343,121 @@ func TestHomeworkNilSafe(t *testing.T) {
 	if _, err := svc.GetHomeworkPromptConfig(1, "math"); !errors.Is(err, ErrHomeworkNotEnabled) {
 		t.Errorf("GetPrompt nil: err = %v; want ErrHomeworkNotEnabled", err)
 	}
+}
+
+// TestEnqueueHomework_DedupesAndSkips v2 勾选式入队:正常入队 + 去重 + 不存在的 episode skip。
+func TestEnqueueHomework_DedupesAndSkips(t *testing.T) {
+	svc, _, ids := seedHomeworkServiceFixture(t)
+
+	// 正常入队该 episode。
+	enqueued, skipped, err := svc.EnqueueHomework([]uint{ids.episodeID})
+	if err != nil {
+		t.Fatalf("EnqueueHomework #1: %v", err)
+	}
+	if len(enqueued) != 1 || enqueued[0] != ids.episodeID {
+		t.Errorf("enqueued #1 = %v; want [%d]", enqueued, ids.episodeID)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped #1 = %v; want empty", skipped)
+	}
+
+	// 第二次:已有在途 job → skip。
+	enqueued2, skipped2, _ := svc.EnqueueHomework([]uint{ids.episodeID})
+	if len(enqueued2) != 0 {
+		t.Errorf("enqueued #2 = %v; want empty (dedup)", enqueued2)
+	}
+	if len(skipped2) != 1 {
+		t.Errorf("skipped #2 = %v; want 1 (in-flight)", skipped2)
+	}
+
+	// 不存在的 episode id → skip with reason。
+	enqueued3, skipped3, _ := svc.EnqueueHomework([]uint{999999})
+	if len(enqueued3) != 0 {
+		t.Errorf("enqueued #3 = %v; want empty (nonexistent)", enqueued3)
+	}
+	if _, ok := skipped3[999999]; !ok {
+		t.Errorf("skipped #3 = %v; want key 999999", skipped3)
+	}
+}
+
+// TestRunHomeworkJob_FinishReasonLengthTruncation v2 截断短路:LLM 返回 FinishReason="length"
+// 时,job 应以明确错误 fail("truncated at MaxTokens"),而不是落到 parse 报奇怪字符错。
+// 这是 v2 新增范式(quiz 无先例)。注意 fake LLM 的 FinishReason 默认 "stop",需特制一条。
+func TestRunHomeworkJob_FinishReasonLengthTruncation(t *testing.T) {
+	svc, _, ids := seedHomeworkServiceFixture(t)
+	// 自制一条 FinishReason=length 的 fake 响应(content 故意是不完整 JSON,验证走不到 parse)。
+	svc.homeworkLLMOverride = &lengthTruncatedLLM{}
+
+	job := enqueueHomeworkJob(svc, ids)
+	svc.runHomeworkJob(job)
+
+	got := getHomeworkJob(t, svc, job.ID)
+	if got.Status != "failed" {
+		t.Fatalf("job status = %s; want failed (truncation must fail)", got.Status)
+	}
+	if !strings.Contains(got.Error, "truncated") {
+		t.Errorf("job error = %q; want mentions truncated (clear cause, not weird parse err)", got.Error)
+	}
+	// ai_runs 里应该有一条 fail + finish_reason=length 的诊断 note。
+	var note string
+	svc.db.Model(&model.AIRun{}).Where("job_id = ? AND capability = 'homework'", job.ID).
+		Select("self_check_note").Scan(&note)
+	if !strings.Contains(note, "finish_reason=length") {
+		t.Errorf("run self_check_note = %q; want mentions finish_reason=length", note)
+	}
+}
+
+// lengthTruncatedLLM 模拟撞 MaxTokens 的 LLM:FinishReason="length",content 是半截 JSON。
+type lengthTruncatedLLM struct{}
+
+func (m *lengthTruncatedLLM) Chat(_ context.Context, _ ai.ChatRequest) (*ai.ChatResponse, error) {
+	return &ai.ChatResponse{
+		Content:      `{"sections":[{"seq":1,"title":"一、选择题","questions":[{"stem":"截断`, // 不闭合
+		FinishReason: "length",
+	}, nil
+}
+func (m *lengthTruncatedLLM) Ping(_ context.Context) error { return nil }
+func (m *lengthTruncatedLLM) ProviderType() string         { return "fake-length" }
+
+// TestRunHomeworkJob_BareQuoteRepairObserved v2 观测性:LLM 返回的 JSON 在 explanation
+// 里写了裸 ASCII 双引号引语(真实案例 ai_runs id=16),parse 第一次失败 + repair 救回。
+// 验证 job 仍 done(救回成功)+ ai_runs.self_check_note 留痕含 "recovered via bare-quote
+// repair"(让 admin 观测 LLM 多频繁写裸引号,据此调 prompt 或考虑分步出题)。
+func TestRunHomeworkJob_BareQuoteRepairObserved(t *testing.T) {
+	svc, _, ids := seedHomeworkServiceFixture(t)
+	// fake LLM 返回带裸引号的 JSON(explanation 写 "对应思想" 用裸双引号,不是转义)。
+	// 这段是 run 16 真实失败片段的简化版。
+	svc.homeworkLLMOverride = &fakeHomeworkLLM{responses: []fakeHomeworkResp{{
+		content: `{"sections":[{"seq":1,"title":"一、选择题","passage_title":null,"passage_content":null,"questions":[` +
+			`{"section_seq":1,"seq":1,"type":"choice","stem":"23+95 与 87+19 哪个大?","options":["23+95大","87+19大","相等","无法比较"],"scoring":{"correct_index":0},"explanation":"用"对应思想"比较:每个加数都更大,和就更大。"}` +
+			`]}],"questions_count":1}`,
+	}}}
+
+	job := enqueueHomeworkJob(svc, ids)
+	svc.runHomeworkJob(job)
+
+	// job 应 done(repair 救回成功)。
+	got := getHomeworkJob(t, svc, job.ID)
+	if got.Status != "done" {
+		t.Fatalf("job status = %s; want done (bare-quote repair should recover)", got.Status)
+	}
+	// ai_runs 里应有一条 pass run,且 self_check_note 标 "recovered via bare-quote repair"。
+	var note string
+	svc.db.Model(&model.AIRun{}).Where("job_id = ? AND capability = 'homework'", job.ID).
+		Select("self_check_note").Scan(&note)
+	if !strings.Contains(note, "recovered via bare-quote repair") {
+		t.Errorf("run self_check_note = %q; want mentions 'recovered via bare-quote repair'", note)
+	}
+}
+
+// getHomeworkJob helper:从 DB 读一条 job 的最新状态(测试断言用)。
+func getHomeworkJob(t *testing.T, svc *aiService, id uint) *model.AIJob {
+	t.Helper()
+	var job model.AIJob
+	if err := svc.db.First(&job, id).Error; err != nil {
+		t.Fatalf("get job %d: %v", id, err)
+	}
+	return &job
 }
 
 // TestHomeworkPromptConfig_Lifecycle Get → Save → Get(改了)→ Reset → Get(回默认)。

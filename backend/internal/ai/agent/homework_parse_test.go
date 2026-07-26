@@ -93,7 +93,7 @@ func TestParseHomeworkGenerationHappyPath(t *testing.T) {
 		goodCalculation(5), goodCopyWord(6), goodDictation(7), goodTranslation(8),
 	}
 	raw := oneSection(qlines)
-	draft, err := ParseHomeworkGeneration(raw, "chinese")
+	draft, _, err := ParseHomeworkGeneration(raw, "chinese")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -152,7 +152,7 @@ func TestParseHomeworkGenerationDropsBadScoring(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			// 残题 + 一道合法 choice 题。期望残题被丢、合法题保留。
 			raw := oneSection([]string{c.bad, goodChoice(2)})
-			draft, err := ParseHomeworkGeneration(raw, "math")
+			draft, _, err := ParseHomeworkGeneration(raw, "math")
 			if err != nil {
 				t.Fatalf("expected no error (one good question survives), got %v", err)
 			}
@@ -172,7 +172,7 @@ func TestParseHomeworkGenerationBadSectionRef(t *testing.T) {
 	// section seq=1,但 question section_seq=99(不存在)→ 丢该题。
 	badRef := `{"section_seq":99,"seq":1,"type":"choice","stem":"引用不存在的大题","options":["甲","乙"],"scoring":{"correct_index":0},"explanation":"e"}`
 	raw := oneSection([]string{badRef, goodChoice(2)})
-	draft, err := ParseHomeworkGeneration(raw, "math")
+	draft, _, err := ParseHomeworkGeneration(raw, "math")
 	if err != nil {
 		t.Fatalf("expected no error (good question survives), got %v", err)
 	}
@@ -206,7 +206,7 @@ func TestParseHomeworkGenerationAllBad(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := ParseHomeworkGeneration(c.raw, "math")
+			_, _, err := ParseHomeworkGeneration(c.raw, "math")
 			if err == nil {
 				t.Errorf("expected error for %q, got nil", c.name)
 			}
@@ -229,7 +229,7 @@ func TestParseHomeworkGenerationRecoversTruncated(t *testing.T) {
 	// 第 6 道截断:写了对象开始但 stem 字符串没闭合。
 	b.WriteString(`,{"section_seq":1,"seq":6,"type":"choice","stem":"截断`)
 	// 故意在这里截断——没有闭合 stem 字符串、对象、数组、外层对象。
-	draft, err := ParseHomeworkGeneration(b.String(), "math")
+	draft, _, err := ParseHomeworkGeneration(b.String(), "math")
 	if err != nil {
 		t.Fatalf("expected recovery from truncation, got err: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestParseHomeworkGenerationRecoversTruncated(t *testing.T) {
 func TestParseHomeworkGenerationFencedJSON(t *testing.T) {
 	inner := oneSection([]string{goodChoice(1)})
 	raw := "```json\n" + inner + "\n```"
-	draft, err := ParseHomeworkGeneration(raw, "math")
+	draft, _, err := ParseHomeworkGeneration(raw, "math")
 	if err != nil {
 		t.Fatalf("fenced JSON should parse: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestParseHomeworkGenerationFencedJSON(t *testing.T) {
 func TestParseHomeworkGenerationProseWrapped(t *testing.T) {
 	inner := oneSection([]string{goodChoice(1)})
 	raw := "好的,这是作业:\n" + inner + "\n希望对学生有帮助。"
-	draft, err := ParseHomeworkGeneration(raw, "math")
+	draft, _, err := ParseHomeworkGeneration(raw, "math")
 	if err != nil {
 		t.Fatalf("prose-wrapped JSON should parse: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestParseHomeworkGenerationProseWrapped(t *testing.T) {
 func TestParseHomeworkGenerationCopyWordTimesDefault(t *testing.T) {
 	noTimes := `{"section_seq":1,"seq":1,"type":"copy_word","stem":"抄写","scoring":{"content":"字"},"explanation":"e"}`
 	raw := oneSection([]string{noTimes})
-	draft, err := ParseHomeworkGeneration(raw, "chinese")
+	draft, _, err := ParseHomeworkGeneration(raw, "chinese")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -281,12 +281,31 @@ func TestParseHomeworkGenerationCopyWordTimesDefault(t *testing.T) {
 	}
 }
 
+// TestParseHomeworkGenerationCopyWordContentTooLongDropped v2:copy_word 的 content
+// 超 12 字符(整段课文级)→ 丢这道题,避免前端田字格撑爆 A4 卷面行。
+func TestParseHomeworkGenerationCopyWordContentTooLongDropped(t *testing.T) {
+	// 13 个中文字(超 12 上限)+ 一道合法短 content 题,长的那道应被丢、短的保留。
+	longContent := `{"section_seq":1,"seq":1,"type":"copy_word","stem":"抄写","scoring":{"content":"这是一段超长的抄写内容根本不该出现在抄写题里"},"explanation":""}`
+	shortContent := `{"section_seq":1,"seq":2,"type":"copy_word","stem":"抄写","scoring":{"content":"天地人"},"explanation":""}`
+	raw := oneSection([]string{longContent, shortContent})
+	draft, _, err := ParseHomeworkGeneration(raw, "chinese")
+	if err != nil {
+		t.Fatalf("expected no error (one valid question remains), got %v", err)
+	}
+	if len(draft.Questions) != 1 {
+		t.Fatalf("expected 1 question (long content dropped), got %d", len(draft.Questions))
+	}
+	if !strings.Contains(draft.Questions[0].Scoring, "天地人") {
+		t.Errorf("expected the short-content question to survive, got scoring = %s", draft.Questions[0].Scoring)
+	}
+}
+
 // TestParseHomeworkGenerationMultiChoiceMinCorrectForHalfDefault multi_choice 缺
 // min_correct_for_half 时默认 1。
 func TestParseHomeworkGenerationMultiChoiceMinCorrectForHalfDefault(t *testing.T) {
 	noMin := `{"section_seq":1,"seq":1,"type":"multi_choice","stem":"多选","options":["甲","乙","丙"],"scoring":{"correct_indices":[0,1]},"explanation":"e"}`
 	raw := oneSection([]string{noMin})
-	draft, err := ParseHomeworkGeneration(raw, "math")
+	draft, _, err := ParseHomeworkGeneration(raw, "math")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -311,7 +330,7 @@ func TestParseHomeworkGenerationReadingComprehension(t *testing.T) {
 		},
 	}
 	raw := `{"sections":[` + sec.String() + `],"questions_count":2}`
-	draft, err := ParseHomeworkGeneration(raw, "chinese")
+	draft, _, err := ParseHomeworkGeneration(raw, "chinese")
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -328,7 +347,7 @@ func TestParseHomeworkGenerationReadingComprehension(t *testing.T) {
 // 用 chinese 科目跑数学白名单题型(calculation)依然能通过——证明校验不按科目黑名单丢题。
 func TestParseHomeworkGenerationSubjectKeyDoesNotGate(t *testing.T) {
 	raw := oneSection([]string{goodCalculation(1)})
-	draft, err := ParseHomeworkGeneration(raw, "chinese") // chinese 黑名单含 calculation,但代码层不拦
+	draft, _, err := ParseHomeworkGeneration(raw, "chinese") // chinese 黑名单含 calculation,但代码层不拦
 	if err != nil {
 		t.Fatalf("expected no error (subjectKey doesn't gate at parse layer), got %v", err)
 	}
@@ -350,5 +369,81 @@ func TestExtractJSONObjectWrapper(t *testing.T) {
 		if got := ExtractJSONObject(c); got != extractJSONObject(c) {
 			t.Errorf("ExtractJSONObject(%q) = %q, but extractJSONObject = %q (should match)", c, got, extractJSONObject(c))
 		}
+	}
+}
+
+// TestRepairBareQuotesInJSON 验证 v2 兜底修复:LLM 在 string value 里写的未转义裸
+// ASCII 双引号(引语)替换成中文「」(成对交替)。这是 ParseHomeworkGeneration 第一次
+// json.Unmarshal 失败时的硬兜底。
+func TestRepairBareQuotesInJSON(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "合法 JSON 不改(无裸引号)",
+			in:   `{"a":"hello","b":1}`,
+			want: `{"a":"hello","b":1}`,
+		},
+		{
+			name: "转义双引号不动(backslash-quote 是合法转义)",
+			in:   `{"a":"hello\"world"}`,
+			want: `{"a":"hello\"world"}`,
+		},
+		{
+			name: "单个引语:中文间的裸双引号成对替换",
+			in:   `{"explanation":"用"对应思想"比较大小"}`,
+			want: `{"explanation":"用「对应思想」比较大小"}`,
+		},
+		{
+			name: "多个引语:每个 string 独立配对(toggle 在 string 结束时重置)",
+			in:   `{"a":"用"思想"做","b":"讲"算法"快"}`,
+			want: `{"a":"用「思想」做","b":"讲「算法」快"}`,
+		},
+		{
+			name: "引号后跟结构字符是真结束(不替换)",
+			in:   `{"a":"比较大小","b":1}`,
+			want: `{"a":"比较大小","b":1}`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := RepairBareQuotesInJSON(c.in)
+			if got != c.want {
+				t.Errorf("RepairBareQuotesInJSON(%q)\n  got  = %q\n  want = %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestParseHomeworkGeneration_RecoverFromBareQuotes 用真实失败案例(ai_runs id=16)
+// 的关键片段验证:LLM 在 explanation 写了裸双引号引语,原 parse 失败,修复后能成功
+// parse 出题目。这是 v2 兜底的端到端验证。
+func TestParseHomeworkGeneration_RecoverFromBareQuotes(t *testing.T) {
+	// 真实失败片段(从 run 16 response_text 提取):一道 choice 题,explanation 里有
+	// 裸双引号引语。原 JSON parser 在第一个 " 误判字符串结束。
+	raw := `{"sections":[{"seq":1,"title":"一、选择题","passage_title":null,"passage_content":null,"questions":[
+		{"section_seq":1,"seq":1,"type":"choice","stem":"23+95 与 87+19 哪个大?","options":["23+95大","87+19大","相等","无法比较"],"scoring":{"correct_index":0},"explanation":"本课强调用"对应思想"比较大小:每个加数都更大,和就更大。"}
+	]}],"questions_count":1}`
+
+	// 期望:repair 后能 parse 出 1 道题,explanation 里的裸双引号被「」替换,
+	// 且 wasRepaired=true(第一次 parse 失败、靠 repair 救回)。
+	draft, wasRepaired, err := ParseHomeworkGeneration(raw, "math")
+	if err != nil {
+		t.Fatalf("ParseHomeworkGeneration should recover via repair, got err: %v", err)
+	}
+	if !wasRepaired {
+		t.Errorf("expected wasRepaired=true (parse recovered via bare-quote repair)")
+	}
+	if len(draft.Questions) != 1 {
+		t.Fatalf("expected 1 question salvaged, got %d", len(draft.Questions))
+	}
+	expl := draft.Questions[0].Explanation
+	if !strings.Contains(expl, "「对应思想」") {
+		t.Errorf("expected explanation to have 「对应思想」 (bare quotes replaced), got %q", expl)
+	}
+	if strings.Contains(expl, `"对应思想"`) {
+		t.Errorf("explanation still has bare ASCII quotes: %q", expl)
 	}
 }

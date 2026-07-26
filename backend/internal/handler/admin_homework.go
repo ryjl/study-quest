@@ -16,19 +16,22 @@ import (
 // ErrHomeworkNotEnabled(在 service_errors_init.go 注册到 503,文案"作业功能未启用")。
 //
 // 设计取舍:
-//   - RegenerateHomework(单 episode 重生成)**故意不实现**。当前 AIService 只暴露
-//     EnqueueHomeworkForCourse(整门课批量),没有单 episode 入队方法。单集重生成在前端
-//     通过"再点一次批量生成"实现——service 的去重门(已在途作业的 episode 跳过)保证
-//     只生成缺的那集,不会重复烧 token。真正的单集重生成留二期(在 service 加
-//     EnqueueHomeworkForEpisode)。所以路由表里也没有 POST /episodes/:id/homework/regenerate。
+//   - 单/批量 episode 重生成(v2 已实现):走通用 POST /admin/api/ai/jobs 端点的
+//     case "homework"(handler admin_ai_jobs.go),前端在 RegenTab 勾选 episode 后入队。
+//     service 层对应 EnqueueHomework(episodeIDs []uint),与 EnqueueSegment/Summary/Polish
+//     三兄弟同形。单集重生成 = 勾选那一集;批量重生成 = 勾选多集。
+//   - TriggerHomework(course-level 整门课)**已废弃**(v2 标注,二期清):前端不再用它,
+//     保留仅为兜底/向后兼容。新代码请走 POST /admin/api/ai/jobs {job_type:"homework"}。
 //   - ListHomeworks 只返回 homeworks 数组,不附 pending_episodes(避免 N+1 调
 //     HasPendingHomeworkJob)。在途状态前端按 created_at + 轮询推断,或二期补一个
 //     批量状态端点。
 //   - prompt 配置端点的 subjectKey 走 query param ?key=math(不查 subjectRepo)。前端
 //     在 subject 列表页已知 key,直接透传;service 用它算默认 prompt 配方(题型/题量)。
 
-// TriggerHomework 触发为某课程批量生成作业卷(异步入队 homework job,逐 episode 跑)。
-// 去重门已在 service 内:已有在途作业的 episode 跳过,所以反复点只补缺的集。
+// TriggerHomework [DEPRECATED v2] 触发为某课程批量生成作业卷(整门课)。
+// v2 起前端改用勾选式:POST /admin/api/ai/jobs {job_type:"homework", episode_ids:[...]},
+// 走 admin_ai_jobs.go 的通用 switch + service.EnqueueHomework(逐 episode 入队 + skipped map)。
+// 本端点(course-level)保留兜底但不再被前端调用,二期清理时连路由一起删。
 //
 //	POST /admin/api/ai/courses/:id/homework/generate
 //

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"studyquest/backend/internal/model"
 )
@@ -249,6 +250,36 @@ func TestExtractJSONObject(t *testing.T) {
 		if got := extractJSONObject(c.in); got != c.want {
 			t.Errorf("extractJSONObject(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestExtractJSONObjectTruncatedUTF8MidChar v2 UTF-8 字节截断盲区补测。
+// MaxTokens 截断点可能落在一个 3 字节中文汉字的中间(切了 1-2 字节),s[start:] 起点带
+// 半个 UTF-8 序列会让后续 json.Unmarshal 报 "invalid UTF-8" 而非真正的语法错误。
+// ToValidUTF8 把残缺字节剔除,保证喂给 Unmarshal 的是合法 UTF-8。
+//
+// 场景:LLM 正在写 {"a":"老师讲到中... 字符串值没闭合就被砍断,且砍断点恰好落在
+// 「中」字(\xe4\xb8\xad)的第 2 字节后(留了 \xe4\xb8 两个残缺字节)。
+// 期望:残缺字节剔除 + 字符串补闭合 + object 补闭合 → {"a":"老师讲到"}
+func TestExtractJSONObjectTruncatedUTF8MidChar(t *testing.T) {
+	// 构造输入:合法前缀 + 残缺 UTF-8 尾字节(「中」的前两字节 \xe4\xb8,第三字节被砍)。
+	input := "{\"a\":\"老师讲到" + string([]byte{0xe4, 0xb8})
+	recovered := extractJSONObject(input)
+
+	// 关键断言 1:recovered 是合法 UTF-8(没有残缺字节)。
+	if !utf8.ValidString(recovered) {
+		t.Errorf("recovered is not valid UTF-8: % x", []byte(recovered))
+	}
+	// 关键断言 2:recovered 能被 json.Unmarshal 解析(不报 invalid UTF-8)。
+	var v struct {
+		A string `json:"a"`
+	}
+	if err := json.Unmarshal([]byte(recovered), &v); err != nil {
+		t.Fatalf("recovered JSON unparseable: %v\nrecovered=%q", err, recovered)
+	}
+	// 关键断言 3:前缀的合法中文保留,残缺字节被剔除而非留作乱码。
+	if !strings.Contains(v.A, "老师讲到") {
+		t.Errorf("expected 老师讲到 in salvaged value, got %q (recovered=%s)", v.A, recovered)
 	}
 }
 

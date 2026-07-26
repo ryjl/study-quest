@@ -146,7 +146,13 @@ func extractJSONObject(raw string) string {
 	// closers in reverse open order. Worst case the result still doesn't parse
 	// (we never make it worse than the raw tail); best case we salvage the N-1
 	// complete questions and only lose the half-written trailing one.
-	out := s[start:]
+	//
+	// v2(2026-07-26):s[start:] 是字节切片,如果 MaxTokens 截断点恰好落在一个
+	// 3 字节中文汉字的中间(切了 1-2 字节),out 起点就带半个 UTF-8 序列,后续
+	// json.Unmarshal 会报 "invalid UTF-8" 而非真正的语法错误。strings.ToValidUTF8
+	// 把残缺字节剔除,保证喂给 Unmarshal 的是合法 UTF-8。quiz 的 parse 也走这条
+	// 兜底路径,顺带受益。
+	out := strings.ToValidUTF8(s[start:], "")
 	if inString {
 		out += "\""
 	}

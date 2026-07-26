@@ -17,8 +17,14 @@ import (
 // 但作业是 episode 级、不绑 user、AI 单次生成(不走 ReAct)、纯打印。
 //
 // 入口:
-//   - EnqueueHomeworkForCourse:admin 批量触发(整门课),照抄 EnqueueSegmentForCourse 范式
+//   - EnqueueHomework:v2 勾选式批量入队(admin 在 RegenTab 勾选 episode 后调),对齐
+//     EnqueuePolish 范式(逐 episode 建 job + skipped map)。走通用 POST /admin/api/ai/jobs
+//     case "homework"。
+//   - EnqueueHomeworkForCourse:[DEPRECATED v2] course-level 整门课批量,照抄
+//     EnqueueSegmentForCourse 范式。前端 v2 起改用勾选式(EnqueueHomework),本方法保留
+//     兜底(其端点 POST /courses/:id/homework/generate 标废弃),二期清。
 //   - runHomeworkJob:worker 消费 job,照抄 runSummaryJob 的"单次 LLM 调用"范式
+//     (v2:MaxTokens 16000 + FinishReason=="length" 截断短路)。
 //   - GetHomeworkViewByID / ListHomeworksByCourse / HasPendingHomeworkJob:admin 预览/列表/状态
 //   - Get/Save/Reset HomeworkPromptConfig:per-subject 完整 system prompt 配置(C 方案)
 //
@@ -111,6 +117,61 @@ func (s *aiService) EnqueueHomeworkForCourse(courseID uint) (int, error) {
 	return len(enqueued), nil
 }
 
+// EnqueueHomework 为指定 episode 列表入队 homework job(v2 新增,对齐 EnqueuePolish 范式)。
+// 这是勾选式批量入队的入口:admin 在 RegenTab 勾选若干 episode,前端调
+// POST /admin/api/ai/jobs {job_type:"homework", episode_ids:[...]} → handler 走通用 switch
+// 的 case "homework" → 调本方法。
+//
+// 与 EnqueueHomeworkForCourse(整门课)的区别:这里入参就是 episodeIDs,不查 ListByCourse。
+// 去重门保留(hasPendingJob)避免重复入队。返回 (enqueued, skipped, err) 三段式,skipped
+// 是 episode_id → 原因的 map,handler 透传给前端展示。
+//
+// 旧的 course-level EnqueueHomeworkForCourse 保留兜底(其端点 POST /courses/:id/homework/generate
+// 标废弃但不清,二期再删),避免破坏既有调用方。
+func (s *aiService) EnqueueHomework(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error) {
+	if s.homeworkRepo == nil {
+		return nil, nil, ErrHomeworkNotEnabled
+	}
+	enqueued = make([]uint, 0, len(episodeIDs))
+	skipped = make(map[uint]string)
+	for _, epID := range episodeIDs {
+		ep, ferr := s.episodeRepo.FindByID(epID)
+		if ferr != nil {
+			skipped[epID] = "查询课时失败: " + ferr.Error()
+			continue
+		}
+		if ep == nil {
+			skipped[epID] = "课时不存在"
+			continue
+		}
+		// homework 需要素材(字幕 chunks),没字幕的 episode 出不了作业。worker 里也会再校验
+		// 一次(ErrHomeworkInsufficientMaterial),这里提前 skip 让 admin 立刻看到原因。
+		chunks, _ := s.contentRepo.ListChunks(epID, "subtitle")
+		if len(chunks) == 0 {
+			skipped[epID] = "无字幕素材"
+			continue
+		}
+		if s.hasPendingJob("homework", epID) {
+			skipped[epID] = "已有在途作业"
+			continue
+		}
+		epIDCopy, courseIDCopy := epID, ep.CourseID
+		job := &model.AIJob{
+			JobType:   "homework",
+			EpisodeID: &epIDCopy,
+			CourseID:  &courseIDCopy,
+			Status:    "queued",
+			Priority:  priorityHomework,
+		}
+		if cerr := s.contentRepo.CreateJob(job); cerr != nil {
+			skipped[epID] = "入队失败: " + cerr.Error()
+			continue
+		}
+		enqueued = append(enqueued, epID)
+	}
+	return enqueued, skipped, nil
+}
+
 // HasPendingHomeworkJob 报告某 episode 是否有在途 homework job。
 func (s *aiService) HasPendingHomeworkJob(episodeID uint) bool {
 	return s.hasPendingJob("homework", episodeID)
@@ -201,12 +262,17 @@ func (s *aiService) runHomeworkJob(job *model.AIJob) {
 	// 6. 构造 user prompt(本课 top chunks + 课程复习 chunks + 科目信息)。
 	userPrompt := buildHomeworkUserPrompt(retrieved, reviewChunks, subjectLabel)
 
-	// 7. 单次 LLM 调用(MaxTokens 给足,避免 quiz 那种 JSON 砍断坑)。
+	// 7. 单次 LLM 调用。MaxTokens 16000(v2 从 10000 上调)——体积推算:
+	//   quiz 实测一套 8-12 题峰值 7000-8000 token,1 字符 ≈ 1.68 token(中文 LLM 实际密度)。
+	//   homework 标准语文卷(21 题+阅读理解,explanation 标可选后)≈ 14400 token,16000 覆盖
+	//   且余 1600;英语/啰嗦/长默写仍可能超(那是 v2 prompt 引号转义硬规则要根治的另一个问题,
+	//   与 MaxTokens 大小无关——LLM 在 JSON 字符串值里写未转义 ASCII 双引号触发 parse 失败)。
+	//   extractJSONObject 另有截断兜底(救回前面 N-1 道完整题),但首选还是输出不被砍断。
 	start := time.Now()
 	chatResp, err := llm.Chat(ctx, ai.ChatRequest{
 		Model:       modelName,
 		Temperature: 0,
-		MaxTokens:   10000,
+		MaxTokens:   16000,
 		Messages: []ai.ChatMessage{
 			{Role: ai.RoleSystem, Content: systemPrompt},
 			{Role: ai.RoleUser, Content: userPrompt},
@@ -219,16 +285,38 @@ func (s *aiService) runHomeworkJob(job *model.AIJob) {
 	}
 	elapsed := time.Since(start)
 
-	// 8. 解析 + 逐题校验(复用 agent.ParseHomeworkGeneration,含截断兜底 + 残题丢弃)。
-	draft, err := agent.ParseHomeworkGeneration(chatResp.Content, subjectKey)
+	// 7.5 截断短路:FinishReason=="length" 表示撞 MaxTokens 中途截断,JSON 必不闭合。
+	// 这里给明确错误,不让它落到 parse 报奇怪字符错(如 "invalid character 'x' after ..."),
+	// 那种错误信息对 admin 诊断毫无帮助。extractJSONObject 虽能救回 N-1 题,但截断场景下
+	// 主动报错更干净——admin 看到 "finish_reason=length" 就知道要调 prompt 或拆分大卷。
+	// v2 新增范式(quiz 无先例,因 quiz 走 ReAct 不一次出 JSON)。
+	if chatResp.FinishReason == "length" {
+		note := fmt.Sprintf("finish_reason=length (truncated at MaxTokens=%d, completion_tokens=%d)", 16000, chatResp.Usage.CompletionTokens)
+		s.recordHomeworkRun(job, systemPrompt, userPrompt, modelName, chatResp, elapsed, 0, "fail", note)
+		s.failJob(job, "homework truncated at MaxTokens (output too long, consider simplifying prompt or splitting sections)")
+		return
+	}
+
+	// 8. 解析 + 逐题校验(复用 agent.ParseHomeworkGeneration,含截断兜底 + 残题丢弃 +
+	// v2 引号修复重试)。返回 wasRepaired 标记第一次 parse 失败 + repair 救回的情况。
+	draft, wasRepaired, err := agent.ParseHomeworkGeneration(chatResp.Content, subjectKey)
 	if err != nil {
 		// 解析失败:记一条 fail run(LLM 返回了内容但解析/校验全废,admin 需看 ResponseText 诊断)。
 		s.recordHomeworkRun(job, systemPrompt, userPrompt, modelName, chatResp, elapsed, 0, "fail", "parse: "+err.Error())
 		s.failJob(job, "parse homework: "+err.Error())
 		return
 	}
-	// 解析成功:记 pass run(qCount 是实际落盘题数)。
-	s.recordHomeworkRun(job, systemPrompt, userPrompt, modelName, chatResp, elapsed, len(draft.Questions), "pass", "")
+	// v2 观测性:wasRepaired 由 parse 内部返回(基于 trimmed,即 extractJSONObject 处理后
+	// 的 JSON 主体,不是原始 content)。原方案在 service 层比对 repair(content)!=content,
+	// 但 content 可能含散文前缀里的裸引号(不影响 parse)→ 误报。改用 parse 内部判断,
+	// 只在"真的靠 repair 救回 JSON 主体"时留痕。
+	var selfCheckNote string
+	if wasRepaired {
+		selfCheckNote = "recovered via bare-quote repair (LLM emitted unescaped \" in string value)"
+		log.Printf("homework job %d: parse recovered via bare-quote repair (LLM emitted unescaped quotes)", job.ID)
+	}
+	// 解析成功:记 pass run(qCount 是实际落盘题数;note 标修复救回信息)。
+	s.recordHomeworkRun(job, systemPrompt, userPrompt, modelName, chatResp, elapsed, len(draft.Questions), "pass", selfCheckNote)
 
 	// 9. 持久化:把 draft 翻译成 model(算 Version + 对齐 SectionID)。
 	hwID, err := s.persistHomeworkDraft(episodeID, courseID, draft, retrieved, subjectKey)

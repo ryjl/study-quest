@@ -13,14 +13,18 @@ import (
 // 出现的若干关键子串。
 
 func TestDefaultHomeworkPrompt(t *testing.T) {
-	// 通用断言:Base 内容应该出现在每个科目配方里(角色定位 + 输出格式契约 + 反蒙题四原则 +
-	// 8 种题型 scoring 约定 + 阅读理解说明)。
+	// 通用断言:Base 内容应该出现在每个科目配方里(角色定位 + 输出格式契约 + 客观出题四原则 +
+	// JSON 转义硬规则 + 8 种题型 scoring 约定 + 阅读理解说明)。
+	// v2(2026-07-26):"反蒙题四原则"改成"客观出题四原则"(作业是练习卷不是反蒙题)、
+	// 加 JSON 转义硬规则(根治 parse 失败)、explanation 标可选。
 	commonMustContain := []string{
 		"K12 课后作业出题助手",
 		"严格 JSON",
 		"sections",
 		"questions_count",
-		"反蒙题四原则",
+		"客观出题四原则", // v2: 替代"反蒙题四原则"
+		"JSON 转义硬规则", // v2 新增
+		"中文引号",       // v2 新增(转义硬规则推荐中文引号)
 		"correct_index",
 		"correct_indices",
 		`"accept"`,
