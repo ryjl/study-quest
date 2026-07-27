@@ -29,12 +29,9 @@ type WrongBookRow struct {
 	Stem        string
 	Type        string
 	Options     string
-	// Scoring + Answer + AnswerText 都带下来,供 service 层派生正确答案
-	// (choice→CorrectIndex, fill→CorrectText, multi→CorrectIndices)。grading helper
-	// 优先读 Scoring,空则回退老字段 Answer/AnswerText(见 agent.ParseScoring)。
+	// Scoring 带下来供 service 层派生正确答案(choice→CorrectIndex, fill→CorrectText,
+	// multi→CorrectIndices)。Scoring 是唯一判分元数据来源(2026-07-27 删 Answer/AnswerText 列后)。
 	Scoring     string
-	Answer      int
-	AnswerText  string
 	Explanation string
 	HasJump     bool
 	AnsweredAt  string // RFC3339,直接给客户端展示
@@ -58,7 +55,7 @@ func (r *aiContentRepo) ListWrongAnswersByUserCourse(userID, courseID uint) ([]W
 			quizzes.course_id AS course_id,
 			courses.subject_id AS subject_id,
 			questions.stem AS stem, questions.type AS type, questions.options AS options,
-			questions.scoring AS scoring, questions.answer AS answer, questions.answer_text AS answer_text,
+			questions.scoring AS scoring,
 			questions.explanation AS explanation,
 			questions.has_jump AS has_jump,
 			answers.answered_at AS answered_at`).
@@ -85,7 +82,7 @@ func (r *aiContentRepo) ListWrongAnswersByUser(userID, subjectID, courseID, chun
 			quizzes.course_id AS course_id,
 			courses.subject_id AS subject_id,
 			questions.stem AS stem, questions.type AS type, questions.options AS options,
-			questions.scoring AS scoring, questions.answer AS answer, questions.answer_text AS answer_text,
+			questions.scoring AS scoring,
 			questions.explanation AS explanation,
 			questions.has_jump AS has_jump,
 			answers.answered_at AS answered_at`).
@@ -127,7 +124,7 @@ func (r *aiContentRepo) ListQuestionsByCourseForExam(courseID uint) ([]ExamPoolQ
 	var rows []ExamPoolQuestion
 	err := r.db.Table("questions").
 		Select(`questions.id, questions.quiz_id, questions.chunk_id, questions.type, questions.stem,
-			questions.options, questions.answer, questions.answer_text, questions.scoring,
+			questions.options, questions.scoring,
 			questions.explanation, questions.has_jump, questions.created_at,
 			quizzes.episode_id AS episode_id`).
 		Joins("JOIN quizzes ON quizzes.id = questions.quiz_id").

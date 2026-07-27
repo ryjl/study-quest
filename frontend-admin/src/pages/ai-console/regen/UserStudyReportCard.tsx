@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../../lib/api';
+import { MiniMarkdown } from '../../../components/ai/MiniMarkdown';
 import { useConfirm, useToast } from '../../../lib/toast';
 import { pollWhileGenerating } from '../../../lib/query';
 import { useTypedMutation } from '../../../lib/useTypedMutation';
@@ -60,9 +61,15 @@ export function UserStudyReportCard({ userId }: { userId: number }) {
 
   return (
     <div className="rounded-md border border-border bg-card-2 p-3">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">学习报告</h3>
-        <div className="flex items-center gap-1.5">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-medium">学习报告</h3>
+          {/* 跨课程说明:报告是该生所有授权课程的综合画像(agent 逐课程分析 mastery/总结/
+              建议后综合),不需要也不应该选课程——选了反而以偏概全。说明这点消除"没选课给谁生成"
+              的困惑。 */}
+          <p className="mt-0.5 text-[11px] text-muted">跨该生所有课程的综合画像(agent 逐课程分析后综合),无需选课。</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
           <button
             className="btn-ghost btn-sm"
             onClick={trigger}
@@ -90,7 +97,7 @@ export function UserStudyReportCard({ userId }: { userId: number }) {
         </div>
       ) : data?.status === 'ready' && data.report ? (
         <div className="space-y-1.5">
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-txt">{data.report}</p>
+          <MiniMarkdown text={data.report} />
           <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-muted">
             {data.generated_at && <span>生成于 {new Date(data.generated_at).toLocaleString('zh-CN')}</span>}
             {data.model_used && <span>模型: {data.model_used}</span>}

@@ -4,12 +4,15 @@ import { api } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { Section, StatCard, Spinner } from '../components/ui';
 
-// Exam.tsx — 课程考试观测页 (TODO.md P0)。展示考试全局统计 + 题源质量对比
+// Exam.tsx — 课程考试观测页。展示考试全局统计 + 题源质量对比
 // (pool 题库抽 vs generated agent 新出)。每个聚合服务端独立降级,单点失败该区为
 // 0/空,不拖垮整页。
 //
 // 数据源:GET /admin/api/exam/stats。低频访问(观测页),不做轮询。
 // 视觉:复用 WrongBook.tsx 的 StatCard + Section + Tailwind CSS 横条范式(不引 recharts)。
+//
+// embedded=true 时跳过 PageHeader,由外层(AI 控制台观测组)提供标题——和
+// AIWorkflow/AIUserView 的 embedded 约定一致。
 
 // SOURCE_LABEL 把后端 source key 转成中文展示。
 const SOURCE_LABEL: Record<string, string> = {
@@ -17,7 +20,7 @@ const SOURCE_LABEL: Record<string, string> = {
   generated: '新生成题',
 };
 
-export function Exam() {
+export function Exam({ embedded = false }: { embedded?: boolean }) {
   const statsQ = useQuery({
     queryKey: ['exam-stats'],
     queryFn: api.examStats,
@@ -50,11 +53,13 @@ export function Exam() {
 
   return (
     <div>
-      <PageHeader
-        title="课程考试"
-        description="学生阶段性综合测评;题源质量对比帮你判断迁移题难度是否合理。"
-      />
-      <div className="mt-6 space-y-6">
+      {!embedded && (
+        <PageHeader
+          title="课程考试"
+          description="学生阶段性综合测评;题源质量对比帮你判断迁移题难度是否合理。"
+        />
+      )}
+      <div className={embedded ? 'space-y-6' : 'mt-6 space-y-6'}>
         {/* StatCard 顶栏 */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="考试卷总数" value={s.total} icon={<ClipboardList size={16} />} color="#6366f1" />

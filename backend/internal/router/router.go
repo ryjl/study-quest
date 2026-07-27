@@ -268,6 +268,9 @@ func RegisterRoutes(
 		adm.POST("/api/ai/jobs/:id/retry", admin.RetryAIJob)
 		// PR2 — polish 失败时 admin 的逃生口:放弃润色,用原始字幕继续 segment/summary。
 		adm.POST("/api/ai/jobs/:id/skip-polish", admin.SkipPolishAIJob)
+		// admin 确认忽略失败任务(failed→skipped)。用于"无字幕"这类 admin 无法修复的
+		// 失败——retry 无意义,但留在 failed 列表会淹没真实的新失败。
+		adm.POST("/api/ai/jobs/:id/acknowledge", admin.AcknowledgeAIJob)
 		// PR2.5 — glossary candidate review (术语候选审核)。
 		adm.GET("/api/courses/:id/glossary-candidates", admin.ListGlossaryCandidates)
 		adm.POST("/api/glossary-candidates/:id/accept", admin.AcceptGlossaryCandidate)

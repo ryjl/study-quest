@@ -231,6 +231,16 @@ type AIService interface {
 	// Only valid on a FAILED POLISH job — other states/types return a 409-mapped
 	// error (ErrJobNotFailed / ErrJobNotPolish).
 	SkipPolish(jobID uint) error
+	// AcknowledgeJob marks a failed job as 'skipped' WITHOUT re-running it or
+	// chaining downstream (unlike SkipPolish). Use case: a job failed for an
+	// unrecoverable reason the admin can't fix (typical: episode has no
+	// subtitle, so summary/quiz can't run). Retry is pointless (no subtitle
+	// appeared), but the job lingering in 'failed' pollutes the failure signal.
+	// Acknowledge lets the admin dismiss it — it leaves the failed list and
+	// shows as 'skipped' in history. Re-running is still possible by enqueuing
+	// a fresh job from the workbench (no "un-acknowledge" needed). Only valid
+	// on a FAILED job; returns repository.ErrJobNotFailed otherwise.
+	AcknowledgeJob(jobID uint) error
 
 	// ── glossary candidate review (PR2.5) ──
 	// The polish job mines term-correction rules (军→车 in a xiangqi course) and

@@ -28,12 +28,17 @@ import { useTypedMutation } from '../../../lib/useTypedMutation';
 import { useSubjects } from '../../../lib/useSubjects';
 import { HomeworkPreviewModal } from '../../../components/homework/HomeworkPreviewModal';
 
-export function CourseRegenColumn() {
+// courseId prop(可选):外部传入=课程工作台模式,课程已由路由固定,不渲染选课程
+// 下拉、不允许切换;不传=独立模式(带选课程下拉,保留组件可独立复用的能力)。
+// 当前唯一调用方是课程工作台(传 prop),但保留独立模式让组件可测试/未来可复用。
+export function CourseRegenColumn({ courseId: lockedCourseId }: { courseId?: number } = {}) {
   const confirm = useConfirm();
   const toast = useToast();
   const coursesQ = useQuery({ queryKey: ['courses'], queryFn: api.listCourses });
   const courses = coursesQ.data ?? [];
-  const [courseId, setCourseId] = useState<number | null>(null);
+  const isLocked = lockedCourseId != null;
+  // 工作台模式:初始值用传入的 lockedCourseId,且 setCourseId 不再被调用(下拉隐藏)。
+  const [courseId, setCourseId] = useState<number | null>(lockedCourseId ?? null);
 
   const episodesQ = useQuery({
     queryKey: ['course-episodes', courseId],
@@ -215,26 +220,30 @@ export function CourseRegenColumn() {
         <p className="text-xs text-muted">勾选课时批量生成总结/作业,或单行操作。</p>
       </header>
 
-      <div>
-        <label className="mb-1 block text-xs text-muted">选择课程</label>
-        <select
-          className="input"
-          value={courseId ?? ''}
-          onChange={(e) => {
-            setCourseId(e.target.value ? Number(e.target.value) : null);
-            setSelected(new Set()); // v2:切课程时清空选中(抄 GlossaryTab)
-          }}
-          disabled={coursesQ.isLoading}
-        >
-          <option value="">{coursesQ.isLoading ? '加载中…' : '— 请选择 —'}</option>
-          {courses.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.title}
-            </option>
-          ))}
-        </select>
-        {coursesQ.error && <p className="mt-1 text-xs text-bad">加载失败: {(coursesQ.error as Error).message}</p>}
-      </div>
+      {/* 工作台模式(isLocked)下课程已由路由固定,不渲染选课程下拉——避免一个
+          "选课程"控件出现在"课程工作台"里(冗余且会让人困惑"这还能切到别的课?")。 */}
+      {!isLocked && (
+        <div>
+          <label className="mb-1 block text-xs text-muted">选择课程</label>
+          <select
+            className="input"
+            value={courseId ?? ''}
+            onChange={(e) => {
+              setCourseId(e.target.value ? Number(e.target.value) : null);
+              setSelected(new Set()); // v2:切课程时清空选中(抄 GlossaryTab)
+            }}
+            disabled={coursesQ.isLoading}
+          >
+            <option value="">{coursesQ.isLoading ? '加载中…' : '— 请选择 —'}</option>
+            {courses.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.title}
+              </option>
+            ))}
+          </select>
+          {coursesQ.error && <p className="mt-1 text-xs text-bad">加载失败: {(coursesQ.error as Error).message}</p>}
+        </div>
+      )}
 
       {courseId != null && (
         <>

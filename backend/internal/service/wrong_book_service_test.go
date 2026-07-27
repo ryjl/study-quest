@@ -33,7 +33,7 @@ func seedWrongBookScenario(t *testing.T, stems ...string) (svc *aiService, repo 
 
 	qs := make([]model.Question, len(stems))
 	for i, stem := range stems {
-		qs[i] = model.Question{Type: "choice", Stem: stem, Options: `["a","b"]`, Answer: 1}
+		qs[i] = model.Question{Type: "choice", Stem: stem, Options: `["a","b"]`, Scoring: `{"correct_index":1}`}
 	}
 	_, questions := seedQuizWithQuestions(t, contentRepo, user.ID, episode.ID, course.ID, qs)
 	ids := make([]uint, len(questions))
@@ -52,12 +52,12 @@ func TestSubmitAllQuizAnswers_WrongAnswerEntersWrongBook(t *testing.T) {
 	svc, repo, wrongBook := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(1), uint(10), uint(100)
 	_, questions := seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "right", Options: `["a","b"]`, Answer: 0},
-		{Type: "choice", Stem: "wrong", Options: `["a","b"]`, Answer: 1},
+		{Type: "choice", Stem: "right", Options: `["a","b"]`, Scoring: `{"correct_index":0}`},
+		{Type: "choice", Stem: "wrong", Options: `["a","b"]`, Scoring: `{"correct_index":1}`},
 	})
 	rightQ, wrongQ := questions[0], questions[1]
 
-	rightIdx, wrongIdx := 0, 0 // rightQ.Answer=0 对;wrongQ.Answer=1,选 0 错
+	rightIdx, wrongIdx := 0, 0 // rightQ 正确索引 0(选 0 对);wrongQ 正确索引 1,选 0 错
 	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, []QuizAnswerInput{
 		{QuestionID: rightQ.ID, AnswerIndex: &rightIdx},
 		{QuestionID: wrongQ.ID, AnswerIndex: &wrongIdx},
@@ -92,7 +92,7 @@ func TestSubmitAllQuizAnswers_WrongAnswerIncrementsOnReSubmit(t *testing.T) {
 	svc, repo, wrongBook := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(1), uint(10), uint(100)
 	_, questions := seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "q", Options: `["a","b"]`, Answer: 1},
+		{Type: "choice", Stem: "q", Options: `["a","b"]`, Scoring: `{"correct_index":1}`},
 	})
 	wrongQ := questions[0]
 	wrongIdx := 0 // Answer=1, 选 0 错
@@ -104,7 +104,7 @@ func TestSubmitAllQuizAnswers_WrongAnswerIncrementsOnReSubmit(t *testing.T) {
 	// 已在 repo 测试覆盖,这里只验证交卷 hook 在第二次调用时 +1 而非新建。
 	// 为此手动造第二份 quiz(seedQuizWithQuestions 会 archive 旧的)。
 	_, q2 := seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "q2", Options: `["a","b"]`, Answer: 1},
+		{Type: "choice", Stem: "q2", Options: `["a","b"]`, Scoring: `{"correct_index":1}`},
 	})
 	svc.SubmitAllQuizAnswers(userID, episodeID, []QuizAnswerInput{{QuestionID: q2[0].ID, AnswerIndex: &wrongIdx}})
 

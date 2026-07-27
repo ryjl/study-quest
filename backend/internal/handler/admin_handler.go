@@ -150,6 +150,8 @@ type AdminHandler interface {
 	RetryAIJob(c *gin.Context)
 	// SkipPolishAIJob: polish 失败逃生口(放弃润色,继续下游)。
 	SkipPolishAIJob(c *gin.Context)
+	// AcknowledgeAIJob: admin 确认忽略失败任务(failed→skipped),用于无法修复的失败。
+	AcknowledgeAIJob(c *gin.Context)
 	// PR2.5 — glossary candidate review (术语候选审核)。
 	ListGlossaryCandidates(c *gin.Context)
 	AcceptGlossaryCandidate(c *gin.Context)

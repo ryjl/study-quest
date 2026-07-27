@@ -282,16 +282,15 @@ type Question struct {
 	Type        string `gorm:"size:20;default:'choice'"` // choice | multi_choice | fill
 	Stem        string `gorm:"type:text;not null"`
 	Options     string `gorm:"type:text"` // JSON []string (choice/multi_choice)
-	Answer      int    // DEPRECATED（choice 单选正确索引）。新数据改走 Scoring.correct_index。保留兼容老数据/老 prompt。
-	AnswerText  string `gorm:"type:text"` // DEPRECATED（fill 可接受答案 JSON）。新数据改走 Scoring.accept。保留兼容。
 	// Scoring 承载各题型的判分元数据(JSON),按 type 解析。前向兼容设计:加新题型只扩
-	// Scoring 的 schema,不必改表。grading.go 优先读 Scoring,空则回退老字段(Answer/
-	// AnswerText)。示例:
+	// Scoring 的 schema,不必改表。示例:
 	//   choice:       {"correct_index":2}
 	//   multi_choice: {"correct_indices":[0,2,3],"partial_credit":true,"min_correct_for_half":1}
 	//   fill:         {"accept":["12","十二"]}
 	//   judge(未来):  {"correct":true}
 	//   short_answer(未来): {"rubric":"...","keywords":[...]}
+	// 历史:曾经有 Answer(int)/AnswerText(string) 两列承载 choice/fill 判分,2026-07-27
+	// 清数据重部署时连同 DB 列一起删除——Scoring 列成为唯一判分元数据来源。
 	Scoring     string `gorm:"type:text"`
 	Explanation string `gorm:"type:text"`
 	// HasJump 标记该题是否对应一个明确的视频片段(anchor chunk)。agent 出题时
@@ -659,15 +658,14 @@ func (s *Subject) SetAIConfig(cfg AIConfig) {
 	s.AIConfigJSON = string(out)
 }
 
-// EffectiveWhisperHint: Course.AIConfig().WhisperHint 优先 → Subject.AIConfig().WhisperHint → deprecated AIHint 列。
+// EffectiveWhisperHint: Course.AIConfig().WhisperHint 优先 → Subject.AIConfig().WhisperHint。
+// 历史:曾有三层 fallback 到 deprecated AIHint 列,2026-07-27 清数据重部署时 AIHint 列
+// 一并删除,此方法不再有第三层兜底(新库所有 course 的 whisper_hint 都在 AIConfigJSON 里)。
 func (c Course) EffectiveWhisperHint(subject Subject) string {
 	if h := strings.TrimSpace(c.AIConfig().WhisperHint); h != "" {
 		return h
 	}
-	if h := strings.TrimSpace(subject.AIConfig().WhisperHint); h != "" {
-		return h
-	}
-	return c.AIHint // legacy
+	return strings.TrimSpace(subject.AIConfig().WhisperHint)
 }
 
 // EffectiveSummaryHint: Course > Subject > ""
@@ -678,15 +676,12 @@ func (c Course) EffectiveSummaryHint(subject Subject) string {
 	return strings.TrimSpace(subject.AIConfig().SummaryHint)
 }
 
-// EffectiveQuizHint: Course > Subject > deprecated AIHint
+// EffectiveQuizHint: Course > Subject(曾有三层 fallback 到 AIHint,已删)
 func (c Course) EffectiveQuizHint(subject Subject) string {
 	if h := strings.TrimSpace(c.AIConfig().QuizHint); h != "" {
 		return h
 	}
-	if h := strings.TrimSpace(subject.AIConfig().QuizHint); h != "" {
-		return h
-	}
-	return c.AIHint
+	return strings.TrimSpace(subject.AIConfig().QuizHint)
 }
 
 // EffectiveAdviceHint: Course > Subject > ""

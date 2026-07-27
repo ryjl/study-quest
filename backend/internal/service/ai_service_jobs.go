@@ -3,6 +3,8 @@ package service
 import (
 	"fmt"
 	"time"
+
+	"gorm.io/gorm"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 )
@@ -335,6 +337,43 @@ func (s *aiService) SkipPolish(jobID uint) error {
 		s.enqueueSegmentForPolish(*job.EpisodeID, *job.CourseID)
 	}
 	return nil
+}
+
+// AcknowledgeJob is the admin "dismiss this failure" action. Unlike SkipPolish
+// (which chains downstream), it ONLY flips status failed→skipped. The typical
+// case is an unrecoverable failure: episode has no subtitle, so summary/quiz
+// jobs hit "no subtitle for this episode" and fail forever. Retry is pointless
+// (the subtitle didn't appear), but leaving it failed buries real new failures
+// in noise. Acknowledge lets the admin say "I know, can't fix, stop showing".
+//
+// The job stays in history as 'skipped' with its original error preserved in
+// detail (so the admin can still see WHY it was dismissed). Re-running is a
+// fresh enqueue from the workbench — no un-acknowledge path needed.
+//
+// 实现注意:不能用 contentRepo.UpdateJobStatus —— 它对终态写入(done/failed/skipped)
+// 加了 status='processing' 守卫(防止 worker 的终态写入覆盖 admin 的 reset/reap)。
+// 但 acknowledge 是 admin 主动把 failed→skipped,不经过 processing,会被守卫挡成 0 行。
+// 这里直接用 db.Update 绕过守卫,语义明确(admin 操作,无并发 worker 写入冲突)。
+func (s *aiService) AcknowledgeJob(jobID uint) error {
+	job, err := s.contentRepo.GetJob(jobID)
+	if err != nil {
+		return err
+	}
+	if job == nil {
+		return repository.ErrJobNotFound
+	}
+	if job.Status != "failed" {
+		return repository.ErrJobNotFailed
+	}
+	// 保留原 error 文本作为 detail(skipped 状态下仍可查看"为什么被忽略"),
+	// 前缀标记 admin 主动确认过,区别于系统自动 skip。progress 清 NULL(同终态约定)。
+	err = s.db.Model(&model.AIJob{}).Where("id = ? AND status = ?", jobID, "failed").Updates(map[string]interface{}{
+		"status":      "skipped",
+		"error":       "admin acknowledged: " + job.Error,
+		"progress":    gorm.Expr("NULL"),
+		"completed_at": gorm.Expr("CURRENT_TIMESTAMP"),
+	}).Error
+	return err
 }
 
 // --- glossary candidate review (PR2.5) ---

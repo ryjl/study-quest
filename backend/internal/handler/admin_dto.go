@@ -30,11 +30,6 @@ type courseDTO struct {
 	TagIDs              []uint   `json:"tag_ids"`     // tag ids (for admin edit forms)
 	GradeDisplay        string   `json:"grade_display"`
 	AttachmentJSON      string   `json:"attachment_json"`
-	// AIHint is DEPRECATED. Replaced by AIConfigJSON (a single JSON blob holding
-	// whisper_hint + quiz_hint + future knobs). Still echoed so older admin SPAs
-	// can repopulate; the edit form reads whisper_hint / quiz_hint instead.
-	// See model.Course.AIHint / AIConfig.
-	AIHint              string   `json:"ai_hint"`
 	// WhisperHint is the admin-authored hint fed to the subtitle worker's
 	// Whisper initial_prompt (terminology / accent notes). Echoed so the edit
 	// form can repopulate. Sourced from Course.AIConfig().WhisperHint (the JSON
@@ -111,7 +106,6 @@ func (h *adminHandler) toCourseDTO(c model.Course) courseDTO {
 		TagIDs:               tagIDsOf(c.Tags),    // []uint tag ids
 		GradeDisplay:         c.GradeDisplay(),
 		AttachmentJSON:       c.AttachmentJSON,
-		AIHint:               c.AIHint,
 		WhisperHint:          aiCfg.WhisperHint,
 		SummaryHint:          aiCfg.SummaryHint,
 		QuizHint:             aiCfg.QuizHint,

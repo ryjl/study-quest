@@ -270,10 +270,25 @@ func (h *adminHandler) TestAIProvider(c *gin.Context) {
 // POST /admin/api/ai/providers/models  body: {base_url, api_key}
 func (h *adminHandler) ListAIProviderModels(c *gin.Context) {
 	var req struct {
-		BaseURL string `json:"base_url"`
-		APIKey  string `json:"api_key"`
+		BaseURL    string `json:"base_url"`
+		APIKey     string `json:"api_key"`
+		ProviderID uint   `json:"provider_id"`
 	}
-	if !bindJSON(c, &req) { return }
+	if !bindJSON(c, &req) {
+		return
+	}
+	// provider_id + 空 api_key:edit 模式复用已存 key(同 RealTestAIProvider 的逻辑)。
+	if req.APIKey == "" && req.ProviderID != 0 && h.aiProviderRepo != nil {
+		saved, err := h.aiProviderRepo.FindByID(req.ProviderID)
+		if err == nil && saved != nil {
+			if req.APIKey == "" {
+				req.APIKey = saved.APIKey
+			}
+			if req.BaseURL == "" {
+				req.BaseURL = saved.BaseURL
+			}
+		}
+	}
 	if req.BaseURL == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "base_url 为必填"})
 		return
@@ -350,15 +365,39 @@ var realTestAIProviderHeaders = []string{
 // 同时从响应头启发式推测中转站背后的真实模型后端,展示给 admin 看(比如 hi-code.cc 实
 // 际是 Gemini 后端,长输出不稳)。推测仅作参考,会一并回传原始响应头让 admin 自行判断。
 //
-// 不依赖已保存的 DB 行(照抄 ListAIProviderModels 模式):body 传 {base_url, api_key,
-// model_name} 即测,这样配新中转站选型时不用先保存。POST /admin/api/ai/providers/test-real
+// body 传 {base_url, api_key, model_name} 即测(配新中转站选型时不用先保存)。也支持
+// 传 provider_id:edit 模式下 api_key 留空(=不修改)时,后端用 DB 里已存的 key 发请求,
+// 这样已配好的 provider 测试不用反复重输 key。POST /admin/api/ai/providers/test-real
 func (h *adminHandler) RealTestAIProvider(c *gin.Context) {
 	var req struct {
-		BaseURL   string `json:"base_url"`
-		APIKey    string `json:"api_key"`
-		ModelName string `json:"model_name"`
+		BaseURL    string `json:"base_url"`
+		APIKey     string `json:"api_key"`
+		ModelName  string `json:"model_name"`
+		ProviderID uint   `json:"provider_id"`
 	}
-	if !bindJSON(c, &req) { return }
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	// provider_id + 空 api_key:edit 模式复用已存 key。后端不回显 key,前端 edit 表单
+	// 的 key 框永远空(空=不修改),实战测试需要真实 key 发请求,这里从 DB 补上。
+	// base_url/model_name 若 body 没传也一并从 DB 行补齐(edit 表单里这俩通常已回填,
+	// 但兜底:万一 admin 改了 URL 还没保存,用表单值优先)。
+	if req.APIKey == "" && req.ProviderID != 0 && h.aiProviderRepo != nil {
+		saved, err := h.aiProviderRepo.FindByID(req.ProviderID)
+		if err == nil && saved != nil {
+			if req.APIKey == "" {
+				req.APIKey = saved.APIKey
+			}
+			if req.BaseURL == "" {
+				req.BaseURL = saved.BaseURL
+			}
+			if req.ModelName == "" {
+				req.ModelName = saved.ModelName
+			}
+		}
+	}
+
 	if req.BaseURL == "" || req.ModelName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "base_url 和 model_name 为必填"})
 		return

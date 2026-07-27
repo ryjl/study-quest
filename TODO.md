@@ -215,13 +215,16 @@ agent 跑完一次性返回 → 改成 SSE 流式输出，改善等待体验。
 
 ## 已识别的技术债
 
-### AIHint 旧字段清理
+### ✓ AIHint 旧字段清理 —— 已完成（2026-07-27）
 
-`Course.AIHint` 在质量优化轮次收进单 JSON 列 `AIConfigJSON` 后已 deprecated，`EffectiveWhisperHint()` / `EffectiveQuizHint()` 方法从 JSON 解析、JSON 字段空时回退到老 `AIHint` 列。同理 `Question.Answer` / `Question.AnswerText` 被 `Scoring` 取代后也 deprecated。
+趁生产清数据重部署，连 DB 列一起删干净了。删除三个 deprecated 字段：
+- `Course.AIHint`（被 `AIConfigJSON` 取代）
+- `Question.Answer`（int,被 `Scoring.correct_index` 取代）
+- `Question.AnswerText`（string,被 `Scoring.accept` 取代）
 
-- **要做什么**：deprecated 一轮（确认所有线上课程都重新保存过、所有 question 都有 Scoring）后，删除 `Course.AIHint` 列 + `Question.Answer`/`Question.AnswerText` 列 + `Effective*` 回退逻辑（回退去掉后 `Effective*` 直接返回 `AIConfig()` 的字段即可）。
-- **阻塞项**：删列属于"升级困难"类（SQLite DROP COLUMN 有版本/约束限制），需要等下次数据清零或写显式迁移脚本。不能在 AutoMigrate 里直接删。
-- **触发条件**：admin 端观测无 course 还在用 AIHint（Effective* 回退路径连续一段时间无命中）。
+改动点：模型字段 + `Effective*` 回退逻辑（改成直接返回 AIConfig）+ grading.go/ai_service_quiz.go 的回退逻辑（改成直接读 Scoring，无 fallback）+ 出题双写（只写 Scoring）+ question_pool_repo 三条 SQL SELECT 去掉两列 + WrongBookRow 字段 + DTO（CourseDTO.AIHint / QuizDetailQuestion.Answer+AnswerText）+ 测试 seed（改用 Scoring）。前端 `AIUserView` 的正确答案高亮/参考答案改读 `scoring` JSON，`types.ts` 三个字段删除。
+
+**清数据重部署后新库没有这三列**（AutoMigrate 不 DROP，但新库从零建表），无需写 DROP 迁移。此后 AutoMigrate 永远不用删列，"升级困难"顾虑解除。
 
 ### AIConfig 扩展新配置项（JSON 化的收益兑现）
 

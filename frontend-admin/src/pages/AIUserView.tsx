@@ -7,6 +7,7 @@ import { fmtSec } from '../lib/format';
 import { pollWhileGenerating } from '../lib/query';
 import { Modal } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
+import { MiniMarkdown } from '../components/ai/MiniMarkdown';
 
 // AIUserView — the per-student observability page. Pick a user (from a
 // searchable dropdown of all users), see their generated quizzes, drill into
@@ -18,10 +19,13 @@ import { PageHeader } from '../components/PageHeader';
 // → next generation adapts. It complements the job-centric AIWorkflow page
 // (which shows generation jobs across all students).
 
-// embedded=true 时不渲染自己的 PageHeader —— 由父页面(AIConsole 的 users tab)提供
-// 统一的"AI 控制台"标题。见 AIWorkflow 的 embedded 注释,同模式。
-export function AIUserView({ embedded = false }: { embedded?: boolean } = {}) {
-  const [userId, setUserId] = useState<number | null>(null);
+// embedded=true 时不渲染自己的 PageHeader —— 由父页面(学生工作台)提供统一标题。
+// userId prop(可选):外部传入=学生工作台模式,学生已由路由固定,不渲染 user picker;
+// courseFilter(可选):传入时题库列表只显示该 course_id 的 quiz(学生工作台「题库与建议」
+// tab 的课程过滤器联动用)。不传=显示全部。
+export function AIUserView({ embedded = false, userId: lockedUserId, courseFilter }: { embedded?: boolean; userId?: number; courseFilter?: number } = {}) {
+  const isLocked = lockedUserId != null;
+  const [userId, setUserId] = useState<number | null>(lockedUserId ?? null);
   const [query, setQuery] = useState(''); // filters the user dropdown by nickname
   const [openQuizId, setOpenQuizId] = useState<number | null>(null);
 
@@ -37,7 +41,11 @@ export function AIUserView({ embedded = false }: { embedded?: boolean } = {}) {
     enabled: userId != null,
   });
 
-  const quizzes = quizzesQ.data ?? [];
+  const quizzes = useMemo(() => {
+    const all = quizzesQ.data ?? [];
+    // courseFilter:只显示该课程的 quiz(学生工作台课程过滤器联动)。
+    return courseFilter != null ? all.filter((q) => q.course_id === courseFilter) : all;
+  }, [quizzesQ.data, courseFilter]);
   const selectedUser = useMemo(() => users.find((u) => u.id === userId) ?? null, [users, userId]);
 
   return (
@@ -50,52 +58,49 @@ export function AIUserView({ embedded = false }: { embedded?: boolean } = {}) {
         />
       )}
 
-      {/* User picker — a searchable combobox over api.listUsers(). An <input>
-          filters by nickname; a native <datalist> offers matches. Picking one
-          sets the user id; a small "查看" button makes the selection explicit
-          (datalist selection also updates via onChange). */}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          className="input max-w-[260px]"
-          list="ai-user-options"
-          placeholder={usersQ.isLoading ? '加载用户…' : '搜索昵称选择用户'}
-          value={selectedUser ? `${selectedUser.nickname} (#${selectedUser.id})` : query}
-          onChange={(e) => {
-            const entered = e.target.value;
-            // 选中靠解析 value 尾部的 "(#id)" —— 而不是用 nickname 反查 find。
-            // 原因:nickname 可能重复(系统不强制唯一),用 find 会永远取第一个,且
-            // datalist 对相同 value 的 option 会去重,同名第二个根本显示不出来。
-            // 带上 (#id) 后,每个 option 的 value 唯一,重复昵称也能区分选中。
-            const idMatch = entered.match(/\(#(\d+)\)\s*$/);
-            if (idMatch) {
-              const id = Number(idMatch[1]);
-              if (users.some((u) => u.id === id)) {
-                setUserId(id);
-                setQuery('');
-                return;
+      {/* User picker — 工作台模式(isLocked)下学生已由路由固定,不渲染 picker。
+          独立模式下是 searchable combobox:nickname 可能重复,option value 带 (#id)。 */}
+      {!isLocked && (
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            className="input max-w-[260px]"
+            list="ai-user-options"
+            placeholder={usersQ.isLoading ? '加载用户…' : '搜索昵称选择用户'}
+            value={selectedUser ? `${selectedUser.nickname} (#${selectedUser.id})` : query}
+            onChange={(e) => {
+              const entered = e.target.value;
+              const idMatch = entered.match(/\(#(\d+)\)\s*$/);
+              if (idMatch) {
+                const id = Number(idMatch[1]);
+                if (users.some((u) => u.id === id)) {
+                  setUserId(id);
+                  setQuery('');
+                  return;
+                }
               }
-            }
-            // 未命中已知用户:当作过滤词,边打边缩窄下拉列表。
-            setUserId(null);
-            setQuery(entered);
-          }}
-        />
-        <datalist id="ai-user-options">
-          {users
-            .filter((u) => (query ? u.nickname.toLowerCase().includes(query.toLowerCase()) : true))
-            .map((u) => (
-              // value 带 (#id):让重复昵称的 option 各自唯一,否则 datalist 会合并。
-              <option key={u.id} value={`${u.nickname} (#${u.id})`}>
-                {u.role}
-              </option>
-            ))}
-        </datalist>
-      </div>
+              setUserId(null);
+              setQuery(entered);
+            }}
+          />
+          <datalist id="ai-user-options">
+            {users
+              .filter((u) => (query ? u.nickname.toLowerCase().includes(query.toLowerCase()) : true))
+              .map((u) => (
+                <option key={u.id} value={`${u.nickname} (#${u.id})`}>
+                  {u.role}
+                </option>
+              ))}
+          </datalist>
+        </div>
+      )}
 
       {/* 用户学习报告(Phase E)—— agent 驱动的跨课程画像,供 admin 查看。
           选中用户后显示:有报告则渲染文本;无报告显示"生成"按钮;生成中显示 spinner +
           轮询(类似 quiz 的 lazy 生成)。独立成组件,内部管理触发 + 轮询状态。 */}
-      {userId != null && <UserStudyReportSection userId={userId} />}
+      {/* 学习报告:独立模式下渲染(AIConsole users tab 时代遗留)。工作台模式(isLocked)
+          下不渲染——学生工作台「概览」tab 已有 UserStudyReportCard(且带删除按钮,能力更全),
+          避免同一报告在两个 tab 重复且能力不一致。 */}
+      {userId != null && !isLocked && <UserStudyReportSection userId={userId} />}
 
       {/* Quiz list */}
       <div className="space-y-3">
@@ -217,7 +222,7 @@ function UserStudyReportSection({ userId }: { userId: number }) {
       ) : data?.status === 'ready' && data.report ? (
         // ready:渲染报告文本。whitespace-pre-wrap 保留段落/换行,让报告的结构清晰。
         <div className="space-y-2">
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-txt">{data.report}</p>
+          <MiniMarkdown text={data.report} />
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
             {data.generated_at && <span>生成于 {new Date(data.generated_at).toLocaleString('zh-CN')}</span>}
             {data.model_used && <span>模型: {data.model_used}</span>}
@@ -253,7 +258,7 @@ function QuizDetailModal({ quizId, onClose }: { quizId: number | null; onClose: 
           {detail.quiz.agent_feedback && (
             <div className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3">
               <div className="mb-1 text-xs font-medium text-blue-600">Agent 对这个学生的评价与建议</div>
-              <p className="text-sm text-txt whitespace-pre-wrap">{detail.quiz.agent_feedback}</p>
+              <MiniMarkdown text={detail.quiz.agent_feedback} />
             </div>
           )}
 
@@ -310,9 +315,17 @@ function QuestionCard({ index, q, answers }: { index: number; q: AiQuizDetail['q
   } catch {
     /* keep empty */
   }
+  // 正确答案信息全在 Scoring JSON 里(2026-07-27 删 answer/answer_text 字段后)。
+  // choice/multi_choice:correct_index / correct_indices;fill:accept。
+  // 兜底:Scoring 缺失或解析失败时,choice 无高亮、fill 无参考答案。
+  let correctIndex: number | undefined;
   let acceptText: string[] = [];
   try {
-    if (q.answer_text) acceptText = JSON.parse(q.answer_text);
+    if (q.scoring) {
+      const s = JSON.parse(q.scoring);
+      if (typeof s.correct_index === 'number') correctIndex = s.correct_index;
+      if (Array.isArray(s.accept)) acceptText = s.accept;
+    }
   } catch {
     /* keep empty */
   }
@@ -327,8 +340,8 @@ function QuestionCard({ index, q, answers }: { index: number; q: AiQuizDetail['q
       {q.type !== 'fill' && (
         <ul className="mt-1 space-y-0.5 text-xs">
           {options.map((o, i) => (
-            <li key={i} className={`inline-flex items-center gap-1 ${i === q.answer ? 'text-emerald-600' : 'text-muted'}`}>
-              {String.fromCharCode(65 + i)}. {o} {i === q.answer && <Check size={12} />}
+            <li key={i} className={`inline-flex items-center gap-1 ${i === correctIndex ? 'text-emerald-600' : 'text-muted'}`}>
+              {String.fromCharCode(65 + i)}. {o} {i === correctIndex && <Check size={12} />}
             </li>
           ))}
         </ul>

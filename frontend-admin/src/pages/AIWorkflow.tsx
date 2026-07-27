@@ -39,10 +39,9 @@ function jobDuration(j: AiJob): string {
   return `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
 }
 
-// embedded=true 时不渲染自己的 PageHeader —— 由父页面(AIConsole 的 jobs tab)提供
-// 统一的"AI 控制台"标题。独立路由 /admin/ai-workflow 已重定向到 AIConsole,所以
-// 实际上 embedded 总是 true;但保留 embedded 默认值 false 是为了将来万一有别的嵌入
-// 场景或独立路由复活时不破坏 API。
+// embedded=true 时不渲染自己的 PageHeader —— 由父页面(任务队列页 /admin/ai/jobs)提供
+// 统一标题。实际上 embedded 总是 true(任务队列是它的唯一入口);但保留 embedded 默认值
+// false 是为了将来万一有别的嵌入场景或独立路由复活时不破坏 API。
 export function AIWorkflow({ embedded = false }: { embedded?: boolean } = {}) {
   const [filter, setFilter] = useState<AiJobStatus | 'all'>('all');
 

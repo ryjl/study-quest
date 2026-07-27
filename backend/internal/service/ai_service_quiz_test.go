@@ -68,9 +68,9 @@ func TestSubmitAllQuizAnswers_GradesPersistsLocks(t *testing.T) {
 	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(1), uint(10), uint(100)
 	quiz, questions := seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "right when idx matches", Options: `["a","b","c","d"]`, Answer: 1},
-		{Type: "choice", Stem: "wrong when idx differs", Options: `["a","b","c","d"]`, Answer: 2},
-		{Type: "fill", Stem: "skip me", AnswerText: `["42"]`},
+		{Type: "choice", Stem: "right when idx matches", Options: `["a","b","c","d"]`, Scoring: `{"correct_index":1}`},
+		{Type: "choice", Stem: "wrong when idx differs", Options: `["a","b","c","d"]`, Scoring: `{"correct_index":2}`},
+		{Type: "fill", Stem: "skip me", Scoring: `{"accept":["42"]}`},
 	})
 	rightQ := questions[0]
 	wrongQ := questions[1]
@@ -139,7 +139,7 @@ func TestGetQuizForClient_ReportsSubmitted(t *testing.T) {
 	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(2), uint(20), uint(200)
 	seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Answer: 0, HasJump: true},
+		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Scoring: `{"correct_index":0}`, HasJump: true},
 	})
 
 	view, err := svc.GetQuizForClient(userID, episodeID)
@@ -175,7 +175,7 @@ func TestSubmitAllQuizAnswers_ArchivesQuiz(t *testing.T) {
 	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(3), uint(30), uint(300)
 	seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Answer: 0},
+		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Scoring: `{"correct_index":0}`},
 	})
 
 	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, nil); err != nil {
@@ -212,7 +212,7 @@ func TestGetOrEnqueueQuiz_DoneAfterSubmit(t *testing.T) {
 	svc, repo, _ := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(4), uint(40), uint(400)
 	seedQuizWithQuestions(t, repo, userID, episodeID, courseID, []model.Question{
-		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Answer: 0},
+		{Type: "choice", Stem: "Q", Options: `["a","b"]`, Scoring: `{"correct_index":0}`},
 	})
 
 	if _, err := svc.SubmitAllQuizAnswers(userID, episodeID, nil); err != nil {

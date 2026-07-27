@@ -288,6 +288,37 @@ func (h *adminHandler) SkipPolishAIJob(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// AcknowledgeAIJob is the admin "dismiss this failure" action. A failed job
+// that can't be fixed (typical: episode has no subtitle → summary/quiz fail
+// forever) would otherwise pollute the failure list. Acknowledge flips it to
+// 'skipped' so it leaves the failed list but stays in history (with its error
+// preserved). Only valid on a FAILED job — other states return 409 so the UI
+// can hide the button.
+// POST /admin/api/ai/jobs/:id/acknowledge
+func (h *adminHandler) AcknowledgeAIJob(c *gin.Context) {
+	if h.aiService == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
+		return
+	}
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的 id"})
+		return
+	}
+	if err := h.aiService.AcknowledgeJob(id); err != nil {
+		switch err {
+		case repository.ErrJobNotFound:
+			c.JSON(http.StatusNotFound, gin.H{"error": "任务不存在"})
+		case repository.ErrJobNotFailed:
+			c.JSON(http.StatusConflict, gin.H{"error": "任务不是失败状态,无需确认"})
+		default:
+			respondError(c, err)
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // ---------------------------------------------------------------------------
 // Phase C — quiz observability (admin): per-user quizzes + detail + summaries
 // ---------------------------------------------------------------------------

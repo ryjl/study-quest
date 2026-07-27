@@ -70,12 +70,6 @@ type Course struct {
 	// JSON shape: {"whisper_hint":"...", "quiz_hint":"...", ...future fields}.
 	// Empty string = no AI config (the default for courses that never had one).
 	AIConfigJSON string `gorm:"column:ai_config_json;type:text"`
-	// AIHint is DEPRECATED. The single-field predecessor of AIConfigJSON. Kept
-	// only so the Effective* helpers can fall back to it for any pre-migration
-	// row (data was zeroed in round 4, so this is defense-in-depth). Do NOT write
-	// new code against AIHint — write AIConfigJSON via SetAIConfig instead.
-	// Removal is tracked in TODO.md.
-	AIHint string `gorm:"type:text"`
 	// AISummaryEnabled controls whether the AI agent generates summaries for
 	// this course's episodes. Off by default: AI is an opt-in add-on, not every
 	// course needs it. The agent only processes episodes belonging to a course

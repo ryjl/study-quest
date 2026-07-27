@@ -15,8 +15,6 @@ import {
   Users,
   Calendar,
   Bot,
-  BookX,
-  GraduationCap,
   Tags,
   Medal,
   Package,
@@ -27,6 +25,7 @@ import {
   ChevronRight,
   Loader2,
   ScrollText,
+  ListChecks,
 } from 'lucide-react';
 
 interface NavItem {
@@ -34,6 +33,11 @@ interface NavItem {
   label: string;
   icon: ReactNode;
   end?: boolean;
+  // 额外的 active 匹配前缀。默认 active 判断用 `to`(end 时精确匹配,否则 startsWith)。
+  // 当一个导航项对应"列表页 + 详情页"(如课程工作台 /admin/ai/courses 和详情
+  // /admin/ai/course/:id),详情页路径不是列表页的前缀,需要在这里显式补上,否则
+  // 进入详情页时侧栏该项不高亮。
+  matchAlso?: string[];
 }
 
 interface NavGroup {
@@ -69,14 +73,16 @@ const NAV_GROUPS: NavGroup[] = [
   {
     group: 'AI 运营',
     items: [
-      // 2026-07-19 集中化:原 AI Workflow + AI 用户视图 + CourseModal 里的 AI 配置 +
-      // Settings 里的 Provider 全部并入这个 AI 控制台。各功能用 ?tab= 切换。
-      { to: '/admin/ai-console', label: 'AI 控制台', icon: <Bot size={16} /> },
-      // 错题本观测(TODO.md P0):学生做错的题聚合,高频错题榜 + 科目弱点分布。
-      { to: '/admin/wrong-book', label: '错题本', icon: <BookX size={16} /> },
-      // 课程考试观测(TODO.md P0):阶段综合测评统计 + 题源质量对比。
-      { to: '/admin/exam', label: '课程考试', icon: <GraduationCap size={16} /> },
-      // 作业卷入口已并入 AI 控制台 RegenTab(v2):勾选课时 → 生成作业 → 行内查看/打印。
+      // 对象即导航:围绕「课程」「学生」两个核心对象组织 AI 事务,而不是按功能类型堆 tab。
+      // 旧 AI 控制台(/admin/ai-console,6 平铺 tab)被对象工作台取代——它的 tab 内部组件
+      // 被迁进工作台对应 tab,任务流不再跨 tab 断裂。
+      // Provider 已挪到「系统设置」(一次性配置归位)。
+      { to: '/admin/ai', label: 'AI 概览', icon: <LayoutGrid size={16} />, end: true },
+      // matchAlso:进入具体课程工作台 /admin/ai/course/:id(单数 course)时也要高亮,
+      // 因为详情页路径不是列表页 /admin/ai/courses(复数)的前缀。
+      { to: '/admin/ai/courses', label: '课程工作台', icon: <Bot size={16} />, matchAlso: ['/admin/ai/course/'] },
+      { to: '/admin/ai/students', label: '学生工作台', icon: <Users size={16} />, matchAlso: ['/admin/ai/student/'] },
+      { to: '/admin/ai/jobs', label: '任务队列', icon: <ListChecks size={16} /> },
     ],
   },
   {
@@ -147,9 +153,11 @@ export function Layout() {
           {NAV_GROUPS.map((g, gi) => {
             // Auto-expand on active: if any item matches the current path the
             // group is always shown, regardless of the user's toggle state.
-            const groupIsActive = g.items.some((it) =>
-              it.end ? location.pathname === it.to : location.pathname.startsWith(it.to),
-            );
+            const itemActive = (it: NavItem) => {
+              const direct = it.end ? location.pathname === it.to : location.pathname.startsWith(it.to);
+              return direct || (it.matchAlso?.some((p) => location.pathname.startsWith(p)) ?? false);
+            };
+            const groupIsActive = g.items.some(itemActive);
             const isCollapsed = !groupIsActive && collapsed.has(g.group);
             return (
               <div key={g.group}>
@@ -168,10 +176,10 @@ export function Layout() {
                         key={n.to}
                         to={n.to}
                         end={n.end}
-                        className={({ isActive }) =>
-                          // Active: muted bg + left accent bar (via border-l) +
-                          // primary-colored text. No gradient fill, no glow.
-                          isActive
+                        // active 判断用外层 itemActive(考虑 matchAlso),不用 NavLink 自带的
+                        // isActive(它只认 to+end,匹配不了 /admin/ai/course/:id 这种详情页)。
+                        className={() =>
+                          itemActive(n)
                             ? 'relative flex items-center gap-2.5 rounded-md bg-card-2 px-2.5 py-1.5 text-sm font-medium text-txt before:absolute before:left-0 before:top-1/2 before:h-4 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary'
                             : 'flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-muted transition-colors hover:bg-card-2 hover:text-txt'
                         }

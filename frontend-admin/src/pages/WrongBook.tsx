@@ -4,13 +4,16 @@ import { api } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { Section, StatCard, Spinner } from '../components/ui';
 
-// WrongBook.tsx — 错题本观测页 (TODO.md P0)。展示错题本全局统计 + 高频错题榜 +
-// 科目弱点分布。每个聚合服务端独立降级,单点失败该区为 0/空,不拖垮整页。
+// WrongBook.tsx — 错题本观测页。展示错题本全局统计 + 高频错题榜 + 科目弱点分布。
+// 每个聚合服务端独立降级,单点失败该区为 0/空,不拖垮整页。
 //
 // 数据源:GET /admin/api/wrong-book/stats。低频访问(观测页),不做轮询。
 // 视觉:复用 Dashboard 的 StatCard + Section + Tailwind CSS 横条(全仓约定,不引 recharts)。
+//
+// embedded=true 时跳过 PageHeader,由外层(AI 控制台观测组)提供标题——和
+// AIWorkflow/AIUserView 的 embedded 约定一致。
 
-export function WrongBook() {
+export function WrongBook({ embedded = false }: { embedded?: boolean }) {
   const statsQ = useQuery({
     queryKey: ['wrong-book-stats'],
     queryFn: api.wrongBookStats,
@@ -40,11 +43,13 @@ export function WrongBook() {
 
   return (
     <div>
-      <PageHeader
-        title="错题本"
-        description="学生做错的题自动归集;高频错题和科目弱点分布帮你发现题面问题或难点。"
-      />
-      <div className="mt-6 space-y-6">
+      {!embedded && (
+        <PageHeader
+          title="错题本"
+          description="学生做错的题自动归集;高频错题和科目弱点分布帮你发现题面问题或难点。"
+        />
+      )}
+      <div className={embedded ? 'space-y-6' : 'mt-6 space-y-6'}>
         {/* StatCard 顶栏 */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard label="错题总数" value={s.total} icon={<BookX size={16} />} color="#6366f1" />

@@ -7,6 +7,7 @@
 // wild; an unknown role falls back to the first entry (student) via roleMeta.
 
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../lib/api';
 import type { User } from '../../lib/types';
@@ -25,6 +26,7 @@ import {
   Trash2,
   Smartphone,
   Star,
+  Bot,
   Users as UsersIcon,
 } from 'lucide-react';
 
@@ -43,6 +45,7 @@ export function roleMeta(role: string) {
 }
 
 export function Users() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<User | null>(null);
@@ -75,9 +78,15 @@ export function Users() {
       <PageHeader
         title="用户与授权"
         actions={
-          <button className="btn-primary" onClick={() => setCreating(true)}>
-            <Plus size={14} /> 新增用户
-          </button>
+          <div className="flex gap-2">
+            {/* AI 工作台入口:用户与授权(CRUD/授权)和学生 AI 工作台(围绕学生的 AI 数据)职责分离。 */}
+            <button className="btn-secondary" onClick={() => navigate('/admin/ai/students')} title="进入学生 AI 工作台">
+              <Bot size={14} /> AI 工作台
+            </button>
+            <button className="btn-primary" onClick={() => setCreating(true)}>
+              <Plus size={14} /> 新增用户
+            </button>
+          </div>
         }
       />
 

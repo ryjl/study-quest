@@ -6,30 +6,17 @@ import { useToast } from '../lib/toast';
 import { useAiProviders, useInvalidateAiProviders } from '../lib/useAiProviders';
 import type { AiProvider, AiModelsResult, AiRealTestResult } from '../lib/types';
 
-// PURPOSE_OPTIONS is the fixed menu of purpose tags the admin can assign to a
-// chat provider (PR5). The values match what the backend resolver routes on —
-// see backend/internal/service/ai_service*.go ResolveChatByPurpose calls.
-// Label is the Chinese display; the tooltip hints which model strength suits it.
-const PURPOSE_OPTIONS: { value: string; label: string; hint: string }[] = [
-  { value: 'polish', label: '字幕润色', hint: '推荐便宜模型(调用频繁,中文常识即可)' },
-  { value: 'summary', label: '课时总结', hint: '中等强度(综合多段字幕)' },
-  { value: 'quiz', label: '出题', hint: '推荐强模型(题目质量直接影响学生)' },
-  { value: 'advice', label: '学习建议', hint: '中-强(agent 多步推理)' },
-  { value: 'course_summary', label: '课程总结', hint: '中-强(跨课时综合)' },
-  { value: 'user_report', label: '学习报告', hint: '中-强(跨课程分析)' },
-];
-
-// AiProvidersSection is the AI-provider management card on the Settings page.
+// AiProvidersSection — the single chat LLM config form.
 //
-// Round-3 redesign: the embedding model is bundled in the docker image and
-// auto-seeded on boot (ai.SeedLocalEmbedding), so it is NOT configurable here —
-// the admin only configures the single chat provider. There is exactly one chat
-// config (not a list), so this is a single fixed form:
-//   - no chat row yet → "初次配置" (creates one);
-//   - chat row exists → "编辑" (updates it).
-// No add/delete — chat is a singleton config. base_url + api_key are entered,
-// then "拉取可用模型" probes the relay's /v1/models so the operator picks the
-// model from a dropdown instead of typing a possibly-wrong id.
+// 项目当前是"单 LLM"架构:所有 AI 调用(润色/总结/出题/建议/报告/作业)走同一个
+// chat provider。后端 resolver 的 purpose 分派机制(opt-in,没配 tag 就兜底用唯一
+// chat provider)保留着留扩展余地,但前端不再暴露多 provider / 按 purpose 分工的 UI——
+// 那会误导用户以为能配多个 provider,实际上 UI 早就只支持单个。
+//
+// embedding 模型(onnx 本地 BGE)内置在镜像里、不存 DB、不可配,所以这里只管 chat。
+// 单例配置:没有 chat 行 → "初次配置"(创建);有 → "编辑"(更新)。没有增删多行。
+// base_url + api_key 填好后,"拉取可用模型"探测中转站 /v1/models,operator 从下拉选模型,
+// 而不是手敲一个可能写错的 id。
 export function AiProvidersSection() {
   const providersQ = useAiProviders();
   const invalidate = useInvalidateAiProviders();
@@ -51,10 +38,15 @@ export function AiProvidersSection() {
       <div className="mb-4">
         <h2 className="text-base font-bold text-txt">AI Provider 配置</h2>
         <p className="mt-0.5 text-xs text-muted">
-          配置聊天模型(OpenAI 兼容端点)。向量模型已内置,无需配置。
+          配置唯一的聊天 LLM(OpenAI 兼容端点)——所有 AI 任务(润色/总结/出题/建议/报告/作业)共用它。向量模型已内置,无需配置。
         </p>
       </div>
-      <ChatProviderForm provider={chatProvider} onSaved={invalidate} />
+      {/* key 钉在 provider.id 上:当外层 chatProvider 引用变化(保存后 invalidate
+          refetch、或从无到有创建出第一行),强制整个表单 unmount/remount,useState
+          重新用新的 provider.* 初始化。这是根治"切换/保存后 model_name 残留旧值"
+          stale state bug 的关键——否则 useState 的 initialValue 只在首次 mount 生效,
+          后续 provider prop 变化时 state 不会跟着重置。 */}
+      <ChatProviderForm key={chatProvider?.id ?? 'new'} provider={chatProvider} onSaved={invalidate} />
     </div>
   );
 }
@@ -70,10 +62,6 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
   const [apiKey, setApiKey] = useState('');
   const [modelName, setModelName] = useState(provider?.model_name ?? '');
   const [isEnabled, setIsEnabled] = useState(provider?.is_enabled ?? true);
-  // tags: purpose-routing (PR5). Empty = general-purpose (every task falls back
-  // to this provider). Check specific purposes to dedicate this provider to them.
-  // We store as a Set for easy toggle; serialize to [] on submit.
-  const [tags, setTags] = useState<Set<string>>(new Set(provider?.tags ?? []));
 
   // Model dropdown state: fetched from the relay's /v1/models after base_url +
   // api_key are entered. Empty = not yet fetched (the input falls back to a
@@ -82,15 +70,21 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
   const [modelsFetched, setModelsFetched] = useState(false);
 
   const fetchModelsMut = useMutation({
-    // The models probe hits the relay directly with the entered key (the saved
-    // key is never echoed back, so we can't reuse it here). In edit mode the
-    // operator must re-enter the key to pull models — acceptable since this is
-    // an occasional diagnostic action, not the save path.
-    mutationFn: () => api.fetchAiModels(baseUrl.trim(), apiKey.trim()),
+    // edit 模式 key 框空(=不修改)时,传 providerId 让后端用 DB 已存 key——不再要求
+    // admin 反复重输 key 才能拉模型列表。新建模式无 providerId,仍需手输 key。
+    mutationFn: () => api.fetchAiModels(baseUrl.trim(), apiKey.trim(), isEdit && !apiKey.trim() ? provider?.id : undefined),
     onSuccess: (d: AiModelsResult) => {
       if (d.ok && d.models) {
         setModels(d.models);
         setModelsFetched(true);
+        // 根治 stale model bug 的第二招:换中转站重新拉取后,旧 modelName 几乎一定
+        // 不在新列表里(否则就没必要换了)。受控 <select> 在 value 不匹配任何 option
+        // 时会静默显示空白,但 state 仍保留旧值——用户以为没选,保存却提交了过期 id,
+        // 配上新 base_url 就 404。这里主动清空,让用户从新列表里重新选;若旧值恰好
+        // 还在新列表里则保留(免得给用户增加无谓的重复操作)。
+        if (!d.models.includes(modelName)) {
+          setModelName('');
+        }
         toast.success(`拉取到 ${d.models.length} 个可用模型`);
       } else {
         setModels([]);
@@ -125,24 +119,17 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
       // no-op on update). Mirrors the admin-password "留空则不修改" convention.
       api_key: apiKey,
       model_name: modelName.trim(),
-      // Tags: empty array = general-purpose (the default). Backend stores [] as
-      // "" and treats "" as "matches no specific purpose, fallback for all".
-      tags: Array.from(tags),
+      // 单 LLM 架构:不暴露 purpose 分工,tags 永远发空数组(后端 resolver 兜底走这个
+      // provider)。tags 字段保留在类型里是为了后端兼容,这里只是 UI 不再让用户配。
+      tags: [],
       is_enabled: isEnabled,
     };
     saveMut.mutate(body);
   };
 
-  const toggleTag = (t: string) => {
-    setTags((prev) => {
-      const next = new Set(prev);
-      if (next.has(t)) next.delete(t);
-      else next.add(t);
-      return next;
-    });
-  };
-
-  const canFetchModels = baseUrl.trim() !== '' && apiKey.trim() !== '';
+  // edit 模式有 providerId 时,即使 key 框空(=不修改)也允许拉取——后端用 DB 已存 key。
+  // 新建模式必须手输 key(没有已存的可用)。
+  const canFetchModels = baseUrl.trim() !== '' && (apiKey.trim() !== '' || (isEdit && provider?.id != null));
   const canSubmit = name.trim() !== '' && baseUrl.trim() !== '' && modelName.trim() !== '' && (isEdit || apiKey.trim() !== '');
 
   return (
@@ -206,29 +193,6 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
         )}
       </div>
       <div>
-        <label className="mb-1 block text-xs text-muted">用途标签</label>
-        <p className="mb-1.5 text-[11px] text-muted">
-          留空 = 通用(所有任务都用它,默认);勾选则只服务勾选的任务。配多个 provider 时按任务分工(如润色用便宜模型、出题用强模型)。
-        </p>
-        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-          {PURPOSE_OPTIONS.map((p) => (
-            <label
-              key={p.value}
-              className="flex cursor-pointer items-center gap-1.5 rounded border border-border/60 px-2 py-1.5 text-xs hover:bg-card-2/50"
-              title={p.hint}
-            >
-              <input
-                type="checkbox"
-                checked={tags.has(p.value)}
-                onChange={() => toggleTag(p.value)}
-                className="h-3.5 w-3.5 accent-primary"
-              />
-              <span className="text-txt">{p.label}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-      <div>
         <label className="flex h-[38px] items-center gap-2 text-sm text-txt">
           <input type="checkbox" checked={isEnabled} onChange={(e) => setIsEnabled(e.target.checked)} className="h-4 w-4 accent-primary" />
           <span className="text-xs text-muted">启用此 Provider</span>
@@ -244,7 +208,7 @@ function ChatProviderForm({ provider, onSaved }: { provider: AiProvider | null; 
           测试 max_tokens=5 测不出长输出超时 502 这类故障)。独立面板放在表单底部,因为
           结果信息量大(后端模型推测、响应头、输出采样),需要展开空间。不依赖已保存的
           provider——填了 URL+Key+Model 即可测,这样配新中转站选型时不用先保存。 */}
-      <RealTestPanel baseUrl={baseUrl} apiKey={apiKey} modelName={modelName} />
+      <RealTestPanel baseUrl={baseUrl} apiKey={apiKey} modelName={modelName} providerId={isEdit ? provider?.id : undefined} />
     </div>
   );
 }
@@ -277,11 +241,12 @@ function ConnectionTestButton({ id }: { id: number }) {
 //
 // 用 apiKey 作为入参:edit 模式下表单的 apiKey 可能是空(留空=不修改),此时按钮禁用——
 // 和"拉取可用模型"按钮一致的策略,避免用空 key 发请求拿到误导性的 401。
-function RealTestPanel({ baseUrl, apiKey, modelName }: { baseUrl: string; apiKey: string; modelName: string }) {
+function RealTestPanel({ baseUrl, apiKey, modelName, providerId }: { baseUrl: string; apiKey: string; modelName: string; providerId?: number }) {
   const [result, setResult] = useState<AiRealTestResult | null>(null);
 
   const testMut = useMutation({
-    mutationFn: () => api.realTestAiProvider(baseUrl.trim(), apiKey.trim(), modelName.trim()),
+    // providerId 提供 + key 空时,后端用 DB 已存 key(edit 模式复用,不用反复重输 key)。
+    mutationFn: () => api.realTestAiProvider(baseUrl.trim(), apiKey.trim(), modelName.trim(), providerId),
     onSuccess: (d) => {
       setResult(d);
     },
@@ -291,7 +256,9 @@ function RealTestPanel({ baseUrl, apiKey, modelName }: { baseUrl: string; apiKey
     },
   });
 
-  const canTest = baseUrl.trim() !== '' && apiKey.trim() !== '' && modelName.trim() !== '';
+  // providerId 有值(edit 模式)时,即使 key 框空也允许测试——后端用 DB 已存 key。
+  // 无 providerId(新建/未保存)时,必须手输 key。
+  const canTest = baseUrl.trim() !== '' && modelName.trim() !== '' && (apiKey.trim() !== '' || providerId != null);
 
   return (
     <div className="mt-2 rounded-lg border border-border/60 bg-bg-secondary/40 p-3">

@@ -34,22 +34,22 @@ export const ai = {
   async testAiProvider(id: number): Promise<AiProviderTestResult> {
     return request(`/admin/api/ai/providers/${id}/test`, { method: 'POST' });
   },
-  // Fetch the available model ids from an OpenAI-compatible relay using the
-  // provided base_url + api_key (NOT a saved row). Lets the admin pick a model
-  // from a dropdown before saving. Returns {ok, models?, message?}.
-  async fetchAiModels(baseUrl: string, apiKey: string): Promise<AiModelsResult> {
+  // Fetch the available model ids from an OpenAI-compatible relay. apiKey 可选:
+  // 传 provider_id + 空 key 时后端用 DB 已存 key(edit 模式复用,不用反复重输 key)。
+  // Returns {ok, models?, message?}.
+  async fetchAiModels(baseUrl: string, apiKey: string, providerId?: number): Promise<AiModelsResult> {
     return request('/admin/api/ai/providers/models', {
       method: 'POST',
-      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, provider_id: providerId }),
     });
   },
   // 实战测试:发一个接近真实 quiz 生成规模的长输出请求(max_tokens=6000),验证中转站
   // 能否扛住真实业务负载。暴露连通性测试测不出的长输出超时 502 故障,并启发式推测中转站
-  // 后端模型。同样不依赖已保存的 DB 行(填表即测)。注意:耗时较长(实测 40-60s)。
-  async realTestAiProvider(baseUrl: string, apiKey: string, modelName: string): Promise<AiRealTestResult> {
+  // 后端模型。apiKey 可选:传 providerId + 空 key 时后端用 DB 已存 key。耗时较长(40-60s)。
+  async realTestAiProvider(baseUrl: string, apiKey: string, modelName: string, providerId?: number): Promise<AiRealTestResult> {
     return request('/admin/api/ai/providers/test-real', {
       method: 'POST',
-      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model_name: modelName }),
+      body: JSON.stringify({ base_url: baseUrl, api_key: apiKey, model_name: modelName, provider_id: providerId }),
     });
   },
 
@@ -87,6 +87,12 @@ export const ai = {
   // as a benign toast).
   async skipPolish(id: number): Promise<{ ok: boolean }> {
     return request(`/admin/api/ai/jobs/${id}/skip-polish`, { method: 'POST' });
+  },
+  // Acknowledge a failed job: flip failed→skipped WITHOUT re-running. For
+  // unrecoverable failures admin can't fix (typical: episode has no subtitle →
+  // summary/quiz fail). Throws 409 when the job isn't currently failed.
+  async acknowledgeAiJob(id: number): Promise<{ ok: boolean }> {
+    return request(`/admin/api/ai/jobs/${id}/acknowledge`, { method: 'POST' });
   },
   // --- PR2.5 glossary candidate review (术语候选审核) ---
   // The polish job mines term-correction rules; the admin reviews them here.

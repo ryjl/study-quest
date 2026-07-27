@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
 import { Plus, Lock, AlertTriangle, Tags } from 'lucide-react';
 import { api } from '../lib/api';
 import { useSubjects, useInvalidateSubjects } from '../lib/useSubjects';
@@ -9,6 +8,7 @@ import type { SubjectMeta } from '../lib/types';
 import { Modal, LoadingState, EmptyState, SubjectIcon } from '../components/ui';
 import { resolveSubjectIcon } from '../lib/subjectIcon';
 import { useToast } from '../lib/toast';
+import { AIHintFields, emptyAiHintValue, type AiHintFieldsValue } from './ai-console/AIHintFields';
 
 // Color swatch palette offered for new/custom subjects. The admin can also
 // paste any hex value in the dedicated field.
@@ -17,11 +17,10 @@ const COLOR_CHOICES = [
   '#06b6d4', '#ec4899', '#84cc16', '#eab308', '#64748b',
 ];
 
-// Reusable table + create/edit modal for subjects. Rendered standalone by the
-// legacy /admin/subjects route (kept for safety) and embedded in the
-// Classification page's "科目" tab. The page-level title/description is owned
-// by the host (Subjects page or Classification), so this component only
-// renders the "+ 新增科目" action (right-aligned above the table) and the modal.
+// Reusable table + create/edit modal for subjects. Embedded in the
+// Classification page's "科目" tab(没有独立 /admin/subjects 路由,只在此处渲染)。
+// The page-level title/description is owned by the host (Classification), so
+// this component only renders the "+ 新增科目" action and the modal.
 export function SubjectsTable() {
   const subjectsQ = useSubjects();
   const invalidate = useInvalidateSubjects();
@@ -136,7 +135,6 @@ export function SubjectsTable() {
 function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClose: () => void }) {
   const isEdit = !!subject;
   const toast = useToast();
-  const navigate = useNavigate();
   const invalidate = useInvalidateSubjects();
 
   const [key, setKey] = useState('');
@@ -152,8 +150,10 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
   // backend handler (subject_handler.go) already accepts category on PUT; the
   // form just wasn't sending it.
   const [category, setCategory] = useState<'academic' | 'entertainment'>('academic');
-  // 学科级 AI 提示(5 字段 hint)已迁移到「AI 控制台 → Prompt 配置」tab。
-  // 这里只保留学科基本信息(key/label/color/sort_order/category)。save 时 ai_config 原值回传。
+  // 学科级 AI 提示(5 字段 hint)。2026-07-26 从 AI 控制台 Prompt tab 挪回这里——
+  // 学科和它的 AI 默认本就该在一起编辑(之前跳出去配是集中化做一半的产物)。
+  // 学科是 AI 提示的"模板源",课程覆盖会回退到这里,所以放学科定义处最自然。
+  const [aiCfg, setAiCfg] = useState<AiHintFieldsValue>(emptyAiHintValue());
 
   useEffect(() => {
     if (subject) {
@@ -162,12 +162,22 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
       setColor(subject.color || COLOR_CHOICES[0]);
       setSortOrder(subject.sort_order ?? 0);
       setCategory(subject.category === 'entertainment' ? 'entertainment' : 'academic');
+      // 回填已存在的 ai_config(5 字段)。空字段兜底为空串,AIHintFields 容忍。
+      const c = subject.ai_config;
+      setAiCfg({
+        whisper_hint: c?.whisper_hint ?? '',
+        summary_hint: c?.summary_hint ?? '',
+        quiz_hint: c?.quiz_hint ?? '',
+        advice_hint: c?.advice_hint ?? '',
+        term_dict: c?.term_dict ?? '',
+      });
     } else {
       setKey('');
       setLabel('');
       setColor(COLOR_CHOICES[0]);
       setSortOrder(0);
       setCategory('academic');
+      setAiCfg(emptyAiHintValue());
     }
   }, [subject]);
 
@@ -179,9 +189,14 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
         color,
         sort_order: sortOrder,
         category,
-        // ai_config 原值回传 —— 本表单不再编辑 hint(已挪到 AI 控制台)。回传保证
-        // PUT 不把这 5 字段误清。新建学科时 subject 为 null,ai_config 为 undefined。
-        ai_config: subject?.ai_config,
+        // 本表单直接编辑 5 字段 hint,save 时发完整 ai_config。
+        ai_config: {
+          whisper_hint: aiCfg.whisper_hint.trim(),
+          summary_hint: aiCfg.summary_hint.trim(),
+          quiz_hint: aiCfg.quiz_hint.trim(),
+          advice_hint: aiCfg.advice_hint.trim(),
+          term_dict: aiCfg.term_dict.trim(),
+        },
       };
       if (!body.key) throw new Error('请填写科目 Key（小写英文）');
       if (!body.label) throw new Error('请填写科目名称');
@@ -305,32 +320,13 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
           />
         </div>
 
-        {/* 学科级 AI 提示已迁移到「AI 控制台 → Prompt 配置」tab。这里只留跳转入口,
-            让 admin 知道该去哪配;学科基本信息(key/label/color/sort_order)仍在这里编辑。 */}
-        <div className="flex items-center justify-between rounded-xl border border-border bg-card-2 p-3">
-          <div>
-            <div className="text-xs font-medium text-txt">学科默认 AI 提示</div>
-            <div className="mt-0.5 text-[11px] text-muted">5 字段 hint(Whisper/总结/出题/建议/术语字典),课程未覆盖时回退到这里。集中管理。</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => {
-              if (!isEdit || !subject) {
-                toast.info('请先创建学科,再配置 AI 提示');
-                return;
-              }
-              // 跳到 AI 控制台 Prompt 配置 tab,带 subject id 让目标页预选该学科。
-              // 用 navigate(SPA 内跳转,不刷页,保留 react-query 缓存)而不是
-              // window.location.assign(后者会全页重载,体验差且丢缓存)。
-              onClose();
-              const subjectParam = subject.id ? `&subject=${subject.id}` : '';
-              navigate(`/admin/ai-console?tab=prompt${subjectParam}`);
-            }}
-            className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
-            title="跳转到 AI 控制台 配置该学科的 AI 提示默认值"
-          >
-            配置 →
-          </button>
+        {/* 学科级 AI 提示(5 字段 hint)。学科是 AI 提示的"模板源"——课程未覆盖时
+            回退到这里,所以它就该在学科定义处编辑。复用 AIHintFields(和课程覆盖、
+            原 Prompt tab 同一套表单,标签/帮助文案一致)。学科本身就是模板源,所以
+            不显示"套用模板"按钮(那对学科是循环的)。 */}
+        <div>
+          <label className="mb-1 block text-xs text-muted">学科默认 AI 提示（课程未覆盖时回退到这里）</label>
+          <AIHintFields value={aiCfg} onChange={setAiCfg} />
         </div>
 
         <button type="submit" className="btn-primary w-full" disabled={saveMut.isPending}>

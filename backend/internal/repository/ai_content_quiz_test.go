@@ -23,7 +23,7 @@ func TestCreateQuiz_ArchivesOldQuiz(t *testing.T) {
 
 	// 1st generation: insert an active quiz with 1 question + 1 answer.
 	q1 := &model.Quiz{EpisodeID: episodeID, UserID: userID, CourseID: courseID, Difficulty: "adaptive"}
-	questions1 := []model.Question{{Type: "choice", Stem: "Q1", Options: "[\"a\",\"b\"]", Answer: 0}}
+	questions1 := []model.Question{{Type: "choice", Stem: "Q1", Options: "[\"a\",\"b\"]", Scoring: `{"correct_index":0}`}}
 	id1, err := repo.CreateQuiz(q1, questions1)
 	if err != nil {
 		t.Fatalf("CreateQuiz #1: %v", err)
@@ -37,7 +37,7 @@ func TestCreateQuiz_ArchivesOldQuiz(t *testing.T) {
 
 	// 2nd generation (regen): must archive q1 and create a new active quiz.
 	q2 := &model.Quiz{EpisodeID: episodeID, UserID: userID, CourseID: courseID, Difficulty: "adaptive"}
-	questions2 := []model.Question{{Type: "fill", Stem: "Q2", AnswerText: "[\"42\"]"}}
+	questions2 := []model.Question{{Type: "fill", Stem: "Q2", Scoring: `{"accept":["42"]}`}}
 	id2, err := repo.CreateQuiz(q2, questions2)
 	if err != nil {
 		t.Fatalf("CreateQuiz #2: %v", err)
@@ -110,7 +110,7 @@ func TestCreateQuiz_ActiveUniqueInvariant(t *testing.T) {
 	// Three generations in a row.
 	for i := 0; i < 3; i++ {
 		q := &model.Quiz{EpisodeID: episodeID, UserID: userID, CourseID: courseID, Difficulty: "adaptive"}
-		_, err := repo.CreateQuiz(q, []model.Question{{Type: "choice", Stem: "stem", Options: "[\"x\"]", Answer: 0}})
+		_, err := repo.CreateQuiz(q, []model.Question{{Type: "choice", Stem: "stem", Options: "[\"x\"]", Scoring: `{"correct_index":0}`}})
 		if err != nil {
 			t.Fatalf("CreateQuiz #%d: %v", i, err)
 		}
@@ -169,7 +169,7 @@ func TestGetQuiz_FiltersArchived(t *testing.T) {
 
 	// Create + immediately archive a quiz manually (simulate a history-only
 	// state, e.g. a failed regen left only an archived row).
-	_, err := repo.CreateQuiz(&model.Quiz{EpisodeID: episodeID, UserID: userID, CourseID: courseID}, []model.Question{{Type: "choice", Stem: "s", Options: "[\"a\"]", Answer: 0}})
+	_, err := repo.CreateQuiz(&model.Quiz{EpisodeID: episodeID, UserID: userID, CourseID: courseID}, []model.Question{{Type: "choice", Stem: "s", Options: "[\"a\"]", Scoring: `{"correct_index":0}`}})
 	if err != nil {
 		t.Fatalf("CreateQuiz: %v", err)
 	}

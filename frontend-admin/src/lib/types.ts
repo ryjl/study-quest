@@ -131,19 +131,6 @@ export interface Course {
   cover_url: string;
   cover_fallback_url?: string; // first-episode cover, shown only when cover_url is empty
   attachment_json: string;
-  /**
-   * DEPRECATED. Single-field predecessor of the split whisper_hint/quiz_hint
-   * (now stored together in one backend JSON column, AIConfigJSON). Kept for
-   * edit-form repopulation of legacy rows; new writes go to whisper_hint /
-   * quiz_hint. See backend model.Course.AIConfig.
-   *
-   * Read today only by PromptConfigTab.tsx (~L207) as a fallback when
-   * ai_config.whisper_hint is empty. Do not add new write sites; migrate the
-   * fallback reader and delete this field.
-   * @deprecated use {@link AiConfig.whisper_hint} / {@link AiConfig.quiz_hint} via {@link Course.ai_config} instead.
-   */
-  // DEPRECATED: legacy ai_hint — see JSDoc above.
-  ai_hint?: string;
   /** Admin-authored hint fed to the subtitle worker's Whisper initial_prompt
    * (terminology list, accent notes, ≤240 chars). Sourced from the backend's
    * AIConfigJSON blob. Empty when unset. */
@@ -775,28 +762,13 @@ export interface AiQuizQuestion {
   type: string; // "choice" | "multi_choice" | "fill"
   stem: string;
   options?: string; // JSON []string (choice / multi_choice)
-  /**
-   * DEPRECATED choice-type answer: 0-based index into `options`. Always 0 for
-   * multi_choice (read `correct_indices` instead). Read today only by
-   * AIUserView.tsx (~L313) for legacy single-choice rows; new quiz rows use
-   * `correct_indices` for multi-choice and the scoring metadata for other types.
-   * @deprecated read {@link AiQuizQuestion.correct_indices} / {@link AiQuizQuestion.scoring} instead.
-   */
-  // DEPRECATED: legacy `answer` field — see JSDoc above.
-  answer: number;
-  /**
-   * DEPRECATED fill-type answer: JSON []string of acceptable answers. Empty
-   * for multi_choice. Read today only by AIUserView.tsx (~L328-329) for legacy
-   * fill-in-the-blank rows; new quiz rows carry the answer inside `scoring`.
-   * @deprecated read {@link AiQuizQuestion.scoring} instead.
-   */
-  // DEPRECATED: legacy `answer_text` field — see JSDoc above.
-  answer_text?: string;
   /** multi_choice: 正确选项索引数组(choice/fill 不下发)。admin 核对多选题答案用。 */
   correct_indices?: number[];
   /** multi_choice: 是否允许部分对 scoring。 */
   partial_credit?: boolean;
-  /** 原始判分元数据 JSON(按 type 解析),供 admin 排查判分问题。 */
+  /** 原始判分元数据 JSON(按 type 解析),供 admin 排查判分问题。
+   * 2026-07-27 起是正确答案的唯一来源(choice→correct_index, fill→accept):
+   * 旧的 answer/answer_text 后端字段已删,前端不再下发。 */
   scoring?: string;
   explanation: string;
   chunk_start_time?: number | null; // joined from content_chunks, for video-jump

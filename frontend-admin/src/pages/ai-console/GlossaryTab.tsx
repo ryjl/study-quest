@@ -12,14 +12,15 @@ import type { Course, GlossaryCandidate } from '../../lib/types';
 // ones (which promotes them into the course's TermDict so future polish runs
 // apply them automatically) or rejects the bad ones.
 //
-// One tab per course (术语 are domain-specific). Top-level course picker, then
-// the candidate list grouped by status: pending first (the actionable ones),
-// then accepted/rejected collapsed for history.
-export function GlossaryTab() {
+// courseId prop(可选):外部传入=课程工作台模式,课程已由路由固定,不渲染选课程下拉、
+// 不允许切换;不传=独立模式(带选课程下拉,保留组件可独立复用的能力)。
+// 当前唯一调用方是课程工作台(传 prop),保留独立模式便于测试/复用。
+export function GlossaryTab({ courseId: lockedCourseId }: { courseId?: number } = {}) {
   const qc = useQueryClient();
   const toast = useToast();
   const coursesQ = useQuery({ queryKey: ['courses'], queryFn: api.listCourses });
-  const [courseId, setCourseId] = useState<number | null>(null);
+  const isLocked = lockedCourseId != null;
+  const [courseId, setCourseId] = useState<number | null>(lockedCourseId ?? null);
   const [statusFilter, setStatusFilter] = useState<'pending' | 'all'>('pending');
 
   const courses: Course[] = coursesQ.data ?? [];
@@ -99,23 +100,26 @@ export function GlossaryTab() {
 
   return (
     <div className="space-y-4">
-      {/* 顶部：课程选择 + 状态过滤 + 批量操作 */}
+      {/* 顶部：课程选择 + 状态过滤 + 批量操作。
+          工作台模式(isLocked)下课程已固定,隐藏选课程下拉,只留状态过滤 + 批量操作。 */}
       <div className="card flex flex-wrap items-end gap-3">
-        <div>
-          <label className="mb-1 block text-xs text-muted">课程</label>
-          <select
-            className="input"
-            value={effectiveCourseId ?? ''}
-            onChange={(e) => {
-              setCourseId(Number(e.target.value));
-              setSelected(new Set());
-            }}
-          >
-            {courses.map((c) => (
-              <option key={c.id} value={c.id}>{c.title}</option>
-            ))}
-          </select>
-        </div>
+        {!isLocked && (
+          <div>
+            <label className="mb-1 block text-xs text-muted">课程</label>
+            <select
+              className="input"
+              value={effectiveCourseId ?? ''}
+              onChange={(e) => {
+                setCourseId(Number(e.target.value));
+                setSelected(new Set());
+              }}
+            >
+              {courses.map((c) => (
+                <option key={c.id} value={c.id}>{c.title}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <label className="mb-1 block text-xs text-muted">状态</label>
           <select

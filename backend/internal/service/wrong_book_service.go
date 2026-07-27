@@ -348,11 +348,12 @@ func decodeOptions(raw string) []string {
 	return out
 }
 
-// deriveCorrectAnswer 从 WrongBookRow(带 Scoring/Answer/AnswerText)派生正确答案三件套,
+// deriveCorrectAnswer 从 WrongBookRow(带 Scoring)派生正确答案三件套,
 // 复用 redo 交卷的判分 helper(choiceAnswerIndex / fillAcceptable / ParseScoring)。
 // 这三个 helper 吃 model.Question,这里用 row 字段拼一个最小 Question 喂进去。
+// Scoring 是唯一判分元数据来源(2026-07-27 删 Answer/AnswerText 列后,不再需要那俩字段)。
 func deriveCorrectAnswer(r repository.WrongBookRow) (*int, string, []int) {
-	q := model.Question{Type: r.Type, Scoring: r.Scoring, Answer: r.Answer, AnswerText: r.AnswerText}
+	q := model.Question{Type: r.Type, Scoring: r.Scoring}
 	switch r.Type {
 	case agent.QuestionFill:
 		return nil, joinAcceptable(fillAcceptable(q)), nil

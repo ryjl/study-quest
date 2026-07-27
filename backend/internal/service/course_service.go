@@ -121,10 +121,8 @@ func (s *courseService) UpdateCourse(id uint, title string, grades []model.Grade
 	c.AttachmentJSON = attachmentJSON
 	// AI 配置走单一 JSON 列(AIConfigJSON)。service 层把 admin 表单的 5 个
 	// textarea 组装成 AIConfig 再序列化。加新配置项时只需扩 AIConfig struct +
-	// 表单,不用改 DB schema。老 AIHint 列清空,让 Effective* 不再回退到旧
-	// blob(避免陈旧提示残留)。
+	// 表单,不用改 DB schema。
 	c.SetAIConfig(aiConfig)
-	c.AIHint = ""
 	// AI 开关同样透传:之前这两行漏掉,导致 admin 即便勾选了也会被丢弃。
 	c.AISummaryEnabled = aiSummaryEnabled
 	c.AIQuizEnabled = aiQuizEnabled

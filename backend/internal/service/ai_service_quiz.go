@@ -169,9 +169,8 @@ type QuizDetailQuestion struct {
 	Type       string `json:"type"`
 	ChunkID    uint   `json:"chunk_id"`
 	Stem       string `json:"stem"`
-	Options    string `json:"options"`     // JSON []string (choice/multi_choice)
-	Answer     int    `json:"answer"`      // DEPRECATED choice: 0-based index (multi_choice 恒 0,看 correct_indices)
-	AnswerText string `json:"answer_text"` // DEPRECATED fill: JSON []string (multi_choice 空,看 scoring)
+	Options    string `json:"options"` // JSON []string (choice/multi_choice)
+	// 正确答案信息全在 Scoring 里(2026-07-27 删 Answer/AnswerText 后)。
 	// CorrectIndices 多选题的正确选项索引数组(choice/fill 为 nil)。admin 核对多选题答案用。
 	CorrectIndices []int `json:"correct_indices,omitempty"` // multi_choice: 正确索引
 	PartialCredit  bool  `json:"partial_credit,omitempty"`  // multi_choice: 是否允许部分对
@@ -493,12 +492,9 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 		case agent.QuestionChoice:
 			opts, _ := json.Marshal(d.Options)
 			q.Options = string(opts)
-			q.Answer = d.Answer
 			scoring, _ := json.Marshal(map[string]any{"correct_index": d.Answer})
 			q.Scoring = string(scoring)
 		default: // fill
-			at, _ := json.Marshal(d.AnswerText)
-			q.AnswerText = string(at)
 			scoring, _ := json.Marshal(map[string]any{"accept": d.AnswerText})
 			q.Scoring = string(scoring)
 		}
@@ -1084,24 +1080,23 @@ func buildAnswerResult(q model.Question, v agent.Verdict, chunkStart *int) Answe
 	return res
 }
 
-// fillAcceptable resolves the fill acceptable answers (Scoring.accept first,
-// then legacy AnswerText JSON).
+// fillAcceptable resolves the fill acceptable answers from Scoring.accept.
+// No fallback — Scoring is the single source since AnswerText column was
+// removed (2026-07-27).
 func fillAcceptable(q model.Question) []string {
 	if s := agent.ParseScoring(q); s != nil && len(s.FillAccept) > 0 {
 		return s.FillAccept
 	}
-	var accept []string
-	_ = json.Unmarshal([]byte(q.AnswerText), &accept)
-	return accept
+	return nil
 }
 
-// choiceAnswerIndex resolves the choice correct index (Scoring.correct_index
-// first, then legacy Answer column).
+// choiceAnswerIndex resolves the choice correct index from Scoring.correct_index.
+// No fallback — Scoring is the single source since Answer column was removed.
 func choiceAnswerIndex(q model.Question) int {
 	if s := agent.ParseScoring(q); s != nil && s.ChoiceIndex != nil {
 		return *s.ChoiceIndex
 	}
-	return q.Answer
+	return 0
 }
 
 // ErrQuizAlreadySubmitted 在对已交卷的 quiz 再次调用 SubmitAllQuizAnswers 时返回。
@@ -1264,8 +1259,6 @@ func (s *aiService) GetQuizDetail(quizID uint) (*QuizDetail, error) {
 			ChunkID:        q.ChunkID,
 			Stem:           q.Stem,
 			Options:        q.Options,
-			Answer:         q.Answer,
-			AnswerText:     q.AnswerText,
 			Scoring:        q.Scoring,
 			Explanation:    q.Explanation,
 			ChunkStartTime: startByChunk[q.ChunkID],

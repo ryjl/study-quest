@@ -32,18 +32,20 @@ func GradeChoice(q model.Question, userIndex int) bool {
 }
 
 // choiceCorrectIndex resolves the correct option index for a single-choice
-// question: prefer Scoring.correct_index, fall back to the deprecated Answer
-// column. Used by GradeChoice and GradeAnswerV.
+// question from Scoring.correct_index. No fallback — Scoring is the single
+// source of truth since the deprecated Answer column was removed (2026-07-27).
+// Returns 0 (first option) when Scoring is missing; callers treat a missing
+// correct index as "ungradable" at higher layers (defensive).
 func choiceCorrectIndex(q model.Question) int {
 	if s := ParseScoring(q); s != nil && s.ChoiceIndex != nil {
 		return *s.ChoiceIndex
 	}
-	return q.Answer
+	return 0
 }
 
 // GradeFill returns whether the user's free-text answer matches one of the
 // question's acceptable answers, after normalization. The acceptable answers
-// are stored on q.AnswerText as a JSON []string (multiple equivalent forms, e.g.
+// come from Scoring.accept (a JSON []string of equivalent forms, e.g.
 // ["12","十二"]). An empty user answer is always wrong.
 //
 // Normalization (ai.NormalizeText) lowercases, folds full-width → half-width,
@@ -69,17 +71,14 @@ func GradeFill(q model.Question, userText string) bool {
 	return false
 }
 
-// fillAcceptableAnswers resolves the acceptable fill answers from Scoring.accept
-// first, falling back to the deprecated AnswerText JSON.
+// fillAcceptableAnswers resolves the acceptable fill answers from Scoring.accept.
+// No fallback — Scoring is the single source of truth since the deprecated
+// AnswerText column was removed (2026-07-27).
 func fillAcceptableAnswers(q model.Question) []string {
 	if s := ParseScoring(q); s != nil && len(s.FillAccept) > 0 {
 		return s.FillAccept
 	}
-	accept, err := parseAcceptableAnswers(q.AnswerText)
-	if err != nil {
-		return nil
-	}
-	return accept
+	return nil
 }
 
 // GradeAnswer dispatches on question type. answerIndex is used for choice,
@@ -251,17 +250,4 @@ func ParseScoring(q model.Question) *ParsedScoring {
 		return nil
 	}
 	return &s
-}
-
-// parseAcceptableAnswers decodes the JSON []string on Question.AnswerText. Empty
-// input → empty slice (no acceptable answers, treated as ungradeable → wrong).
-func parseAcceptableAnswers(answerTextJSON string) ([]string, error) {
-	if answerTextJSON == "" {
-		return nil, nil
-	}
-	var accept []string
-	if err := json.Unmarshal([]byte(answerTextJSON), &accept); err != nil {
-		return nil, err
-	}
-	return accept, nil
 }
