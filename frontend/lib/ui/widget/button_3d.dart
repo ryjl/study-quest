@@ -1,6 +1,18 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../theme.dart';
+
+/// Whether [key] is a TV activation key (remote OK / Enter / gamepad A).
+///
+/// Centralized here so [Button3D] and other focusables share one source of
+/// truth instead of each re-listing the same `LogicalKeyboardKey` checks.
+/// Written as a function (not a `const Set`) because `LogicalKeyboardKey`
+/// overrides `==`/`hashCode` and thus can't live in a `const` set.
+bool isActivationKey(LogicalKeyboardKey key) =>
+    key == LogicalKeyboardKey.enter ||
+    key == LogicalKeyboardKey.select ||
+    key == LogicalKeyboardKey.gameButtonSelect;
 
 class Button3D extends StatefulWidget {
   final VoidCallback? onPressed;
@@ -81,10 +93,19 @@ class _Button3DState extends State<Button3D> {
     final double offsetTop = _isPressed ? 4.0 : 0.0;
     final double shadowHeight = _isPressed ? 0.0 : 4.0;
 
-    return FocusableActionDetector(
+    return Focus(
       autofocus: widget.autoFocus,
       onFocusChange: (value) => setState(() => _isFocused = value),
-      onShowFocusHighlight: (value) => setState(() => _isFocused = value),
+      onKeyEvent: (node, event) {
+        // TV 激活:遥控器 OK / 回车 / gamepad A 触发 onPressed。原来只有
+        // FocusableActionDetector(只高亮),D-pad 下 Enter 不触发,导致
+        // PIN 键盘、设置保存/清理等全 app 的 Button3D 在 TV 上是死的。
+        if (event is KeyDownEvent && isActivationKey(event.logicalKey)) {
+          widget.onPressed?.call();
+          return KeyEventResult.handled;
+        }
+        return KeyEventResult.ignored;
+      },
       child: GestureDetector(
         onTapDown: (_) {
           if (widget.onPressed != null) {

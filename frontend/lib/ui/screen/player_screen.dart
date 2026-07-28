@@ -13,15 +13,14 @@ import '../../service/api_service.dart';
 import '../../service/track_selection_controller.dart';
 import '../../service/ui_prefs.dart';
 import '../../service/tv_mode.dart';
-import '../ai/ai_availability.dart';
 import 'ai_study_screen.dart';
 import '../../theme.dart';
 import '../widget/button_3d.dart';
 import '../widget/buffered_seek_bar.dart';
 import '../widget/focus_button.dart';
 import '../widget/helper_panel.dart';
-import '../widget/inline_chip_menu.dart';
 import '../widget/pdf_viewer_dialog.dart';
+import '../widget/player_menu.dart';
 
 /// Immersive video playback screen.
 ///
@@ -38,6 +37,13 @@ import '../widget/pdf_viewer_dialog.dart';
 ///   4. Reports progress every 5s (anti-cheat). Quiz is entered manually via
 ///      the AI icon / helper panel / course detail button, not by playback
 ///      progress.
+///
+/// **焦点系统**:声明式,完全依赖 Flutter framework。方向键 ◄▲▼► 由
+/// MaterialApp 顶层默认 Shortcuts 绑定到 [DirectionalFocusIntent] →
+/// [FocusNode.focusInDirection] → framework 的 2D 几何算法自动找空间最近的
+/// 可聚焦节点。本屏只在三处做最小拦截(详见 [_onWakeControls] / seek bar
+/// 的 onKeyEvent / [dpadEscapeFocusNode] 用于 TextField)。菜单用标准
+/// [MenuAnchor] + [RadioMenuButton],焦点隔离 + 几何导航由 framework 保证。
 class PlayerScreen extends StatefulWidget {
   final int activeUserId;
   final Episode episode;
@@ -106,11 +112,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Timer? _hideTimer;
 
   // Fullscreen + extra controls state
-  bool _isFullscreen = false;
-  bool _controlsLocked = false;
+  // (注:_isFullscreen 现在是 helper panel 显隐的唯一事实源,定义在下面带完整
+  // 注释,这里不再重复声明。)
   double _rate = 1.0;
   double _volumeBeforeMute = 50.0;
-  String _activeMenu = '';
   // native(libmpv 内置)字幕轨 id 集合。用 Set 去重 —— 修复字幕按钮重复 bug(需求 #4):
   // 之前用 List,tracks 事件多次触发时会重复 add 同一个 id,导致字幕菜单里出现多个
   // 同名「中文」按钮,点一个又触发新事件再 add,越点越多。
@@ -124,8 +129,28 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Duration _dragPosition = Duration.zero;
 
   // Helper panel layout state
-  bool _helperPanelInitialized = false;
-  bool _showHelperPanel = false;
+  //
+  // 统一模型:helper panel 的显隐只由 _isFullscreen 决定(单一事实源)。
+  //   _isFullscreen = false(默认) → 显示右侧 helper panel
+  //   _isFullscreen = true        → 全屏沉浸,无 panel
+  // 控制行的全屏按钮是唯一开关。砍掉了:右侧 chevron 开关、panel 右上角关闭
+  // 按钮、初始化时"TV/宽屏自动展开"的特殊逻辑 —— 三端行为统一,减少心智负担。
+  // (历史:曾有 _showHelperPanel + _isFullscreen 两个布尔互相反向,代码里到处
+  //  `if (!_isFullscreen && _showHelperPanel)` 双重判断,冗余且易错。)
+  bool _isFullscreen = false;
+
+  // 焦点系统的命名 FocusNode,用于 TV 下显式 ▲▼ 跳转(参考 YouTube/爱奇艺 TV)。
+  // 不再用旧的分发表 + 几何算法(几何算法在 video+panel 同 scope 时会把 panel
+  // 的 FocusButton 当候选,跳错)。改成显式:
+  //   seek bar ▲ → 顶栏返回按钮,▼ → 控制行播放按钮
+  //   ◄→ 在控制行/顶栏按钮间走几何算法(同区,候选明确)
+  //   ► 到控制行右边界 → 顶层 FocusScope(parentScope)跨进 helper panel
+  late final FocusNode _seekBarFocus = FocusNode(debugLabel: 'seekBar');
+  late final FocusNode _backFocus = FocusNode(debugLabel: 'back');
+  late final FocusNode _playPauseFocus = FocusNode(debugLabel: 'playPause');
+  // seek bar 聚焦态:聚焦时 thumb 变大 + track/文字高亮,TV 用户能看出焦点在哪。
+  // FocusButton 自带发光环,seek bar 是裸 Focus+Slider,得手动 listen focus 改样式。
+  bool _seekBarFocused = false;
 
   // Gestures Overlay indicators
   bool _showVolumeIndicator = false;
@@ -193,6 +218,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _progressTimer?.cancel();
     _hideTimer?.cancel();
     _player.dispose();
+    _seekBarFocus.dispose();
+    _backFocus.dispose();
+    _playPauseFocus.dispose();
     // Restore all orientations so the rest of the app can rotate freely.
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -419,12 +447,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // ---------------------------------------------------------------------------
 
   void _scheduleAutoHide() {
+    // TV 模式下不 auto-hide:控件(seek bar + 控制行)是 TV 用户的操作主体,
+    // auto-hide 会卸载控件子树 → seek bar 的 _seekBarFocus 从焦点树移除 → 视频
+    // 区零焦点落点 → 焦点丢失。PAD/手机保留 auto-hide(触屏无操作 4 秒隐藏的
+    // 传统交互)。
+    if (TvMode.instance.isActive) {
+      _hideTimer?.cancel();
+      return;
+    }
     _hideTimer?.cancel();
     _hideTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && _player.state.playing) {
         setState(() {
           _controlsVisible = false;
-          _activeMenu = '';
         });
       }
     });
@@ -436,7 +471,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   // ---------------------------------------------------------------------------
-  // Volume / speed / fullscreen / lock
+  // Volume / speed / fullscreen
   // ---------------------------------------------------------------------------
 
   void _setVolume(double v) {
@@ -455,15 +490,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _toggleFullscreen() {
     setState(() => _isFullscreen = !_isFullscreen);
     _scheduleAutoHide();
-  }
-
-  void _toggleLock() {
-    setState(() {
-      _controlsLocked = !_controlsLocked;
-      if (_controlsLocked) {
-        _controlsVisible = false;
-      }
-    });
   }
 
   // ---------------------------------------------------------------------------
@@ -495,6 +521,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Build
   // ---------------------------------------------------------------------------
 
+  // 一次性闸门:TV 模式下默认焦点落 seek bar 的初始化只跑一次。
+  // 替代了原来的 _helperPanelInitialized(它管的事已经下放到 _isFullscreen 字段初值)。
+  bool _focusInitialized = false;
+
   @override
   Widget build(BuildContext context) {
     if (!_engineReady && _errorMessage.isEmpty) {
@@ -504,112 +534,151 @@ class _PlayerScreenState extends State<PlayerScreen> {
       return _buildErrorScreen();
     }
 
-    if (!_helperPanelInitialized) {
-      // TV 模式下强制展开 helper panel(需求 #9)—— TV 屏幕大、交互靠 D-pad,
-      // 隐藏式 chevron 入口反而难发现,直接常驻右侧随堂助手更顺手。
-      _showHelperPanel =
-          TvMode.instance.isActive || MediaQuery.of(context).size.width >= 900;
-      _isFullscreen = !_showHelperPanel;
-      _helperPanelInitialized = true;
+    // TV 模式下首次进入:焦点落 seek bar —— 最常用的 ◄► seek 直接可用,而不是
+    // 靠 autofocus 飘到不确定的子节点。postFrame 等控件行渲染完再 requestFocus。
+    if (!_focusInitialized) {
+      _focusInitialized = true;
+      if (TvMode.instance.isActive) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _seekBarFocus.requestFocus();
+        });
+      }
     }
 
     return Scaffold(
       backgroundColor: Colors.black,
       body: Shortcuts(
-        shortcuts: {
-          LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
-          LogicalKeySet(LogicalKeyboardKey.enter): const ActivateIntent(),
-          LogicalKeySet(LogicalKeyboardKey.space): const ActivateIntent(),
-          LogicalKeySet(LogicalKeyboardKey.mediaPlay): const ActivateIntent(),
-          LogicalKeySet(LogicalKeyboardKey.mediaPause): const ActivateIntent(),
+        shortcuts: const {
+          // 激活键 → 播放/暂停。不绑方向键!方向键留给 MaterialApp 顶层默认
+          // 绑定的 DirectionalFocusIntent → focusInDirection 2D 几何算法,
+          // 在所有可聚焦节点间按空间最近原则跳转。我若在这里绑方向键,会覆盖
+          // framework 默认行为,破坏几何导航。
+          SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.mediaPlay): ActivateIntent(),
+          SingleActivator(LogicalKeyboardKey.mediaPause): ActivateIntent(),
+          // 退出键 → 分层 Dismiss(收菜单 → 收控件 → 退出页面)。
+          // browserBack/goBack 补在这里:MenuAnchor 源码(menu_anchor.dart:71-79)
+          // 只绑了 escape,某些 Android TV 遥控器的"返回"键发 goBack 而非 escape,
+          // 显式补 DismissIntent 避免菜单内按返回键外泄到播放器根层。
+          SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+          SingleActivator(LogicalKeyboardKey.browserBack): DismissIntent(),
+          SingleActivator(LogicalKeyboardKey.goBack): DismissIntent(),
         },
-        child: Focus(
-          autofocus: true,
-          onKeyEvent: _onRemoteKey,
-          child: Stack(
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: Actions(
+          actions: {
+            ActivateIntent: CallbackAction<ActivateIntent>(
+              onInvoke: (_) => _togglePlayPause(),
+            ),
+            DismissIntent: CallbackAction<DismissIntent>(
+              onInvoke: (_) => _handleDismiss(),
+            ),
+          },
+          child: Focus(
+            // autofocus 让这个 Focus 节点接管键入口,_onWakeControls 才能在
+            // 控件隐藏态(子树已卸载,seek bar 的 onKeyEvent 收不到键)唤出控件。
+            autofocus: true,
+            onKeyEvent: _onWakeControls,
+            child: FocusTraversalGroup(
+              child: Stack(
                 children: [
-                  Expanded(
-                    child: _buildVideoArea(),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(
+                        child: _buildVideoArea(),
+                      ),
+                      // panel 显隐只由 _isFullscreen 决定(单一事实源)。
+                      // 宽度按屏幕宽自适应:宽屏 360,窄屏(手机横屏)300。
+                      //
+                      // **TV 端 panel 只读**:用 ExcludeFocus 把 panel 从焦点树
+                      // 移除,D-pad 焦点进不去也出不来,避免"进了 panel 回不来"的
+                      // 死锁。TV 用户需要 AI 学习/附件时,在 PAD/手机端操作(panel
+                      // 在非 TV 下正常可聚焦)。panel 内部仍用 FocusScope(供非 TV
+                      // 用),ExcludeFocus 在 TV 下覆盖该 scope。
+                      if (!_isFullscreen)
+                        SizedBox(
+                          width: MediaQuery.of(context).size.width >= 900 ? 360 : 300,
+                          child: ExcludeFocus(
+                            excluding: TvMode.instance.isActive,
+                            child: _buildHelperPanel(),
+                          ),
+                        ),
+                    ],
                   ),
-                  if (!_isFullscreen && _showHelperPanel)
-                    SizedBox(
-                      width: MediaQuery.of(context).size.width >= 900 ? 360 : 300,
-                      child: _buildHelperPanel(),
-                    ),
+
+                  // Buffering spinner centered over the video. We listen to the
+                  // buffering stream (not state) so the overlay rebuilds promptly,
+                  // and we only show it while actually playing — a paused player
+                  // reports buffering too, which would leave a stale spinner after
+                  // a seek that lands in a buffered region.
+                  StreamBuilder<bool>(
+                    stream: _player.stream.buffering,
+                    initialData: _player.state.buffering,
+                    builder: (context, snap) {
+                      final buffering = snap.data ?? false;
+                      if (!buffering || !_player.state.playing) {
+                        return const SizedBox.shrink();
+                      }
+                      return const Center(
+                        child: CircularProgressIndicator(color: Colors.white70),
+                      );
+                    },
+                  ),
                 ],
               ),
-
-              // Buffering spinner centered over the video. We listen to the
-              // buffering stream (not state) so the overlay rebuilds promptly,
-              // and we only show it while actually playing — a paused player
-              // reports buffering too, which would leave a stale spinner after
-              // a seek that lands in a buffered region.
-              StreamBuilder<bool>(
-                stream: _player.stream.buffering,
-                initialData: _player.state.buffering,
-                builder: (context, snap) {
-                  final buffering = snap.data ?? false;
-                  if (!buffering || !_player.state.playing) {
-                    return const SizedBox.shrink();
-                  }
-                  return const Center(
-                    child: CircularProgressIndicator(color: Colors.white70),
-                  );
-                },
-                ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  /// D-pad / keyboard handler. media_kit's own keyboard handling is disabled
-  /// because we wrap with our own Focus; here we own play/pause + seek.
-  KeyEventResult _onRemoteKey(FocusNode node, KeyEvent event) {
+  /// 控件隐藏态的"唤出兜底"。取代旧的 _onRemoteKey(那个拦截全部方向键并转成
+  /// 线性 nextFocus,破坏了 framework 的 2D 几何导航)。
+  ///
+  /// 这里只在 **TV + 控件隐藏** 这一种情况下拦键:任意方向键/激活键唤出控件 +
+  /// 吞键(避免唤出那次按键同时触发 seek 或几何跳转)。其余情况一律 return
+  /// [KeyEventResult.ignored],方向键自然流给 framework 跑几何算法。
+  ///
+  /// 为什么需要这个兜底:控件子树(含 seek bar 的 onKeyEvent)在 _controlsVisible
+  /// == false 时被整树卸载(见 _buildVideoArea 的 `if (_controlsVisible)`),
+  /// 没人接键,TV 用户按方向键唤不出控件。这个顶层 Focus 是唯一能可靠在隐藏态
+  /// 接键的位置。
+  KeyEventResult _onWakeControls(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
-    final key = event.logicalKey;
-
-    if (key == LogicalKeyboardKey.space ||
-        key == LogicalKeyboardKey.enter ||
-        key == LogicalKeyboardKey.select) {
-      _togglePlayPause();
-      return KeyEventResult.handled;
-    } else if (key == LogicalKeyboardKey.arrowLeft) {
-      // TV 模式下遥控器左右键 seek 步长加大到 30s(需求 #9)—— 10s 在 TV 上太小,
-      // 长视频快进/后退体验差。触屏双击手势保持 ±10s 不变(那是近距离精确跳)。
-      final step = TvMode.instance.isActive ? 30 : 10;
-      _seekRelative(Duration(seconds: -step));
-      return KeyEventResult.handled;
-    } else if (key == LogicalKeyboardKey.arrowRight) {
-      final step = TvMode.instance.isActive ? 30 : 10;
-      _seekRelative(Duration(seconds: step));
-      return KeyEventResult.handled;
-    } else if (key == LogicalKeyboardKey.arrowUp) {
-      // 非 TV:上下键调音量(PAD/手机无独立音量键的便捷操作)。
-      // TV:不处理 —— 交给焦点遍历系统,让 D-pad 上下能在视频区和 helper panel
-      // 之间移动焦点(TV 遥控器通常有独立音量键,不需要 App 内再占用上下键)。
-      if (!TvMode.instance.isActive) {
-        _player.setVolume((_player.state.volume + 5).clamp(0, 100));
-        return KeyEventResult.handled;
-      }
-      return KeyEventResult.ignored;
-    } else if (key == LogicalKeyboardKey.arrowDown) {
-      if (!TvMode.instance.isActive) {
-        _player.setVolume((_player.state.volume - 5).clamp(0, 100));
-        return KeyEventResult.handled;
-      }
-      return KeyEventResult.ignored;
-    } else if (key == LogicalKeyboardKey.escape ||
-        key == LogicalKeyboardKey.browserBack) {
-      Navigator.maybePop(context);
+    if (!TvMode.instance.isActive) return KeyEventResult.ignored;
+    if (_controlsVisible) return KeyEventResult.ignored;
+    final k = event.logicalKey;
+    final isWake = k == LogicalKeyboardKey.arrowLeft ||
+        k == LogicalKeyboardKey.arrowRight ||
+        k == LogicalKeyboardKey.arrowUp ||
+        k == LogicalKeyboardKey.arrowDown ||
+        k == LogicalKeyboardKey.enter ||
+        k == LogicalKeyboardKey.select ||
+        k == LogicalKeyboardKey.space;
+    if (isWake) {
+      _toggleControls();
       return KeyEventResult.handled;
     }
+    // escape/browserBack/goBack 由顶层 DismissIntent 处理,不在这里拦。
     return KeyEventResult.ignored;
   }
+
+  /// 分层 Dismiss:有菜单 → 收菜单(MenuAnchor 自己处理 DismissIntent,这里不
+  /// 重复);控件显示 → 收控件;否则退出页面。修复"按 ESC 直接退出整个播放页"
+  /// 的旧 bug(旧代码在根层 _onRemoteKey 无条件 Navigator.pop)。
+  void _handleDismiss() {
+    // 菜单(Dialog)打开时,Dialog 路由自带 DismissIntent 关闭(routes.dart:1198),
+    // 不会走到这里。这里只处理"无菜单"的情况:控件显示 → 收控件;否则退出页面。
+    if (_controlsVisible) {
+      setState(() => _controlsVisible = false);
+      return;
+    }
+    Navigator.maybePop(context);
+  }
+
 
   void _togglePlayPause() {
     if (_player.state.playing) {
@@ -770,61 +839,60 @@ class _PlayerScreenState extends State<PlayerScreen> {
               ),
 
             // 3. Top-level gesture layer
-            if (!_controlsLocked)
-              Positioned.fill(
-                child: GestureDetector(
-                  behavior: HitTestBehavior.translucent,
-                  onTap: _toggleControls,
-                  onDoubleTapDown: (details) {
-                    final dx = details.localPosition.dx;
-                    if (dx < videoWidth * 0.35) {
-                      _seekRelative(const Duration(seconds: -10));
-                      _showFFRewindIndicator('-10s');
-                    } else if (dx > videoWidth * 0.65) {
-                      _seekRelative(const Duration(seconds: 10));
-                      _showFFRewindIndicator('+10s');
-                    } else {
-                      _togglePlayPause();
-                    }
-                  },
-                  onHorizontalDragStart: (_) => _onSeekDragStart(),
-                  onHorizontalDragUpdate: (details) =>
-                      _onSeekDragUpdate(details.delta.dx, videoWidth),
-                  onHorizontalDragEnd: (_) => _onSeekDragEnd(),
-                  onVerticalDragStart: (details) {
-                    final isRight = details.localPosition.dx > videoWidth / 2;
-                    _dragStartOffset = details.localPosition.dy;
-                    if (isRight) {
-                      _dragVolumeStart = _player.state.volume;
-                    } else {
-                      _getBrightness().then((b) => _dragBrightnessStart = b);
-                    }
-                  },
-                  onVerticalDragUpdate: (details) {
-                    final isRight = details.localPosition.dx > videoWidth / 2;
-                    final dy = _dragStartOffset - details.localPosition.dy;
-                    final pct = dy / 200.0; // 200px drag represents 100% change
-                    if (isRight) {
-                      final newVol = (_dragVolumeStart + pct * 100).clamp(0.0, 100.0);
-                      _setVolume(newVol);
-                      _showVolumeOverlay(newVol);
-                    } else {
-                      final newBright = (_dragBrightnessStart + pct).clamp(0.0, 1.0);
-                      _setBrightness(newBright);
-                      _showBrightnessOverlay(newBright);
-                    }
-                  },
-                  onLongPressStart: (_) {
-                    _rateBeforeLongPress = _rate;
-                    _setRate(2.0);
-                    _showFastForwardOverlay("2.0x 倍速播放中");
-                  },
-                  onLongPressEnd: (_) {
-                    _setRate(_rateBeforeLongPress);
-                    _hideFFIndicator();
-                  },
-                ),
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: _toggleControls,
+                onDoubleTapDown: (details) {
+                  final dx = details.localPosition.dx;
+                  if (dx < videoWidth * 0.35) {
+                    _seekRelative(const Duration(seconds: -10));
+                    _showFFRewindIndicator('-10s');
+                  } else if (dx > videoWidth * 0.65) {
+                    _seekRelative(const Duration(seconds: 10));
+                    _showFFRewindIndicator('+10s');
+                  } else {
+                    _togglePlayPause();
+                  }
+                },
+                onHorizontalDragStart: (_) => _onSeekDragStart(),
+                onHorizontalDragUpdate: (details) =>
+                    _onSeekDragUpdate(details.delta.dx, videoWidth),
+                onHorizontalDragEnd: (_) => _onSeekDragEnd(),
+                onVerticalDragStart: (details) {
+                  final isRight = details.localPosition.dx > videoWidth / 2;
+                  _dragStartOffset = details.localPosition.dy;
+                  if (isRight) {
+                    _dragVolumeStart = _player.state.volume;
+                  } else {
+                    _getBrightness().then((b) => _dragBrightnessStart = b);
+                  }
+                },
+                onVerticalDragUpdate: (details) {
+                  final isRight = details.localPosition.dx > videoWidth / 2;
+                  final dy = _dragStartOffset - details.localPosition.dy;
+                  final pct = dy / 200.0; // 200px drag represents 100% change
+                  if (isRight) {
+                    final newVol = (_dragVolumeStart + pct * 100).clamp(0.0, 100.0);
+                    _setVolume(newVol);
+                    _showVolumeOverlay(newVol);
+                  } else {
+                    final newBright = (_dragBrightnessStart + pct).clamp(0.0, 1.0);
+                    _setBrightness(newBright);
+                    _showBrightnessOverlay(newBright);
+                  }
+                },
+                onLongPressStart: (_) {
+                  _rateBeforeLongPress = _rate;
+                  _setRate(2.0);
+                  _showFastForwardOverlay("2.0x 倍速播放中");
+                },
+                onLongPressEnd: (_) {
+                  _setRate(_rateBeforeLongPress);
+                  _hideFFIndicator();
+                },
               ),
+            ),
 
             // Volume Overlay Indicator
             if (_showVolumeIndicator)
@@ -888,78 +956,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ),
               ),
 
-            // 4. Lock chip when controls are locked.
-            if (_controlsLocked && _controlsVisible)
-              Positioned(
-                top: 24,
-                left: 0,
-                right: 0,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.lock_rounded,
-                            color: Colors.white, size: 16),
-                        SizedBox(width: 6),
-                        Text('已锁定控件',
-                            style:
-                                TextStyle(color: Colors.white, fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-
-            // Chevron tab to open helper panel when it is closed
-            if (!_isFullscreen && !_showHelperPanel)
-              Positioned(
-                right: 0,
-                top: 0,
-                bottom: 0,
-                child: Center(
-                  child: GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _showHelperPanel = true;
-                        _isFullscreen = false;
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
-                      decoration: const BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.only(
-                          topLeft: Radius.circular(16),
-                          bottomLeft: Radius.circular(16),
-                        ),
-                      ),
-                      child: const Icon(Icons.chevron_left_rounded, color: Colors.white, size: 24),
-                    ),
-                  ),
-                ),
-              ),
-
-            // 5. Controls overlay (top bar + bottom bar). When hidden, this
+            // 4. Controls overlay (top bar + bottom bar). When hidden, this
             //    subtree is removed so taps fall through to layer 3.
+            //
+            // **TV 模式下控件不会隐藏**(见 _scheduleAutoHide 的 TvMode 判断):
+            // auto-hide 是 PAD/触屏的传统交互(鼠标移开/无操作自动隐藏),TV 用户
+            // 没有这个概念 —— 控件隐藏会导致 seek bar 的 _seekBarFocus 从焦点树
+            // 移除,视频区零焦点落点,焦点丢失。所以 TV 下控件常驻可见,seek bar
+            // 的 FocusNode 永远在焦点树里,几何算法总能找到 → 跨区导航可靠。
             if (_controlsVisible)
               Positioned.fill(
                 child: Stack(
                   children: [
-                    if (!_controlsLocked)
-                      Positioned(
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        child: _buildTopBar(),
-                      ),
-                    if (!_controlsLocked) _buildPlayerControls(),
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: _buildTopBar(),
+                    ),
+                    _buildPlayerControls(),
                   ],
                 ),
               ),
@@ -970,6 +985,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildTopBar() {
+    // 去掉了外层 Focus(focusNode: _topBarFocus, ...) 锚点 —— 方向键现在完全交给
+    // framework 几何算法,顶栏的返回按钮靠 FocusButton 自带的可聚焦性参与遍历。
+    // 同时砍掉了锁按钮(TV+PAD 都删,连同 _controlsLocked/_toggleLock 状态)。
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       decoration: const BoxDecoration(
@@ -983,6 +1001,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         children: [
           _iconControl(
             icon: Icons.arrow_back_rounded,
+            focusNode: _backFocus,
             onTap: () {
               Navigator.pop(context);
             },
@@ -1000,55 +1019,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
           ),
           const SizedBox(width: 8),
-          // AI study entry — opens the AI study page (summary + practice). On
-          // return, if the user tapped a "[跳转 12:38]" link, pop receives a
-          // JumpRequest and we seek the player there.
-          // Phase 2:三态 gating 与课程详情页一致(走同一 helper)。不可用时图标
-          // 置灰(active=false)、点击弹 SnackBar 提示原因,不进入 AiStudyScreen。
-          // disableAiTab(AI 跳转 push 出来的播放器):整个入口不渲染,防栈无限加深。
-          if (!widget.disableAiTab)
-            Builder(builder: (iconCtx) {
-              final availability =
-                  AiAvailabilityHelper.fromEpisode(widget.episode);
-              final enabled = availability == AiAvailability.enabled;
-              return _iconControl(
-                icon: Icons.auto_awesome_rounded,
-                active: enabled,
-                onTap: () async {
-                  if (!enabled) {
-                    ScaffoldMessenger.of(iconCtx).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                            AiAvailabilityHelper.tooltipFor(availability)!),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                    return;
-                  }
-                  // 进 AI 学习页前暂停视频,避免在后台继续播放(含音频)。
-                  // 返回时不自动 resume——用户可能只想看完解析,让其手动点播放更可控。
-                  _player.pause();
-                  final result = await Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (context) => AiStudyScreen(
-                        activeUserId: widget.activeUserId,
-                        episode: widget.episode,
-                      ),
-                    ),
-                  );
-                  if (result is JumpRequest && mounted) {
-                    _seekTo(result.target);
-                  }
-                },
-              );
-            }),
-          const SizedBox(width: 8),
-          _iconControl(
-            icon: _controlsLocked
-                ? Icons.lock_outline
-                : Icons.lock_open_rounded,
-            onTap: _toggleLock,
-          ),
+          // 顶栏 AI 按钮已移除:AI 学习的唯一入口统一到 helper panel 的 AI 卡。
+          // 减少入口冗余(原本顶栏 + helper panel 两处),三端行为一致。
+          // JumpRequest(从 AI 页"跳转 12:38"回来 seek)的处理在 _enterAiStudy。
         ],
       ),
     );
@@ -1095,9 +1068,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     return Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (_activeMenu == 'speed') _buildSpeedInlineMenu(),
-                        if (_activeMenu == 'subtitle') _buildSubtitleInlineMenu(),
-                        if (_activeMenu == 'audio') _buildAudioInlineMenu(),
                         const SizedBox(height: 8),
                         _buildSeekBar(position, duration, buffer),
                         const SizedBox(height: 10),
@@ -1128,64 +1098,135 @@ class _PlayerScreenState extends State<PlayerScreen> {
         _isDraggingSeek ? _dragPosition.inMilliseconds.toDouble().clamp(0.0, maxMs) : posMs;
     final displayPos = _isDraggingSeek ? _dragPosition : position;
 
-    return Row(
-      children: [
-        Text(
-          _formatDuration(displayPos),
-          style: const TextStyle(
-              color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-        ),
-        Expanded(
-          child: SliderTheme(
-            data: SliderTheme.of(context).copyWith(
-              trackHeight: 4,
-              // Custom track paints three ranges:
-              //   [0 .. position]   → played (primary)
-              //   [position .. buf] → buffered (lighter)
-              //   [buf .. end]      → unbuffered (faint)
-              trackShape: BufferedSeekBarTrackShape(
-                bufferedFraction: totalMs > 0 ? bufMs / totalMs : 0.0,
-                bufferedColor: Colors.white38,
+    // seek bar 是焦点系统的"主落点":TV 进屏 autofocus 到这,◄► 做 seek ±30s
+    // (唯一手写方向键语义,因为 seek 不是焦点遍历语义,framework 的几何算法
+    // 帮不上)。其它方向键:
+    //  - TV ▲▼ → return ignored,交给 framework 几何算法跳顶栏/控制行
+    //  - 非 TV ◄► → seek ±10s(旧行为),▲▼ → 调音量(旧行为)
+    // descendantsAreFocusable: TV 下 false —— Slider 自己聚焦后会用 ◄► 做单帧
+    // 拖动,粒度太细不适合遥控;触屏拖动不依赖焦点,仍正常工作。
+    return FocusTraversalGroup(
+      child: Focus(
+        focusNode: _seekBarFocus,
+        autofocus: TvMode.instance.isActive,
+        descendantsAreFocusable: !TvMode.instance.isActive,
+        onFocusChange: (focused) => setState(() => _seekBarFocused = focused),
+        onKeyEvent: (node, event) {
+          if (event is! KeyDownEvent) return KeyEventResult.ignored;
+          final tv = TvMode.instance.isActive;
+          return switch (event.logicalKey) {
+            LogicalKeyboardKey.arrowLeft =>
+              _seekAndHandle(Duration(seconds: tv ? -30 : -10)),
+            LogicalKeyboardKey.arrowRight =>
+              _seekAndHandle(Duration(seconds: tv ? 30 : 10)),
+            LogicalKeyboardKey.arrowUp => _seekArrowUp(tv),
+            LogicalKeyboardKey.arrowDown => _seekArrowDown(tv),
+            _ => KeyEventResult.ignored,
+          };
+        },
+        child: Row(
+          children: [
+            Text(
+              _formatDuration(displayPos),
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+                // 聚焦时时间文字加蓝色阴影,辅助识别焦点位置。
+                shadows: _seekBarFocused
+                    ? const [
+                        Shadow(color: AppTheme.primaryColor, blurRadius: 6)
+                      ]
+                    : null,
               ),
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
             ),
-            child: Slider(
-              value: displayMs,
-              max: maxMs,
-              onChangeStart: totalMs > 0
-                  ? (_) {
-                      setState(() {
-                        _isDraggingSeek = true;
-                        _dragPosition = position;
-                      });
-                    }
-                  : null,
-              onChanged: totalMs > 0
-                  ? (v) {
-                      setState(() {
-                        _dragPosition = Duration(milliseconds: v.toInt());
-                      });
-                    }
-                  : null,
-              onChangeEnd: totalMs > 0
-                  ? (v) {
-                      _seekTo(Duration(milliseconds: v.toInt()));
-                      setState(() => _isDraggingSeek = false);
-                    }
-                  : null,
-              activeColor: AppTheme.primaryColor,
-              inactiveColor: Colors.white24,
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  // 聚焦时 track 加粗 + thumb 变大,TV 用户远距离能看出焦点。
+                  trackHeight: _seekBarFocused ? 6 : 4,
+                  // Custom track paints three ranges:
+                  //   [0 .. position]   → played (primary)
+                  //   [position .. buf] → buffered (lighter)
+                  //   [buf .. end]      → unbuffered (faint)
+                  trackShape: BufferedSeekBarTrackShape(
+                    bufferedFraction: totalMs > 0 ? bufMs / totalMs : 0.0,
+                    bufferedColor: Colors.white38,
+                  ),
+                  thumbShape: RoundSliderThumbShape(
+                      enabledThumbRadius: _seekBarFocused ? 10 : 7),
+                  overlayShape: RoundSliderOverlayShape(
+                      overlayRadius: _seekBarFocused ? 18 : 14),
+                ),
+                child: Slider(
+                  value: displayMs,
+                  max: maxMs,
+                  onChangeStart: totalMs > 0
+                      ? (_) {
+                          setState(() {
+                            _isDraggingSeek = true;
+                            _dragPosition = position;
+                          });
+                        }
+                      : null,
+                  onChanged: totalMs > 0
+                      ? (v) {
+                          setState(() {
+                            _dragPosition = Duration(milliseconds: v.toInt());
+                          });
+                        }
+                      : null,
+                  onChangeEnd: totalMs > 0
+                      ? (v) {
+                          _seekTo(Duration(milliseconds: v.toInt()));
+                          setState(() => _isDraggingSeek = false);
+                        }
+                      : null,
+                  activeColor: AppTheme.primaryColor,
+                  inactiveColor: Colors.white24,
+                ),
+              ),
             ),
-          ),
+            Text(
+              _formatDuration(duration),
+              style: const TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 12),
+            ),
+          ],
         ),
-        Text(
-          _formatDuration(duration),
-          style: const TextStyle(
-              color: Colors.white70, fontWeight: FontWeight.bold, fontSize: 12),
-        ),
-      ],
+      ),
     );
+  }
+
+  /// seek bar onKeyEvent 的 helper:执行 seek + 返 handled。
+  KeyEventResult _seekAndHandle(Duration delta) {
+    _seekRelative(delta);
+    return KeyEventResult.handled;
+  }
+
+  /// seek bar onKeyEvent 的 helper(非 TV):调音量 + 返 handled。
+  KeyEventResult _volumeAndHandle(double delta) {
+    _setVolume((_player.state.volume + delta).clamp(0.0, 100.0));
+    return KeyEventResult.handled;
+  }
+
+  /// seek bar ▲ 的 helper:TV 显式跳顶栏返回按钮(避免几何算法跳错到 panel);
+  /// 非 TV 调音量。
+  KeyEventResult _seekArrowUp(bool tv) {
+    if (tv) {
+      _backFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return _volumeAndHandle(5);
+  }
+
+  /// seek bar ▼ 的 helper:TV 显式跳控制行播放按钮;非 TV 调音量。
+  KeyEventResult _seekArrowDown(bool tv) {
+    if (tv) {
+      _playPauseFocus.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return _volumeAndHandle(-5);
   }
 
 
@@ -1198,25 +1239,32 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   void _autoSelectDefaultSubtitle(List<Map<String, dynamic>> options) {
+    // 优先级:backend(LLM polish 后的优质字幕) > native(容器内嵌兜底) > off。
+    // 历史问题:之前 native 优先,默认就选了硬编码轨,白白丢掉了 polish 成果;
+    // 而且菜单同时出现"中文"和"中文(校对版)"时,默认走 native 会让"校对版"
+    // 那条点击无字幕的 bug 更明显。改成 backend 优先后两者都顺带修了。
+
+    // 1) 若播放器已挂着某条轨,且它在选项列表里,先沿用(用户/续播已选)。
     final currentTrack = _player.state.track.subtitle;
     if (currentTrack.id != 'no') {
-      final idx = options.indexWhere((opt) => opt['type'] == 'native' && opt['track'].id == currentTrack.id);
+      final idx = options.indexWhere((opt) {
+        if (opt['type'] != 'native') return false;
+        final track = opt['track'] as SubtitleTrack;
+        return track.id == currentTrack.id;
+      });
       if (idx != -1) {
         setState(() => _selectedSubtitle = idx);
         return;
       }
     }
 
-    final firstNativeIdx = options.indexWhere((opt) => opt['type'] == 'native');
-    if (firstNativeIdx != -1) {
-      _applySubtitleOption(options[firstNativeIdx], firstNativeIdx);
-      return;
-    }
-
-    final firstBackendIdx = options.indexWhere((opt) => opt['type'] == 'backend');
-    if (firstBackendIdx != -1) {
-      _applySubtitleOption(options[firstBackendIdx], firstBackendIdx);
-      return;
+    // 2) 否则按优先级表挑默认项 —— 表驱动,加新来源只动这张表。
+    for (final preferredType in const ['backend', 'native']) {
+      final idx = options.indexWhere((opt) => opt['type'] == preferredType);
+      if (idx != -1) {
+        _applySubtitleOption(options[idx], idx);
+        return;
+      }
     }
 
     setState(() => _selectedSubtitle = 0);
@@ -1245,95 +1293,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {});
   }
 
-  Widget _buildSpeedInlineMenu() {
-    return InlineChipMenu(
-      title: '播放速度：',
-      items: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
-          .map((r) => InlineChipItem(
-                label: '${r}x',
-                selected: _rate == r,
-                onTap: () {
-                  _setRate(r);
-                  _scheduleAutoHide();
-                },
-              ))
-          .toList(),
-    );
-  }
-
-  Widget _buildSubtitleInlineMenu() {
-    final subtitleOptions = _getSubtitleOptions();
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        InlineChipMenu(
-          title: '字幕选择：',
-          items: subtitleOptions.asMap().entries.map((entry) {
-            final idx = entry.key;
-            final opt = entry.value;
-            return InlineChipItem(
-              label: opt['label'],
-              selected: _selectedSubtitle == idx,
-              onTap: () async {
-                await _applySubtitleOption(opt, idx);
-                setState(() {});
-                _scheduleAutoHide();
-              },
-            );
-          }).toList(),
-        ),
-        const SizedBox(height: 10),
-        // 字号档位接全局 UiPrefs(需求 #5 + #7):四档「小/中/大/超大」,
-        // 选中态读 UiPrefs.subtitleSizeIndex,点击写回 SharedPreferences,
-        // 下次进播放器沿用上次选择。改档位后 setState 重建,上面的
-        // SubtitleViewConfiguration 会读最新的 UiPrefs.subtitleSize 生效。
-        InlineChipMenu(
-          title: '字幕大小：',
-          items: UiPrefs.subtitleSizeLabels.asMap().entries.map((entry) {
-            final index = entry.key;
-            final label = entry.value;
-            return InlineChipItem(
-              label: label,
-              selected: UiPrefs.instance.subtitleSizeIndex == index,
-              onTap: () async {
-                await UiPrefs.instance.setSubtitleSizeIndex(index);
-                setState(() {});
-                _scheduleAutoHide();
-              },
-            );
-          }).toList(),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildAudioInlineMenu() {
-    final audioOptions = _getAudioOptions();
-    final currentAudio = _player.state.track.audio;
-    if (audioOptions.isEmpty) {
-      return InlineChipMenu(
-        title: '音轨选择：',
-        items: const [],
-      );
-    }
-    return InlineChipMenu(
-      title: '音轨选择：',
-      items: audioOptions.map((opt) {
-        final track = opt['track'] as AudioTrack;
-        return InlineChipItem(
-          label: opt['label'],
-          selected: currentAudio.id == track.id,
-          onTap: () async {
-            await _applyAudioOption(opt);
-            setState(() {});
-            _scheduleAutoHide();
-          },
-        );
-      }).toList(),
-    );
-  }
-
   void _toggleMute() {
     final currentVol = _player.state.volume;
     if (currentVol > 0.0) {
@@ -1345,12 +1304,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildControlsRow(Duration position, Duration duration) {
+    // 去掉了外层 Focus(focusNode: _controlsRowFocus, ...) 锚点 + _activeMenu
+    // 状态机。三个设置菜单改用 PlayerSettingsMenu(MenuAnchor + RadioMenuButton),
+    // 焦点隔离 + 几何导航 + escape 关菜单都由 framework 保证。锁按钮已删。
     final playing = _player.state.playing;
+    final audioOptions = _getAudioOptions();
+    final subtitleOptions = _getSubtitleOptions();
     return Row(
       children: [
         // Play / pause
         _iconControl(
           icon: playing ? Icons.pause_rounded : Icons.play_arrow_rounded,
+          focusNode: _playPauseFocus,
           onTap: _togglePlayPause,
         ),
         const Spacer(),
@@ -1361,86 +1326,122 @@ class _PlayerScreenState extends State<PlayerScreen> {
           builder: (context, snap) {
             final v = snap.data ?? _player.state.volume;
             final isMuted = v == 0.0;
+            final tv = TvMode.instance.isActive;
             return Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                GestureDetector(
+                // 音量图标:FocusButton,让 D-pad 可聚焦、Enter 触发静音切换。
+                _iconControl(
+                  icon: isMuted
+                      ? Icons.volume_off_rounded
+                      : Icons.volume_up_rounded,
                   onTap: _toggleMute,
-                  child: Icon(
-                    isMuted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                    color: Colors.white,
-                    size: 24,
-                  ),
                 ),
-                const SizedBox(width: 4),
-                SizedBox(
-                  width: 70,
-                  child: SliderTheme(
-                    data: SliderTheme.of(context).copyWith(
-                      trackHeight: 3,
-                      activeTrackColor: AppTheme.primaryColor,
-                      inactiveTrackColor: Colors.white24,
-                      thumbColor: Colors.white,
-                      thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
-                      overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-                      trackShape: const RectangularSliderTrackShape(),
-                    ),
-                    child: Slider(
-                      value: v.clamp(0.0, 100.0),
-                      min: 0,
-                      max: 100,
-                      onChanged: (val) {
-                        _setVolume(val);
-                      },
+                // 音量 Slider:TV 下不渲染。原因 —— Slider 聚焦后会吃掉 ◄►
+                // 做单步 ±1% 调值(Flutter Slider 默认行为),焦点陷阱。
+                // TV 有硬件音量键 + 上面的静音图标,够用。
+                // PAD/手机保留 Slider(触屏拖动,不依赖焦点)。
+                if (!tv) ...[
+                  const SizedBox(width: 4),
+                  SizedBox(
+                    width: 70,
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 3,
+                        activeTrackColor: AppTheme.primaryColor,
+                        inactiveTrackColor: Colors.white24,
+                        thumbColor: Colors.white,
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                        trackShape: const RectangularSliderTrackShape(),
+                      ),
+                      child: Slider(
+                        value: v.clamp(0.0, 100.0),
+                        min: 0,
+                        max: 100,
+                        onChanged: (val) {
+                          _setVolume(val);
+                        },
+                      ),
                     ),
                   ),
-                ),
+                ],
               ],
             );
           },
         ),
         const SizedBox(width: 12),
-        // Playback Speed
-        FocusButton(
-          onPressed: () {
-            setState(() {
-              _activeMenu = _activeMenu == 'speed' ? '' : 'speed';
-            });
-            _scheduleAutoHide();
-          },
-          borderRadius: 20,
-          baseColor: _activeMenu == 'speed' ? AppTheme.primaryColor : Colors.white12,
-          borderColor: Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Text(
-            '${_rate}x',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-          ),
+        // Playback Speed —— MenuAnchor + RadioMenuButton(单选,framework 焦点隔离)
+        PlayerSettingsMenu<double>(
+          icon: Icons.speed_rounded,
+          selectedValue: _rate,
+          options: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+              .map((r) => PlayerMenuOption(value: r, label: '${r}x'))
+              .toList(),
+          onSelected: (r) => _setRate(r),
         ),
         const SizedBox(width: 12),
-        // Subtitles
-        _iconControl(
+        // Subtitles —— 字幕选择 + 字幕大小(用两个独立菜单,避免 SubmenuButton
+        // 在 mumu 上的样式不确定性)。subtitleOptions 自带「关闭字幕」(type='off')
+        // 作为第 0 项,所以菜单直接用它,value = 列表索引,_selectedSubtitle 同语义。
+        // (历史:曾手动加 PlayerMenuOption(value:0,'关闭') + 列表偏移 +1,跟
+        //  subtitleOptions 自带的「关闭字幕」重复成两个关闭项。)
+        PlayerSettingsMenu<int>(
           icon: Icons.subtitles_rounded,
-          onTap: () {
-            setState(() {
-              _activeMenu = _activeMenu == 'subtitle' ? '' : 'subtitle';
-            });
+          selectedValue: _selectedSubtitle,
+          menuTitle: '字幕选择',
+          options: subtitleOptions.asMap().entries.map((entry) {
+            final opt = entry.value;
+            return PlayerMenuOption(
+                value: entry.key, label: opt['label'] as String);
+          }).toList(),
+          onSelected: (idx) async {
+            final opt = subtitleOptions[idx];
+            await _applySubtitleOption(opt, idx);
+            setState(() {});
             _scheduleAutoHide();
           },
-          active: _activeMenu == 'subtitle',
         ),
         const SizedBox(width: 12),
-        // Audio Tracks
-        if (_getAudioOptions().isNotEmpty) ...[
-          _iconControl(
+        // 字幕大小档位(独立菜单):接全局 UiPrefs,四档「小/中/大/超大」。
+        PlayerSettingsMenu<int>(
+          icon: Icons.format_size_rounded,
+          selectedValue: UiPrefs.instance.subtitleSizeIndex,
+          menuTitle: '字幕大小',
+          options: UiPrefs.subtitleSizeLabels
+              .asMap()
+              .entries
+              .map((entry) => PlayerMenuOption(
+                  value: entry.key, label: entry.value))
+              .toList(),
+          onSelected: (index) async {
+            await UiPrefs.instance.setSubtitleSizeIndex(index);
+            setState(() {});
+            _scheduleAutoHide();
+          },
+        ),
+        const SizedBox(width: 12),
+        // Audio Tracks —— 条件渲染:有多条音轨才显示。
+        if (audioOptions.length > 1) ...[
+          PlayerSettingsMenu<String>(
             icon: Icons.audiotrack_rounded,
-            onTap: () {
-              setState(() {
-                _activeMenu = _activeMenu == 'audio' ? '' : 'audio';
-              });
+            selectedValue: (_player.state.track.audio.id == 'no' ||
+                    _player.state.track.audio.id == 'auto')
+                ? null
+                : _player.state.track.audio.id,
+            menuTitle: '音轨选择',
+            options: audioOptions.map((opt) {
+              final track = opt['track'] as AudioTrack;
+              return PlayerMenuOption(value: track.id, label: opt['label'] as String);
+            }).toList(),
+            onSelected: (id) async {
+              final opt = audioOptions.firstWhere(
+                (o) => (o['track'] as AudioTrack).id == id,
+                orElse: () => audioOptions.first,
+              );
+              await _applyAudioOption(opt);
               _scheduleAutoHide();
             },
-            active: _activeMenu == 'audio',
           ),
           const SizedBox(width: 12),
         ],
@@ -1460,8 +1461,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     required IconData icon,
     required VoidCallback onTap,
     bool active = false,
+    FocusNode? focusNode,
   }) {
     return FocusButton(
+      focusNode: focusNode,
       onPressed: onTap,
       borderRadius: 24,
       baseColor: active ? AppTheme.primaryColor : Colors.white12,
@@ -1476,6 +1479,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // ---------------------------------------------------------------------------
 
   Widget _buildHelperPanel() {
+    // 去掉了外层 Focus(focusNode: _helperPanelFocus, ...) 锚点。helper panel
+    // 内部有 FocusButton(AI 卡 + 附件),靠 framework 几何算法自然参与遍历。
+    // 跨区(视频区 ↔ panel)由顶层 FocusTraversalGroup 保证同 scope。
     return HelperPanel(
       episode: widget.episode,
       attachments: _attachments,
@@ -1484,28 +1490,30 @@ class _PlayerScreenState extends State<PlayerScreen> {
       preAdventureTasks: widget.preAdventureTasks,
       disableAiTab: widget.disableAiTab,
       tvModeActive: TvMode.instance.isActive,
-      onClosePanel: () {
-        setState(() {
-          _showHelperPanel = false;
-          _isFullscreen = true;
-        });
-      },
       onOpenAttachment: (att) => _openAttachment(att),
-      onEnterAiStudy: () async {
-        // 进 AI 学习页前暂停视频,避免在后台继续播放(含音频)。
-        // 与顶栏 AI 入口行为一致 —— 之前 helper panel 这个常驻入口漏了 pause,
-        // 导致从卡片进 AI 页后视频还在后台放(需求 #1)。
-        _player.pause();
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => AiStudyScreen(
-              activeUserId: widget.activeUserId,
-              episode: widget.episode,
-            ),
-          ),
-        );
-      },
+      onEnterAiStudy: _enterAiStudy,
     );
+  }
+
+  /// 进入 AI 学习页的唯一入口(helper panel 的 AI 卡)。
+  ///
+  /// 进前暂停视频(避免后台播放含音频);返回时若用户点了 AI 页里的"跳转
+  /// 12:38"链接,pop 会带回来一个 [JumpRequest],我们 seek 过去。
+  /// 历史:这条逻辑原本在顶栏 AI 图标里,顶栏 AI 砍掉(统一入口)后搬到这,
+  /// 顺手补上原来 helper panel 入口漏掉的 JumpRequest 处理 + pause。
+  Future<void> _enterAiStudy() async {
+    _player.pause();
+    final result = await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => AiStudyScreen(
+          activeUserId: widget.activeUserId,
+          episode: widget.episode,
+        ),
+      ),
+    );
+    if (result is JumpRequest && mounted) {
+      _seekTo(result.target);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1595,4 +1603,3 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return '${two(d.inMinutes)}:${two(d.inSeconds.remainder(60))}';
   }
 }
-

@@ -6,6 +6,7 @@ import '../../theme.dart';
 import '../widget/bookshelf.dart';
 import '../widget/focus_button.dart';
 import '../widget/state_widgets.dart';
+import '../widget/tv_focus.dart';
 import 'pdf_reader_screen.dart';
 import 'article_reader_screen.dart';
 import 'reading_series_detail_screen.dart';
@@ -23,11 +24,20 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
   late Future<ReadingRoomView> _readingRoomFuture;
   List<Subject> _subjectsCatalog = const [];
   String _searchQuery = '';
+  // 焦点陷阱修复:搜索框 TextField 默认吞掉方向键,D-pad 进了出不来。
+  // dpadEscapeFocusNode 截断方向键转 nextFocus/previousFocus,字母数字放行。
+  late final FocusNode _searchFocusNode = dpadEscapeFocusNode();
 
   @override
   void initState() {
     super.initState();
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _searchFocusNode.dispose();
+    super.dispose();
   }
 
   void _loadData() {
@@ -70,7 +80,8 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
               filteredBooks.isEmpty &&
               filteredArticles.isEmpty;
 
-          return Padding(
+          return FocusTraversalGroup(
+            child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
             child: SingleChildScrollView(
               child: Column(
@@ -109,6 +120,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
 
                   // Search bar
                   TextField(
+                    focusNode: _searchFocusNode,
                     onChanged: (val) => setState(() => _searchQuery = val),
                     style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
                     decoration: InputDecoration(
@@ -171,6 +183,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
                 ],
               ),
             ),
+          ),
           );
         },
       ),

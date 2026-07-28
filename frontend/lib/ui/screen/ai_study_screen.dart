@@ -474,12 +474,17 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           _buildSummarySection(effectiveScale),
           const SizedBox(height: 16),
           _buildAdviceCard(effectiveScale),
-          const SizedBox(height: 16),
-          // 历史练习在上(默认折叠):交卷即归档后,已交卷的卷子进这里,重进页面先看到
-          // 历史可点开 review,当前练习区在下面才是「做新题」入口。
-          _buildHistorySection(effectiveScale),
-          const SizedBox(height: 16),
-          _buildQuizSection(effectiveScale),
+          // 【TV 只读模式】TV 下只保留"看总结 + 学习建议",练习(quiz)和历史
+          // (历史也是 quiz)整 section 不渲染 —— TV 做题体验差,且 MainNavigation
+          // 已在 tab 层裁掉错题本,这里和那条策略一致。PAD/手机不受影响。
+          if (!TvMode.instance.isActive) ...[
+            const SizedBox(height: 16),
+            // 历史练习在上(默认折叠):交卷即归档后,已交卷的卷子进这里,重进页面先看到
+            // 历史可点开 review,当前练习区在下面才是「做新题」入口。
+            _buildHistorySection(effectiveScale),
+            const SizedBox(height: 16),
+            _buildQuizSection(effectiveScale),
+          ],
         ],
       ),
     );

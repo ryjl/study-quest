@@ -8,6 +8,7 @@ import '../responsive.dart';
 import '../widget/button_3d.dart';
 import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
+import '../widget/tv_focus.dart';
 
 /// 系统设置 page — server URL config + local playback prefs.
 ///
@@ -15,7 +16,11 @@ import '../widget/glass_panel.dart';
 /// parent (MainNavigation) owns the [ipController], [isSavingIp] flag and the
 /// save/logout side effects and passes them in as props, since they also
 /// drive the rest of the app (e.g. baseUrl is read globally by ApiService).
-class SettingsScreen extends StatelessWidget {
+///
+/// StatefulWidget 以持有 [_ipFocusNode] —— IP TextField 用 dpadEscapeFocusNode
+/// 解 D-pad 焦点陷阱(否则方向键被 EditableText 吞掉,跳不到"保存修改"按钮),
+/// 节点需要在 dispose 时释放,StatelessWidget 做不到。
+class SettingsScreen extends StatefulWidget {
   final TextEditingController ipController;
   final bool isSavingIp;
   final VoidCallback onSaveIp;
@@ -32,9 +37,28 @@ class SettingsScreen extends StatelessWidget {
   });
 
   @override
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  // 焦点陷阱修复:TextField 默认吞掉方向键做光标移动,D-pad 进了出不来。
+  // dpadEscapeFocusNode 在 EditableText 之前截断方向键转 nextFocus/previousFocus,
+  // 让 D-pad 能从 IP 输入框跳到"保存修改"按钮。字母数字回车放行给输入。
+  late final FocusNode _ipFocusNode = dpadEscapeFocusNode();
+
+  @override
+  void dispose() {
+    _ipFocusNode.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final compact = isPortrait(context);
-    return Padding(
+    // 整屏 FocusTraversalGroup:IP 输入框 / 保存按钮 / 开关 / 清理按钮 /
+    // 登出按钮共享一个 reading-order 遍历链,D-pad 才能在它们之间自然移动。
+    return FocusTraversalGroup(
+      child: Padding(
       padding: portraitAwarePadding(context),
       child: SingleChildScrollView(
         child: Column(
@@ -133,21 +157,28 @@ class SettingsScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   // Hardware Decoding Switch
+                  //
+                  // 【TV 适配】SwitchListTile 自身 Enter/Space 能切(Material 默认),
+                  // 但 TV 下焦点高亮很弱(只一条细边)。用 _tvFocusableTile 包一层:
+                  // 焦点时加蓝色边框 + 轻微背景,让用户看清 D-pad 落点。下面的
+                  // force_tv 开关(测试这一切的入口)同样包一层。
                   FutureBuilder<bool>(
                     future: SharedPreferences.getInstance().then((prefs) => prefs.getBool('enable_hw_acceleration') ?? false),
                     builder: (context, snapshot) {
                       final isEnabled = snapshot.data ?? false;
-                      return SwitchListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('硬件加速解码 (HW Acceleration)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
-                        subtitle: const Text('开启后使用硬件加速解码，若播放异常请关闭', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
-                        value: isEnabled,
-                        activeThumbColor: AppTheme.primaryColor,
-                        onChanged: (val) async {
-                          final prefs = await SharedPreferences.getInstance();
-                          await prefs.setBool('enable_hw_acceleration', val);
-                          onPreferencesChanged();
-                        },
+                      return _tvFocusableTile(
+                        SwitchListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('硬件加速解码 (HW Acceleration)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
+                          subtitle: const Text('开启后使用硬件加速解码，若播放异常请关闭', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                          value: isEnabled,
+                          activeThumbColor: AppTheme.primaryColor,
+                          onChanged: (val) async {
+                            final prefs = await SharedPreferences.getInstance();
+                            await prefs.setBool('enable_hw_acceleration', val);
+                            widget.onPreferencesChanged();
+                          },
+                        ),
                       );
                     },
                   ),
@@ -156,50 +187,54 @@ class SettingsScreen extends StatelessWidget {
                   // 打开后强制走 TV 分支布局,这样不用真机 TV 也能验证 TV 页面。
                   // 真机 TV 走自动检测,本开关对其无影响(本来就走 TV)。
                   // 需要 App 重启后全局生效 —— TvMode 在启动时只读一次。
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('预览 TV 模式(调试)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
-                    subtitle: const Text('打开后 App 强制使用 TV 布局,用于在模拟器上验证 TV 体验。重启 App 后生效。', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
-                    value: TvMode.instance.forceEnabled,
-                    activeThumbColor: AppTheme.primaryColor,
-                    onChanged: (val) async {
-                      await TvMode.instance.setForceEnabled(val);
-                      onPreferencesChanged();
-                      if (val) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('已开启 TV 模式预览。请重启 App(或热重启)使全部页面切换到 TV 布局。')),
-                        );
-                      }
-                    },
+                  _tvFocusableTile(
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('预览 TV 模式(调试)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
+                      subtitle: const Text('打开后 App 强制使用 TV 布局,用于在模拟器上验证 TV 体验。重启 App 后生效。', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                      value: TvMode.instance.forceEnabled,
+                      activeThumbColor: AppTheme.primaryColor,
+                      onChanged: (val) async {
+                        await TvMode.instance.setForceEnabled(val);
+                        widget.onPreferencesChanged();
+                        if (val) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('已开启 TV 模式预览。请重启 App(或热重启)使全部页面切换到 TV 布局。')),
+                          );
+                        }
+                      },
+                    ),
                   ),
                   const Divider(color: AppTheme.borderMuted, height: 32),
                   // Cache Cleaning
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('清理本地缓存空间', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
-                    subtitle: const Text('清理 PDF 讲义和临时缓存的媒体文件', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
-                    trailing: Button3D.white(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      onPressed: () async {
-                        try {
-                          final tempDir = await getTemporaryDirectory();
-                          if (tempDir.existsSync()) {
-                            tempDir.deleteSync(recursive: true);
+                  _tvFocusableTile(
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: const Text('清理本地缓存空间', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
+                      subtitle: const Text('清理 PDF 讲义和临时缓存的媒体文件', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                      trailing: Button3D.white(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        onPressed: () async {
+                          try {
+                            final tempDir = await getTemporaryDirectory();
+                            if (tempDir.existsSync()) {
+                              tempDir.deleteSync(recursive: true);
+                            }
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('本地缓存清理成功！')),
+                              );
+                            }
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('清理失败: $e')),
+                              );
+                            }
                           }
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text('本地缓存清理成功！')),
-                            );
-                          }
-                        } catch (e) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('清理失败: $e')),
-                            );
-                          }
-                        }
-                      },
-                      child: const Text('立即清理', style: TextStyle(fontWeight: FontWeight.bold)),
+                        },
+                        child: const Text('立即清理', style: TextStyle(fontWeight: FontWeight.bold)),
+                      ),
                     ),
                   ),
                 ],
@@ -215,7 +250,7 @@ class SettingsScreen extends StatelessWidget {
             FocusButton(
               baseColor: Colors.transparent,
               borderColor: AppTheme.borderMuted,
-              onPressed: onLogout,
+              onPressed: widget.onLogout,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -237,12 +272,14 @@ class SettingsScreen extends StatelessWidget {
         ],
       ),
       ),
+      ),
     );
   }
 
   Widget _buildIpTextField() {
     return TextField(
-      controller: ipController,
+      controller: widget.ipController,
+      focusNode: _ipFocusNode,
       style: const TextStyle(fontFamily: 'monospace', fontSize: 15, color: AppTheme.textWhite, fontWeight: FontWeight.bold),
       decoration: InputDecoration(
         filled: true,
@@ -265,11 +302,49 @@ class SettingsScreen extends StatelessWidget {
 
   Widget _buildSaveButton() {
     return Button3D.blue(
-      onPressed: onSaveIp,
+      onPressed: widget.onSaveIp,
       padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-      child: isSavingIp
+      child: widget.isSavingIp
           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
           : const Text('保存修改', style: TextStyle(fontWeight: FontWeight.w900, color: Colors.white)),
+    );
+  }
+
+  /// 给 SwitchListTile / ListTile 这种 Material 行控件套一层 TV 友好的焦点
+  /// 高亮:聚焦时加蓝色边框 + 淡蓝背景,让用户看清 D-pad 落点。非 TV 模式下
+  /// 纯透明,不影响触屏视觉。
+  Widget _tvFocusableTile(Widget child) => _TvFocusableTile(child: child);
+}
+
+class _TvFocusableTile extends StatefulWidget {
+  final Widget child;
+  const _TvFocusableTile({required this.child});
+
+  @override
+  State<_TvFocusableTile> createState() => _TvFocusableTileState();
+}
+
+class _TvFocusableTileState extends State<_TvFocusableTile> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      canRequestFocus: true,
+      onFocusChange: (v) => setState(() => _focused = v),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: _focused
+              ? Border.all(color: AppTheme.primaryColor, width: 2)
+              : Border.all(color: Colors.transparent, width: 2),
+          color: _focused
+              ? AppTheme.primaryColor.withValues(alpha: 0.08)
+              : Colors.transparent,
+        ),
+        child: widget.child,
+      ),
     );
   }
 }

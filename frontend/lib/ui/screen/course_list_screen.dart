@@ -1,9 +1,5 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
-// services.dart 暴露 LogicalKeyboardKey / KeyDownEvent / KeyEventResult /
-// FocusManager,用于修复 Android TV 上搜索框的 D-pad 焦点陷阱(详见 build 中
-// 搜索区 Focus widget 的 onKeyEvent)。
-import 'package:flutter/services.dart';
 import '../../model/course.dart';
 import '../../model/grade_tag.dart';
 import '../../model/progress.dart';
@@ -12,10 +8,11 @@ import '../../model/tag.dart';
 import '../../service/api_service.dart';
 import '../../service/tv_mode.dart';
 import '../../theme.dart';
-import '../widget/focus_button.dart';
 import '../widget/button_3d.dart';
+import '../widget/focus_button.dart';
 import '../widget/state_widgets.dart';
 import '../widget/subject_icon.dart';
+import '../widget/tv_focus.dart';
 import 'course_detail_screen.dart';
 
 // 2026-07-20: grade 改成开放 tag 体系,过滤栏不再写死 1-9 年级。
@@ -56,24 +53,10 @@ class _CourseListScreenState extends State<CourseListScreen> {
   // 运行。把 D-pad 方向键在 onKeyEvent 里截掉并返回 handled,EditableText 就
   // 收不到方向键,无法把光标移动消费掉 —— 焦点就能 nextFocus/previousFocus
   // 跳出搜索框。用外层 Focus widget 包裹是拦不住的(TextField 自己消费在前)。
-  late final FocusNode _searchFocusNode = FocusNode(
-    onKeyEvent: (node, event) {
-      if (event is! KeyDownEvent) {
-        return KeyEventResult.ignored;
-      }
-      final k = event.logicalKey;
-      final next = k == LogicalKeyboardKey.arrowDown ||
-          k == LogicalKeyboardKey.arrowRight;
-      final prev = k == LogicalKeyboardKey.arrowUp ||
-          k == LogicalKeyboardKey.arrowLeft;
-      if (!next && !prev) {
-        // 字母/数字/回车/退格等一律放行给 TextField 输入。
-        return KeyEventResult.ignored;
-      }
-      next ? node.nextFocus() : node.previousFocus();
-      return KeyEventResult.handled;
-    },
-  );
+  //
+  // 这套修复逻辑现在抽到了 [dpadEscapeFocusNode](lib/ui/widget/tv_focus.dart),
+  // 复用给 LoginScreen / SettingsScreen 的输入框焦点陷阱,不再每屏各写一遍。
+  late final FocusNode _searchFocusNode = dpadEscapeFocusNode();
 
   @override
   void dispose() {
@@ -395,46 +378,29 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 const SizedBox(height: 24),
 
                 // Subject Tabs (Sleek text-based)
+                //
+                // 【TV 适配】原每个 Tab 是裸 GestureDetector,D-pad 完全跳不过来、
+                // 也无法 Enter 选中 —— 这是大厅 filter 选不中的元凶。改用 TvFocus
+                // 包裹:保留原视觉(active 下划线 + 字号),叠加焦点 + Enter/Select
+                // 处理。focused 时文字提到全亮,让用户看清当前 D-pad 落点。
                 SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   physics: const BouncingScrollPhysics(),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: _subjectFilters.map((subj) {
+                    children: _subjectFilters.asMap().entries.map((entry) {
+                      final subj = entry.value;
+                      final isFirst = entry.key == 0;
                       final active = _selectedSubject == subj;
                       final label = subj == '全部'
                           ? '推荐'
                           : resolveSubject(subj, _subjectsCatalog).label;
-                      return GestureDetector(
-                        onTap: () => setState(() => _selectedSubject = subj),
-                        child: Container(
-                          padding: const EdgeInsets.only(right: 24.0, bottom: 8.0),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                label,
-                                style: TextStyle(
-                                  fontSize: active ? 18 : 16,
-                                  fontWeight: active ? FontWeight.w900 : FontWeight.bold,
-                                  color: active ? AppTheme.textWhite : AppTheme.textMuted.withValues(alpha: 0.6),
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              if (active)
-                                Container(
-                                  width: 20,
-                                  height: 4,
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.primaryColor,
-                                    borderRadius: BorderRadius.circular(2),
-                                  ),
-                                )
-                              else
-                                const SizedBox(height: 4),
-                            ],
-                          ),
-                        ),
+                      return _SubjectTab(
+                        label: label,
+                        active: active,
+                        autoFocus: isFirst,
+                        onPressed: () =>
+                            setState(() => _selectedSubject = subj),
                       );
                     }).toList(),
                   ),
@@ -879,4 +845,75 @@ class _CourseListScreenState extends State<CourseListScreen> {
     );
   }
 
+}
+
+/// 大厅顶部的科目筛选 Tab。
+///
+/// 原来是裸 `GestureDetector`(不可聚焦,TV 断点)。这里抽成独立 widget 用
+/// `TvFocus` 包裹,既保留 active 下划线 + 字号视觉,又让 D-pad 可逐个选中、
+/// Enter 切换科目。focused 态把非 active 的文字亮度从 0.6 提到 1.0,让用户
+/// 看清当前 D-pad 落点(active 态本来就全亮,focused 不再额外变化)。
+class _SubjectTab extends StatefulWidget {
+  final String label;
+  final bool active;
+  final bool autoFocus;
+  final VoidCallback onPressed;
+
+  const _SubjectTab({
+    required this.label,
+    required this.active,
+    required this.autoFocus,
+    required this.onPressed,
+  });
+
+  @override
+  State<_SubjectTab> createState() => _SubjectTabState();
+}
+
+class _SubjectTabState extends State<_SubjectTab> {
+  bool _focused = false;
+
+  @override
+  Widget build(BuildContext context) {
+    // 颜色规则表:active 全亮;非 active 时 focused 提亮(0.6→1.0),否则暗淡。
+    final color = widget.active
+        ? AppTheme.textWhite
+        : (_focused
+            ? AppTheme.textWhite.withValues(alpha: 0.95)
+            : AppTheme.textMuted.withValues(alpha: 0.6));
+    return TvFocus(
+      autoFocus: widget.autoFocus,
+      onFocusChange: (v) => setState(() => _focused = v),
+      onPressed: widget.onPressed,
+      child: Container(
+        padding: const EdgeInsets.only(right: 24.0, bottom: 8.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.label,
+              style: TextStyle(
+                fontSize: widget.active ? 18 : 16,
+                fontWeight:
+                    widget.active ? FontWeight.w900 : FontWeight.bold,
+                color: color,
+              ),
+            ),
+            const SizedBox(height: 6),
+            if (widget.active)
+              Container(
+                width: 20,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              )
+            else
+              const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    );
+  }
 }

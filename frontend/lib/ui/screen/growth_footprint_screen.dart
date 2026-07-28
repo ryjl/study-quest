@@ -70,7 +70,11 @@ class GrowthFootprintScreen extends StatelessWidget {
         final unlockedStars = badges.fold<int>(0, (sum, b) => sum + (b.unlocked ? (b.tier + 1) : 0));
         final totalStars = badges.fold<int>(0, (sum, b) => sum + b.tierCount);
 
-        return SingleChildScrollView(
+        // 整页 FocusTraversalGroup:成长足迹是纯展示 dashboard,唯一交互元素
+        // (装饰性 Button3D,A1 已让它 D-pad 可聚焦)需要一个遍历组才能被 D-pad
+        // 落到。包一层即可,无其它改动。
+        return FocusTraversalGroup(
+          child: SingleChildScrollView(
           padding: portraitAwarePadding(context),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -133,6 +137,7 @@ class GrowthFootprintScreen extends StatelessWidget {
               }),
             ],
           ),
+        ),
         );
       },
     );

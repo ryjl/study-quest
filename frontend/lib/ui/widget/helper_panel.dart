@@ -27,7 +27,6 @@ class HelperPanel extends StatelessWidget {
   final List<String> preAdventureTasks;
   final bool disableAiTab;
   final bool tvModeActive;
-  final VoidCallback onClosePanel;
   final void Function(Attachment attachment) onOpenAttachment;
   final VoidCallback onEnterAiStudy;
 
@@ -40,7 +39,6 @@ class HelperPanel extends StatelessWidget {
     required this.preAdventureTasks,
     required this.disableAiTab,
     required this.tvModeActive,
-    required this.onClosePanel,
     required this.onOpenAttachment,
     required this.onEnterAiStudy,
   });
@@ -58,10 +56,22 @@ class HelperPanel extends StatelessWidget {
         color: Colors.white,
         border: Border(left: BorderSide(color: AppTheme.borderMuted, width: 2)),
       ),
-      child: SingleChildScrollView(
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.all(24),
-        child: Column(
+      // FocusScope(独立焦点域)+ ClampingScrollPhysics 解决两个 D-pad 焦点问题:
+      //  1. 之前用 BouncingScrollPhysics(iOS 弹性),D-pad 垂直键被 Scrollable
+      //     接管去滚动,而不是在 FocusButton 间跳。ClampingScrollPhysics 让方向键
+      //     优先给焦点遍历。
+      //  2. 之前用 FocusTraversalGroup(普通 group,非 scope),panel 和视频区的
+      //     FocusButton 在同一 traversal scope,按 ▲▼ 到边界时几何算法把视频区控制行
+      //     的 FocusButton 当候选 → 焦点"跳走丢失"。FocusScope 创建独立 FocusScopeNode,
+      //     directionalTraversalEdgeBehavior 默认 stop,panel 内 ▲▼ 到边界停住不溢出。
+      // 跨区(视频区 → panel)由播放器顶层 FocusScope(parentScope)处理:video 按 →
+      // 到边界,parentScope 在顶层 scope 找到 panel 边界 FocusButton,跨进 panel。
+      // 触屏拖动滚动不受影响(ClampingScrollPhysics 本身就是触屏滚动用)。
+      child: FocusScope(
+        child: SingleChildScrollView(
+          physics: const ClampingScrollPhysics(),
+          padding: const EdgeInsets.all(24),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Title bar
@@ -82,11 +92,8 @@ class HelperPanel extends StatelessWidget {
                         fontSize: _tvScaled(20),
                         fontWeight: FontWeight.w900,
                         color: AppTheme.textWhite)),
-                const Spacer(),
-                IconButton(
-                  icon: const Icon(Icons.close_rounded, color: AppTheme.slate400),
-                  onPressed: onClosePanel,
-                ),
+                // 右上角关闭按钮已移除:panel 显隐统一由播放器的全屏按钮控制,
+                // 不再给用户多个关闭入口(减少心智负担)。
               ],
             ),
             const SizedBox(height: 24),
@@ -144,6 +151,7 @@ class HelperPanel extends StatelessWidget {
             _buildAiStudyEntry(context),
           ],
         ),
+        ),
       ),
     );
   }
@@ -151,12 +159,16 @@ class HelperPanel extends StatelessWidget {
   // AI 学习入口卡片:常驻显示(不受 _controlsVisible 影响)。AI 开 + 有字幕时
   // 可点击进入 AiStudyScreen;不可用时置灰 + 点击弹 SnackBar 提示原因。
   // disableAiTab=true 时整体不渲染(AI 跳转 push 出来的播放器不能再进 AI 页)。
+  //
+  // 用 FocusButton 替代原裸 GestureDetector —— 让 D-pad 可聚焦、Enter 进入,
+  // 顺带继承 GlassPanel 的焦点发光环。紫色渐变内层保留,靠 FocusButton 的
+  // 透明 baseColor + borderColor 让发光环正确显现。
   Widget _buildAiStudyEntry(BuildContext context) {
     if (disableAiTab) return const SizedBox.shrink();
     final availability = AiAvailabilityHelper.fromEpisode(episode);
     final enabled = availability == AiAvailability.enabled;
-    return GestureDetector(
-      onTap: () {
+    return FocusButton(
+      onPressed: () {
         if (!enabled) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -168,6 +180,10 @@ class HelperPanel extends StatelessWidget {
         }
         onEnterAiStudy();
       },
+      borderRadius: 14,
+      baseColor: Colors.transparent,
+      borderColor: Colors.transparent,
+      padding: EdgeInsets.zero,
       child: Opacity(
         opacity: enabled ? 1.0 : 0.5,
         child: Container(

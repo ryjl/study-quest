@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 
 import '../model/course.dart';
@@ -14,59 +15,69 @@ class TrackSelectionController {
 
   /// Builds the subtitle option list shown in the inline subtitle menu.
   ///
-  ///修复字幕按钮重复 bug(需求 #4):native(libmpv 内置)轨和 backend 轨可能
-  /// 同名(都叫「中文」),直接拼接会让菜单里出现两个「中文」按钮。用 seenLabels
-  /// 在最终列表的 label 层做去重:同一个 label 只保留一个来源,优先保留 native
-  /// (切换更可靠,直接走 libmpv 的内置轨),backend 的同名 label 加「(校对版)」
-  /// 后缀保留为可选项。「关闭字幕」label 唯一,自然不会被去重掉。
+  /// 单一字幕策略:每语言只展示一个选项。backend 字幕(Whisper 转录 + LLM
+  /// polish)优先用原名展示;若 backend 已覆盖某语言/label,native(libmpv 从
+  /// 视频容器抽出的内嵌轨)的同名同语言条目直接跳过 —— 否则菜单会冒出「中文」
+  /// 和「中文(校对版)」两个按钮,而它们实际是同一条字幕的两份来源,既混乱、
+  /// 切换时还会因 native/backend 索引时序错位导致「点了没字幕」。
+  ///
+  /// 历史:之前为了"保留可选项"给重名 backend 加「(校对版)」后缀,但后端每个
+  /// (episode, language) 只存一行 Subtitle,LLM 校对是 in-place 覆盖 VttContent,
+  /// 根本不存在"原始/校对"两份数据 —— 所谓"校对版"是前端拼出来的假选项。改为
+  /// backend 优先、native 兜底(无 backend 时才展示 native)。
   static List<Map<String, dynamic>> subtitleOptions({
     required Player player,
     required Set<String> nativeSubtitleIds,
     required List<EpisodeSubtitle> backendSubtitles,
   }) {
-    final list = <Map<String, dynamic>>[];
-    final seenLabels = <String>{};
-
-    list.add({'label': '关闭字幕', 'type': 'off'});
-    seenLabels.add('关闭字幕');
-
+    // 委托给纯函数,让合并逻辑可单测(不需要 mock Player)。
     final cleanNativeSubs = player.state.tracks.subtitle
         .where((t) => nativeSubtitleIds.contains(t.id))
         .toList();
-    for (var track in cleanNativeSubs) {
-      final label = track.title ?? track.language ?? '内置字幕 ${track.id}';
-      if (!seenLabels.contains(label)) {
-        seenLabels.add(label);
-        list.add({
-          'label': label,
-          'type': 'native',
-          'track': track,
-        });
-      }
+    return mergeSubtitleOptions(
+      backendSubtitles: backendSubtitles,
+      nativeSubs: cleanNativeSubs,
+    );
+  }
+
+  /// 字幕合并的纯逻辑(无 Player 依赖,可单测)。
+  ///
+  /// 策略:backend 优先用原名,native 若与 backend 同 label 或同 language
+  /// 则跳过。详见 [subtitleOptions] 的完整注释。
+  @visibleForTesting
+  static List<Map<String, dynamic>> mergeSubtitleOptions({
+    required List<EpisodeSubtitle> backendSubtitles,
+    required List<SubtitleTrack> nativeSubs,
+  }) {
+    final list = <Map<String, dynamic>>[];
+    final seenLabels = <String>{};
+    final seenLanguages = <String>{};
+
+    void add(Map<String, dynamic> opt) {
+      list.add(opt);
+      seenLabels.add(opt['label'] as String);
     }
 
-    // Backend 字幕(Whisper 转录/校对版)。和 native 重名时不直接跳过 —— backend
-    // 版本可能是经过术语纠错的优质翻译,直接去重会让用户选不到。改成给重名的加
-    // 「(校对版)」后缀,既避免菜单出现两个一模一样的「中文」,又保留可选项。
-    // 不重名的正常加入。
-    for (var sub in backendSubtitles) {
-      final label = seenLabels.contains(sub.label)
-          ? '${sub.label}(校对版)'
-          : sub.label;
-      // 后缀后的 label 理论上仍可能撞名(极端情况:已有 native 叫「中文(校对版)」),
-      // 用 while 兜底直到不重名。正常场景一次就够。
-      var finalLabel = label;
-      var n = 2;
-      while (seenLabels.contains(finalLabel)) {
-        finalLabel = '${sub.label}(校对版$n)';
-        n++;
-      }
-      seenLabels.add(finalLabel);
-      list.add({
-        'label': finalLabel,
-        'type': 'backend',
-        'track': sub,
-      });
+    add({'label': '无', 'type': 'off'});
+
+    // 1) Backend 字幕优先:Whisper 转录 + LLM polish 后的内容,质量更高。
+    //    用原名展示,同时登记 label 和 language,供下面 native 去重。
+    for (final sub in backendSubtitles) {
+      if (!seenLabels.add(sub.label)) continue;
+      seenLanguages.add(sub.language);
+      list.add({'label': sub.label, 'type': 'backend', 'track': sub});
+    }
+
+    // 2) Native 兜底:仅当 backend 未覆盖该 label 或 language 时才展示。
+    //    netdisk 流的容器内嵌轨经常拉取失败,留着主要给"backend 缺失"的剧集兜底。
+    for (final track in nativeSubs) {
+      final label = track.title ?? track.language ?? '内置字幕 ${track.id}';
+      final clashByLabel = seenLabels.contains(label);
+      final clashByLang =
+          track.language != null && seenLanguages.contains(track.language);
+      if (clashByLabel || clashByLang) continue;
+      seenLabels.add(label);
+      list.add({'label': label, 'type': 'native', 'track': track});
     }
     return list;
   }

@@ -118,48 +118,55 @@ class _NumPadState extends State<NumPad> {
             const SizedBox(height: 24),
 
             // 3x4 Keypad Grid
-            Column(
-              children: [
-                Row(
-                  children: [
-                    _buildKey('1'),
-                    const SizedBox(width: 12),
-                    _buildKey('2'),
-                    const SizedBox(width: 12),
-                    _buildKey('3'),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _buildKey('4'),
-                    const SizedBox(width: 12),
-                    _buildKey('5'),
-                    const SizedBox(width: 12),
-                    _buildKey('6'),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _buildKey('7'),
-                    const SizedBox(width: 12),
-                    _buildKey('8'),
-                    const SizedBox(width: 12),
-                    _buildKey('9'),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: [
-                    _buildActionKey('C', _clear),
-                    const SizedBox(width: 12),
-                    _buildKey('0'),
-                    const SizedBox(width: 12),
-                    _buildActionKey('⌫', _backspace),
-                  ],
-                ),
-              ],
+            //
+            // 【TV 适配】FocusTraversalGroup 让 12 个键共享一个 reading-order
+            // 遍历顺序,D-pad 上下左右按视觉网格跳。第一个键(1)给 autofocus,
+            // 这样 PIN 蒙层打开时(外层 login_screen 已用 FocusScope 引导焦点进
+            // 来),D-pad 首个落点是「1」而不是飘到背后模糊的用户卡上。
+            FocusTraversalGroup(
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      _buildKey('1', autoFocus: true),
+                      const SizedBox(width: 12),
+                      _buildKey('2'),
+                      const SizedBox(width: 12),
+                      _buildKey('3'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _buildKey('4'),
+                      const SizedBox(width: 12),
+                      _buildKey('5'),
+                      const SizedBox(width: 12),
+                      _buildKey('6'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _buildKey('7'),
+                      const SizedBox(width: 12),
+                      _buildKey('8'),
+                      const SizedBox(width: 12),
+                      _buildKey('9'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _buildActionKey('C', _clear),
+                      const SizedBox(width: 12),
+                      _buildKey('0'),
+                      const SizedBox(width: 12),
+                      _buildActionKey('⌫', _backspace),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -167,9 +174,10 @@ class _NumPadState extends State<NumPad> {
     );
   }
 
-  Widget _buildKey(String label) {
+  Widget _buildKey(String label, {bool autoFocus = false}) {
     return Expanded(
       child: Button3D.white(
+        autoFocus: autoFocus,
         padding: const EdgeInsets.symmetric(vertical: 14),
         onPressed: () => _onKeyPress(label),
         child: Text(

@@ -4,6 +4,7 @@ import '../../config.dart';
 import '../../model/user.dart';
 import '../../model/progress.dart';
 import '../../service/api_service.dart';
+import '../../service/app_features.dart';
 import '../../service/auth_service.dart';
 import '../../service/update_service.dart';
 import '../../theme.dart';
@@ -193,25 +194,20 @@ class _MainNavigationState extends State<MainNavigation> {
         _loadUserPoints();
         _loadUnmasteredCount();
       },
-      items: [
-        const BottomNavigationBarItem(
-            icon: Icon(Icons.school_rounded), label: '学习大厅'),
-        const BottomNavigationBarItem(
-            icon: Icon(Icons.menu_book_rounded), label: '阅读室'),
-        const BottomNavigationBarItem(
-            icon: Icon(Icons.explore_rounded), label: '成长足迹'),
-        // 错题本:图标用 spellcheck(语义=检查/纠错),和阅读室的 menu_book 区分;
-        // 未掌握数 > 0 时带角标红点提示有题要复习。
-        BottomNavigationBarItem(
-            icon: Badge(
-              isLabelVisible: _unmasteredCount > 0,
-              label: Text('$_unmasteredCount'),
-              child: const Icon(Icons.spellcheck_rounded),
-            ),
-            label: '错题本'),
-        const BottomNavigationBarItem(
-            icon: Icon(Icons.settings_rounded), label: '系统设置'),
-      ],
+      items: visibleFeaturesFor()
+          .map((feature) {
+            // 错题本带未掌握数 badge,其它 tab 纯图标。
+            final isWrongBook = feature == AppFeature.wrongBook;
+            final icon = isWrongBook
+                ? Badge(
+                    isLabelVisible: _unmasteredCount > 0,
+                    label: Text('$_unmasteredCount'),
+                    child: Icon(feature.icon),
+                  )
+                : Icon(feature.icon);
+            return BottomNavigationBarItem(icon: icon, label: feature.label);
+          })
+          .toList(),
     );
   }
 
@@ -565,13 +561,21 @@ class _MainNavigationState extends State<MainNavigation> {
                       ),
 
                     // Menu Navigation Tabs
+                    //
+                    // 【TV 路由表裁剪】tab 列表从 visibleFeaturesFor() 生成,
+                    // 不是硬编码 5 个。TV 模式下错题本(AppFeature.wrongBook 的
+                    // supportsTv=false)整 tab 不出现。错题本带未掌握数 badge。
                     const SizedBox(height: 12),
-                    _buildNavItem(0, Icons.school_rounded, '学习大厅'),
-                    _buildNavItem(1, Icons.menu_book_rounded, '阅读室'),
-                    _buildNavItem(2, Icons.explore_rounded, '成长足迹'),
-                    // 错题本:图标 spellcheck 区分阅读室;未掌握数 > 0 带角标。
-                    _buildNavItemWithBadge(3, Icons.spellcheck_rounded, '错题本', _unmasteredCount),
-                    _buildNavItem(4, Icons.settings_rounded, '系统设置'),
+                    ...visibleFeaturesFor().asMap().entries.map((entry) {
+                      final index = entry.key;
+                      final feature = entry.value;
+                      final isWrongBook = feature == AppFeature.wrongBook;
+                      if (isWrongBook) {
+                        return _buildNavItemWithBadge(
+                            index, feature.icon, feature.label, _unmasteredCount);
+                      }
+                      return _buildNavItem(index, feature.icon, feature.label);
+                    }),
 
                     const Spacer(),
 
@@ -693,28 +697,32 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   Widget _buildCurrentScreen(int activeUserId) {
-    switch (_selectedTab) {
-      case 0:
+    // 路由表 = 可见功能列表。TV 模式下错题本整 tab 不出现(visibleFeaturesFor
+    // 过滤掉),_selectedTab 索引映射到过滤后的列表。新增/裁剪功能只改
+    // app_features.dart 的 enum,这里自动跟随。
+    final features = visibleFeaturesFor();
+    // _selectedTab 越界保护:切 TV 模式后原索引可能超出新列表长度。
+    final safeIndex = _selectedTab.clamp(0, features.length - 1);
+    return _buildScreenFor(features[safeIndex], activeUserId);
+  }
+
+  /// 按 feature 渲染对应屏。switch 表驱动,加新屏只加一个 case。
+  Widget _buildScreenFor(AppFeature feature, int activeUserId) {
+    switch (feature) {
+      case AppFeature.courseHall:
         return CourseListScreen(activeUserId: activeUserId);
-      case 1:
+      case AppFeature.readingRoom:
         return ReadingRoomScreen(activeUserId: activeUserId);
-      case 2:
-        return _buildProgressScreen(activeUserId);
-      case 3:
+      case AppFeature.footprint:
+        return GrowthFootprintScreen(activeUserId: activeUserId);
+      case AppFeature.wrongBook:
         return WrongBookScreen(
           activeUserId: activeUserId,
           onWrongBookChanged: _loadUnmasteredCount,
         );
-      case 4:
+      case AppFeature.settings:
         return _buildSettingsScreen();
-      default:
-        return CourseListScreen(activeUserId: activeUserId);
     }
-  }
-
-  // 1. Growth Footprints Dashboard Screen
-  Widget _buildProgressScreen(int activeUserId) {
-    return GrowthFootprintScreen(activeUserId: activeUserId);
   }
 
 

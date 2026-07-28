@@ -9,6 +9,7 @@ import '../widget/focus_button.dart';
 import '../widget/glass_panel.dart';
 import '../widget/num_pad.dart';
 import '../widget/dot_pattern_background.dart';
+import '../widget/tv_focus.dart';
 import '../../config.dart';
 import 'main_navigation.dart';
 
@@ -40,6 +41,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   void _showIpConfigDialog() {
     final controller = TextEditingController(text: AppConfig.baseUrl);
+    // 焦点陷阱修复:TextField 默认会吞掉方向键(光标移动),D-pad 进了就出不来,
+    // 跳不到「取消 / 保存并重试」按钮。dpadEscapeFocusNode 在 EditableText 之前
+    // 截断方向键转 nextFocus/previousFocus,字母数字回车放行给输入。
+    final ipFocusNode = dpadEscapeFocusNode();
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -70,6 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
               const SizedBox(height: 16),
               TextField(
                 controller: controller,
+                focusNode: ipFocusNode,
                 autofocus: true,
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
                 decoration: InputDecoration(
@@ -131,7 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
           ],
         );
       },
-    );
+    ).whenComplete(ipFocusNode.dispose);
   }
 
   void _onSelectUser(User user) {
@@ -170,7 +176,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    // 整屏 FocusTraversalGroup:用户卡 / 设置按钮 / 错误态按钮 / PIN 键盘
+    // 共享一个 reading-order 遍历链,D-pad 才能在它们之间自然移动。
+    return FocusTraversalGroup(
+      child: Scaffold(
       body: DotPatternBackground(
         child: Stack(
           children: [
@@ -250,45 +259,53 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
 
           // Overlay PIN Pad with high-blur frosted glass
+          //
+          // 【TV 适配】FocusScope(autofocus:true):PIN 蒙层打开时焦点自动进入
+          // NumPad(NumPad 内部「1」键再 autofocus),D-pad 落在数字键上而不是
+          // 背后模糊的用户卡。蒙层移除时焦点自然还回外层用户卡。
           if (_showPinPad && _selectedUser != null)
             Positioned.fill(
               child: Container(
                 color: Colors.black.withValues(alpha: 0.15), // Light dim overlay
                 child: BackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        NumPad(
-                          title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
-                          maxDigits: 4, // standard 4-digit PIN
-                          onSubmit: _onSubmitPin,
-                          onCancel: _onCancelPin,
-                        ),
-                        if (_errorMessage.isNotEmpty) ...[
-                          const SizedBox(height: 20),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: Colors.redAccent.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
-                            ),
-                            child: Text(
-                              _errorMessage,
-                              style: const TextStyle(color: Colors.redAccent, fontSize: 16, fontWeight: FontWeight.bold),
-                            ),
+                  child: FocusScope(
+                    autofocus: true,
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          NumPad(
+                            title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
+                            maxDigits: 4, // standard 4-digit PIN
+                            onSubmit: _onSubmitPin,
+                            onCancel: _onCancelPin,
                           ),
+                          if (_errorMessage.isNotEmpty) ...[
+                            const SizedBox(height: 20),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.redAccent.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: Colors.redAccent.withValues(alpha: 0.3)),
+                              ),
+                              child: Text(
+                                _errorMessage,
+                                style: const TextStyle(color: Colors.redAccent, fontSize: 16, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 ),
+              ),
             ),
-          ),
         ],
       ),
+    ),
     ),
   );
 }
@@ -298,8 +315,14 @@ class _LoginScreenState extends State<LoginScreen> {
       spacing: 24,
       runSpacing: 24,
       alignment: WrapAlignment.center,
-      children: users.map((user) {
+      children: users.asMap().entries.map((entry) {
+        final user = entry.value;
+        final isFirst = entry.key == 0;
         return FocusButton(
+          // 首个用户卡 autofocus:首屏 D-pad 落点确定(而不是飘到右上设置按钮
+          // 或不可预测的位置)。用户列表异步加载,FutureBuilder 数据到达后
+          // 首次构建这个 Wrap,autofocus 此时生效。
+          autoFocus: isFirst,
           padding: const EdgeInsets.all(20),
           borderRadius: 24,
           onPressed: () => _onSelectUser(user),
