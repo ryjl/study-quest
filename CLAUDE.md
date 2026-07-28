@@ -137,6 +137,10 @@ Always run `make test` before declaring backend work done.
    bug，用户看得到、会困惑。别用"小问题""可观测性层面"给自己找台阶。踩坑细节
    和具体修法进 `docs/pitfalls/`，不堆在 CLAUDE.md。
 
+8. **所有修改直接进 `main`，不要拉 branch。** 这个项目是单人开发，分支管理
+   是纯开销。commit 直接打在 `main` 上，不建 feature branch、不开 PR、不走
+   rebase/merge 流程。不要"按规范先分支"——这里的主线就是 `main`。
+
 ## Where things live (quick map)
 
 - **Time/timezone:** `backend/internal/appclock/` (the one business zone).
