@@ -6,17 +6,30 @@ import kotlinx.serialization.Serializable
 /**
  * 用户对单集的观看进度。对应 Dart: `UserProgress`。
  *
- * 进度上报 `/progress/report` 响应、进度列表 `/progress` 都返回同一形状。
- * 后端字段 snake_case（progress_handler.go）。
+ * **字段大小写注意**:后端有两个进度端点,字段大小写不同:
+ *   - `/progress/report` 响应:snake_case(`episode_id` / `is_completed` 等)。
+ *   - `/progress` 列表:**PascalCase**(`EpisodeID` / `IsCompleted` 等),且带嵌套
+ *     关联对象(User/Episode)。这是 Go ORM 默认序列化的结果。
+ *
+ * 课程详情页用 `/progress` 列表(对照 PAD `fetchProgressOverview`),所以这里按
+ * **PascalCase** 标注(对齐实际下发的 `/progress` 响应)。`/progress/report` 的
+ * 响应字段在 [ReportProgressRequest] 是请求体不涉及,且 report 的响应 TV 端目前
+ * 不消费(只看成功/失败),所以 PascalCase 标注不影响 report 流程。
+ *
+ * 嵌套的 User/Episode 关联对象(后端 ORM preload 的)这里不解析 ——
+ * `Json.ignoreUnknownKeys = true` 会忽略它们,我们只取扁平的进度字段。
+ *
+ * 对应 Dart: `UserProgress.fromJson`(PAD 端用双键读取兼容大小写,
+ * 这里以 PascalCase 为准,跟 CourseDto/EpisodeDto 一致)。
  */
 @Serializable
 data class UserProgressDto(
-    @SerialName("id") val id: Int = 0,
-    @SerialName("user_id") val userId: Int = 0,
-    @SerialName("episode_id") val episodeId: Int = 0,
-    @SerialName("last_position_seconds") val lastPositionSeconds: Int = 0,
-    @SerialName("watch_seconds") val watchSeconds: Int = 0,
-    @SerialName("is_completed") val isCompleted: Boolean = false,
+    @SerialName("ID") val id: Int = 0,
+    @SerialName("UserID") val userId: Int = 0,
+    @SerialName("EpisodeID") val episodeId: Int = 0,
+    @SerialName("LastPositionSeconds") val lastPositionSeconds: Int = 0,
+    @SerialName("WatchSeconds") val watchSeconds: Int = 0,
+    @SerialName("IsCompleted") val isCompleted: Boolean = false,
 )
 
 /**

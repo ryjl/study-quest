@@ -5,11 +5,13 @@ import com.revin.studyquest.tv.data.remote.dto.ChapterDto
 import com.revin.studyquest.tv.data.remote.dto.CourseDto
 import com.revin.studyquest.tv.data.remote.dto.EpisodeDto
 import com.revin.studyquest.tv.data.remote.dto.EpisodeSummaryDto
+import com.revin.studyquest.tv.data.remote.dto.GradeTagDto
 import com.revin.studyquest.tv.data.remote.dto.LoginRequestDto
 import com.revin.studyquest.tv.data.remote.dto.LoginResponseDto
 import com.revin.studyquest.tv.data.remote.dto.PlayInfoDto
 import com.revin.studyquest.tv.data.remote.dto.PointsLedgerDto
 import com.revin.studyquest.tv.data.remote.dto.ReportProgressRequest
+import com.revin.studyquest.tv.data.remote.dto.SubjectDto
 import com.revin.studyquest.tv.data.remote.dto.UserDto
 import com.revin.studyquest.tv.data.remote.dto.UserPointDto
 import com.revin.studyquest.tv.data.remote.dto.UserProgressDto
@@ -73,6 +75,20 @@ interface ApiService {
     /** GET /api/v1/courses/{id}/last-watched —— 最近观看的课时（断点续看入口）。 */
     @GET("api/v1/courses/{id}/last-watched")
     suspend fun fetchLastWatched(@Path("id") courseId: Int): EpisodeDto
+
+    /**
+     * GET /api/v1/courses/grade-tags —— 学段 tag 目录(课程卡片角标 / 过滤栏)。
+     * 对照 PAD `ApiService.fetchGradeTags`。失败时 Repository 用 [PresetGradeTags] 兜底。
+     */
+    @GET("api/v1/courses/grade-tags")
+    suspend fun fetchGradeTags(): List<GradeTagDto>
+
+    /**
+     * GET /api/v1/subjects —— 学科目录(课程卡片渐变色 / 学科名 label)。
+     * 对照 PAD `ApiService.fetchSubjects`。需要学生鉴权头。
+     */
+    @GET("api/v1/subjects")
+    suspend fun fetchSubjects(): List<SubjectDto>
 
     // ── 3. 播放器 ──────────────────────────────────────────────────────────
 

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.revin.studyquest.tv.data.local.TokenStore
 import com.revin.studyquest.tv.data.remote.dto.CourseDto
+import com.revin.studyquest.tv.data.remote.dto.GradeTagDto
+import com.revin.studyquest.tv.data.remote.dto.SubjectDto
 import com.revin.studyquest.tv.data.repo.CourseRepo
 import com.revin.studyquest.tv.data.repo.UrlResolver
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,9 +22,13 @@ import javax.inject.Inject
  * 职责:
  *  1. init 时调 [CourseRepo.fetchCourses] 拉课程列表(contentType="learning"),
  *     用 sealed [CourseHallUiState] 暴露 Loading / Error / Done 三态。
- *  2. 提供 [absoluteCover] 帮 UI 把后端 server-relative 封面路径拼成绝对 URL
- *     (对照 PAD `ApiService.absoluteUrl(course.coverUrl)`)。baseUrl 在 [TokenStore],
- *     不在 DTO 里,这里注入 TokenStore 读出来。
+ *  2. 加载 subject / grade-tag 两个 catalog(对照 PAD `_subjectsCatalog` /
+ *     `_gradeTagsCatalog`),给卡片渲染 label / 渐变色用。
+ *  3. 暴露 [baseUrl] / [subjects] / [gradeTags] 三个 StateFlow,让 UI 用
+ *     `collectAsStateWithLifecycle` 订阅 —— 这是封面 URL 异步竞态修复的关键:
+ *     初次组合时 baseUrl 可能还没读到(SP 异步),旧实现 `remember(course.id,
+ *     course.coverUrl)` 不含 baseUrl 进 key,导致 baseUrl 到位后封面永久不刷新。
+ *     现在 baseUrl 进 StateFlow,UI 重组时 `remember(baseUrl, ...)` 会重算封面 URL。
  *
  * 不做筛选 / 搜索(PAD 端的 subject / grade / tag 过滤)—— TV 端 D-pad 操作成本高,
  * 第一版只铺平卡片网格。后续阶段再加。
@@ -43,18 +49,44 @@ class CourseHallViewModel @Inject constructor(
      * 后端 baseUrl(从 TokenStore 读)。给 UI 用 [UrlResolver.absolute] 同步拼封面 URL,
      * 避免 composable 里 runBlocking 读 SP。init 时加载一次;baseUrl 改动需重载
      * (设置页改完会重建 Activity,这里不监听变化)。
+     *
+     * **竞态修复**:作为 StateFlow 暴露给 UI,UI collectAsState 后参与重组,使
+     * `remember(baseUrl, ...)` 在 baseUrl 到位时重算封面 URL。
      */
     private val _baseUrl = MutableStateFlow<String?>(null)
     val baseUrl: StateFlow<String?> = _baseUrl.asStateFlow()
 
+    /** 学科目录(对照 PAD `_subjectsCatalog`)。空表时 UI 用 fallback 显示原始 key。 */
+    private val _subjects = MutableStateFlow<List<SubjectDto>>(emptyList())
+    val subjects: StateFlow<List<SubjectDto>> = _subjects.asStateFlow()
+
+    /** 学段 tag 目录(对照 PAD `_gradeTagsCatalog`)。失败兜底 PresetGradeTags。 */
+    private val _gradeTags = MutableStateFlow<List<GradeTagDto>>(emptyList())
+    val gradeTags: StateFlow<List<GradeTagDto>> = _gradeTags.asStateFlow()
+
     init {
         loadBaseUrl()
         loadCourses()
+        loadCatalogs()
     }
 
     /** 从 TokenStore 读 baseUrl 进 StateFlow(给 UI 同步拼封面 URL 用)。 */
     private fun loadBaseUrl() {
         viewModelScope.launch { _baseUrl.value = tokenStore.getBaseUrl() }
+    }
+
+    /**
+     * 拉 subject / grade-tag catalog(非阻塞,失败各自兜底)。
+     *
+     * 课程列表加载不依赖这两个 catalog(catalog 慢一点顶多卡片先显示原始 key,
+     * catalog 到位后 UI 重组刷新成 label),所以跟 [loadCourses] 并行发起,
+     * 任一失败不阻塞主列表。
+     */
+    private fun loadCatalogs() {
+        viewModelScope.launch {
+            _subjects.value = courseRepo.fetchSubjects()
+            _gradeTags.value = courseRepo.fetchGradeTags()
+        }
     }
 
     /** 拉课程列表。失败 → Error 态(带 message);成功 → Done(data)。 */

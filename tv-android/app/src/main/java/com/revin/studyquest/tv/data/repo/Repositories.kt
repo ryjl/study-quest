@@ -83,8 +83,30 @@ class CourseRepo @Inject constructor(
     suspend fun fetchChapters(courseId: Int) = api.fetchChapters(courseId)
     suspend fun fetchLastWatched(courseId: Int) = api.fetchLastWatched(courseId)
 
+    /**
+     * 学段 tag 目录。端点失败 → [PresetGradeTags] 兜底(对照 PAD `kPresetGradeTags`
+     * fallback 语义:保证卡片角标 / 过滤栏在端点挂掉时仍可用)。
+     */
+    suspend fun fetchGradeTags(): List<com.revin.studyquest.tv.data.remote.dto.GradeTagDto> =
+        runCatching { api.fetchGradeTags() }
+            .getOrElse { com.revin.studyquest.tv.data.remote.dto.PresetGradeTags }
+
+    /**
+     * 学科目录。端点失败 → 空表(学科没有像 grade 那样的预设兜底,后端 DB-driven)。
+     * 调用方用 [resolveSubject] 查询,空 catalog 时走 fallback(显示原始 key)。
+     */
+    suspend fun fetchSubjects(): List<com.revin.studyquest.tv.data.remote.dto.SubjectDto> =
+        runCatching { api.fetchSubjects() }.getOrDefault(emptyList())
+
     /** play-info：播放器核心契约。 */
     suspend fun fetchPlayInfo(episodeId: Int) = api.fetchPlayInfo(episodeId)
+
+    /**
+     * 用户全量进度列表(GET /progress)。课程详情页用它构建 completionMap /
+     * resumeMap(对照 PAD course_detail_screen.dart 行 147-155),计算完成态 +
+     * 续播位 + 进度%。
+     */
+    suspend fun fetchProgressOverview() = api.fetchProgressOverview()
 
     /** 进度上报（防作弊，business-rules.md 第 4 节；客户端只在 delta∈(0,30] 调）。 */
     suspend fun reportProgress(episodeId: Int, positionSeconds: Int, deltaWatchSeconds: Int) =

@@ -50,6 +50,40 @@ data class ChapterDto(
 )
 
 /**
+ * 学科目录项。对应 Dart `frontend/lib/model/subject.dart` 的 `Subject`。
+ *
+ * 课程 DTO 里只带 `subject` 字符串 key,展示用的 label / 卡片渐变色需要从这个 catalog
+ * 查出来(对照 PAD `resolveSubject(course.subject, catalog).label/.color`)。
+ *
+ * 后端 `/api/v1/subjects` 字段全小写,前端兼容双键(与 Dart `Subject.fromJson` 一致)。
+ */
+@Serializable
+data class SubjectDto(
+    @SerialName("key") val key: String = "",
+    @SerialName("label") val label: String = "",
+    @SerialName("color") val color: String = "#9ca3af",
+    @SerialName("category") val category: String = "academic",
+) {
+    /** 是否娱乐子类(动画片/电影/纪录片/综艺)。对齐 Dart `Subject.isEntertainment`。 */
+    val isEntertainment: Boolean get() = category == "entertainment"
+}
+
+/**
+ * 学段(年级)tag 目录项。对应 Dart `frontend/lib/model/grade_tag.dart` 的 `GradeTag`。
+ *
+ * 后端 `/api/v1/courses/grade-tags` 返回;`course.grade` 字段存的是 key(可能是逗号
+ * 分隔多个),卡片角标按 key 查 label 展示(对照 PAD `gradeLabelOf`)。
+ *
+ * 后端字段全小写(与 Dart `GradeTag.fromJson` 一致)。
+ */
+@Serializable
+data class GradeTagDto(
+    @SerialName("key") val key: String = "",
+    @SerialName("label") val label: String = "",
+    @SerialName("preset") val preset: Boolean = false,
+)
+
+/**
  * 单个课时。对应 Dart: `Episode`；后端 `clientEpisodeDTO`。
  *
  * 注意 `locked` 是契约里唯一的小写字段（后端 client_dto.go 注释明确说明：
@@ -131,3 +165,46 @@ data class PlayInfoDto(
     /** 是否已看完（progress 缺失视为未完成）。 */
     val isCompleted: Boolean get() = progress?.isCompleted == true
 }
+
+// ── Catalog 兜底常量(对照 PAD `kPresetGradeTags` / `kFallbackSubjects`) ──────
+
+/**
+ * 预设 grade tag 兜底列表 —— `/api/v1/courses/grade-tags` 端点失败时用。
+ *
+ * **跨层契约**:必须与以下保持同步(对照 `frontend/lib/model/grade_tag.dart` 注释):
+ *   - backend `model.PresetGrades`
+ *   - frontend-admin `lib/grades.ts`
+ *   - PAD `frontend/lib/model/grade_tag.dart` 的 `kPresetGradeTags`
+ *
+ * 2026-07-21「成人」(adult) 已替换为「大学」(college) + 「其它」(other)。
+ */
+val PresetGradeTags: List<GradeTagDto> = listOf(
+    GradeTagDto(key = "primary", label = "小学", preset = true),
+    GradeTagDto(key = "junior", label = "初中", preset = true),
+    GradeTagDto(key = "senior", label = "高中", preset = true),
+    GradeTagDto(key = "college", label = "大学", preset = true),
+    GradeTagDto(key = "other", label = "其它", preset = true),
+    GradeTagDto(key = "universal", label = "通用", preset = true),
+)
+
+/**
+ * 学科目录查询 helper(对照 PAD `resolveSubject`)。
+ *
+ * 用 key 在 catalog 里找对应的 [SubjectDto];找不到返回一个 fallback(原 key 作 label,
+ * 灰色 #9ca3af),保证 UI 永远拿到非 null 对象,不会因 catalog 缺项崩。
+ *
+ * 注意:此函数在 catalog 为空(端点还没拉到 / 失败)时,**所有** key 都走 fallback,
+ * label 会显示原始 key(如 "math")。所以调用方应优先用 [PresetGradeTags] 给 grade
+ * 兜底,subject 通常无预设(后端 DB-driven),只能等 catalog 拉到。
+ */
+fun resolveSubject(key: String, catalog: List<SubjectDto>): SubjectDto =
+    catalog.firstOrNull { it.key == key }
+        ?: SubjectDto(key = key, label = key.ifEmpty { "课程" }, color = "#9ca3af")
+
+/**
+ * grade key → label 查询(对照 PAD `gradeLabelOf`)。
+ *
+ * 在 catalog 里找 label;找不到原样返回 key(自定义 tag 的兼容行为,对齐 PAD)。
+ */
+fun gradeLabelOf(key: String, catalog: List<GradeTagDto>): String =
+    catalog.firstOrNull { it.key == key }?.label ?: key

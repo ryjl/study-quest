@@ -26,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -39,16 +38,23 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.ExperimentalTvMaterial3Api
+import androidx.tv.material3.Glow
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import coil.compose.AsyncImage
 import com.revin.studyquest.tv.data.remote.dto.CourseDto
-import com.revin.studyquest.tv.ui.theme.brandGradient
+import com.revin.studyquest.tv.data.remote.dto.GradeTagDto
+import com.revin.studyquest.tv.data.remote.dto.SubjectDto
+import com.revin.studyquest.tv.data.remote.dto.gradeLabelOf
+import com.revin.studyquest.tv.data.remote.dto.resolveSubject
+import com.revin.studyquest.tv.data.repo.UrlResolver
 import com.revin.studyquest.tv.ui.theme.primaryColor
 import com.revin.studyquest.tv.ui.theme.slate400
 import com.revin.studyquest.tv.ui.theme.slate700
 import com.revin.studyquest.tv.ui.theme.slate900
+import com.revin.studyquest.tv.ui.theme.subjectGradientFromColor
 
 /**
  * 课程大厅屏 —— TV 端核心首页。
@@ -79,6 +85,11 @@ fun CourseHallScreen(
     viewModel: CourseHallViewModel = hiltViewModel(),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    // 三个 StateFlow collectAsState:baseUrl/catalog 到位时触发重组,
+    // 让下方 remember(baseUrl, catalog, ...) 重算(修复封面 URL 异步竞态 + label)。
+    val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
+    val subjects by viewModel.subjects.collectAsStateWithLifecycle()
+    val gradeTags by viewModel.gradeTags.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -102,7 +113,10 @@ fun CourseHallScreen(
                 } else {
                     CourseGrid(
                         courses = state.courses,
-                        viewModel = viewModel,
+                        // 直接传值,让卡片用 collectAsState 后的最新值重算。
+                        baseUrl = baseUrl,
+                        subjects = subjects,
+                        gradeTags = gradeTags,
                         onOpenCourse = onOpenCourse,
                     )
                 }
@@ -232,13 +246,16 @@ private fun EmptyState(onRetry: () -> Unit) {
 @Composable
 private fun CourseGrid(
     courses: List<CourseDto>,
-    viewModel: CourseHallViewModel,
+    baseUrl: String?,
+    subjects: List<SubjectDto>,
+    gradeTags: List<GradeTagDto>,
     onOpenCourse: (CourseDto) -> Unit,
 ) {
     // TV 横屏 4 列(对照 PAD 宽屏 crossAxisCount=4),卡片宽高比 0.86 接近 PAD。
     LazyVerticalGrid(
         columns = GridCells.Fixed(4),
         modifier = Modifier.fillMaxSize(),
+        // 外围 padding 给卡片聚焦 scale(1.05)+ glow 留缓冲,避免被 grid cell 边界 clip。
         contentPadding = PaddingValues(start = 48.dp, end = 48.dp, bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp),
         horizontalArrangement = Arrangement.spacedBy(24.dp),
@@ -247,13 +264,27 @@ private fun CourseGrid(
             items = courses,
             key = { course -> course.id },
         ) { course ->
-            // 封面绝对 URL:viewModel 同步拼(baseUrl 已在 init 读进 StateFlow)。
-            val coverUrl = remember(course.id, course.coverUrl) {
-                viewModel.absoluteCover(course)
+            // **封面 URL 异步竞态修复**:remember key 必须包含 baseUrl。
+            // 旧实现 key 只有 (course.id, course.coverUrl),init 时 baseUrl 还没从
+            // SP 读出来(null),拼成相对路径 → 封面永久 404。现在 baseUrl 进 key,
+            // collectAsState 触发重组时重算成绝对 URL。
+            val coverUrl = remember(course.id, course.coverUrl, baseUrl) {
+                UrlResolver.absolute(baseUrl, course.coverUrl)
+            }
+            // 学科信息查 catalog(对照 PAD `resolveSubject`)。
+            val subject = remember(course.subject, subjects) {
+                resolveSubject(course.subject, subjects)
+            }
+            // grade key → label(对照 PAD `gradeLabelOf`)。
+            val firstGradeKey = course.grade.split(",").firstOrNull()?.trim().orEmpty()
+            val firstGradeLabel = remember(firstGradeKey, gradeTags) {
+                if (firstGradeKey.isEmpty()) "" else gradeLabelOf(firstGradeKey, gradeTags)
             }
             CourseCard(
                 course = course,
                 coverUrl = coverUrl,
+                subject = subject,
+                gradeLabel = firstGradeLabel,
                 onClick = { onOpenCourse(course) },
             )
         }
@@ -264,63 +295,74 @@ private fun CourseGrid(
  * 课程卡 —— 对照 PAD `_buildCourseCard`(course_list_screen.dart 行 487)。
  *
  * 复刻的 PAD 视觉元素:
- *   1. 顶部学科渐变 banner(`getSubjectGradientFromColor`)。TV 端暂无学科 catalog,
- *      用固定 [brandGradient](蓝→靛)兜底。
- *   2. banner 左上角 chip 标签:"tag | grade"(对照 PAD `cardLabel`)。
+ *   1. 顶部学科渐变 banner(对照 PAD `getSubjectGradientFromColor`,用 subject.color
+ *      动态生成,而非固定 brandGradient —— 这是 #4「列表没做对」的视觉修复之一)。
+ *   2. banner 左上角 chip 标签:"tag | gradeLabel"(对照 PAD `cardLabel`)。
  *   3. banner 右下角播放图标(对照 PAD PlayCircleFill)。
- *   4. banner 区可有封面图(有 coverUrl 时 AsyncImage 覆盖)。
- *   5. 信息区:学科名 chip + 标题(2 行省略)+ "点击进入学习" 提示。
+ *   4. banner 区可有封面图(有 coverUrl 时 AsyncImage 覆盖;加载失败 fallback 学科渐变)。
+ *   5. 信息区:学科名 chip(显示 subject.label 而非 key)+ 标题(2 行省略)+ "点击进入学习"。
  *
- * TV 焦点态(对照 design-tokens.md「焦点视觉 TV 版」):
- *   - 边框 primaryColor 3dp + 发光环(primaryColor alpha 0.35 blurRadius 24)。
- *   - 非聚焦:surface 底色 + slate700 1dp 细边。
+ * TV 焦点态(对照 design-tokens.md「焦点视觉 TV 版」)—— 用 tv-material3 原生聚焦
+ * 参数(对照 [TvIconButton] 同范式),**不再用 `Modifier.shadow`**(深色底上 shadow
+ * 不可见,实测反馈"高亮效果不好看"):
+ *   - 聚焦发光环:`glow` = primaryColor alpha 0.35 blurRadius 24(tv-material3 Glow
+ *     原生绘制,比 Modifier.shadow 在深色底更醒目)。
+ *   - 聚焦缩放:scale 1.0 → 1.05(对照 design-tokens.md 焦点缩放节;腾讯/网易 TV 风格)。
+ *   - 聚焦边框:border focusedBorder primaryColor 3dp,非聚焦 slate700 1dp。
+ *   - 聚焦背景微提亮:focusedContainerColor = primaryColor alpha 0.12。
+ *
+ * @param subject 已解析的学科目录项(用 label 显示 + color 生成渐变);
+ *   catalog 缺项时由 [resolveSubject] fallback,key 作 label。
+ * @param gradeLabel 已解析的学段 label(catalog 缺项时为原始 key)。
  */
+@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 private fun CourseCard(
     course: CourseDto,
     coverUrl: String,
+    subject: SubjectDto,
+    gradeLabel: String,
     onClick: () -> Unit,
 ) {
-    var focused by remember { mutableStateOf(false) }
-    // chip 标签 = 首个 tag | grade 首个 key(对照 PAD cardLabel)。
+    // chip 标签 = 首个 tag | gradeLabel(对照 PAD cardLabel)。
     val firstTag = course.tagsList.firstOrNull().orEmpty()
-    val firstGrade = course.grade.split(",").firstOrNull()?.trim().orEmpty()
     val cardLabel = when {
-        firstTag.isEmpty() && firstGrade.isEmpty() -> ""
-        firstTag.isEmpty() -> firstGrade
-        firstGrade.isEmpty() -> firstTag
-        else -> "$firstTag | $firstGrade"
+        firstTag.isEmpty() && gradeLabel.isEmpty() -> ""
+        firstTag.isEmpty() -> gradeLabel
+        gradeLabel.isEmpty() -> firstTag
+        else -> "$firstTag | $gradeLabel"
     }
 
     Surface(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(0.86f)
-            .onFocusChanged { focused = it.isFocused }
-            .then(
-                if (focused) {
-                    // 发光环:primaryColor alpha 0.35 blurRadius 24(对照 design-tokens.md TV 版)。
-                    Modifier.shadow(
-                        elevation = 24.dp,
-                        shape = RoundedCornerShape(20.dp),
-                        ambientColor = primaryColor.copy(alpha = 0.35f),
-                        spotColor = primaryColor.copy(alpha = 0.35f),
-                    )
-                } else {
-                    Modifier
-                },
-            ),
+            .aspectRatio(0.86f),
         shape = ClickableSurfaceDefaults.shape(shape = RoundedCornerShape(20.dp)),
+        // 聚焦缩放 1.05(对照 design-tokens.md 焦点缩放节)。
+        scale = ClickableSurfaceDefaults.scale(focusedScale = 1.05f),
+        // 发光环:primaryColor alpha 0.35,blurRadius 24(对照 design-tokens.md TV 版)。
+        // tv-material3 Glow 在深色底上比 Modifier.shadow 醒目得多。
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = Glow(elevation = 24.dp, elevationColor = primaryColor.copy(alpha = 0.35f)),
+        ),
         colors = ClickableSurfaceDefaults.colors(
             containerColor = Color(0xFF1E293B), // slate800 卡片底
             focusedContainerColor = primaryColor.copy(alpha = 0.12f), // 聚焦背景微提亮(对照 token)
         ),
         border = ClickableSurfaceDefaults.border(
+            // 非聚焦(默认 border 参数):slate700 细边,弱化非焦点(对照 design-tokens TV 版)。
             border = Border(
                 border = androidx.compose.foundation.BorderStroke(
-                    width = if (focused) 3.dp else 1.dp,
-                    color = if (focused) primaryColor else slate700,
+                    width = 1.dp,
+                    color = slate700,
+                ),
+            ),
+            // 聚焦:primaryColor 3dp 粗边框。
+            focusedBorder = Border(
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 3.dp,
+                    color = primaryColor,
                 ),
             ),
         ),
@@ -331,13 +373,14 @@ private fun CourseCard(
                 course = course,
                 coverUrl = coverUrl,
                 cardLabel = cardLabel,
+                subjectColorHex = subject.color,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
             )
             // 信息区:学科名 chip + 标题 + 进入提示。
             CardInfo(
-                subjectKey = course.subject,
+                subjectLabel = subject.label,
                 title = course.title,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -353,21 +396,23 @@ private fun Banner(
     course: CourseDto,
     coverUrl: String,
     cardLabel: String,
+    subjectColorHex: String,
     modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier.background(
-            brush = if (coverUrl.isNotEmpty()) Brush.linearGradient(
-                colors = listOf(Color.Transparent, Color.Transparent),
-            ) else brandGradient,
+            // 学科渐变 banner(对照 PAD getSubjectGradientFromColor,后端配置色驱动)。
+            // 无封面图时显示;有封面图时被 AsyncImage 覆盖。Coil 加载失败也 fallback 到这个渐变。
+            brush = subjectGradientFromColor(subjectColorHex),
         ),
     ) {
-        // 封面图(有则覆盖渐变底)。
+        // 封面图(有则覆盖渐变底;加载失败 fallback 渐变)。
         if (coverUrl.isNotEmpty()) {
             AsyncImage(
                 model = coverUrl,
                 contentDescription = course.title,
                 contentScale = ContentScale.Crop,
+                // Coil 加载失败时透出底层学科渐变(对照 PAD Image.network 的 errorBuilder)。
                 modifier = Modifier.fillMaxSize(),
             )
         }
@@ -406,12 +451,12 @@ private fun Banner(
 
 @Composable
 private fun CardInfo(
-    subjectKey: String,
+    subjectLabel: String,
     title: String,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier) {
-        // 学科名 chip(对照 PAD 学科名 chip)。
+        // 学科名 chip(对照 PAD 学科名 chip,显示 label 而非 raw key)。
         Box(
             modifier = Modifier
                 .background(
@@ -420,7 +465,7 @@ private fun CardInfo(
                 ),
         ) {
             Text(
-                text = if (subjectKey.isEmpty()) "课程" else subjectKey,
+                text = subjectLabel.ifBlank { "课程" },
                 color = slate400,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,

@@ -25,9 +25,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -54,15 +57,20 @@ import com.revin.studyquest.tv.ui.theme.slate900
 
 // ── 路由常量 ──────────────────────────────────────────────────────────────────
 
-/** 路由表。对照需求:login / home / footprint / settings / player/{episodeId}。 */
+/** 路由表。对照需求:login / home / footprint / settings / course-detail / player。 */
 object Routes {
     const val LOGIN = "login"
     const val HOME = "home"
     const val FOOTPRINT = "footprint"
     const val SETTINGS = "settings"
+    const val COURSE_DETAIL = "course-detail/{courseId}"
     const val PLAYER = "player/{episodeId}"
 
+    fun courseDetail(courseId: Int) = "course-detail/$courseId"
     fun player(episodeId: Int) = "player/$episodeId"
+
+    /** sidebar 的 tab 路由集合(给焦点锚定用,见 [Sidebar] 的 tabFocusRequesters)。 */
+    val TAB_ROUTES = setOf(HOME, FOOTPRINT, SETTINGS)
 }
 
 /**
@@ -138,7 +146,7 @@ fun AppNav(sessionViewModel: com.revin.studyquest.tv.ui.SessionViewModel = hiltV
             ) {
                 CourseHallScreen(
                     onOpenCourse = { course ->
-                        navController.navigate(Routes.player(course.id))
+                        navController.navigate(Routes.courseDetail(course.id))
                     },
                 )
             }
@@ -172,6 +180,20 @@ fun AppNav(sessionViewModel: com.revin.studyquest.tv.ui.SessionViewModel = hiltV
                     onLogout = { sessionViewModel.logout() },
                 )
             }
+        }
+
+        // 课程详情:选集列表(章节分组)。点课程卡进入,选课时跳播放器。
+        // 对照 PAD CourseDetailScreen(从 course_list 课程卡点入 → 选 episode → PlayerScreen)。
+        composable(
+            route = Routes.COURSE_DETAIL,
+            arguments = listOf(navArgument("courseId") { type = NavType.IntType }),
+        ) { entry ->
+            val courseId = entry.arguments?.getInt("courseId") ?: 0
+            com.revin.studyquest.tv.ui.detail.CourseDetailScreen(
+                courseId = courseId,
+                onPlayEpisode = { episodeId -> navController.navigate(Routes.player(episodeId)) },
+                onBack = { navController.popBackStack() },
+            )
         }
 
         // 播放器:全屏 ExoPlayer(阶段 3)。接 VideoPlayerScreen(真屏)。
@@ -227,6 +249,26 @@ private fun Sidebar(
     onNavigate: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // tab 焦点锚定:NavHost 切路由会销毁旧屏重建新屏,MainShell 跟着重组,
+    // 3 个 NavTab 被重新创建 → Compose 焦点系统失去记忆,默认把焦点还给第一个
+    // 可聚焦项(学习大厅)。实测反馈:切到设置 → 内容对了,但 sidebar 高亮和
+    // 焦点都跳回"学习大厅",方向键再操作就乱套。
+    //
+    // 修法:给每个 NavTab 一个 FocusRequester,用 LaunchedEffect(currentRoute)
+    // 在路由变化后(重组完成)把焦点手动设到当前选中的 tab。这样无论 NavHost
+    // 怎么重建,sidebar 焦点始终锚定在 currentRoute 对应的 tab 上。
+    val tabFocusRequesters = remember(currentRoute) {
+        Routes.TAB_ROUTES.associateWith { FocusRequester() }
+    }
+    // 路由变化后,把焦点请求到当前 tab。delay 一帧等 NavTab 重组挂载完 FocusRequester
+    // 才生效(否则 requester 还没绑定到 Modifier.focusRequester,会抛 IllegalState)。
+    LaunchedEffect(currentRoute) {
+        if (currentRoute != null && currentRoute in tabFocusRequesters) {
+            withFrameNanos { } // 等 1 帧
+            runCatching { tabFocusRequesters.getValue(currentRoute).requestFocus() }
+        }
+    }
+
     Column(
         modifier = modifier
             .background(slate900)
@@ -239,18 +281,21 @@ private fun Sidebar(
             label = "学习大厅",
             selected = currentRoute == Routes.HOME,
             onClick = { onNavigate(Routes.HOME) },
+            focusRequester = tabFocusRequesters.getValue(Routes.HOME),
         )
         NavTab(
             icon = Icons.Rounded.Explore,
             label = "成长足迹",
             selected = currentRoute == Routes.FOOTPRINT,
             onClick = { onNavigate(Routes.FOOTPRINT) },
+            focusRequester = tabFocusRequesters.getValue(Routes.FOOTPRINT),
         )
         NavTab(
             icon = Icons.Rounded.Settings,
             label = "系统设置",
             selected = currentRoute == Routes.SETTINGS,
             onClick = { onNavigate(Routes.SETTINGS) },
+            focusRequester = tabFocusRequesters.getValue(Routes.SETTINGS),
         )
     }
 }
@@ -292,6 +337,7 @@ private fun NavTab(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    focusRequester: FocusRequester,
 ) {
     var focused by remember { mutableStateOf(false) }
     Surface(
@@ -299,6 +345,7 @@ private fun NavTab(
         modifier = Modifier
             .padding(horizontal = 20.dp, vertical = 4.dp)
             .fillMaxWidth()
+            .focusRequester(focusRequester)
             .onFocusChanged { focused = it.isFocused }
             .then(
                 if (focused) {

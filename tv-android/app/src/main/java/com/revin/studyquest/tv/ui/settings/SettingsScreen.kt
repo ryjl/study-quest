@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,11 +29,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -226,15 +235,32 @@ private fun ServerUrlCard(
 /**
  * baseUrl 输入框。
  *
- * **TODO(TV D-pad 焦点陷阱)**:BasicTextField 的 EditableText 默认吞方向键做光标
- * 移动,D-pad 进了输入框出不来(跳不到「保存修改」)。PAD 端用 `dpadEscapeFocusNode`
- * 在 EditableText 之前截方向键转 nextFocus/previousFocus 解决。Compose for TV 暂无
- * 等价 helper,可后续用:
- *   - `Modifier.onKeyEvent { if (方向键) { focusManager.moveFocus(...); true } else false }`
- *     在 BasicTextField 外层包一层拦截方向键;
- *   - 或把 TextField 改成点击进入一个全屏 IME 编辑蒙层(遥控器数字/字母键盘),Back 退出。
- * 当前先用 BasicTextField + Uri KeyboardType 保证 IP/URL 输入体验,焦点逃逸留待
- * TV 交互 polish 阶段补。
+ * **D-pad 焦点陷阱的三轮修复**(踩坑记录,避免再走弯路):
+ *
+ * **v1**(失败):`onPreviewKeyEvent` 拦所有方向键 → moveFocus。问题:D-pad **进入**
+ * EditText 的那个方向键也走 KeyUp,结果刚聚焦进去就被 moveFocus 弹走,用户根本
+ * 进不去(实测反馈"光标移进去就被弹出")。
+ *
+ * **v2**(失败):干脆全放行方向键,只拦 Back。问题:BasicTextField 聚焦后自己吞
+ * 方向键做光标移动,焦点进去就**出不来**(实测反馈"edit 框进去出不来")。
+ *
+ * **v3(本版)**:用 `justEntered` 标志状态机区分"进入瞬间"和"已在内"。
+ * 关键洞察:D-pad 从外部移进 EditText 时,那个导致进入的方向键的 KeyUp 事件
+ * 也会经过 onPreviewKeyEvent(此时焦点刚落到 EditText)。如果不特殊处理,这一帧
+ * 就会触发 moveFocus 把焦点弹走(v1 的 bug)。
+ *
+ * 状态机:
+ *   - `focused == false`:不在编辑态,所有方向键放行(让焦点系统正常移入)。
+ *   - `justEntered == true`(进入后第一次收到方向键 KeyUp):消化掉这个事件
+ *     (return true 拦截),不 moveFocus,然后清 justEntered 标志。这样进入用的
+ *     那个方向键不会自弹。
+ *   - `justEntered == false`(用户之后**主动**按的方向键):
+ *     - Up/Down → moveFocus 逃逸(满足"上下能出来")。
+ *     - Left/Right → 放行给 BasicTextField 做光标移动(URL 输入要左右定位光标)。
+ *   - Back/ESC → clearFocus 收键盘退出。
+ *
+ * 这样:进入不自弹(消化进入事件)+ 进去后上下能逃逸(用户主动按时)+ 左右可移
+ * 光标(编辑需要)+ Back 兜底退出。所有路径都打通。
  */
 @Composable
 private fun ServerUrlField(
@@ -243,6 +269,10 @@ private fun ServerUrlField(
     error: String?,
 ) {
     var focused by remember { mutableStateOf(false) }
+    // 刚进入标志:防止"进入用的方向键"自弹焦点。进入瞬间为 true,消化第一个方向
+    // KeyUp 后置 false。焦点离开 EditText 时也要重置(下次进入重新生效)。
+    var justEntered by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     val borderColor = if (error != null) Color.Red.copy(alpha = 0.7f)
         else if (focused) primaryColor
         else slate700
@@ -252,8 +282,15 @@ private fun ServerUrlField(
         value = value,
         onValueChange = onValueChange,
         singleLine = true,
-        // TV 软键盘按 URI 输入(http://192.168.x.x:8080)。
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+        // TV 软键盘按 URI 输入(http://192.168.x.x:8080)。IME action = Done,
+        // 软键盘上按 Done 收键盘退出编辑态(等同 Back)。
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Uri,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = { focusManager.clearFocus() },
+        ),
         textStyle = TextStyle(
             color = Color.White,
             fontSize = 16.sp,
@@ -263,7 +300,44 @@ private fun ServerUrlField(
         cursorBrush = androidx.compose.ui.graphics.SolidColor(primaryColor),
         modifier = Modifier
             .fillMaxWidth()
-            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                // 只在 KeyUp 处理(Down/Up 双触发会跳两格)。
+                if (event.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
+                when (event.key) {
+                    Key.Back, Key.Escape -> {
+                        focusManager.clearFocus()
+                        true
+                    }
+                    // 进入瞬间(消化进入用的那个方向键,防自弹)+ 用户主动按的
+                    // Up/Down(逃逸)。两者都在这里处理。
+                    Key.DirectionUp, Key.DirectionDown -> {
+                        if (justEntered) {
+                            // 进入后的第一个方向键:消化掉,不 moveFocus(否则自弹)。
+                            // 之后用户主动按的 Up/Down 才逃逸。
+                            justEntered = false
+                            true
+                        } else {
+                            // 用户主动按 Up/Down → 逃逸到上下邻居(满足"上下能出来")。
+                            val dir = if (event.key == Key.DirectionUp) FocusDirection.Up else FocusDirection.Down
+                            focusManager.moveFocus(dir)
+                            true
+                        }
+                    }
+                    // Left/Right 放行给 BasicTextField 做光标移动(URL 输入要左右定位)。
+                    // 进入瞬间按 Left/Right 也算消化 justEntered。
+                    Key.DirectionLeft, Key.DirectionRight -> {
+                        justEntered = false
+                        false
+                    }
+                    else -> false
+                }
+            }
+            .onFocusChanged { state ->
+                focused = state.isFocused
+                // 焦点进入 EditText → 设 justEntered,等消化进入用的方向键。
+                // 焦点离开 → 清 justEntered(下次进入重新生效)。
+                justEntered = state.isFocused
+            }
             .background(slate800, RoundedCornerShape(12.dp))
             .border(borderWidth, borderColor, RoundedCornerShape(12.dp))
             .padding(horizontal = 18.dp, vertical = 16.dp),
