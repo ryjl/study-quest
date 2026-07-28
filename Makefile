@@ -1,4 +1,4 @@
-.PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat fetch-ai-models clean-ai-models fetch-ffmpeg clean-ffmpeg
+.PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat build-tv-apk build-tv-apk-debug install-tv fetch-ai-models clean-ai-models fetch-ffmpeg clean-ffmpeg
 
 # Build the admin SPA (React/Vite). Output lands in
 # backend/internal/admin/spa/dist and is embedded into the Go binary via go:embed.
@@ -74,6 +74,34 @@ build-apk-x64:
 # 一个 fat APK（含所有 ABI，包体较大但安装最省心）。
 build-apk-fat:
 	@cd frontend && $(FLUTTER) build apk --release
+
+# ─── TV 原生 (Android Kotlin + Compose for TV) ──────────────────────────
+# 与上面的 Flutter build-apk 是两个独立工程(工具链不同,故分开 make 目标,不硬拼):
+#   build-apk*  → frontend/ (Flutter, PAD/手机)
+#   build-tv-*  → tv-android/ (Kotlin 原生, Android TV)
+#
+# ANDROID_HOME 需指向 Android SDK(本机默认 ~/android-sdk)。gradlew 自带 wrapper,
+# 不需要预装 Gradle。JDK 17 必需。
+TV_DIR := tv-android
+ANDROID_HOME ?= $(HOME)/android-sdk
+
+# 构建 TV release APK(单 fat,含所有 ABI)。产物在 tv-android/app/build/outputs/apk/release/。
+# TV 端目前不 split-per-abi(TV 盒子基本是 arm64,且 media3 native 库已较大,先 fat 简化)。
+build-tv-apk:
+	@echo "==> Building TV release APK (Kotlin + Compose for TV)..."
+	@cd $(TV_DIR) && ANDROID_HOME=$(ANDROID_HOME) ANDROID_SDK_ROOT=$(ANDROID_HOME) ./gradlew :app:assembleRelease
+	@echo "✓ TV APK at $(TV_DIR)/app/build/outputs/apk/release/"
+
+# 构建 TV debug APK(开发调试用,applicationId 带 .debug 后缀)。
+build-tv-apk-debug:
+	@echo "==> Building TV debug APK..."
+	@cd $(TV_DIR) && ANDROID_HOME=$(ANDROID_HOME) ANDROID_SDK_ROOT=$(ANDROID_HOME) ./gradlew :app:assembleDebug
+	@echo "✓ TV debug APK at $(TV_DIR)/app/build/outputs/apk/debug/"
+
+# 构建 debug APK 并装到已连接的 TV 设备/模拟器(adb)。
+install-tv: build-tv-apk-debug
+	@echo "==> Installing TV debug APK to connected device..."
+	@cd $(TV_DIR) && ANDROID_HOME=$(ANDROID_HOME) $(ANDROID_HOME)/platform-tools/adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 # 清理构建产物。
 # 注意：`rm -rf backend/data/` 会顺带删掉 ai-models/ 和 ffmpeg-bin/ —— 这是 backend/data

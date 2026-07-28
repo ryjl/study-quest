@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TV launcher 横幅图标占位(320x180dp)。
+  Android TV 桌面显示应用用 banner 不是 icon。品牌蓝底,后续换正式设计图。
+  用纯色避免 aapt gradient 复杂性;渐变效果等正式 banner 设计图。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- 品牌蓝 primaryColor #3B82F6(对齐 PAD theme.dart) -->
+    <path
+        android:pathData="M0,0 H320 V180 H0 Z"
+        android:fillColor="#3B82F6" />
+</vector>

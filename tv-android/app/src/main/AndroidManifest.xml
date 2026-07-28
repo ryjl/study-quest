@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  StudyQuest TV — Android TV 专属 manifest。
+
+  与 frontend/ (Flutter 单 APK 兼跑 PAD/TV) 的关键差异:
+    - leanback required="true":只装 TV 设备(Google Play TV 分类准入)
+    - touchscreen required="false":TV 无触屏
+    - 只注册 LEANBACK_LAUNCHER(不注册 LAUNCHER):TV 桌面图标
+    - banner:TV launcher 横幅图标(TV 专属,手机不要)
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- TV 设备准入:开发期 required=false(让 mumu/手机模拟器也能装,便于测试)。
+         上架 Play Store TV 分类时切回 required="true"。 -->
+    <uses-feature
+        android:name="android.software.leanback"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="false" />
+
+    <application
+        android:name=".StudyQuestApp"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:banner="@drawable/tv_banner"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
+        android:theme="@style/Theme.StudyQuestTV">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|fontScale|density|uiMode"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <!-- TV launcher 桌面图标(真机 TV) -->
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                <!-- 手机桌面图标(mumu/手机模拟器调试用;真机 TV 忽略此 category) -->
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

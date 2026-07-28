@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TV 主题基类。用 DeviceDefault 深色基底(TV 系统强制深色),Compose 启动后
+  由 StudyQuestTheme(深色 + 品牌色)接管 UI。core-splashscreen 要求 parent 是
+  Theme.SplashScreen 或其子类,这里先挂基础深色,splash 风格后续在 Compose 层做。
+-->
+<resources>
+    <style name="Theme.StudyQuestTV" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

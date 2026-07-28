@@ -1,0 +1,12 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+# JVM 堆转储(Gradle OOM 时生成,可达数百 MB,绝不能入库)
+*.hprof
