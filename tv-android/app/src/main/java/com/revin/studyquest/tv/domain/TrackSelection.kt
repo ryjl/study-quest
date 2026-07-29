@@ -146,3 +146,27 @@ fun audioOptions(tracks: List<NativeAudioTrack>): List<AudioOption> {
     }
     return list
 }
+
+/**
+ * 选默认字幕的 index(对照 PAD `_autoSelectDefaultSubtitle` 行 1241)。
+ *
+ * 规则(契约补充,business-rules.md 第 1 节字幕合并的延伸):
+ *   1. 优先级 backend(LLM polish 优质字幕)> native(容器内嵌兜底)。
+ *      `mergeSubtitleOptions` 已按 backend→native 顺序追加,所以从 index 1 开始
+ *      找第一条非 OFF 的即是最高优先级的可用字幕。
+ *   2. 没有任何字幕(只有「无」)→ 返回 0(保持关闭)。
+ *
+ * 用户要求"有字幕默认打开中文字幕":backend 字幕通常是 zh-CN(Whisper 转录的中文
+ * 内容),选第一条 backend/native 即满足。这里不强制匹配 language=zh —— 若有多语言
+ * 字幕,默认选第一条(通常是主语言);用户可手动切。
+ *
+ * @param options [mergeSubtitleOptions] 的输出(首项是「无」)
+ * @return 默认选中的 index(0 = 关闭,>0 = 某条字幕);无字幕时返回 0
+ */
+fun defaultSubtitleIndex(options: List<SubtitleOption>): Int {
+    // 从 1 开始(跳过「无」),找第一条非 OFF 的。mergeSubtitleOptions 已按优先级排序。
+    for (i in 1 until options.size) {
+        if (options[i].type != SubtitleType.OFF) return i
+    }
+    return 0
+}

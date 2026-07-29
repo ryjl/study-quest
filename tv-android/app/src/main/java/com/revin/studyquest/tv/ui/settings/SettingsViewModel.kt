@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.revin.studyquest.tv.data.local.TokenStore
 import com.revin.studyquest.tv.data.remote.ApiService
+import com.revin.studyquest.tv.domain.SUBTITLE_SIZE_LABELS
+import com.revin.studyquest.tv.domain.clampSubtitleSizeIndex
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -51,7 +53,7 @@ class SettingsViewModel @Inject constructor(
                 it.copy(
                     baseUrlInput = baseUrl,
                     savedBaseUrl = baseUrl,
-                    subtitleSizeIndex = subtitleIndex.coerceIn(0, SUBTITLE_LABELS.lastIndex),
+                    subtitleSizeIndex = clampSubtitleSizeIndex(subtitleIndex),
                     nickname = nickname,
                     initialized = true,
                 )
@@ -102,7 +104,7 @@ class SettingsViewModel @Inject constructor(
 
     /** 选字幕字号档位(index 0..3)。落盘 + 更新 UI。 */
     fun selectSubtitleSize(index: Int) {
-        val clamped = index.coerceIn(0, SUBTITLE_LABELS.lastIndex)
+        val clamped = clampSubtitleSizeIndex(index)
         _uiState.update { it.copy(subtitleSizeIndex = clamped) }
         viewModelScope.launch {
             tokenStore.saveSubtitleSizeIndex(clamped)
@@ -126,12 +128,9 @@ class SettingsViewModel @Inject constructor(
     }
 
     companion object {
-        /**
-         * 字幕字号档位标签(对照 business-rules.md 第 6 节)。
-         * index → (label, sp)。
-         */
-        val SUBTITLE_LABELS = listOf("小", "中", "大", "超大")
-        val SUBTITLE_SIZES_SP = listOf(18f, 24f, 30f, 38f)
+        // 字幕字号档位表已收敛到 domain 层(`domain/SubtitleSize.kt`),这里只做转发
+        // 兼容已有调用方(SettingsScreen),避免散落两份定义。新代码应直接引用 domain。
+        val SUBTITLE_LABELS: List<String> get() = SUBTITLE_SIZE_LABELS
     }
 }
 

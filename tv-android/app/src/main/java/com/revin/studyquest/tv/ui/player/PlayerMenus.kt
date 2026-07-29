@@ -50,8 +50,8 @@ import com.revin.studyquest.tv.ui.theme.slate900
  *
  * 交互:
  *   - 点击按钮(ENTER / 触屏)→ 菜单在按钮**正上方**弹出(不居中,贴着按钮)。
- *   - 菜单首项自动聚焦(D-pad 从按钮往上自然进菜单)。
- *   - 上下在选项间移动,ENTER 确认,Back / ESC / 选外部 关闭菜单,焦点回按钮。
+ *   - 菜单默认聚焦**当前选中项**(无选中则聚焦首项),D-pad 上下在选项间移动。
+ *   - ENTER 确认,Back / ESC / 选外部 关闭菜单,焦点回按钮。
  *   - 选中某项 → 触发 [onSelect] + 关闭菜单。
  *
  * @param icon 按钮图标(速度/字幕/音轨)。
@@ -129,7 +129,8 @@ data class PlayerMenuOption(
  * 让 Popup 的左下角对齐按钮的左上角(默认 Popup 是左上对齐,这里需要往上偏移列表高度)。
  * Compose Popup 默认 alignment 到 parent 的 (0,0),用 onPlacementRemoved / offset 调整。
  *
- * 焦点:首项自动聚焦(ENTER 进菜单后,方向键在选项间移动)。选中/Back/ESC 关闭。
+ * 焦点:默认聚焦当前选中项(对照主流播放器菜单),无选中项时回退到首项。
+ * 选中/Back/ESC 关闭。
  */
 @Composable
 private fun PlayerOptionPopup(
@@ -137,11 +138,17 @@ private fun PlayerOptionPopup(
     onDismiss: () -> Unit,
     onSelect: (Int) -> Unit,
 ) {
-    val firstFocusRequester = remember { FocusRequester() }
-    // 首项聚焦(进菜单后方向键直接生效)。
+    // 焦点锚点:默认落在**当前选中项**(对照 PAD `MenuAnchor` 行为 + design-tokens
+    // 习惯),而不是列表首项。用户进菜单是为了"切换到附近档位",从已选项出发上下
+    // 移动比从最顶开始更省按键。没有选中项时回退到首项(index 0)。
+    val initialFocusIndex = remember(options) {
+        options.indexOfFirst { it.selected }.takeIf { it >= 0 } ?: 0
+    }
+    val initialFocusRequester = remember { FocusRequester() }
+    // 初始项聚焦(进菜单后方向键直接生效)。
     LaunchedEffect(Unit) {
         withFrameNanos { }
-        runCatching { firstFocusRequester.requestFocus() }
+        runCatching { initialFocusRequester.requestFocus() }
     }
 
     Popup(
@@ -169,8 +176,8 @@ private fun PlayerOptionPopup(
                 PlayerOptionItem(
                     label = opt.label,
                     selected = opt.selected,
-                    isFirst = index == 0,
-                    firstFocusRequester = firstFocusRequester,
+                    isInitialFocus = index == initialFocusIndex,
+                    initialFocusRequester = initialFocusRequester,
                     onClick = { onSelect(index) },
                 )
             }
@@ -183,8 +190,8 @@ private fun PlayerOptionPopup(
 private fun PlayerOptionItem(
     label: String,
     selected: Boolean,
-    isFirst: Boolean,
-    firstFocusRequester: FocusRequester,
+    isInitialFocus: Boolean,
+    initialFocusRequester: FocusRequester,
     onClick: () -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -195,7 +202,7 @@ private fun PlayerOptionItem(
     }
     Box(
         modifier = Modifier
-            .then(if (isFirst) Modifier.focusRequester(firstFocusRequester) else Modifier)
+            .then(if (isInitialFocus) Modifier.focusRequester(initialFocusRequester) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .focusable()
             .onPreviewKeyEvent { event ->

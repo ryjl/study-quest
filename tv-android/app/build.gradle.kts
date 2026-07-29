@@ -78,7 +78,10 @@ dependencies {
 
     // Media3 ExoPlayer(播放器核心)+ Compose UI surface + OkHttp datasource
     // (datasource-okhttp 用于注入网盘 Referer 鉴权头)
+    // (ui 提供 SubtitleView —— PlayerSurface 只渲染视频画面不画字幕,字幕需要单独的
+    //  SubtitleView overlay 监听 player 的 text cues,对照 media3 官方文档。)
     implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.media3.datasource.okhttp)
 

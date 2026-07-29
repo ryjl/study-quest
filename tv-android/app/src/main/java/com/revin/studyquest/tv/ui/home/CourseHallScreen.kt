@@ -20,13 +20,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -52,6 +58,7 @@ import com.revin.studyquest.tv.data.remote.dto.resolveSubject
 import com.revin.studyquest.tv.data.repo.UrlResolver
 import com.revin.studyquest.tv.ui.theme.primaryColor
 import com.revin.studyquest.tv.ui.theme.slate400
+import com.revin.studyquest.tv.ui.theme.subjectIconData
 import com.revin.studyquest.tv.ui.theme.slate700
 import com.revin.studyquest.tv.ui.theme.slate900
 import com.revin.studyquest.tv.ui.theme.subjectGradientFromColor
@@ -90,6 +97,24 @@ fun CourseHallScreen(
     val baseUrl by viewModel.baseUrl.collectAsStateWithLifecycle()
     val subjects by viewModel.subjects.collectAsStateWithLifecycle()
     val gradeTags by viewModel.gradeTags.collectAsStateWithLifecycle()
+
+    // **ON_RESUME 自动刷新**(对照 PAD `course_list_screen.dart` 的
+    // `_refreshData()` 在路由 push 回到列表时调用)。
+    //
+    // 问题背景:CourseHallViewModel.init 只调一次 loadCourses —— 从课程详情/播放器
+    // popBackStack 回大厅时,VM scoped 到 NavHost composable 不会重建(导航有 saveState/
+    // restoreState),init 不再跑,后端新 assign 的课看不到(要退出重登才出现)。
+    // 监听 ON_RESUME,每次回到大厅重新拉一遍列表,新 assign 立即可见。
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, viewModel) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.loadCourses()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Column(
         modifier = Modifier
@@ -399,13 +424,30 @@ private fun Banner(
     subjectColorHex: String,
     modifier: Modifier = Modifier,
 ) {
+    // clipToBounds:学科水印(无封面时画)会偏移到 banner 边界外,要裁掉避免溢出到信息区。
     Box(
-        modifier = modifier.background(
-            // 学科渐变 banner(对照 PAD getSubjectGradientFromColor,后端配置色驱动)。
-            // 无封面图时显示;有封面图时被 AsyncImage 覆盖。Coil 加载失败也 fallback 到这个渐变。
-            brush = subjectGradientFromColor(subjectColorHex),
-        ),
+        modifier = modifier
+            .clipToBounds()
+            .background(
+                // 学科渐变 banner(对照 PAD getSubjectGradientFromColor,后端配置色驱动)。
+                // 无封面图时显示;有封面图时被 AsyncImage 覆盖。Coil 加载失败也 fallback 到这个渐变。
+                brush = subjectGradientFromColor(subjectColorHex),
+            ),
     ) {
+        // 无封面图时画学科水印(对照 PAD `_buildSubjectWatermark`):右下角倾斜 -15°
+        // 的大号学科图标,白色半透明,纯装饰。让无封面卡也有视觉识别度,不只是一片纯色。
+        if (coverUrl.isEmpty()) {
+            Icon(
+                imageVector = subjectIconData(course.subject),
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.15f),
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = (-12).dp, bottom = (-12).dp) // 部分溢出边界(被 clipToBounds 裁),对照 PAD right/bottom -24
+                    .size(90.dp)
+                    .rotate(-15f),
+            )
+        }
         // 封面图(有则覆盖渐变底;加载失败 fallback 渐变)。
         if (coverUrl.isNotEmpty()) {
             AsyncImage(

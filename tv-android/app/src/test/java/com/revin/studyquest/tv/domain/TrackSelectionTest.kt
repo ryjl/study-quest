@@ -210,4 +210,40 @@ class TrackSelectionTest {
         val options = audioOptions(listOf(track))
         assertSame(track, options.single().track)
     }
+
+    // ---- defaultSubtitleIndex (默认字幕自动选择,对照 PAD _autoSelectDefaultSubtitle) ----
+
+    @Test
+    fun `default subtitle prefers backend when present`() {
+        // 用户要求"有字幕默认打开中文字幕":有 backend(中文)时默认选它。
+        val options = mergeSubtitleOptions(
+            backendSubtitles = listOf(backendSub(id = 1, label = "中文")),
+            nativeSubs = listOf(nativeTrack(id = "2", title = "English", language = "en")),
+        )
+        // [无, 中文(backend), English(native)] → 默认选 index 1(backend 优先)。
+        assertEquals(1, defaultSubtitleIndex(options))
+        assertEquals(SubtitleType.BACKEND, options[defaultSubtitleIndex(options)].type)
+    }
+
+    @Test
+    fun `default subtitle falls back to native when no backend`() {
+        val options = mergeSubtitleOptions(
+            backendSubtitles = emptyList(),
+            nativeSubs = listOf(nativeTrack(id = "1", title = "中文", language = "zh-CN")),
+        )
+        // [无, 中文(native)] → 默认选 index 1。
+        assertEquals(1, defaultSubtitleIndex(options))
+        assertEquals(SubtitleType.NATIVE, options[defaultSubtitleIndex(options)].type)
+    }
+
+    @Test
+    fun `default subtitle returns zero when only off`() {
+        // 无任何字幕 → 默认保持关闭(index 0 = 「无」)。
+        val options = mergeSubtitleOptions(
+            backendSubtitles = emptyList(),
+            nativeSubs = emptyList(),
+        )
+        assertEquals(0, defaultSubtitleIndex(options))
+        assertEquals(SubtitleType.OFF, options[0].type)
+    }
 }

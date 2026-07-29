@@ -410,7 +410,7 @@ private fun SubtitleSizeCard(
             modifier = Modifier.fillMaxWidth(),
         ) {
             SettingsViewModel.SUBTITLE_LABELS.forEachIndexed { index, label ->
-                val sizeSp = SettingsViewModel.SUBTITLE_SIZES_SP[index]
+                val sizeSp = com.revin.studyquest.tv.domain.SUBTITLE_SIZES_DP[index]
                 SubtitleSegment(
                     modifier = Modifier.weight(1f),
                     label = label,
@@ -422,7 +422,7 @@ private fun SubtitleSizeCard(
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            text = "档位仅本机生效,实时预览字号(${SettingsViewModel.SUBTITLE_SIZES_SP[state.subtitleSizeIndex].toInt()}sp)",
+            text = "档位仅本机生效,实时预览字号(${com.revin.studyquest.tv.domain.SUBTITLE_SIZES_DP[state.subtitleSizeIndex].toInt()}dp)",
             color = slate400,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
