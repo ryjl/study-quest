@@ -2,6 +2,11 @@
 
 > Admin SPA（React + TanStack Query）+ Flutter 客户端共用。AI 模块的坑见
 > `docs/pitfalls/backend.md` 和 `docs/modules/ai/*`。
+>
+> **Flutter 导航 / 路由 / TV 焦点**相关的坑(命令式 push 无路由表、TextField D-pad 焦点陷阱、
+> MenuAnchor 焦点归位、几何导航 vs FocusScope 隔离、返回键键值、互跳无限栈等)单独成篇,
+> 见 **`docs/pitfalls/flutter-navigation.md`** —— 那里有 14 条真坑 + FocusTraversalGroup vs
+> FocusScope 速查表 + TV 专属 vs 通用分类。后续若回归 Flutter 单端会重新全部生效。
 
 ## Admin SPA（React + TanStack Query）
 
