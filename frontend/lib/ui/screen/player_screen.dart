@@ -90,12 +90,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Duration? _pendingResume;
   Duration? _resumeTarget; // active target while the resume seek is pending
   bool _resumeSeekDone = false;
-  int _resumeRetries = 0;
-  DateTime? _lastResumeRetry;
-  // Resume watchdog 的 position 订阅。用户一旦主动 seek(拖进度条/方向键),
-  // 就 cancel 掉它 —— 否则 watchdog 会把用户的回退误判成"CDN 掉线重连重置
-  // 到 0",强制把位置拉回 resume 点,导致"拖回去了又被带回结尾"。
-  StreamSubscription<Duration>? _resumeWatchdogSub;
   List<Attachment> _attachments = [];
   // Phase 2:课前探险问题数据源切到 /ai-summary 的 pre_adventure,"带着问题看"
   // 也读 _summary.pre_adventure。老管线 /ai-content 已在 Phase 5 删除。
@@ -225,7 +219,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void dispose() {
     _progressTimer?.cancel();
     _hideTimer?.cancel();
-    _cancelResumeWatchdog();
     _player.dispose();
     _seekBarFocus.dispose();
     _backFocus.dispose();
@@ -370,42 +363,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void _setupResumeSeek() {
     final target = _resumeTarget;
     if (target == null) return;
-    // Wait for demuxer ready, then seek. After that, run a persistent
-    // watchdog: if position snaps back far from the target (which happens
-    // when the CDN connection drops and libmpv re-opens the stream from 0),
-    // re-seek. We stop only once playback has genuinely progressed past the
-    // target (user is watching forward) or after a bounded retry count.
+    // 初始化阶段:等 demuxer 报出真实 duration 后,seek 到 resume 点一次。
+    //
+    // 不再做 CDN 掉线归 0 的持续看门狗 —— 那套逻辑(监听 position 突变回拉)
+    // 分不清"CDN 掉线归 0"和"视频自然播完重播/用户主动操作",反复误伤(把
+    // 用户回退或重播强行拉回旧位置)。CDN 真掉线归 0 的情况,用户拖一下进度条
+    // 即可恢复,代价远小于一个持续误伤的自动防御。
     _player.stream.duration.listen((duration) {
       if (_resumeSeekDone) return;
       if (duration.inSeconds <= 0 || target >= duration) return;
       _resumeSeekDone = true;
       _player.seek(target);
       _lastLoggedPosition = target.inSeconds;
-    });
-
-    _resumeWatchdogSub = _player.stream.position.listen((pos) {
-      final tgt = target.inSeconds;
-      // Once the user has played past the target + a margin, resume is
-      // considered successful — stop guarding.
-      if (pos.inSeconds > tgt + 10) {
-        return;
-      }
-      // Close to target → fine, nothing to do.
-      if ((pos.inSeconds - tgt).abs() < 15) return;
-      if (_resumeRetries >= 8) return;
-      // Position far from target (typically 0 after a CDN reconnect reset).
-      // Re-seek, throttled to ~1/sec, only when demuxer is ready.
-      if (_player.state.duration.inSeconds <= 0 || _player.state.buffering) {
-        return;
-      }
-      final now = DateTime.now();
-      if (_lastResumeRetry != null &&
-          now.difference(_lastResumeRetry!) < const Duration(seconds: 1)) {
-        return;
-      }
-      _lastResumeRetry = now;
-      _resumeRetries++;
-      _player.seek(target);
     });
   }
 
@@ -418,36 +387,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (!_player.state.playing) return;
       final currentPos = _player.state.position.inSeconds;
       final delta = currentPos - _lastLoggedPosition;
-      // Only credit forward-watching deltas (skip seeks / pauses). The upper
-      // bound is generous (30) vs the 5s cadence so a momentary stall (buffer,
-      // GC, resume re-seek) that delays one tick doesn't discard a legit 6-10s
-      // delta — a previous 10 cap silently dropped watch time and left the
-      // admin "learning time" column stuck at 0. The backend still clamps each
-      // report (600s) and only credits monotonic forward progress, so a big
-      // accidental jump can't inflate the total.
-      if (delta > 0 && delta <= 30) {
-        try {
-          await ApiService.reportProgress(
-            activeUserId: widget.activeUserId,
-            episodeId: widget.episode.id,
-            positionSeconds: currentPos,
-            deltaWatchSeconds: delta,
-          );
-          _lastLoggedPosition = currentPos;
-        } catch (_) {}
-      } else if (delta < 0) {
-        // Position went backwards (typically a CDN reconnect reset to 0 during
-        // resume). Don't anchor the baseline at the low point — that would let
-        // the subsequent re-seek forward register a huge false delta. Just skip
-        // this tick; the resume-seek watchdog re-establishes the real position.
-        // Leave _lastLoggedPosition unchanged so the next forward tick compares
-        // against the last genuine forward position.
-        return;
-      } else {
-        // delta == 0 or delta > 30 (a seek / jump): resync the baseline so we
-        // don't credit the jump as watch time.
-        _lastLoggedPosition = currentPos;
-      }
+      // 真实播放产生的正向 delta 才计入观看时长。delta ≤ 0(暂停/回退/CDN 重连
+      // 归 0)或过大(seek 跳跃)都不算观看时长 —— 但 position 仍然上报,让续播
+      // 点跟随实际位置(旧逻辑在 delta<0 时直接 return 跳过上报,导致用户回退
+      // 后的进度不保存,下次进来 resume 回旧点)。
+      final watchDelta = (delta > 0 && delta <= 30) ? delta : 0;
+      try {
+        await ApiService.reportProgress(
+          activeUserId: widget.activeUserId,
+          episodeId: widget.episode.id,
+          positionSeconds: currentPos,
+          deltaWatchSeconds: watchDelta,
+        );
+      } catch (_) {}
+      // baseline 总是同步到当前位置:无论前进/回退/seek,下次 tick 都从这比。
+      _lastLoggedPosition = currentPos;
     });
   }
 
@@ -456,15 +410,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // ---------------------------------------------------------------------------
 
   void _scheduleAutoHide() {
-    // TV 模式下不 auto-hide:控件(seek bar + 控制行)是 TV 用户的操作主体,
-    // auto-hide 会卸载控件子树 → seek bar 的 _seekBarFocus 从焦点树移除 → 视频
-    // 区零焦点落点 → 焦点丢失。PAD/手机保留 auto-hide(触屏无操作 4 秒隐藏的
-    // 传统交互)。
-    if (TvMode.instance.isActive) {
-      _hideTimer?.cancel();
-      return;
-    }
     _hideTimer?.cancel();
+    // 非 TV(触屏)总是 auto-hide;TV 下仅全屏时 auto-hide —— 非全屏有 helper
+    // panel 需要常驻操作,全屏沉浸时控件过一会要消失避免挡内容。
+    // (控件层现在常驻不卸载,隐藏只影响视觉/触摸,不会让 _seekBarFocus 离开
+    // 焦点树,所以 TV auto-hide 不再导致焦点丢失。)
+    final shouldHide = !TvMode.instance.isActive || _isFullscreen;
+    if (!shouldHide) return;
     _hideTimer = Timer(const Duration(seconds: 4), () {
       if (mounted && _player.state.playing) {
         setState(() {
@@ -476,7 +428,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _toggleControls() {
     setState(() => _controlsVisible = !_controlsVisible);
-    if (_controlsVisible) _scheduleAutoHide();
+    if (_controlsVisible) {
+      _scheduleAutoHide();
+      // TV 唤出控件后,焦点落回 seek bar —— 控件隐藏时焦点在全屏 Focus 节点上
+      // (canRequestFocus: !_controlsVisible),唤出后要回到 seek bar 才能用
+      // D-pad 操作进度条/控制行。延迟到下一帧,等控件重新可交互。
+      if (TvMode.instance.isActive) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _seekBarFocus.canRequestFocus) {
+            _seekBarFocus.requestFocus();
+          }
+        });
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -554,7 +518,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
       }
     }
 
-    return Scaffold(
+    return PopScope(
+      // canPop: false 拦截所有 pop 来源(Android 系统 back、browserBack、ESC 被系统
+      // 当 back、Navigator.maybePop),统一在 onPopInvokedWithResult 里做分层:
+      // 有菜单(Dialog)→ 关菜单;无菜单 → 退出页面。
+      // 不用 canPop: true —— 那样系统 back 会直接 pop,绕过分层(ESC/browserBack
+      // 在 mumu/TV 上走系统 back 通道,不进 Shortcuts 的 KeyEvent)。
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handlePop();
+      },
+      child: Scaffold(
       backgroundColor: Colors.black,
       body: Shortcuts(
         shortcuts: const {
@@ -567,13 +542,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
           SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
           SingleActivator(LogicalKeyboardKey.mediaPlay): ActivateIntent(),
           SingleActivator(LogicalKeyboardKey.mediaPause): ActivateIntent(),
-          // 退出键 → 分层 Dismiss(收菜单 → 收控件 → 退出页面)。
-          // browserBack/goBack 补在这里:MenuAnchor 源码(menu_anchor.dart:71-79)
-          // 只绑了 escape,某些 Android TV 遥控器的"返回"键发 goBack 而非 escape,
-          // 显式补 DismissIntent 避免菜单内按返回键外泄到播放器根层。
+          // escape → 控件显隐分层(有菜单时被 Dialog 路由的 DismissIntent 截获
+          // 关菜单,不会到这里)。browserBack/goBack(系统返回键)→ 退出页面分层。
+          // 两者语义分开:escape 管控件,返回键管退出。菜单内按返回键也由 Dialog
+          // 层先处理(关菜单),无菜单时才退出页面。
           SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
-          SingleActivator(LogicalKeyboardKey.browserBack): DismissIntent(),
-          SingleActivator(LogicalKeyboardKey.goBack): DismissIntent(),
+          SingleActivator(LogicalKeyboardKey.browserBack): const _PopPlayerIntent(),
+          SingleActivator(LogicalKeyboardKey.goBack): const _PopPlayerIntent(),
         },
         child: Actions(
           actions: {
@@ -582,6 +557,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
             DismissIntent: CallbackAction<DismissIntent>(
               onInvoke: (_) => _handleDismiss(),
+            ),
+            _PopPlayerIntent: CallbackAction<_PopPlayerIntent>(
+              onInvoke: (_) => _handlePop(),
             ),
           },
           child: Focus(
@@ -647,6 +625,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -657,10 +636,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 吞键(避免唤出那次按键同时触发 seek 或几何跳转)。其余情况一律 return
   /// [KeyEventResult.ignored],方向键自然流给 framework 跑几何算法。
   ///
-  /// 为什么需要这个兜底:控件子树(含 seek bar 的 onKeyEvent)在 _controlsVisible
-  /// == false 时被整树卸载(见 _buildVideoArea 的 `if (_controlsVisible)`),
-  /// 没人接键,TV 用户按方向键唤不出控件。这个顶层 Focus 是唯一能可靠在隐藏态
-  /// 接键的位置。
+  /// 为什么需要这个兜底:控件隐藏时焦点在这个全屏 Focus 上(见它的
+  /// canRequestFocus: !_controlsVisible),控件子树虽常驻但此刻不持焦,seek bar
+  /// 的 onKeyEvent 收不到键。这个顶层 Focus 是隐藏态唯一接键的位置,用来唤出控件。
   KeyEventResult _onWakeControls(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (!TvMode.instance.isActive) return KeyEventResult.ignored;
@@ -681,17 +659,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return KeyEventResult.ignored;
   }
 
-  /// 分层 Dismiss:有菜单 → 收菜单(MenuAnchor 自己处理 DismissIntent,这里不
-  /// 重复);控件显示 → 收控件;否则退出页面。修复"按 ESC 直接退出整个播放页"
-  /// 的旧 bug(旧代码在根层 _onRemoteKey 无条件 Navigator.pop)。
+  /// escape 键分层(控件显隐)。菜单(Dialog)打开时,Dialog 路由自带
+  /// DismissIntent 关闭,不会走到这里。这里只处理无菜单的情况:
+  /// 控件显示 → 收控件;控件隐藏 → 唤出控件。escape 不退出页面 —— 退出走
+  /// 返回键(browserBack/goBack)→ _handlePop。
   void _handleDismiss() {
-    // 菜单(Dialog)打开时,Dialog 路由自带 DismissIntent 关闭(routes.dart:1198),
-    // 不会走到这里。这里只处理"无菜单"的情况:控件显示 → 收控件;否则退出页面。
     if (_controlsVisible) {
       setState(() => _controlsVisible = false);
       return;
     }
-    Navigator.maybePop(context);
+    // 控件隐藏:唤出控件。
+    _toggleControls();
+  }
+
+  /// 系统返回键(browserBack)/ESC 分层。由 PopScope 拦截所有 pop 来源后调用。
+  /// 菜单(Dialog)打开时,Dialog 路由在栈顶,系统 back 先 pop Dialog(关菜单),
+  /// 不会到这里。这里处理无菜单的情况:控件显示 → 关控件;控件隐藏 → 退出页面。
+  /// (mumu/TV 上 ESC 常被系统当 back 走这条路径,所以 ESC 与返回键行为统一。)
+  void _handlePop() {
+    if (_controlsVisible) {
+      setState(() => _controlsVisible = false);
+      return;
+    }
+    Navigator.of(context).pop();
   }
 
 
@@ -714,24 +704,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (target < Duration.zero) target = Duration.zero;
       if (target > duration) target = duration;
     }
-    // 用户主动 seek:取消 resume watchdog。否则当 resume 点在末尾附近时,
-    // 用户往前拖会被 watchdog 误判成"CDN 掉线重连重置到 0",强制拉回 resume
-    // 点,导致"拖回去了又被瞬间带回结尾"。watchdog 只在 resume 初始化阶段
-    // 防 CDN 重连,用户接管后不再守卫。
-    _cancelResumeWatchdog();
-    // 同步进度上报的基准点:用户主动 seek(尤其回退)后,_lastLoggedPosition
-    // 必须更新到新位置,否则进度定时器会因 delta<0 一直跳过上报(它把回退
-    // 误当 CDN 重连重置),导致回退后看的进度不保存,下次进来 resume 回旧点。
+    // 用户主动 seek 后,同步进度上报基准点,让续播点尽快跟随用户实际位置
+    // (否则定时器下次 tick 的 delta 会偏大,且 seek 期间的位置变化不计入时长)。
     _lastLoggedPosition = target.inSeconds;
     await _player.seek(target);
     _scheduleAutoHide();
-  }
-
-  /// 取消 resume watchdog。用户主动 seek(进度条拖动/方向键)后调用,
-  /// 表示用户已接管播放位置,不再需要防 CDN 重连的强制回拉。
-  void _cancelResumeWatchdog() {
-    _resumeWatchdogSub?.cancel();
-    _resumeWatchdogSub = null;
   }
 
   /// Seek by a delta from the *current* player position (not the StreamBuilder
@@ -987,28 +964,36 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ),
               ),
 
-            // 4. Controls overlay (top bar + bottom bar). When hidden, this
-            //    subtree is removed so taps fall through to layer 3.
+            // 4. Controls overlay (top bar + bottom bar).
             //
-            // **TV 模式下控件不会隐藏**(见 _scheduleAutoHide 的 TvMode 判断):
-            // auto-hide 是 PAD/触屏的传统交互(鼠标移开/无操作自动隐藏),TV 用户
-            // 没有这个概念 —— 控件隐藏会导致 seek bar 的 _seekBarFocus 从焦点树
-            // 移除,视频区零焦点落点,焦点丢失。所以 TV 下控件常驻可见,seek bar
-            // 的 FocusNode 永远在焦点树里,几何算法总能找到 → 跨区导航可靠。
-            if (_controlsVisible)
-              Positioned.fill(
-                child: Stack(
-                  children: [
-                    Positioned(
-                      top: 0,
-                      left: 0,
-                      right: 0,
-                      child: _buildTopBar(),
-                    ),
-                    _buildPlayerControls(),
-                  ],
+            // 控件层**常驻**(不卸载),用 IgnorePointer + AnimatedOpacity 控制
+            // 显隐。关键:不能用 `if (_controlsVisible)` 卸载 —— 卸载会让 seek bar
+            // 的 _seekBarFocus 离开焦点树,TV 几何导航丢焦。常驻则 FocusNode 永在
+            // 树里,隐藏只影响视觉与触摸命中:
+            //  - IgnorePointer(ignoring: !_controlsVisible):隐藏时不拦触摸,
+            //    让点击穿透到 layer 3 的 GestureDetector(onTap: _toggleControls),
+            //    保持触屏"点一下显/隐"的行为(等价于旧的"卸载后穿透")。
+            //  - AnimatedOpacity:视觉淡入淡出,TV 下隐藏后不挡视频内容。
+            Positioned.fill(
+              child: IgnorePointer(
+                ignoring: !_controlsVisible,
+                child: AnimatedOpacity(
+                  opacity: _controlsVisible ? 1.0 : 0.0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Stack(
+                    children: [
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: _buildTopBar(),
+                      ),
+                      _buildPlayerControls(),
+                    ],
+                  ),
                 ),
               ),
+            ),
           ],
         );
       },
@@ -1661,4 +1646,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
     return '${two(d.inMinutes)}:${two(d.inSeconds.remainder(60))}';
   }
+}
+
+/// 系统返回键(browserBack/goBack)的 Intent。与 DismissIntent(escape)分开:
+/// escape 管控件显隐,返回键管退出页面(菜单内则先关菜单)。见 _handlePop。
+class _PopPlayerIntent extends Intent {
+  const _PopPlayerIntent();
 }
