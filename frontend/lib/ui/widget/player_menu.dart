@@ -30,7 +30,13 @@ class PlayerSettingsMenu<T> extends StatefulWidget {
   final T? selectedValue;
 
   /// 选中某项时回调(参数是该选项的 value)。
-  final ValueChanged<T> onSelected;
+  ///
+  /// 类型是 [Future] 返回:[_openMenu] 会 `await` 这个回调,等里面的
+  /// await(如 `setSubtitleTrack`)+ setState 全部跑完,焦点树稳定后,再
+  /// requestFocus 归位到触发按钮。这避免了"回调未 await → requestFocus 先
+  /// 执行 → 回调里的 setState 重建把刚归位的焦点冲掉"的时序竞争
+  /// (详见 docs/pitfalls/flutter-menu-focus-loss.md 方案 B)。
+  final Future<void> Function(T) onSelected;
 
   /// 可选的菜单标题(显示在菜单顶部)。null 则不显示。
   final String? menuTitle;
@@ -64,8 +70,6 @@ class _PlayerSettingsMenuState<T> extends State<PlayerSettingsMenu<T>> {
   }
 
   Future<void> _openMenu(BuildContext context) async {
-    // showDialog 是 await 的 —— 关闭后代码继续,这里显式 requestFocus 归位。
-    // 这是 Dialog 相对 MenuAnchor 的核心优势:线性流程,焦点归位可靠。
     final result = await showDialog<T>(
       context: context,
       builder: (ctx) => _PlayerSettingsDialog<T>(
@@ -75,13 +79,26 @@ class _PlayerSettingsMenuState<T> extends State<PlayerSettingsMenu<T>> {
       ),
     );
     // 选中某项:回调。ESC/返回键:result 是 null,不回调。
+    // await 这个回调:等里面的 await(如 setSubtitleTrack)+ setState 跑完,
+    // 避免归位的 requestFocus 被 setState 重建冲掉。
     if (result != null) {
-      widget.onSelected(result);
+      await widget.onSelected(result);
     }
     // 菜单关闭后(无论选中/ESC/返回键),焦点回触发按钮。
-    // 防御性检查(node 可能已被 dispose)。
+    //
+    // 关键:延迟到下一帧再归位。showDialog 的 ModalRoute pop 后,Flutter 会
+    // 异步恢复"打开 Dialog 前的焦点"并卸载 Dialog 的 FocusScope。同步在 await
+    // 链里 requestFocus 会和这套恢复/卸载交错,导致归位的焦点状态不稳定 ——
+    // _triggerFocus 虽然拿到 hasFocus,但焦点系统此时的几何导航候选优先级错乱,
+    // 随后 D-pad 方向键会选中错误目标(详见 player_screen.dart 全屏 Focus 节点
+    // 的 canRequestFocus 处理)。postFrameCallback 让归位发生在帧末尾、焦点树
+    // 稳定之后,归位可靠。
     if (mounted && _triggerFocus.canRequestFocus) {
-      _triggerFocus.requestFocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _triggerFocus.canRequestFocus) {
+          _triggerFocus.requestFocus();
+        }
+      });
     }
   }
 

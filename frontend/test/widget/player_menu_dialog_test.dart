@@ -24,7 +24,7 @@ void main() {
                 PlayerMenuOption(value: 1.0, label: '1.0x'),
                 PlayerMenuOption(value: 2.0, label: '2.0x'),
               ],
-              onSelected: (_) {},
+              onSelected: (_) async {},
             ),
           ),
         ),
@@ -77,7 +77,9 @@ void main() {
                 PlayerMenuOption(value: 1.0, label: '1.0x'),
                 PlayerMenuOption(value: 2.0, label: '2.0x'),
               ],
-              onSelected: (v) => selected = v,
+              onSelected: (v) async {
+                selected = v;
+              },
             ),
           ),
         ),

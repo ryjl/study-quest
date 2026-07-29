@@ -92,6 +92,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _resumeSeekDone = false;
   int _resumeRetries = 0;
   DateTime? _lastResumeRetry;
+  // Resume watchdog 的 position 订阅。用户一旦主动 seek(拖进度条/方向键),
+  // 就 cancel 掉它 —— 否则 watchdog 会把用户的回退误判成"CDN 掉线重连重置
+  // 到 0",强制把位置拉回 resume 点,导致"拖回去了又被带回结尾"。
+  StreamSubscription<Duration>? _resumeWatchdogSub;
   List<Attachment> _attachments = [];
   // Phase 2:课前探险问题数据源切到 /ai-summary 的 pre_adventure,"带着问题看"
   // 也读 _summary.pre_adventure。老管线 /ai-content 已在 Phase 5 删除。
@@ -110,6 +114,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Auto-hide controls
   bool _controlsVisible = true;
   Timer? _hideTimer;
+
+  // 长按 ◄► 的加速状态:连续 KeyRepeatEvent 累计次数越多,单次 seek 步长越大
+  // (越按越快)。KeyDown(首次按下)重置为 0,KeyUp(松开)重置为 0。
+  int _seekRepeatCount = 0;
 
   // Fullscreen + extra controls state
   // (注:_isFullscreen 现在是 helper panel 显隐的唯一事实源,定义在下面带完整
@@ -217,6 +225,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   void dispose() {
     _progressTimer?.cancel();
     _hideTimer?.cancel();
+    _cancelResumeWatchdog();
     _player.dispose();
     _seekBarFocus.dispose();
     _backFocus.dispose();
@@ -374,7 +383,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _lastLoggedPosition = target.inSeconds;
     });
 
-    _player.stream.position.listen((pos) {
+    _resumeWatchdogSub = _player.stream.position.listen((pos) {
       final tgt = target.inSeconds;
       // Once the user has played past the target + a margin, resume is
       // considered successful — stop guarding.
@@ -579,6 +588,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
             // autofocus 让这个 Focus 节点接管键入口,_onWakeControls 才能在
             // 控件隐藏态(子树已卸载,seek bar 的 onKeyEvent 收不到键)唤出控件。
             autofocus: true,
+            // 控件可见时,这个全屏 Focus 不参与焦点遍历(canRequestFocus=false):
+            // 否则它覆盖全屏(0,0)~(w,h),在 D-pad 几何导航里会被当作"正对方向
+            // 的大邻居"选中,把焦点从控制行按钮吸走 → 看似丢焦。
+            // 控件隐藏时设回 true:此时控制行子树已卸载,需要这个节点自己持有
+            // 焦点,_onWakeControls 才能在隐藏态接到方向键唤出控件。
+            canRequestFocus: !_controlsVisible,
             onKeyEvent: _onWakeControls,
             child: FocusTraversalGroup(
               child: Stack(
@@ -699,8 +714,24 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (target < Duration.zero) target = Duration.zero;
       if (target > duration) target = duration;
     }
+    // 用户主动 seek:取消 resume watchdog。否则当 resume 点在末尾附近时,
+    // 用户往前拖会被 watchdog 误判成"CDN 掉线重连重置到 0",强制拉回 resume
+    // 点,导致"拖回去了又被瞬间带回结尾"。watchdog 只在 resume 初始化阶段
+    // 防 CDN 重连,用户接管后不再守卫。
+    _cancelResumeWatchdog();
+    // 同步进度上报的基准点:用户主动 seek(尤其回退)后,_lastLoggedPosition
+    // 必须更新到新位置,否则进度定时器会因 delta<0 一直跳过上报(它把回退
+    // 误当 CDN 重连重置),导致回退后看的进度不保存,下次进来 resume 回旧点。
+    _lastLoggedPosition = target.inSeconds;
     await _player.seek(target);
     _scheduleAutoHide();
+  }
+
+  /// 取消 resume watchdog。用户主动 seek(进度条拖动/方向键)后调用,
+  /// 表示用户已接管播放位置,不再需要防 CDN 重连的强制回拉。
+  void _cancelResumeWatchdog() {
+    _resumeWatchdogSub?.cancel();
+    _resumeWatchdogSub = null;
   }
 
   /// Seek by a delta from the *current* player position (not the StreamBuilder
@@ -1112,13 +1143,41 @@ class _PlayerScreenState extends State<PlayerScreen> {
         descendantsAreFocusable: !TvMode.instance.isActive,
         onFocusChange: (focused) => setState(() => _seekBarFocused = focused),
         onKeyEvent: (node, event) {
-          if (event is! KeyDownEvent) return KeyEventResult.ignored;
           final tv = TvMode.instance.isActive;
+          // KeyUp(松开方向键):重置加速计数。无论是不是方向键的 KeyUp 都重置
+          // 无妨 —— 只有方向键在累加 _seekRepeatCount。
+          if (event is KeyUpEvent) {
+            _seekRepeatCount = 0;
+            return KeyEventResult.ignored;
+          }
+          // 同时接受 KeyDownEvent 和 KeyRepeatEvent:后者是长按时的 auto-repeat
+          // 事件。只接 KeyDownEvent 会导致长按 ◄► 只 seek 一次(第一次按下),
+          // 后续 repeat 被拦掉 —— 必须 || KeyRepeatEvent 才能长按连续快退/快进。
+          if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+            return KeyEventResult.ignored;
+          }
+          // 长按加速:首次按下(KeyDown)重置计数;连续 repeat 时计数递增,步长
+          // 随之加大(越按越快)。基础步长 TV 30s / 非 TV 10s,每累计 3 次 repeat
+          // 步长 +基础值,封顶避免一次跳太远。
+          if (event is KeyDownEvent) {
+            _seekRepeatCount = 0;
+          }
+          final isSeekKey = event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+              event.logicalKey == LogicalKeyboardKey.arrowRight;
+          if (isSeekKey) {
+            final base = tv ? 30 : 10;
+            // 前 3 次按基础步长;之后每 3 次步长翻一档:base → 2base → 3base → ...
+            // 封顶 4 档,避免长按一下窜到片尾。
+            final tier = (_seekRepeatCount ~/ 3).clamp(0, 3);
+            final step = base * (1 + tier);
+            if (event is KeyRepeatEvent) _seekRepeatCount++;
+            final delta = event.logicalKey == LogicalKeyboardKey.arrowLeft
+                ? -step
+                : step;
+            return _seekAndHandle(Duration(seconds: delta));
+          }
+          // ▲▼ 不参与加速,走原逻辑。
           return switch (event.logicalKey) {
-            LogicalKeyboardKey.arrowLeft =>
-              _seekAndHandle(Duration(seconds: tv ? -30 : -10)),
-            LogicalKeyboardKey.arrowRight =>
-              _seekAndHandle(Duration(seconds: tv ? 30 : 10)),
             LogicalKeyboardKey.arrowUp => _seekArrowUp(tv),
             LogicalKeyboardKey.arrowDown => _seekArrowDown(tv),
             _ => KeyEventResult.ignored,
@@ -1378,7 +1437,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
           options: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
               .map((r) => PlayerMenuOption(value: r, label: '${r}x'))
               .toList(),
-          onSelected: (r) => _setRate(r),
+          onSelected: (r) async => _setRate(r),
         ),
         const SizedBox(width: 12),
         // Subtitles —— 字幕选择 + 字幕大小(用两个独立菜单,避免 SubmenuButton
