@@ -2,13 +2,13 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"studyquest/backend/internal/ai"
+	"studyquest/backend/internal/ai/jsonx"
 	"studyquest/backend/internal/model"
 )
 
@@ -361,7 +361,8 @@ func gradesLabel(grades []model.CourseGrade) string {
 
 // parseSummaryForTools is a lightweight decode of the stored summary JSON (we
 // only need concepts/key_points/headline here, not the full SummaryResult). Kept
-// local to avoid an import cycle quirk and because the tool tolerates absence.
+// local because the tool tolerates absence. 走 jsonx.ParseLLMJSON 统一兜底(存储的
+// summary 理论上是干净 JSON,但若落库时 LLM 带了围栏/裸引号,这里也能容错)。
 func parseSummaryForTools(raw string) (struct {
 	Headline  string   `json:"headline"`
 	KeyPoints []string `json:"key_points"`
@@ -372,7 +373,7 @@ func parseSummaryForTools(raw string) (struct {
 		KeyPoints []string `json:"key_points"`
 		Concepts  []string `json:"concepts"`
 	}
-	err := json.Unmarshal([]byte(extractJSONObject(raw)), &s)
+	_, err := jsonx.ParseLLMJSON(raw, &s)
 	return s, err
 }
 

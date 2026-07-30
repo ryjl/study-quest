@@ -113,6 +113,39 @@ worker 里一个 job 的 panic（nil deref、bug）**不能杀整个 worker goro
 `TestUpdateJobStatus_ConcurrentProgressNoRegression`（真 20-goroutine 并发，
 跑 `-race`）+ `TestUpdateJobStatus_FailedNullsProgress` / `_DonePinsProgressOne`。
 
+## AI agent loop
+
+### quiz `reached max steps` 是偶发，排查必须看 trace
+
+quiz 出题走 ReAct agent loop（`agent.Run`，`defaultMaxSteps=6`）。报错
+`quizzer: agent loop: agent: reached max steps without a final answer` 意思是：6 步
+跑满后强制让模型给最终答案（`ToolChoice=none`），但模型返回**空内容**。跑了 ~4 分钟。
+
+**这是偶发**（LLM 随机性导致某次 agent loop 不收敛——模型反复调工具不输出，或最终输出
+被截断成空），不是确定性 bug。生产 job8（episode3）首次失败、重跑即成功（self-check 判
+fail → regenerate → done）。重跑通常能过。
+
+**排查必须看 `ai_runs.trace_json`**：trace 记录了模型每一步调了什么工具、观察到什么，
+是定位"在循环什么"的唯一依据。
+
+**踩过的可观测性坑（2026-07-29 修，系统性）**：这是个**两层配合的契约 bug**——
+service 层（runQuizJob/runAdviceJob/runUserReportJob/runCourseSummaryJob）**都**写了
+`if res != nil { recordXxxRun(trace...) }` 的失败兜底，意图是"失败也落 trace 供排查"；
+但 agent 层的 4 个 Generate（quizzer/advice/user_study/course_summary）在 `agent.Run`
+返回 error 时**都** `return nil`，把 `agent.Run` 已返回的 partial trace **丢弃**——导致
+service 层的 `if res != nil` 永远不成立，兜底形同虚设。job8 首次失败时 DB 无 trace 就是
+这个原因。
+
+修复两处：
+1. **agent 层**：4 个 Generate 在 `agent.Run` 失败时都返回带 trace 的非 nil result
+   （`Trace/Usage/Turns/SystemPrompt/UserPrompt`），和 parse 失败的处理一致。
+2. **`agent.Run` 本身**：4 个 error 返回点中，chat 失败（step 1）和 tool 失败两处
+   漏了 `result.Trace = trace`（另两处 forced-call/ErrMaxSteps 有）——补齐，让
+   **`agent.Run` 失败时 `result.Trace` 非 nil 成为可靠契约**。
+
+**契约**：`agent.Run` 失败时返回的 `result` 非 nil 且 `Trace` 已填充（partial）；所有
+Generate 调用者必须在 error 分支接住 trace 透传给 service 层，别 `return nil`。
+
 ## HTTP handler
 
 ### `ShouldBindJSON` 失败时禁返 `err.Error()`

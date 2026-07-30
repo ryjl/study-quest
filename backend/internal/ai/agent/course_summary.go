@@ -2,11 +2,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
 	"studyquest/backend/internal/ai"
+	"studyquest/backend/internal/ai/jsonx"
 )
 
 // course_summary.go 编排 agent 驱动的课程级总结(Phase D 的核心)。和 advice.go 平行:
@@ -82,7 +82,11 @@ func (a *CourseSummaryAgent) Generate(ctx context.Context, req CourseSummaryRequ
 	userPrompt := buildCourseSummaryUserPrompt(req, episodeSeed)
 	res, err := a.agent.Run(ctx, CourseSummarySystemPrompt, userPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("course summary agent: %w", err)
+		// agent.Run 失败时(含 ErrMaxSteps)仍返回带 partial trace 的 result——透传给
+		// service 层落 ai_runs 排查(和 quizzer/advice/user_study 一致)。
+		return &CourseSummaryResult{Trace: res.Trace, Usage: res.Usage, Turns: res.Turns,
+			SystemPrompt: res.SystemPrompt, UserPrompt: res.UserPrompt},
+			fmt.Errorf("course summary agent: %w", err)
 	}
 	summaryText := strings.TrimSpace(res.FinalText)
 	if summaryText == "" {
@@ -133,8 +137,8 @@ func (a *CourseSummaryAgent) buildCourseSummarySeed(ctx context.Context, req Cou
 
 // parseHeadlineOnly 从 AISummary.SummaryJSON 里只取 headline 字段(比 parseSummaryForTools 更
 // 轻量——pre-seed 只要一句话概括,不需要 concepts/key_points 数组)。宽松解析:任何错误
-// 返回 "",调用方据此标"(无总结)"。复用 extractJSONObject(the balanced-brace carver,
-// helpers.go)容忍模型把 JSON 包在 prose/fences 里。
+// 返回 "",调用方据此标"(无总结)"。走 jsonx.ParseLLMJSON 统一兜底,容忍模型把 JSON
+// 包在 prose/fences 里 + 裸引号修复。
 func parseHeadlineOnly(raw string) string {
 	if raw == "" {
 		return ""
@@ -142,7 +146,7 @@ func parseHeadlineOnly(raw string) string {
 	var s struct {
 		Headline string `json:"headline"`
 	}
-	if err := json.Unmarshal([]byte(extractJSONObject(raw)), &s); err != nil {
+	if _, err := jsonx.ParseLLMJSON(raw, &s); err != nil {
 		return ""
 	}
 	return strings.TrimSpace(s.Headline)

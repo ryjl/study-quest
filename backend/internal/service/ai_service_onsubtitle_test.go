@@ -47,10 +47,11 @@ func TestOnSubtitleCompleted_EnqueuesPolishForWhisper(t *testing.T) {
 		repository.NewSubjectRepository(db),
 		repository.NewAIPolishChunkRepository(db), // real repo — OnSubtitleCompleted may chain polish
 		nil,                                        // no logRepo — structured-log writes not asserted,
-		nil,
-		nil,
-
-		nil,).(*aiService)
+		nil,                                        // no wrongBookRepo
+		nil,                                        // no examRepo
+		nil,                                        // no homeworkRepo
+		nil, // no settingsRepo — polish_concurrency defaults to 1
+	).(*aiService)
 	t.Cleanup(svc.Stop)
 
 	// Verify the resolver actually resolves (proves resolver != nil is not enough — it must BUILD).

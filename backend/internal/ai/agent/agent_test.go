@@ -178,12 +178,21 @@ func TestAgentLoopMaxStepsNoAnswerReturnsErr(t *testing.T) {
 	llm := &mockLLM{responses: responses}
 
 	a := NewAgent(llm, "m", tb, AgentOpts{})
-	_, err := a.Run(context.Background(), "sys", "user")
+	res, err := a.Run(context.Background(), "sys", "user")
 	if err == nil {
 		t.Fatal("expected ErrMaxSteps")
 	}
 	if !errors.Is(err, ErrMaxSteps) {
 		t.Errorf("expected ErrMaxSteps, got %v", err)
+	}
+	// 可观测性契约(2026-07-29):失败时 result 非 nil 且 Trace 已填充 partial 记录,
+	// 供调用方(quizzer.Generate 等)透传给 service 层落 ai_runs。这里跑了 6 步 tool
+	// 调用,trace 应有 6 步——若丢失则失败路径无 trace 可排查(生产 job8 曾中招)。
+	if res == nil {
+		t.Fatal("失败时 result 不应为 nil(契约:Trace 须填充供排查)")
+	}
+	if len(res.Trace) != defaultMaxSteps {
+		t.Errorf("失败时 partial trace 应有 %d 步,实际 %d", defaultMaxSteps, len(res.Trace))
 	}
 }
 
@@ -191,9 +200,14 @@ func TestAgentLoopChatErrorAborts(t *testing.T) {
 	// A Chat call fails (network) → run aborts with that error.
 	errLLM := &errChatLLM{err: errors.New("network down")}
 	a := NewAgent(errLLM, "m", nil, AgentOpts{})
-	_, err := a.Run(context.Background(), "sys", "user")
+	res, err := a.Run(context.Background(), "sys", "user")
 	if err == nil || !contains(err.Error(), "network down") {
 		t.Errorf("expected network error, got %v", err)
+	}
+	// 可观测性契约:chat 失败时 result 也不应为 nil(第一步就失败,trace 是空切片,
+	// 但 result 必须非 nil 让调用方能安全取 res.SystemPrompt 落 ai_runs)。
+	if res == nil {
+		t.Fatal("chat 失败时 result 不应为 nil")
 	}
 }
 

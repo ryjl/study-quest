@@ -84,7 +84,11 @@ func (a *UserStudyAgent) Generate(ctx context.Context, req UserStudyRequest) (*U
 	userPrompt := buildUserStudyUserPrompt(req, masterySeed)
 	res, err := a.agent.Run(ctx, UserStudySystemPrompt, userPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("user_study agent: %w", err)
+		// agent.Run 失败时(含 ErrMaxSteps)仍返回带 partial trace 的 result——透传给
+		// service 层落 ai_runs 排查(和 quizzer/advice 一致)。
+		return &UserStudyResult{Trace: res.Trace, Usage: res.Usage, Turns: res.Turns,
+			SystemPrompt: res.SystemPrompt, UserPrompt: res.UserPrompt},
+			fmt.Errorf("user_study agent: %w", err)
 	}
 	reportText := strings.TrimSpace(res.FinalText)
 	if reportText == "" {

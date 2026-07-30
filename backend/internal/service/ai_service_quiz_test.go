@@ -32,6 +32,7 @@ func aiServiceQuizTestEnv(t *testing.T) (*aiService, repository.AIContentReposit
 		wrongBookRepo,        // 错题本 hook — real repo so submit regression tests can assert,
 		nil,
 		nil, // no homeworkRepo — quiz path doesn't touch homework
+		nil, // no settingsRepo — quiz path doesn't read polish_concurrency
 	).(*aiService)
 	t.Cleanup(svc.Stop) // release the worker goroutine (see ai_service_test.go)
 	return svc, contentRepo, wrongBookRepo

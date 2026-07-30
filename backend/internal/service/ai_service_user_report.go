@@ -100,7 +100,7 @@ func (s *aiService) runUserReportJob(job *model.AIJob) {
 	// MaxSteps 10(和 advice 同档):跨课程数据量大,agent 可能要多次调
 	// get_course_mastery(每门课一次)+ get_user_advice + get_course_summary 才能写全。
 	// MaxTokens 3000:报告 400-800 字,比 advice 略长(跨课程内容更多)。
-	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 10, MaxTokens: 3000})
+	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: ai.MaxStepsUserReport, MaxTokens: ai.MaxTokensUserReport})
 	studier := agent.NewUserStudyAgent(genAgent, memory, deps)
 
 	start := time.Now()

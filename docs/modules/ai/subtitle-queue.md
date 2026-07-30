@@ -531,11 +531,26 @@ export，才能让动态链接器看到。
 **分块参数**（基于真实数据校准，可调）：
 - 块大小 150 cue（≈6900 字 + prompt ≈ 8k input）
 - 块重叠 3 cue（前后各 1.5 句上下文）
-- 并发 3 路（用户要求，很多中转站限速严格）
-- MaxTokens 8000
+- 并发 **3 路**（默认，存全局 `settings` 表 `polish_concurrency` 键，admin 可在「系统
+  设置 → AI 性能」改 1~10）。**选 3 的依据**：对生产中继 `api.ja.870314.xyz` 的实测压力
+  测试（2026-07-29）——并发 3 持续 3 轮零 429，并发 4 偶发 429（贴着中转站上限，内部
+  计数抖动会超），3 是安全最优值，比串行（1）快 3 倍。**2026-07-27 的 429 风暴真相**：
+  不是单 job 并发 3 超标（worker 是单 goroutine 串行处理 job，单 job 3 路不会让总并发
+  超 3），而是删库前多 job 交错（残留 job + summary/polish 同时跑）导致瞬时叠加。原硬
+  编码 3 本身是对的，缺的是可调口子 + 退避策略——这两者现在都有了（指数退避兜底）。
+  遇 429 可调低到 2，换不限制并发的中继可调高
+- MaxTokens 8000（注：生产中继 `api.ja.870314.xyz` 未严格遵守，实测 completion
+  到 ~9700 仍返回——maxTokens 在这里是「建议」而非硬墙，模型靠 prompt 自律控制输出长度）
+- **job deadline 按 chunk 数自适应**（2026-07-29）：`max(chunk数 × 5min, 20min)`。
+  原来固定 20min——但长字幕（ep3，2325 cues = 16 chunk）实际需 ~24.5min（每 chunk
+  ~92s，completion 近万 token 生成慢），顶满 20min deadline 导致最后几个 chunk
+  （context deadline exceeded）没轮到跑就被取消。自适应后 16 chunk → 80min 上限，
+  够覆盖最长字幕 + 重试余量；短字幕
+  2-3 chunk → 20min 下限，不空等
 - 单块 **2 次重试**（网络/parse 失败时，2026-07-22 从 3 降到 2——见下方「重试次数
-  3→2」）；仍失败则整 job 标 `failed`（2026-07-21 改，详见下方「验证策略与 partial
-  语义」），不写回字幕、不链式推进 segment
+  3→2」）；重试退避为**指数退避**（2s、8s…），给被 429 限流的中继留排队窗口（原来是
+  线性 1s/2s，间隔太短又撞墙）；仍失败则整 job 标 `failed`（2026-07-21 改，详见下方
+  「验证策略与 partial 语义」），不写回字幕、不链式推进 segment
 
 **验证策略与 partial 语义**（2026-07-21 重构，2026-07-22 提示词对齐）：
 
@@ -567,10 +582,13 @@ replace 输出格式」）。原则：**提示词描述的行为必须和代码�
 见下方「断点续润」），或 SkipPolish 跳过走原版。partial 的唯一成因现在是「LLM 没返回有效
 结果」（网络/parse 失败），不再包含「返回了但规则不信」（因为不再拦截）。
 
-**重试次数 3→2**（2026-07-22）：`maxRetries` 从 3 降到 2。第 3 次重试几乎从不成功
-（relay 垃圾响应原样重复、unknown-id 漂移原样重复），只是白烧计费 token。配合断点续润，
-一个耗尽重试的 chunk 会 fail 掉整 job，但它已 done 的兄弟 chunk 会留下——下次 retry 时
-只重烧这一个 chunk，比内联多打一次近乎无用的第 3 次更便宜。
+**重试次数 3→2 + 指数退避**（2026-07-22 / 2026-07-29）：`maxRetries` 从 3 降到 2。第 3
+次重试几乎从不成功（relay 垃圾响应原样重复、unknown-id 漂移原样重复），只是白烧计费
+token。配合断点续润，一个耗尽重试的 chunk 会 fail 掉整 job，但它已 done 的兄弟 chunk
+会留下——下次 retry 时只重烧这一个 chunk，比内联多打一次近乎无用的第 3 次更便宜。
+**退避**（2026-07-29）：从线性 `attempt * 1s`（1s/2s）改成指数（2s/8s…），因为生产中继
+429 后秒级重试必再撞墙；指数退避让中继有机会排空在途请求。配合默认并发 1，429 风暴从
+源头消除，指数退避是兜底——万一并发调高了或换了更严的中继。
 
 **llm_optimized 一致性**：`isPolishableSource` 单一真源，入队（EnqueuePolish）和执行
 （runPolishJob）共享。允许 whisper（首次润色）和 llm_optimized（re-polish，admin 接受
@@ -687,6 +705,15 @@ provider 配置里 `tags` 字段（JSON 数组），润色任务优先找 tags �
 | **glossary_candidates** | `glossary_candidates` 表（`model/ai.go`） | LLM 挖出的建议池，status: pending/accepted/rejected，admin 审核后 accepted → 自动追加进 TermDict |
 
 单向流：candidates → TermDict（接受）。TermDict 手改不影响 candidates。
+
+**挖矿门槛收紧**（2026-07-29）：从「confidence≥0.7 就报」收紧到「confidence≥0.9 且
+evidence_ids≥2（出现至少 2 个不同 cue）」。两道把关：prompt 要求模型自律（软）+
+`filterGlossary` 硬兜底（`dedupGlossary` 之后过滤）。**为什么收紧**：孤例（出现 1 次）
+和低置信度的规则依赖上下文、不可复用——比如象棋 `推一将→退二将`，脱离"绝杀"语境没
+意义，存进字典反而过拟合到具体词条；而且此前一节课动辄 100+ 候选（如 ep3 跑出 152 个），
+admin 根本审不过来，审核流于形式。收紧后只剩真正高频稳定的规则（如 `车→居` 全课程反复
+出现），数量降到个位数，人工审核才有意义。**注意**：接受候选仍需人工判断——门槛只过滤
+明显的噪音，不替 admin 决定"这个规则值不值得固化进字典"。
 
 **re-polish 关闭挖矿**：admin 接受新 glossary 后 re-polish（source=llm_optimized）时，
 字幕内容未变（从 `RawVttContent` 重跑），能挖的术语上次已挖。此时 `SkipGlossaryMining=true`

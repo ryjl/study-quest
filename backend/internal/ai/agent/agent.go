@@ -158,6 +158,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userPrompt string) (*Agen
 		}
 		resp, err := a.llm.Chat(ctx, req)
 		if err != nil {
+			result.Trace = trace
 			return result, fmt.Errorf("agent: chat at step %d: %w", step, err)
 		}
 		result.Turns++
@@ -193,6 +194,7 @@ func (a *Agent) Run(ctx context.Context, systemPrompt, userPrompt string) (*Agen
 				// A tool's hard error (DB down) aborts the run: a fake
 				// observation could mislead the model into a confidently wrong
 				// answer. The caller marks the job failed with this error.
+				result.Trace = trace
 				return result, fmt.Errorf("agent: tool %q failed: %w", tc.Function.Name, execErr)
 			}
 			trace = append(trace, TraceStep{

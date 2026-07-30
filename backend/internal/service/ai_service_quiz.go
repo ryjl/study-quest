@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"studyquest/backend/internal/ai"
 	"studyquest/backend/internal/ai/agent"
 	"studyquest/backend/internal/model"
 )
@@ -417,8 +418,8 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	// 2.3h/108 chunks) 的多次 quiz 生成都在 4000 tokens 附近被砍断,JSON 截断在中文
 	// UTF-8 多字节字符中间,报 "invalid character 'é' after object key:value pair"。
 	// 10000 覆盖峰值并留余量。extractJSONObject 另有截断兜底,但首选还是输出不被砍断。
-	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 6, MaxTokens: 10000})
-	checkAgent := agent.NewAgent(llm, modelName, nil, agent.AgentOpts{MaxSteps: 1, MaxTokens: 800}) // self-check: short verdict
+	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: ai.MaxStepsQuiz, MaxTokens: ai.MaxTokensQuiz})
+	checkAgent := agent.NewAgent(llm, modelName, nil, agent.AgentOpts{MaxSteps: ai.MaxStepsSelfCheck, MaxTokens: ai.MaxTokensQuizSelfCheck}) // self-check: short verdict
 	quizzer := agent.NewQuizzer(genAgent, checkAgent, memory, deps, llm, modelName)
 
 	start := time.Now()

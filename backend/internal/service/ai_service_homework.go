@@ -271,8 +271,8 @@ func (s *aiService) runHomeworkJob(job *model.AIJob) {
 	start := time.Now()
 	chatResp, err := llm.Chat(ctx, ai.ChatRequest{
 		Model:       modelName,
-		Temperature: 0,
-		MaxTokens:   16000,
+		Temperature: ai.DefaultTemperature,
+		MaxTokens:   ai.MaxTokensHomework,
 		Messages: []ai.ChatMessage{
 			{Role: ai.RoleSystem, Content: systemPrompt},
 			{Role: ai.RoleUser, Content: userPrompt},

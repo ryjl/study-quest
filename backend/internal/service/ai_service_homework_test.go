@@ -83,7 +83,7 @@ func seedHomeworkServiceFixture(t *testing.T) (*aiService, repository.HomeworkRe
 	// homeworkLLMOverride seam 短路在 resolver 调用前。测试必须设 svc.homeworkLLMOverride。
 	resolver := ai.NewProviderResolver(repository.NewAIProviderRepository(db), "")
 	svc := NewAIService(db, contentRepo, repository.NewEpisodeRepository(db), repository.NewCourseRepository(db),
-		resolver, nil, nil, nil, nil, nil, nil, nil, nil, homeworkRepo).(*aiService)
+		resolver, nil, nil, nil, nil, nil, nil, nil, nil, homeworkRepo, nil).(*aiService)
 	// 立即停掉 worker goroutine:这些测试手动驱动 runHomeworkJob,不让后台 worker 抢着
 	// claim 同一条 job 造成竞态(polish E2E 用 file db 能跑通,但 homework 测试有多次
 	// runHomeworkJob 调用,worker 的 3s tick 会撞上,索性停掉)。
@@ -273,7 +273,7 @@ func TestRunHomeworkJob_NoChunksFails(t *testing.T) {
 	// no-chunks 检查。homeworkLLMOverride 设了但不该被触达(无 chunks 前就 fail)。
 	resolver := ai.NewProviderResolver(repository.NewAIProviderRepository(db), "")
 	svc := NewAIService(db, contentRepo, repository.NewEpisodeRepository(db), repository.NewCourseRepository(db),
-		resolver, nil, nil, nil, nil, nil, nil, nil, nil, homeworkRepo).(*aiService)
+		resolver, nil, nil, nil, nil, nil, nil, nil, nil, homeworkRepo, nil).(*aiService)
 	svc.Stop() // 停 worker,手动驱动 runHomeworkJob(同主 fixture)
 	svc.homeworkLLMOverride = &fakeHomeworkLLM{responses: []fakeHomeworkResp{{content: validHomeworkJSON()}}}
 	epID := episode.ID
@@ -325,7 +325,7 @@ func TestHomeworkNilSafe(t *testing.T) {
 	contentRepo := repository.NewAIContentRepository(db)
 	// homeworkRepo = nil(最后一个参数)。
 	svc := NewAIService(db, contentRepo, repository.NewEpisodeRepository(db), repository.NewCourseRepository(db),
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*aiService)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*aiService)
 	svc.Stop() // 停 worker,这些 nil-safe 方法不跑 job,worker 纯属噪音
 
 	if _, err := svc.EnqueueHomeworkForCourse(1); !errors.Is(err, ErrHomeworkNotEnabled) {

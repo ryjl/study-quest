@@ -50,10 +50,11 @@ func polishTestEnv(t *testing.T, withResolver bool) (*aiService, repository.Epis
 		subjectRepo,
 		nil, // no polishChunkRepo — this env covers non-LLM polish paths only
 		nil, // no logRepo — structured-log writes not asserted,
-		nil,
-		nil,
-
-		nil,).(*aiService)
+		nil,                                        // no wrongBookRepo
+		nil,                                        // no examRepo
+		nil,                                        // no homeworkRepo
+		nil, // no settingsRepo — polish_concurrency defaults to 1
+	).(*aiService)
 	t.Cleanup(svc.Stop) // release the worker goroutine
 	return svc, episodeRepo, courseRepo, glossaryRepo, subjectRepo
 }
@@ -351,10 +352,11 @@ func polishE2EEnv(t *testing.T, llm *fakePolishLLM) (*aiService, repository.Epis
 		repository.NewSubjectRepository(db),
 		polishChunkRepo,
 		nil, // no logRepo — structured-log writes not asserted,
-		nil,
-		nil,
-
-		nil,).(*aiService)
+		nil,                                        // no wrongBookRepo
+		nil,                                        // no examRepo
+		nil,                                        // no homeworkRepo
+		nil, // no settingsRepo — polish_concurrency defaults to 1
+	).(*aiService)
 	svc.polishLLMOverride = llm
 	t.Cleanup(svc.Stop)
 	return svc, episodeRepo, courseRepo

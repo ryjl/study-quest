@@ -536,6 +536,34 @@ SRT → ParseSRT(cue 列表) → SegmentChunks(累积+边界对齐) → chunks
 ### 为什么总结不做 tool calling
 总结是**单次抽取**（读全文 → 提炼要点），不需要多步推理或查外部信息。所以 summarizer 是直接的 Chat 调用（temperature=0，结构化 JSON 输出），不走 ReAct loop。tool calling 留给出题（Phase C）和第二轮的 advice/course_summary/user_report（§16）——那些需要查 memory、检索弱点、跨课程遍历，才是 agent loop 的用武之地。
 
+### 调用参数与容错（2026-07-29 加固）
+单次 LLM 调用意味着一次失败整个 job 就废——所以容错设计集中在「让这一次调用尽量成功」：
+
+- **MaxTokens=16000**（与 homework 对齐）。summary 的输出结构比单题重（headline +
+  sections + key_points + methods + common_mistakes + pre_adventure + takeaway），
+  一节长课轻松上千 token。**曾遗漏不设 MaxTokens**（走 provider 默认上限），生产上
+  （2026-07-27 ep123）模型输出到默认上限被硬切断，JSON 在多字节汉字中间断裂
+  （`invalid character 'å' after array element`），整个 job 失败。
+- **`extractJSONObject` 截断兜底**：`parseSummaryJSON` 复用 quiz/homework 同款 balanced-
+  brace carver（`agent/helpers.go`）。被砍断时闭合未完结的字符串/括号/大括号，救回前面
+  的 sections 而非全废。16000 给足正常预算，截断兜底是极端长课的第二道保险。
+- **裸引号修复**（2026-07-29，生产 ep2 故障驱动）：LLM 常在 JSON string value 里写
+  未转义的裸 ASCII 双引号表达引语（如 points 里写 `象棋级别"毕业"`），parser 在裸引号
+  误判字符串结束，后面中文成非法 token（报 `invalid character 'X' after ...`）。三层
+  防御：① prompt 加 JSON 引号转义硬规则（推荐用中文引号「」，软约束，模型偶尔不听）；
+  ② `parseSummaryJSON` 复用 homework 的 `RepairBareQuotesInJSON` 硬兜底——第一次 parse
+  失败时把裸引语成对替换成「」再 parse（这次同时修了 `RepairBareQuotesInJSON` 的 pair-
+  aware 缺陷：引语后跟逗号时不再误判成真字符串结束，summary + homework 都受益）；
+  ③ 已有的重试兜底。ep2 两次重试都因裸引号失败，①+② 是根治。
+- **5min deadline + 重试 1 次**（service 层 `runSummaryJob`）。原来用裸
+  `context.Background()`，唯一兜底是 HTTP client 的 120s——长 prompt 正常生成就可能
+  >120s，被这个"兜底"误杀。现每次尝试用独立 5min ctx（不复用：第一次若 deadline
+  exceeded，复用同 ctx 第二次会立刻取消），失败重试一次（共 2 次尝试）。瞬时抖动
+  （relay 504、偶发超时、JSON 截断）靠重试救回，成本极低。
+- **去重落库**：summarizer 内部不再在解析失败时 `UpdateJobStatus(failed)`——那会和
+  service 层的 `failJob` 重复落库，且重试时导致 failed→done 状态错乱。job 最终状态
+  由 service 层统一决定（重试耗尽才 failJob），summarizer 只返回 error。
+
 ### 输出结构（Phase F 丰富化）
 
 Phase F 把 summary 从"一串平铺要点"升级到接近真实学习笔记的结构。所有新增字段都是**同一次 LLM 调用**产出——零额外 token 成本，只是 prompt 让模型多输出几个结构。

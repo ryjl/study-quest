@@ -175,7 +175,7 @@ func main() {
 	// homeworkRepo stores 课后作业卷(Homework/HomeworkSection/HomeworkQuestion/
 	// HomeworkPromptConfig)。Nil-safe in the service layer, but we always wire it in main.
 	homeworkRepo := repository.NewHomeworkRepository(db)
-	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo, polishChunkRepo, logRepo, wrongBookRepo, examRepo, homeworkRepo)
+	aiService := service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo, aiResolver, unlockService, userRepo, glossaryRepo, subjectRepo, polishChunkRepo, logRepo, wrongBookRepo, examRepo, homeworkRepo, settingsRepo)
 	// Connect Step 2 → Step 3: when a subtitle lands, auto-enqueue a segment job
 	// (only if the course has AI enabled). The callback keeps the subtitle
 	// service free of any AI import — it just calls a function if set.

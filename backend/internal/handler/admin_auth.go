@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -75,17 +76,21 @@ func (h *adminHandler) Me(c *gin.Context) {
 func (h *adminHandler) GetSettings(c *gin.Context) {
 	// Storage connection config moved to storage_sources (multi-source). The
 	// only thing surfaced here is whether an admin password is set, so the SPA
-	// can show a hint.
+	// can show a hint, plus the polish_concurrency knob (so the AI 性能 card can
+	// display the current value).
 	hash, _ := h.settingsRepo.Get("admin_password_hash")
+	polishConc := h.settingsRepo.GetWithDefault("polish_concurrency", "3")
 	c.JSON(http.StatusOK, gin.H{
-		"has_admin_password": hash != "",
+		"has_admin_password":  hash != "",
+		"polish_concurrency":  polishConc,
 	})
 }
 
 // UserLedger returns a paginated slice of a user's point transactions.
 func (h *adminHandler) UpdateSettings(c *gin.Context) {
 	var req struct {
-		AdminPassword string `json:"admin_password"`
+		AdminPassword     string `json:"admin_password"`
+		PolishConcurrency *int   `json:"polish_concurrency"` // pointer: distinguish "omitted" from "0"
 	}
 
 	if !bindJSON(c, &req) { return }
@@ -97,6 +102,22 @@ func (h *adminHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 		_ = h.settingsRepo.Set("admin_password_hash", string(hash), "Admin panel password hash")
+	}
+
+	// polish_concurrency: 1~10。默认 3(实测中继并发 3 稳定/4 偶发 429)。用指针区分"未
+	// 提交该字段"(不改)和"显式给了值"。越界返回 400——虽然 polish.go 会把 <1
+	// clamp 成 1,但这里直接拒更诚实,让 admin 知道填错了。
+	if req.PolishConcurrency != nil {
+		conc := *req.PolishConcurrency
+		if conc < 1 || conc > 10 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "polish_concurrency 必须在 1~10 之间"})
+			return
+		}
+		if err := h.settingsRepo.Set("polish_concurrency", strconv.Itoa(conc),
+			"Polish LLM concurrency (in-flight chunk calls per job)"); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save polish_concurrency"})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Settings updated successfully"})

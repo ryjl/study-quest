@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -115,11 +116,6 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		subjectLabel = subject.Key
 	}
 
-	// Polish deadline: the PoC ran 7m13s for a 157k-char episode at concurrency 3.
-	// 20 min is a generous ceiling that still catches a stuck relay.
-	polishCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
-	defer cancel()
-
 	// Source the polish input from RawVttContent (the immutable pre-polish
 	// snapshot) when it exists, falling back to VttContent for legacy rows
 	// that predate the RawVttContent column. This is the WHOLE POINT of
@@ -132,6 +128,23 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 	if strings.TrimSpace(polishInput) == "" {
 		polishInput = sub.VttContent
 	}
+
+	// Polish deadline 按 chunk 数自适应。原来是固定 20min——但生产(2026-07-29)
+	// 长字幕(ep3, 2325 cues = 16 chunk)在并发 3 下需要 ~24min,直接顶满 20min
+	// deadline,最后几个 chunk(context deadline exceeded)还没轮到跑就被取消了。
+	//
+	// 每 chunk 按 5min 算上限(单 chunk 正常 ~90s,留足 retry + 中继排队 + 极端慢
+	// 调用的余量)。16 chunk → 80min 上限,够覆盖最长字幕;短字幕(2-3 chunk)
+	// → 10-15min,不会空等。最低 20min 保证小 job 也有合理窗口。
+	// 注意:中继如果真的 hang 住,这个 deadline 仍是兜底——job 会失败而非永远占
+	// 着 worker,配合断点续润,失败的 chunk 下次 retry 只重烧自己。
+	chunkCount := countPolishChunks(polishInput)
+	polishDeadline := time.Duration(chunkCount) * 5 * time.Minute
+	if polishDeadline < 20*time.Minute {
+		polishDeadline = 20 * time.Minute
+	}
+	polishCtx, cancel := context.WithTimeout(ctx, polishDeadline)
+	defer cancel()
 
 	// SkipGlossaryMining on re-polish: when the source is already llm_optimized,
 	// the subtitle content hasn't changed (we re-polish from the immutable
@@ -154,6 +167,13 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		SkipGlossaryMining: skipMining,
 		PriorOutcomes:      priorOutcomes,
 		OnChunkDone:        onChunkDone,
+		// polish_concurrency: how many in-flight LLM calls the job may make.
+		// 默认 3:实测生产中继并发 3 零 429、4 偶发 429(2026-07-29 压测)。
+		// 2026-07-27 的 429 风暴真相是多 job 交错叠加,不是单 job 并发 3 超标
+		// (worker 单 goroutine 串行处理 job)。Read from the global Setting so
+		// the admin can raise/lower it without a redeploy. polishConcurrency()
+		// is nil-safe (settingsRepo==nil → 3) and clamps garbage to [1,10].
+		Concurrency: s.polishConcurrency(),
 	})
 	if err != nil {
 		s.failJob(job, "polish: "+err.Error())
@@ -491,6 +511,47 @@ func countDistinctCueChanges(changes []polish.CueChange) int {
 //                             no-op at best and confusing at worst.
 func isPolishableSource(source string) bool {
 	return source == "whisper" || source == "llm_optimized"
+}
+
+// countPolishChunks returns how many chunks Polish will split the VTT into.
+// Used to size the per-job deadline (see runPolishJob) so a long subtitle
+// (16+ chunks) isn't cut off mid-run even at the default concurrency 3.
+// Mirrors the parse + ChunkLayout math in setupPolishCheckpoint; on any parse
+// failure falls back to 0 (caller's deadline logic then uses its 20min floor).
+func countPolishChunks(vtt string) int {
+	cues, err := ai.ParseSRT(subtitle.VttToSrt(vtt))
+	if err != nil || len(cues) == 0 {
+		return 0
+	}
+	return len(polish.ChunkLayout(len(cues)))
+}
+
+// polishConcurrency reads the `polish_concurrency` global Setting and returns
+// the number of in-flight LLM calls a polish job may make. Default 3.
+//
+// 选 3 的依据:对生产中继 api.ja.870314.xyz 的实测压力测试(2026-07-29)——并发 3
+// 持续 3 轮零 429,并发 4 偶发 429(贴着中转站上限,内部计数抖动会超)。3 是这个中转站
+// 的安全最优值,比串行(1)快 3 倍。
+//
+// 2026-07-27 的 429 风暴真相不是"单 job 并发 3 超标"(worker 是单 goroutine 串行
+// 处理 job,单 job 3 路不会让总并发超 3),而是删库前多 job 交错 + summary/polish 同时
+// 在跑导致瞬时叠加。原硬编码 3 本身是对的,只是当时缺一个可调的口子和退避策略。
+//
+// nil-safe (settingsRepo==nil → 3) and clamps garbage (non-numeric, ≤0, or
+// absurdly high) to the [1,10] range.
+func (s *aiService) polishConcurrency() int {
+	if s.settingsRepo == nil {
+		return 3
+	}
+	raw := s.settingsRepo.GetWithDefault("polish_concurrency", "3")
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 3
+	}
+	if n > 10 {
+		return 10
+	}
+	return n
 }
 
 // enqueueSegmentForPolish chains a segment job after a successful polish (or

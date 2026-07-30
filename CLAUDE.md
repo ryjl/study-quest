@@ -132,12 +132,19 @@ Always run `make test` before declaring backend work done.
    disabled, system behavior is identical to pre-AI. Clients treat 404 as
    "no AI data" and hide the cards.
 
-7. **Bug 当轮就修，不要因为"可能是小问题"就拖到下次。** review 标出来的问题
+7. **解析 LLM JSON 走统一 `jsonx.ParseLLMJSON`，禁止各自手写 `json.Unmarshal`。**
+   LLM 常在 string value 写未转义裸 ASCII 双引号（引语），导致 parse 失败报
+   `invalid character 'å'`（看着像编码 bug，其实是裸引号）。全项目解析 LLM 返回
+   JSON 的唯一入口是 `internal/ai/jsonx.ParseLLMJSON`（围栏剥离 + 截断兜底 +
+   裸引号修复三层）。引号问题的根因、探测结论、repair 局限、升级到 response_format
+   根治的路径，见 `docs/pitfalls/llm-json-quotes.md`。
+
+8. **Bug 当轮就修，不要因为"可能是小问题"就拖到下次。** review 标出来的问题
    （哪怕是 MAJOR 不是 BLOCKER、哪怕"终态正确"、哪怕看起来像 UX 瑕疵）都是真
    bug，用户看得到、会困惑。别用"小问题""可观测性层面"给自己找台阶。踩坑细节
    和具体修法进 `docs/pitfalls/`，不堆在 CLAUDE.md。
 
-8. **所有修改直接进 `main`，不要拉 branch。** 这个项目是单人开发，分支管理
+9. **所有修改直接进 `main`，不要拉 branch。** 这个项目是单人开发，分支管理
    是纯开销。commit 直接打在 `main` 上，不建 feature branch、不开 PR、不走
    rebase/merge 流程。不要"按规范先分支"——这里的主线就是 `main`。
 

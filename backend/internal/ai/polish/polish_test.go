@@ -613,11 +613,12 @@ func TestSystemPrompt_NoCharCountRule_NoBatchInvalidation(t *testing.T) {
 }
 
 // TestPolish_GlossaryCollected: LLM returns both a change and a glossary
-// candidate. The result should surface the glossary entry (deduped across
+// candidate that passes the high-confidence/high-frequency bar (conf≥0.9 且
+// evidence≥2). The result should surface the glossary entry (deduped across
 // chunks).
 func TestPolish_GlossaryCollected(t *testing.T) {
 	vtt := makeVTT(2)
-	resp := `{"changes":[{"id":1,"text":"lina1"}],"glossary":[{"original":"line","corrected":"lina","context":"test term","confidence":0.9,"evidence_ids":[1]}]}`
+	resp := `{"changes":[{"id":1,"text":"lina1"}],"glossary":[{"original":"line","corrected":"lina","context":"test term","confidence":0.95,"evidence_ids":[1,2]}]}`
 	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
 
 	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
@@ -631,8 +632,34 @@ func TestPolish_GlossaryCollected(t *testing.T) {
 	if g.Original != "line" || g.Corrected != "lina" {
 		t.Errorf("glossary entry wrong: %+v", g)
 	}
-	if g.Confidence != 0.9 {
-		t.Errorf("confidence = %v, want 0.9", g.Confidence)
+	if g.Confidence != 0.95 {
+		t.Errorf("confidence = %v, want 0.95", g.Confidence)
+	}
+}
+
+// TestPolish_GlossaryFiltered: candidates below the high-confidence/high-
+// frequency bar are dropped (2026-07-29 门槛收紧)。孤例(evidence<2)和低置信度
+// (conf<0.9)的依赖上下文、不可复用,存进字典会过拟合到具体词条,且让审核流于形式。
+func TestPolish_GlossaryFiltered(t *testing.T) {
+	vtt := makeVTT(2)
+	// 三个候选:① conf 够但 evidence 只 1(孤例)→ 过滤;② evidence 够但 conf 不够 → 过滤;
+	// ③ 都够 → 保留。
+	resp := `{"changes":[{"id":1,"text":"lina1"}],"glossary":[
+		{"original":"孤例","corrected":"孤例改","confidence":0.95,"evidence_ids":[1]},
+		{"original":"低置信","corrected":"低置信改","confidence":0.7,"evidence_ids":[1,2]},
+		{"original":"高频稳","corrected":"高频稳改","confidence":0.95,"evidence_ids":[1,2]}
+	]}`
+	llm := &fakeLLM{responses: []fakeResp{{content: resp}}}
+
+	res, err := Polish(context.Background(), llm, "fake-model", PolishRequest{VttContent: vtt})
+	if err != nil {
+		t.Fatalf("Polish: %v", err)
+	}
+	if len(res.Glossary) != 1 {
+		t.Fatalf("Glossary len = %d, want 1 (only high-conf + evidence≥2 survives): %+v", len(res.Glossary), res.Glossary)
+	}
+	if res.Glossary[0].Original != "高频稳" {
+		t.Errorf("surviving entry wrong: %+v", res.Glossary[0])
 	}
 }
 

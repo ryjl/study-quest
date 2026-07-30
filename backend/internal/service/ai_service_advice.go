@@ -83,7 +83,7 @@ func (s *aiService) runAdviceJob(job *model.AIJob) {
 	// 调 get_course_mastery/get_subject_mastery + get_episode_summary 才能写全。每步
 	// 重发完整对话(token 成本线性增长),10 步是"够用但不烧钱"的折中。
 	// MaxTokens 给 2500:自然语言建议 200-500 字,绰绰有余;不像 quiz 要吐 JSON 数组。
-	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 10, MaxTokens: 2500})
+	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: ai.MaxStepsAdvice, MaxTokens: ai.MaxTokensAdvice})
 	adviser := agent.NewAdviceAgent(genAgent, memory, deps)
 
 	start := time.Now()

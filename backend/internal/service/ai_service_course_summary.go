@@ -96,7 +96,7 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 	// 喂了所有 episode + headline,agent 只需调 1-3 次 get_episode_summary 深入查看关键
 	// episode,然后写总结。8 步是"够用但不烧钱"的折中。MaxTokens 给 3000:课程总结比
 	// advice 长一些(要串起整门课的脉络,300-700 字),3000 token 绰绰有余。
-	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: 8, MaxTokens: 3000})
+	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: ai.MaxStepsCourseSummary, MaxTokens: ai.MaxTokensCourseSummary})
 	summarizer := agent.NewCourseSummaryAgent(genAgent, deps)
 
 	start := time.Now()

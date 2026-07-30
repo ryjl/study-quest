@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 )
 
 // OpenAICompatProvider is the single LLMProvider implementation: it speaks the
@@ -48,7 +47,7 @@ func NewOpenAICompatProvider(baseURL, apiKey string) *OpenAICompatProvider {
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: HTTPClientTimeout,
 		},
 	}
 }
@@ -104,7 +103,7 @@ func (p *OpenAICompatProvider) Ping(ctx context.Context) error {
 		// Intentionally tiny: we only want to confirm the round-trip works, not
 		// generate anything. Model is left empty so Chat falls back to the
 		// provider's configured model (set by the resolver from config).
-		MaxTokens: 5,
+		MaxTokens: MaxTokensPing,
 	}
 	_, err := p.Chat(ctx, req)
 	return err

@@ -18,7 +18,7 @@ func examServiceTestEnv(t *testing.T, qCount int) (svc *aiService, contentRepo r
 	examRepo = repository.NewExamRepository(db)
 	wrongBookRepo := repository.NewWrongBookRepository(db)
 	s := NewAIService(db, contentRepo, repository.NewEpisodeRepository(db), repository.NewCourseRepository(db),
-		nil, nil, repository.NewUserRepository(db), nil, nil, nil, nil, wrongBookRepo, examRepo, nil).(*aiService)
+		nil, nil, repository.NewUserRepository(db), nil, nil, nil, nil, wrongBookRepo, examRepo, nil, nil).(*aiService)
 	t.Cleanup(s.Stop)
 
 	subjects := testutil.SeedSubjects(t, db)

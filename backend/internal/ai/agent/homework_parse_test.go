@@ -406,6 +406,15 @@ func TestRepairBareQuotesInJSON(t *testing.T) {
 			in:   `{"a":"比较大小","b":1}`,
 			want: `{"a":"比较大小","b":1}`,
 		},
+		{
+			// 2026-07-29 pair-aware 修复的验证 case:引语恰好出现在值末尾、后面跟
+			// 逗号(summary ep2 生产故障:...象棋级别"毕业",之后...)。原 isStringTerminator
+			// 把 毕业" 后的逗号判成真结束,导致引号配对错乱。pair-aware 改进后,已开引语
+			// 未闭合时下一个 " 必当闭合处理,不再误判。
+			name: "引语后跟逗号(pair-aware 修复):成对闭合不被误判成真结束",
+			in:   `{"points":["象棋级别"毕业",之后参加"]}`,
+			want: `{"points":["象棋级别「毕业」,之后参加"]}`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -99,7 +99,12 @@ func (a *AdviceAgent) Generate(ctx context.Context, req AdviceRequest) (*AdviceR
 	userPrompt := buildAdviceUserPrompt(req, masterySeed)
 	res, err := a.agent.Run(ctx, AdviceSystemPrompt, userPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("advice agent: %w", err)
+		// agent.Run 失败时(含 ErrMaxSteps)仍返回带 partial trace 的 result——透传给
+		// service 层落 ai_runs,否则失败时模型调了什么工具全丢,无法排查(和 quizzer
+		// 一致;service 层 runAdviceJob 的 if res != nil 会接住落 trace)。
+		return &AdviceResult{Trace: res.Trace, Usage: res.Usage, Turns: res.Turns,
+			SystemPrompt: res.SystemPrompt, UserPrompt: res.UserPrompt},
+			fmt.Errorf("advice agent: %w", err)
 	}
 	adviceText := strings.TrimSpace(res.FinalText)
 	if adviceText == "" {

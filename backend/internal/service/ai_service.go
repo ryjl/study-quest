@@ -371,6 +371,13 @@ type aiService struct {
 	// can't be stubbed without a live relay). Production leaves this nil and
 	// the resolver path runs unchanged. See ai_service_polish_test.go.
 	polishLLMOverride ai.LLMProvider
+	// settingsRepo reads global key-value settings (the `settings` table).
+	// Used today for the `polish_concurrency` knob (how many in-flight LLM
+	// calls a polish job may make). 默认 3:实测生产中继并发 3 零 429、4 偶发 429,
+	// 3 是安全最优值(详见 polishConcurrency)。
+	// nil-safe: when nil, polishConcurrency() returns 3 (the default — same as
+	// an unset settings row, since GetWithDefault("polish_concurrency","3")).
+	settingsRepo repository.SettingsRepository
 	// homeworkLLMOverride is a TEST-ONLY seam (mirrors polishLLMOverride): when
 	// non-nil, runHomeworkJob uses this provider directly instead of resolving
 	// through `resolver`. Lets service tests drive the full RAG→LLM→parse→persist
@@ -449,6 +456,7 @@ func NewAIService(
 	wrongBookRepo repository.WrongBookRepository,
 	examRepo repository.ExamRepository,
 	homeworkRepo repository.HomeworkRepository,
+	settingsRepo repository.SettingsRepository,
 ) AIService {
 	s := &aiService{
 		db:              db,
@@ -465,6 +473,7 @@ func NewAIService(
 		wrongBookRepo:   wrongBookRepo,
 		examRepo:        examRepo,
 		homeworkRepo:    homeworkRepo,
+		settingsRepo:    settingsRepo,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
@@ -1102,7 +1111,6 @@ func (s *aiService) runSegmentJob(job *model.AIJob) {
 // here is defense-in-depth (a misrouted job skips cleanly instead of polishing
 // a track that shouldn't be).
 func (s *aiService) runSummaryJob(job *model.AIJob) {
-	ctx := context.Background()
 	if s.resolver == nil {
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped", "AI not configured (no resolver)", nil)
 		return
@@ -1150,19 +1158,39 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 	}
 	modelName := s.resolver.ChatModelNameByPurpose("summary")
 	summarizer := agent.NewSummarizer(llm, s.contentRepo, modelName)
-	_, err = summarizer.Summarize(ctx, agent.SummarizerRequest{
-		EpisodeID:   episodeID,
-		CourseID:    courseID,
-		SummaryHint: summaryHint,
-		TermDict:    termDict,
-		Subject:     subject,
-		Chunks:      chunks,
-	}, job.ID)
-	if err != nil {
-		s.failJob(job, err.Error())
-		return
+	// 重试 1 次(共 2 次尝试)。summary 是单次 LLM 调用,没有 polish 那种 chunk
+	// 续跑机制,一次失败整个 job 就废——而很多失败是瞬时抖动(relay 504、
+	// 偶发超时、JSON 截断)。重试一次成本极低(就是再发一次请求),收益明显。
+	//
+	// 每次尝试用独立的 5min deadline ctx:原来用裸 context.Background(),
+	// 唯一兜底是 HTTP client 的 120s;长 prompt(整节课字幕 + 多字段)正常生成就
+	// 可能 >120s,那个"兜底"反而把正常调用误杀。5min 给足正常生成空间,真正卡死
+	// 的请求(中继 hang 住)由它兜底失败→重试。注意 ctx 不能复用:第一次失败若是
+	// deadline exceeded,复用同一个 ctx 第二次会立刻取消。
+	const summaryMaxAttempts = 2
+	var lastErr error
+	for attempt := 1; attempt <= summaryMaxAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(context.Background(), ai.SummaryJobTimeout)
+		_, err = summarizer.Summarize(attemptCtx, agent.SummarizerRequest{
+			EpisodeID:   episodeID,
+			CourseID:    courseID,
+			SummaryHint: summaryHint,
+			TermDict:    termDict,
+			Subject:     subject,
+			Chunks:      chunks,
+		}, job.ID)
+		cancel()
+		if err == nil {
+			s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
+			return
+		}
+		lastErr = err
+		if attempt < summaryMaxAttempts {
+			log.Printf("AI job %d (summary) episode %d attempt %d failed, retrying: %v",
+				job.ID, episodeID, attempt, err)
+		}
 	}
-	s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
+	s.failJob(job, fmt.Sprintf("summary failed after %d attempts: %s", summaryMaxAttempts, lastErr))
 }
 
 // failJob marks a job failed with an error message and logs it. Centralized so

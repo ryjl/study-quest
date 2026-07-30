@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"studyquest/backend/internal/ai"
+	"studyquest/backend/internal/ai/jsonx"
 	"studyquest/backend/internal/model"
 )
 
@@ -122,7 +123,14 @@ func (q *Quizzer) Generate(ctx context.Context, req QuizzerRequest) (*QuizResult
 	userPrompt := buildQuizUserPrompt(req, masterySummary)
 	agentRes, err := q.agent.Run(ctx, QuizzerSystemPrompt, userPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("quizzer: agent loop: %w", err)
+		// agent.Run 在失败时(含 ErrMaxSteps)仍返回带 partial trace 的 result——
+		// 把它透传给 service 层落 ai_runs,否则 max-steps 失败时 6 步里模型调了
+		// 什么工具、观察到什么全部丢失,无法事后排查(生产 job8 就是这样:跑满 6 步
+		// 失败但 DB 无 trace)。和下面 parse 失败的处理(line ~140)保持一致模式。
+		return &QuizResult{Trace: agentRes.Trace, Usage: agentRes.Usage, Turns: agentRes.Turns,
+			RawFinalText: agentRes.FinalText, SystemPrompt: agentRes.SystemPrompt,
+			UserPrompt: agentRes.UserPrompt},
+			fmt.Errorf("quizzer: agent loop: %w", err)
 	}
 	trace := agentRes.Trace
 	usage := agentRes.Usage
@@ -214,7 +222,7 @@ func (q *Quizzer) runSelfCheck(ctx context.Context, req QuizzerRequest, draft Qu
 		Pass bool   `json:"pass"`
 		Note string `json:"note"`
 	}{}
-	if err := json.Unmarshal([]byte(extractJSONObject(res.FinalText)), &parsed); err != nil {
+	if _, err := jsonx.ParseLLMJSON(res.FinalText, &parsed); err != nil {
 		// Couldn't parse the verdict — treat as skipped (judge spoke gibberish).
 		outcome.Result = "skipped"
 		outcome.Note = "self-check response unparseable"
@@ -257,7 +265,10 @@ func (q *Quizzer) regenerate(ctx context.Context, req QuizzerRequest, masterySum
 // reliable, so we'd rather drop a malformed question than persist garbage.
 func parseQuizGeneration(raw string) (QuizDraft, error) {
 	var resp quizGenerationResponse
-	if err := json.Unmarshal([]byte(extractJSONObject(raw)), &resp); err != nil {
+	// 统一走 jsonx.ParseLLMJSON:围栏剥离/截断兜底 + 裸引号修复。和 homework/summary
+	// 同源——quiz 出题的 LLM 也会在 string value 写裸 ASCII 双引号(题干/选项/解析里
+	// 引用术语),这里之前只用了 extractJSONObject 无裸引号修复,是最严重的遗漏。
+	if _, err := jsonx.ParseLLMJSON(raw, &resp); err != nil {
 		return QuizDraft{}, fmt.Errorf("invalid quiz JSON: %w", err)
 	}
 	cleaned := make([]QuestionDraft, 0, len(resp.Questions))

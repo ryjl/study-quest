@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Wrench, Radio } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Wrench, Radio, Gauge } from 'lucide-react';
 import { api } from '../lib/api';
 import { useToast } from '../lib/toast';
 import { StorageSourcesSection } from './StorageSourcesSection';
@@ -12,12 +12,35 @@ export function Settings() {
   const qc = useQueryClient();
   const toast = useToast();
   const [adminPassword, setAdminPassword] = useState('');
+  const [polishConcurrency, setPolishConcurrency] = useState('');
+
+  // 读当前 polish_concurrency(回显到输入框)。密码是单向的(不回显),并发需要回显,
+  // 所以单独 query。
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: api.getSettings,
+  });
+
+  // 并发值到了再同步到本地 input(只同步一次,避免用户输入时被覆盖)。
+  const currentConc = settingsQuery.data?.polish_concurrency ?? '1';
+  if (polishConcurrency === '' && currentConc) {
+    setPolishConcurrency(currentConc);
+  }
 
   const savePwdMut = useMutation({
     mutationFn: () => api.updateSettings({ admin_password: adminPassword }),
     onSuccess: (d) => {
       toast.success(d.message || '密码已更新');
       setAdminPassword('');
+      qc.invalidateQueries({ queryKey: ['settings'] });
+    },
+    onError: (e) => toast.error((e as Error).message),
+  });
+
+  const saveConcMut = useMutation({
+    mutationFn: () => api.updateSettings({ polish_concurrency: Number(polishConcurrency) }),
+    onSuccess: (d) => {
+      toast.success(d.message || '已更新');
       qc.invalidateQueries({ queryKey: ['settings'] });
     },
     onError: (e) => toast.error((e as Error).message),
@@ -55,6 +78,32 @@ export function Settings() {
             <input type="password" className="input" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="新密码" />
             <button className="btn-primary mt-3" onClick={() => savePwdMut.mutate()} disabled={savePwdMut.isPending || !adminPassword}>
               {savePwdMut.isPending ? '保存中...' : '更新密码'}
+            </button>
+          </div>
+
+          <div className="card">
+            <h2 className="mb-1 inline-flex items-center gap-1.5 text-base font-bold text-txt">
+              <Gauge size={15} /> AI 性能
+            </h2>
+            <label className="mb-1 block text-xs text-muted">字幕润色并发数（1~10，默认 3）</label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              className="input"
+              value={polishConcurrency}
+              onChange={(e) => setPolishConcurrency(e.target.value)}
+              placeholder="3"
+            />
+            <p className="mt-2 text-xs text-muted">
+              润色时同时进行的 LLM 请求数（默认 3）。实测家里用的中继并发 3 稳定、并发 4 偶发限流；如遇 429 失败可调低到 2，换了不限制并发的中继可调高。
+            </p>
+            <button
+              className="btn-primary mt-3"
+              onClick={() => saveConcMut.mutate()}
+              disabled={saveConcMut.isPending || polishConcurrency === '' || polishConcurrency === currentConc}
+            >
+              {saveConcMut.isPending ? '保存中...' : '保存'}
             </button>
           </div>
 

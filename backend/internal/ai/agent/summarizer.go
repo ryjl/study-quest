@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"studyquest/backend/internal/ai"
+	"studyquest/backend/internal/ai/jsonx"
 	"studyquest/backend/internal/model"
 	"studyquest/backend/internal/repository"
 )
@@ -136,7 +137,11 @@ func (s *Summarizer) Summarize(ctx context.Context, req SummarizerRequest, jobID
 
 	chatResp, err := s.llm.Chat(ctx, ai.ChatRequest{
 		Model:       s.model,
-		Temperature: 0,
+		Temperature: ai.DefaultTemperature,
+		// MaxTokens 集中定义在 ai.MaxTokensSummary(含依据:输出结构重 + ep123 截断断裂
+		// 事故)。极端长课若仍超限,parseSummaryJSON 走的 jsonx.ParseLLMJSON 截断兜底
+		// 会救回前面的 sections 而非全废。
+		MaxTokens: ai.MaxTokensSummary,
 		Messages: []ai.ChatMessage{
 			{Role: ai.RoleSystem, Content: SummarizerSystemPrompt},
 			{Role: ai.RoleUser, Content: userPrompt},
@@ -160,8 +165,11 @@ func (s *Summarizer) Summarize(ctx context.Context, req SummarizerRequest, jobID
 
 	result, err := parseSummaryJSON(chatResp.Content)
 	if err != nil {
-		// Record the parse failure as a self-check note on the run we just wrote.
-		s.repo.UpdateJobStatus(jobID, "failed", "summary JSON parse: "+err.Error(), nil)
+		// 解析失败只返回 error,不在这里落 job 状态。理由:runSummaryJob 现在
+		// 会重试一次(瞬时截断/relay 抖动),如果这里先把 job 标 failed,service
+		// 层重试成功后状态会错乱(failed→done)。job 的最终状态由 service 层
+		// 统一决定:重试耗尽才 failJob。recordRunErr 已经把这次失败的 raw 响应
+		// 记进 ai_runs(供 admin 回放),诊断信息不丢。
 		return nil, fmt.Errorf("summarizer: parse response JSON: %w (raw: %.200s)", err, chatResp.Content)
 	}
 	// 保证切片非 nil:模型可能省略某些数组字段(老 prompt 生成的 summary 没有
@@ -278,26 +286,22 @@ func (s *Summarizer) recordRunErr(jobID uint, inputJSON string, err error, elaps
 }
 
 // parseSummaryJSON extracts the structured summary from the model's response.
-// The model is instructed to output pure JSON, but relays sometimes wrap it in
-// ```json fences or add stray prose — we strip common wrappers before parsing.
-// A robust extractor: find the first '{' and last '}' and parse that substring.
+// 解析统一委托 jsonx.ParseLLMJSON(全项目 LLM JSON 的唯一 chokepoint),兜底链:
+//   - extract(围栏剥离/散文夹带剥离):模型被要求输出纯 JSON,但中转站常裹 ```json
+//     围栏或夹带散文;extractJSONObject 挖首个平衡对象,并 RECOVER 截断输出
+//     (max_tokens 截断时闭合未完结结构,救回前面字段而非整 job 失败)。
+//   - 裸引号修复(2026-07-29,与 homework 同源故障):LLM 常在 string value 写未转义
+//     裸 ASCII 双引号(如 points 里写"象棋级别"毕业""),第一次 parse 失败时替换成
+//     中文「」再 parse。生产 ep2 两次 summary 都因裸引号失败,这套兜底救回。
+//
+// 后端不支持 response_format 时(探测确认 v2ex/中转站均 400 拒绝),这是主防线;
+// 换支持约束解码的后端后,从 provider 层启用 response_format 即可根治,本兜底保留。
 func parseSummaryJSON(raw string) (SummaryResult, error) {
 	var result SummaryResult
-	// Strip ```json ... ``` fences if present.
-	s := strings.TrimSpace(raw)
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	s = strings.TrimSpace(s)
-	// Fallback: if there's still surrounding prose, carve out the JSON object.
-	if !strings.HasPrefix(s, "{") {
-		if start := strings.Index(s, "{"); start >= 0 {
-			if end := strings.LastIndex(s, "}"); end > start {
-				s = s[start : end+1]
-			}
-		}
-	}
-	if err := json.Unmarshal([]byte(s), &result); err != nil {
+	// 统一走 jsonx.ParseLLMJSON:extract(围栏/截断)→ unmarshal → 失败则裸引号修复
+	// → 再 unmarshal。repaired 值此处不外传(summary 调用方不需要),但 repair 兜底
+	// 在 jsonx 内部生效,救回 LLM 在 string value 写裸 ASCII 双引号的故障(生产 ep2)。
+	if _, err := jsonx.ParseLLMJSON(raw, &result); err != nil {
 		return result, fmt.Errorf("invalid JSON: %w", err)
 	}
 	result.normalizeMarkdownInFields()

@@ -2,9 +2,10 @@
 // subtitle-system overhaul.
 //
 // It takes a VTT subtitle string + a course TermDict + a subject, runs the
-// subtitles through an LLM in chunks (150 cues each, 3-cue overlap, 3-way
-// concurrency) and returns ONLY a diff of what to change — never a full
-// rewrite. Timestamps are physically impossible for the model to corrupt
+// subtitles through an LLM in chunks (150 cues each, 3-cue overlap, concurrency
+// capped by PolishRequest.Concurrency, default 1) and returns ONLY a diff of
+// what to change — never a full rewrite. Timestamps are physically impossible
+// for the model to corrupt
 // because they are never sent in the prompt: only {id, text} pairs go in,
 // and the model returns {id, text} pairs back. The backend re-applies each
 // change to the corresponding cue by id, preserving start/end ms exactly.
@@ -26,6 +27,7 @@ import (
 	"unicode/utf8"
 
 	"studyquest/backend/internal/ai"
+	"studyquest/backend/internal/ai/jsonx"
 	"studyquest/backend/internal/subtitle"
 )
 
@@ -41,6 +43,14 @@ type PolishRequest struct {
 	// 上次已挖过术语，再挖既白烧 token 也分散注意力。runPolishJob 用 sub.Source
 	// == "llm_optimized" 判断。
 	SkipGlossaryMining bool
+
+	// Concurrency caps the number of in-flight LLM calls. Polish enforces
+	// conc<1 → 1. Default injected by the service is 3 (实测生产中继
+	// api.ja.870314.xyz 并发 3 持续零 429,并发 4 偶发 429——3 是安全最优值,
+	// 比串行快 3 倍)。Run-time configurable via the `polish_concurrency`
+	// Setting (admin → 系统设置 → AI 性能). Was a hardcoded `const concurrency
+	// = 3` before; moved here so the service can inject the configured value.
+	Concurrency int
 
 	// --- checkpoint / resume (断点续润) -----------------------------------
 	// These three fields let runPolishJob resume an interrupted run instead of
@@ -103,7 +113,9 @@ type CueDiff struct {
 }
 
 // GlossaryCandidate is a mined term-correction rule the LLM surfaced while
-// polishing. confidence in [0,1]; only >= 0.7 are reported per the prompt.
+// polishing. confidence in [0,1]. 高门槛保留(2026-07-29):只有 confidence≥0.9
+// 且 evidence_ids≥2(出现至少 2 次)的才保留——孤例和低置信度的依赖上下文、不可复用，
+// 存进字典会过拟合到具体词条。门槛在 prompt(软)+ filterGlossary(硬)两道。
 type GlossaryCandidate struct {
 	Original    string  `json:"original"`
 	Corrected   string  `json:"corrected"`
@@ -162,7 +174,6 @@ type PolishStats struct {
 const (
 	chunkSize    = 150 // cues per chunk
 	chunkOverlap = 3   // overlap cues between adjacent chunks
-	concurrency  = 3   // in-flight LLM calls (user-imposed, relays limit hard)
 	// maxRetries is attempts per chunk before giving up. Was 3; dropped to 2
 	// (2026-07-22): the 3rd retry almost never helps (relay garbage repeats,
 	// unknown-id drift repeats) and just burns billed tokens. With checkpoint/
@@ -170,7 +181,7 @@ const (
 	// survive — so a failed chunk is cheap to retry on demand rather than paying
 	// for a near-useless 3rd attempt inline.
 	maxRetries = 2
-	maxTokens  = 8000
+	// maxTokens 已上移到 ai.MaxTokensPolish(集中管理 + 实测超限 tuning 8000→12000)。
 )
 
 // ChunkLayout returns the global cue-index span [first, last] (inclusive) of
@@ -254,8 +265,18 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 		}
 	}
 
-	// 3. Concurrent LLM calls with a 3-way semaphore.
-	sem := make(chan struct{}, concurrency)
+	// 3. Concurrent LLM calls with a bounded semaphore. Concurrency comes from
+	// PolishRequest (injected by the service from the `polish_concurrency`
+	// Setting, default 3); <1 clamps to 1 (串行). 选 3 的依据:对生产中继
+	// api.ja.870314.xyz 的实测——并发 3 持续 3 轮零 429,并发 4 偶发 429(贴着
+	// 上限,内部计数抖动会超)。2026-07-27 的 429 风暴真相不是"单 job 并发 3 超标"
+	// (worker 是单 goroutine 串行处理 job,单 job 3 路不会让总并发超 3),而是删库前
+	// 多 job 交错 + summary/polish 同时跑导致瞬时叠加。并发可经 admin「AI 性能」调整。
+	conc := req.Concurrency
+	if conc < 1 {
+		conc = 1
+	}
+	sem := make(chan struct{}, conc)
 	outcomes := make([]chunkOutcome, len(chunks))
 
 	// Resume (断点续润): fold in any prior-completed chunks BEFORE the loop so
@@ -333,9 +354,15 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 			for attempt := 0; attempt < maxRetries; attempt++ {
 				if attempt > 0 {
 					retries++
-					// small backoff so we don't hammer a rate-limited relay
+					// 指数退避(2s, 4s, …)给被限流的 relay 留排队窗口。原来是线性
+					// `attempt * 1s`(1s/2s),间隔太短——429 后秒级重试又撞墙,把整个
+					// retry 预算耗在 429 上。指数退避让每次重试多等一倍,relay 有机会
+					// 排空在途请求。默认并发 3(实测安全值)从源头压低 429 概率;这里是
+					// 兜底——万一并发调高了、多 job 交错叠加、或换了限流更严的 relay,
+					// 退避能争取到重试成功的机会。
+					backoff := time.Duration(2<<attempt) * time.Second // attempt=1→4s,2→8s…
 					select {
-					case <-time.After(time.Duration(attempt) * time.Second):
+					case <-time.After(backoff):
 					case <-ctx.Done():
 						pErr = ctx.Err()
 						break retryLoop
@@ -471,6 +498,11 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 	// Dedup glossary across chunks by (Original, Corrected) — take the
 	// highest confidence and merge evidence ids.
 	glossary := dedupGlossary(collectGlossary(outcomes))
+	// 高门槛过滤(2026-07-29):只留 confidence≥0.9 且 evidence_ids≥2 的高频稳定规则。
+	// prompt 已要求模型自律,这里是硬兜底——模型不听 prompt 报了一堆孤例/低置信度,
+	// 在落库前过滤掉,避免 glossary 候选列表被噪音淹没(此前一节课动辄 100+ 候选,
+	// admin 根本审不过来,且孤例接受进字典反而过拟合到具体词条)。
+	glossary = filterGlossary(glossary)
 
 	// Collect failed-chunk error strings (only when some chunk failed, so the
 	// map is nil/empty on the common all-success path — keeps JSON output clean).
@@ -620,8 +652,8 @@ func polishChunk(ctx context.Context, llm ai.LLMProvider, model string, blk []cu
 
 	resp, err := llm.Chat(ctx, ai.ChatRequest{
 		Model:       model,
-		Temperature: 0,
-		MaxTokens:   maxTokens,
+		Temperature: ai.DefaultTemperature,
+		MaxTokens:   ai.MaxTokensPolish,
 		Messages: []ai.ChatMessage{
 			{Role: ai.RoleSystem, Content: sys},
 			{Role: ai.RoleUser, Content: user},
@@ -889,6 +921,35 @@ func dedupGlossary(in []GlossaryCandidate) []GlossaryCandidate {
 	return out
 }
 
+// glossaryMinConfidence / glossaryMinEvidence 是 glossary 候选的保留门槛。
+// 2026-07-29 从"confidence≥0.7 就报"收紧到"confidence≥0.9 且 evidence≥2":孤例
+// (出现 1 次)和低置信度的规则依赖上下文、不可复用,存进字典会过拟合到具体词条;
+// 而且此前一节课动辄 100+ 候选,admin 审不过来,审核流于形式。收紧后只剩真正高频
+// 稳定的规则(如象棋 车→居 全课程反复出现),数量降到个位数,人工审核才有意义。
+const (
+	glossaryMinConfidence = 0.9
+	glossaryMinEvidence   = 2
+)
+
+// filterGlossary drops candidates below the high-confidence/high-frequency bar.
+// Runs after dedupGlossary (which unions evidence_ids across chunks), so the
+// evidence count reflects how many DISTINCT cues exhibited the pattern across
+// the whole episode — not just one chunk. This is the hard floor; the prompt
+// asks the model to self-filter too (soft), this catches models that ignore it.
+func filterGlossary(in []GlossaryCandidate) []GlossaryCandidate {
+	out := make([]GlossaryCandidate, 0, len(in))
+	for _, g := range in {
+		if g.Confidence < glossaryMinConfidence {
+			continue
+		}
+		if len(g.EvidenceIDs) < glossaryMinEvidence {
+			continue
+		}
+		out = append(out, g)
+	}
+	return out
+}
+
 func unionInts(a, b []int) []int {
 	seen := make(map[int]struct{}, len(a)+len(b))
 	out := make([]int, 0, len(a)+len(b))
@@ -964,25 +1025,13 @@ type polishJSONEnvelope struct {
 }
 
 // parsePolishJSON extracts the {changes, glossary} envelope from the model's
-// raw response. The model is asked for pure JSON, but relays/models
-// frequently wrap it in ```json fences or add stray prose — we strip the
-// common wrappers before parsing, falling back to carving out the outermost
-// { ... } span. Mirrors summarizer.parseSummaryJSON.
+// raw response. 走 jsonx.ParseLLMJSON 统一兜底链(围栏剥离 + 平衡栈截断兜底 + 裸引号
+// 修复),取代原先手写的 first/last-brace 切片(无法处理截断/嵌套对象)且补上裸引号
+// 修复——polish 之前是"双重裸奔"(既无 extractJSONObject 的平衡栈,也无 repair),
+// 字幕校对的 text/find/replace 字段里 LLM 引用术语写裸引号会直接整批失败。
 func parsePolishJSON(raw string) (*polishJSONEnvelope, error) {
-	s := strings.TrimSpace(raw)
-	s = strings.TrimPrefix(s, "```json")
-	s = strings.TrimPrefix(s, "```")
-	s = strings.TrimSuffix(s, "```")
-	s = strings.TrimSpace(s)
-	if !strings.HasPrefix(s, "{") {
-		if start := strings.Index(s, "{"); start >= 0 {
-			if end := strings.LastIndex(s, "}"); end > start {
-				s = s[start : end+1]
-			}
-		}
-	}
 	var env polishJSONEnvelope
-	if err := json.Unmarshal([]byte(s), &env); err != nil {
+	if _, err := jsonx.ParseLLMJSON(raw, &env); err != nil {
 		return nil, err
 	}
 	if env.Changes == nil {
@@ -1026,10 +1075,10 @@ changes 输出（两种二选一，优先用 edits）：
 - text：整句替换（find 无法定位时用）
   {"id":147,"text":"修正后的整句"}
 
-术语挖矿（glossary）：放本次观察到的、confidence≥0.7 的术语纠错规律。
-- evidence_ids 填观察到该规律的 cue id
-- 字典里已有的不重复放
-{"original":"军","corrected":"车","context":"象棋术语","confidence":0.95,"evidence_ids":[147,152]}`
+术语挖矿（glossary）：只放**高频稳定**的术语纠错规律——confidence≥0.9 且在
+至少 2 个不同 cue 里观察到（evidence_ids≥2）。孤例（出现 1 次）和低置信度的不报，
+它们依赖上下文、不可复用，存进字典反而过拟合到具体词条。字典里已有的不重复放。
+{"original":"军","corrected":"车","context":"象棋术语","confidence":0.95,"evidence_ids":[147,152,201]}`
 
 // systemPromptNoGlossary 是 SkipGlossaryMining=true 时用的精简版（无术语挖矿段）。
 // re-polish 场景（source=llm_optimized）字幕内容没变，能挖的术语上次已挖，再让

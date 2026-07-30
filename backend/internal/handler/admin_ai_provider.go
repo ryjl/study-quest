@@ -413,14 +413,13 @@ func (h *adminHandler) RealTestAIProvider(c *gin.Context) {
 
 	start := time.Now()
 	resp, err := prov.Chat(ctx, ai.ChatRequest{
-		Temperature: 0,
+		Temperature: ai.DefaultTemperature,
 		Messages: []ai.ChatMessage{
 			{Role: ai.RoleSystem, Content: realTestSystemPrompt},
 			{Role: ai.RoleUser, Content: realTestUserPrompt},
 		},
-		// 10000 直接抄 ai_service_quiz.go 的 quiz 生成 MaxTokens——要复现业务场景就必须
-		// 用业务级输出上限,否则测不出真实负载。
-		MaxTokens: 10000,
+		// MaxTokensProviderProbe:业务级输出上限,要复现真实负载(否则测不出)。
+		MaxTokens: ai.MaxTokensProviderProbe,
 	})
 	latency := time.Since(start).Milliseconds()
 
