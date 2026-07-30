@@ -143,11 +143,12 @@ class ApiService {
     }
   }
 
-  // 2. Perform PIN authentication. Returns the opaque session token on
-  // success (and stores it in [authToken] for subsequent requests), or null on
-  // any failure. deviceName is the OS-level device label surfaced to the admin
-  // device list (see DeviceInfoService).
-  static Future<String?> loginUser(int userId, String pin, {String? deviceName}) async {
+  // 2. Perform PIN authentication. Returns a [LoginOutcome] describing the
+  // result so the UI can distinguish a wrong PIN (clear + retry) from an
+  // account lockout (show the remaining wait). On success the opaque session
+  // token is stored in [authToken] and carried in [LoginOutcome.token].
+  // deviceName is the OS-level device label surfaced to the admin device list.
+  static Future<LoginOutcome> loginUser(int userId, String pin, {String? deviceName}) async {
     final body = <String, dynamic>{
       'user_id': userId,
       'pin': pin,
@@ -161,10 +162,22 @@ class ApiService {
       final tok = data['token'] as String?;
       if (tok != null && tok.isNotEmpty) {
         authToken = tok;
-        return tok;
+        return LoginOutcome.success(tok);
       }
+      // 200 but no usable token — treat like a wrong PIN defensively.
+      return LoginOutcome.wrongPin();
     }
-    return null;
+    if (response.statusCode == 429) {
+      // Backend returns Retry-After (seconds) on lockout; fall back to the
+      // default lockout window if the header is absent/malformed.
+      final retryAfter = int.tryParse(response.headers['retry-after'] ?? '') ??
+          int.tryParse(response.headers['Retry-After'] ?? '');
+      return LoginOutcome.locked(retryAfterSeconds: retryAfter);
+    }
+    // 401 (wrong PIN / unknown user) and anything else → wrong PIN. The
+    // backend deliberately returns the same message for "no such user" and
+    // "wrong PIN" so we do the same here (no user-existence leak).
+    return LoginOutcome.wrongPin();
   }
 
   /// Logout: ask the server to revoke the current token, then clear it locally
@@ -687,4 +700,33 @@ class ApiService {
   static String bookStreamUrl(int bookId) {
     return '${AppConfig.baseUrlRef}/api/v1/readings/books/$bookId/stream';
   }
+}
+
+/// Outcome of a PIN login attempt. The UI distinguishes [wrongPin] (clear the
+/// pad and let the user retype) from [locked] (show how long to wait), instead
+/// of the old single "PIN 码错误" message that hid lockouts.
+class LoginOutcome {
+  final bool success;
+  final String? token;
+  final bool locked;
+  /// Remaining lockout seconds parsed from the backend's `Retry-After` header.
+  /// null when the header was absent/malformed (UI falls back to a generic
+  /// "稍后重试" wording).
+  final int? retryAfterSeconds;
+
+  const LoginOutcome.success(this.token)
+      : success = true,
+        locked = false,
+        retryAfterSeconds = null;
+
+  const LoginOutcome.wrongPin()
+      : success = false,
+        token = null,
+        locked = false,
+        retryAfterSeconds = null;
+
+  const LoginOutcome.locked({this.retryAfterSeconds})
+      : success = false,
+        token = null,
+        locked = true;
 }

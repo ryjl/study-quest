@@ -54,9 +54,10 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  // Attempt login with PIN. On success, persists the user + token and returns
-  // true; on failure returns false and changes nothing.
-  Future<bool> login(User user, String pin) async {
+  // Attempt login with PIN. Returns a [LoginResult] so the caller can tell a
+  // wrong PIN (clear + retype) from an account lockout (show the wait). On
+  // success persists the user + token; on any failure changes nothing.
+  Future<LoginResult> login(User user, String pin) async {
     // Best-effort device label so the admin device list shows "iPad" / "客厅
     // 电视" rather than a raw user-agent. Failures here must not block login —
     // we send no device_name and the backend falls back to the UA.
@@ -67,11 +68,11 @@ class AuthService extends ChangeNotifier {
       deviceName = null;
     }
 
-    final token = await ApiService.loginUser(user.id, pin, deviceName: deviceName);
-    if (token != null) {
+    final outcome = await ApiService.loginUser(user.id, pin, deviceName: deviceName);
+    if (outcome.success && outcome.token != null) {
       _currentUser = user;
-      _authToken = token;
-      ApiService.authToken = token;
+      _authToken = outcome.token;
+      ApiService.authToken = outcome.token;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_keyCurrentUser, jsonEncode({
         'ID': user.id,
@@ -80,11 +81,14 @@ class AuthService extends ChangeNotifier {
         'Role': user.role,
         'Grade': user.grade,
       }));
-      await prefs.setString(_keyAuthToken, token);
+      await prefs.setString(_keyAuthToken, outcome.token!);
       notifyListeners();
-      return true;
+      return LoginResult.success();
     }
-    return false;
+    if (outcome.locked) {
+      return LoginResult.locked(retryAfterSeconds: outcome.retryAfterSeconds);
+    }
+    return LoginResult.wrongPin();
   }
 
   // Logout current session. Asks the server to revoke the token (so it can't
@@ -100,4 +104,27 @@ class AuthService extends ChangeNotifier {
     await prefs.remove(_keyAuthToken);
     notifyListeners();
   }
+}
+
+/// Result of [AuthService.login], surfacing the three states the login UI needs
+/// to handle distinctly: success, wrong PIN, or account lockout (with the
+/// remaining wait parsed from the backend's Retry-After header).
+class LoginResult {
+  final bool success;
+  final bool locked;
+  final int? retryAfterSeconds;
+
+  const LoginResult.success()
+      : success = true,
+        locked = false,
+        retryAfterSeconds = null;
+
+  const LoginResult.wrongPin()
+      : success = false,
+        locked = false,
+        retryAfterSeconds = null;
+
+  const LoginResult.locked({this.retryAfterSeconds})
+      : success = false,
+        locked = true;
 }

@@ -25,6 +25,10 @@ class _LoginScreenState extends State<LoginScreen> {
   User? _selectedUser;
   bool _showPinPad = false;
   String _errorMessage = '';
+  // Controls the NumPad so we can clear the buffered PIN after a wrong attempt
+  // (auto-submit fills maxDigits; without a clear the next digit would no-op
+  // against a full buffer and the user couldn't retype).
+  final GlobalKey<NumPadState> _numPadKey = GlobalKey<NumPadState>();
 
   @override
   void initState() {
@@ -158,16 +162,29 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _onSubmitPin(String pin) async {
     if (_selectedUser == null) return;
-    
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final success = await authService.login(_selectedUser!, pin);
 
-    if (success) {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final result = await authService.login(_selectedUser!, pin);
+
+    if (result.success) {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const MainNavigation()),
       );
+      return;
+    }
+
+    // Failed: always clear the pad so the user starts fresh (auto-submit fills
+    // maxDigits, so without this the buffer stays full).
+    _numPadKey.currentState?.clear();
+
+    if (result.locked) {
+      setState(() {
+        _errorMessage = result.retryAfterSeconds != null
+            ? '尝试次数过多，请 ${formatLockoutWait(result.retryAfterSeconds!)} 后重试'
+            : '尝试次数过多，账户已临时锁定，请稍后重试';
+      });
     } else {
       setState(() {
         _errorMessage = 'PIN 码错误，请重试！';
@@ -278,6 +295,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           NumPad(
+                            key: _numPadKey,
                             title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
                             maxDigits: 6, // 6-digit PIN (security: 6-digit minimum)
                             onSubmit: _onSubmitPin,
@@ -452,5 +470,17 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+/// Formats a Retry-After seconds value into a friendly "X 分 Y 秒" / "X 分钟" /
+/// "X 秒" string for the lockout message. Top-level so it's unit-testable
+/// without pumping the whole login screen (the overlay's BackdropFilter +
+/// async login make full widget tests brittle, and this is the only piece of
+/// real logic in the lockout UX path).
+String formatLockoutWait(int seconds) {
+  if (seconds < 60) return '$seconds 秒';
+  final m = seconds ~/ 60;
+  final s = seconds % 60;
+  return s == 0 ? '$m 分钟' : '$m 分 $s 秒';
 }
 

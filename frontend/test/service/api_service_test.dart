@@ -17,7 +17,7 @@ void main() {
   });
 
   group('ApiService._headers (via loginUser)', () {
-    test('loginUser stores and returns the opaque token on 200', () async {
+    test('loginUser stores the token and reports success on 200', () async {
       ApiService.bindTestClient(MockClient((request) async {
         expect(request.url.path, endsWith('/api/v1/users/login'));
         return http.Response(
@@ -26,19 +26,48 @@ void main() {
         );
       }));
 
-      final tok = await ApiService.loginUser(5, '1234');
-      expect(tok, 'opaque-abc');
+      final outcome = await ApiService.loginUser(5, '123456');
+      expect(outcome.success, isTrue);
+      expect(outcome.token, 'opaque-abc');
+      expect(outcome.locked, isFalse);
       expect(ApiService.authToken, 'opaque-abc');
     });
 
-    test('loginUser returns null on wrong PIN (401) and does not set token',
-        () async {
+    test('loginUser reports wrongPin on 401 and does not set token', () async {
       ApiService.bindTestClient(MockClient((request) async {
         return http.Response(jsonEncode({'error': 'nope'}), 401);
       }));
-      final tok = await ApiService.loginUser(5, '9999');
-      expect(tok, isNull);
+      final outcome = await ApiService.loginUser(5, '999999');
+      expect(outcome.success, isFalse);
+      expect(outcome.locked, isFalse);
+      expect(outcome.token, isNull);
       expect(ApiService.authToken, isNull);
+    });
+
+    test('loginUser reports locked + retryAfterSeconds on 429', () async {
+      ApiService.bindTestClient(MockClient((request) async {
+        return http.Response(
+          jsonEncode({'error': 'locked'}),
+          429,
+          // Backend returns Retry-After (seconds) on account lockout.
+          headers: {'retry-after': '900'},
+        );
+      }));
+      final outcome = await ApiService.loginUser(5, '123456');
+      expect(outcome.success, isFalse);
+      expect(outcome.locked, isTrue);
+      expect(outcome.retryAfterSeconds, 900);
+      expect(ApiService.authToken, isNull);
+    });
+
+    test('loginUser reports locked (retryAfterSeconds null) when no Retry-After header',
+        () async {
+      ApiService.bindTestClient(MockClient((request) async {
+        return http.Response(jsonEncode({'error': 'locked'}), 429);
+      }));
+      final outcome = await ApiService.loginUser(5, '123456');
+      expect(outcome.locked, isTrue);
+      expect(outcome.retryAfterSeconds, isNull);
     });
 
     test('loginUser forwards device_name when provided', () async {
@@ -51,7 +80,7 @@ void main() {
           200,
         );
       }));
-      await ApiService.loginUser(1, '1234', deviceName: '客厅iPad');
+      await ApiService.loginUser(1, '123456', deviceName: '客厅iPad');
       expect(capturedDevice, '客厅iPad');
     });
   });

@@ -47,8 +47,8 @@ void main() {
       }));
 
       final svc = AuthService();
-      final ok = await svc.login(_user(3), '123456');
-      expect(ok, isTrue);
+      final result = await svc.login(_user(3), '123456');
+      expect(result.success, isTrue);
       expect(svc.isAuthenticated, isTrue);
       expect(svc.currentUser?.id, 3);
       expect(svc.currentUser?.grade, '四年级');
@@ -64,8 +64,29 @@ void main() {
         return http.Response('{"error":"no"}', 401);
       }));
       final svc = AuthService();
-      final ok = await svc.login(_user(3), '0000');
-      expect(ok, isFalse);
+      final result = await svc.login(_user(3), '0000');
+      expect(result.success, isFalse);
+      expect(result.locked, isFalse);
+      expect(svc.isAuthenticated, isFalse);
+      expect(svc.currentUser, isNull);
+      expect(ApiService.authToken, isNull);
+    });
+
+    test('on 429 lockout surfaces LoginResult.locked with retry seconds',
+        () async {
+      ApiService.bindTestClient(MockClient((req) async {
+        return http.Response(
+          jsonEncode({'error': 'locked'}),
+          429,
+          headers: {'retry-after': '900'},
+        );
+      }));
+      final svc = AuthService();
+      final result = await svc.login(_user(3), '123456');
+      expect(result.success, isFalse);
+      expect(result.locked, isTrue);
+      expect(result.retryAfterSeconds, 900);
+      // Lockout must not persist anything (no half-authenticated state).
       expect(svc.isAuthenticated, isFalse);
       expect(svc.currentUser, isNull);
       expect(ApiService.authToken, isNull);
