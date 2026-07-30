@@ -19,7 +19,8 @@ enum AppFeature {
   courseHall(Icons.school_rounded, '学习大厅'),
 
   /// 阅读室:书架 + PDF/文章阅读。
-  readingRoom(Icons.menu_book_rounded, '阅读室'),
+  /// TV only false:PDF/长文阅读在远距离 TV 上体验差,与错题本同类决策。
+  readingRoom(Icons.menu_book_rounded, '阅读室', supportsTv: false),
 
   /// 成长足迹:积分/时长/通关 dashboard(纯展示)。
   footprint(Icons.explore_rounded, '成长足迹'),
