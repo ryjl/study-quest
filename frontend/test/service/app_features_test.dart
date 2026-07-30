@@ -4,9 +4,12 @@ import 'package:study_quest/service/app_features.dart';
 
 /// 功能域裁剪测试 —— "路由表即功能定义"策略的核心。
 ///
-/// TV 模式下错题本(AppFeature.wrongBook, supportsTv=false)整 tab 不出现。
-/// 这保证 MainNavigation 的 tab 列表 / 路由表 / 角标逻辑自动跟随,
+/// TV 模式下不支持 TV 的功能(阅读室 + 错题本,均 supportsTv=false)整 tab
+/// 不出现。这保证 MainNavigation 的 tab 列表 / 路由表 / 角标逻辑自动跟随,
 /// 而不是散落的 if (tv) 判断。
+///
+/// 阅读室与错题本同为 supportsTv=false:PDF/长文阅读与做题在远距离 TV 上体验
+/// 都差,用同一机制裁掉。
 
 void main() {
   group('visibleFeaturesFor', () {
@@ -14,15 +17,19 @@ void main() {
       final features = visibleFeaturesFor(tv: false);
       expect(features.length, 5);
       expect(features, contains(AppFeature.wrongBook));
+      expect(features, contains(AppFeature.readingRoom));
       expect(features, AppFeature.values);
     });
 
-    test('TV:错题本被裁掉,只剩 4 个', () {
+    test('TV:阅读室 + 错题本被裁掉,只剩 3 个', () {
       final features = visibleFeaturesFor(tv: true);
-      expect(features.length, 4);
+      expect(features.length, 3);
       expect(features, isNot(contains(AppFeature.wrongBook)));
-      // 其它 4 个都在。
-      expect(features, containsAll(AppFeature.values.where((f) => f != AppFeature.wrongBook)));
+      expect(features, isNot(contains(AppFeature.readingRoom)));
+      // 其它 3 个都在。
+      final kept = AppFeature.values.where(
+          (f) => f != AppFeature.wrongBook && f != AppFeature.readingRoom);
+      expect(features, containsAll(kept));
     });
 
     test('TV 裁剪后顺序保持稳定(学习大厅仍是第 0 个)', () {
@@ -30,24 +37,23 @@ void main() {
       // 顺序变了会导致 tab 切到错的屏。
       final features = visibleFeaturesFor(tv: true);
       expect(features[0], AppFeature.courseHall);
-      expect(features[1], AppFeature.readingRoom);
-      expect(features[2], AppFeature.footprint);
-      expect(features[3], AppFeature.settings);
+      expect(features[1], AppFeature.footprint);
+      expect(features[2], AppFeature.settings);
     });
 
     test('默认参数读 TvMode.instance(此处只验证不抛异常)', () {
       // 默认 tv:null 走 TvMode.instance.isActive。测试环境非 Android TV,
       // isActive 应为 false,所以等价于 tv:false。只验证不崩 + 长度对。
       final features = visibleFeaturesFor();
-      expect(features.length, greaterThanOrEqualTo(4));
+      expect(features.length, greaterThanOrEqualTo(3));
     });
   });
 
   group('AppFeature — supportsTv 声明', () {
-    test('只有 wrongBook 是 TV 不支持', () {
+    test('阅读室 + 错题本是 TV 不支持的', () {
       final tvUnsupported =
           AppFeature.values.where((f) => !f.supportsTv).toList();
-      expect(tvUnsupported, [AppFeature.wrongBook]);
+      expect(tvUnsupported, [AppFeature.readingRoom, AppFeature.wrongBook]);
     });
 
     test('每个 feature 都有非空 label 和 icon', () {
