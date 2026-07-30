@@ -127,15 +127,17 @@ class QuizReviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final v = verdict;
+    final colors = context.colors;
     // submitted 态下若有判分,展示对错横幅(含明细/正确答案/解析)。
     final hasVerdict = _submitted && v != null && v.correct != null;
     final content = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // 题序号 + 题型标签:让卷子像正式试卷。填空琥珀、多选紫、单选蓝。
+        // 标签用浅色块+深色字(固定的"标签"视觉),亮暗均如此以保证辨识。
         Row(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(color: AppTheme.slate100, borderRadius: BorderRadius.circular(5)),
-            child: Text('第${stem.index + 1}题', style: const TextStyle(fontSize: 10, color: AppTheme.textMuted)),
+            decoration: BoxDecoration(color: colors.slate100, borderRadius: BorderRadius.circular(5)),
+            child: Text('第${stem.index + 1}题', style: TextStyle(fontSize: 10, color: colors.textMuted)),
           ),
           const SizedBox(width: 6),
           Container(
@@ -145,7 +147,7 @@ class QuizReviewCard extends StatelessWidget {
                   ? const Color(0xFFFFFBEB)
                   : stem.isMultiChoice
                       ? const Color(0xFFF5F3FF)
-                      : AppTheme.blue100,
+                      : colors.blue100,
               borderRadius: BorderRadius.circular(5),
             ),
             child: Text(
@@ -163,29 +165,29 @@ class QuizReviewCard extends StatelessWidget {
         ]),
         const SizedBox(height: 8),
         // 题干含 markdown(表格题、加粗关键词、代码块/SVG 图),用 MarkdownView 渲染。
-        MarkdownView(data: stem.stem, textScale: textScale, baseTextColor: AppTheme.slate900),
+        MarkdownView(data: stem.stem, textScale: textScale, baseTextColor: colors.textWhite),
         const SizedBox(height: 10),
         // 按题型分派选项渲染:填空 → 输入框/回放;多选 → checkbox 风;单选 → radio 风。
         if (stem.isFill)
-          _buildFill(_submitted, v)
+          _buildFill(context, _submitted, v)
         else if (stem.isMultiChoice)
-          _buildMultiOptions(_submitted, v)
+          _buildMultiOptions(context, _submitted, v)
         else
-          _buildChoiceOptions(_submitted, v),
+          _buildChoiceOptions(context, _submitted, v),
         // 对错横幅:仅交卷/揭示态且有判分(correct != null)时显示三态横幅。
         if (hasVerdict) _buildVerdictBanner(v),
         // 复习脚注(交卷/揭示态,不依赖判分):正确答案 + multi 明细 + 解析。
         // 错题本「查看答案」时无判分(correct=null)也要展示正确答案和解析。
-        if (_submitted && v != null) _buildReviewFooter(v),
+        if (_submitted && v != null) _buildReviewFooter(context, v),
         // 跳转视频:仅 hasJump=true 的题渲染,且仅在交卷态展示(看错题解析时跳回去复习)。
         if (stem.hasJump && stem.chunkStartTime != null && _submitted && onJump != null)
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               onPressed: onJump,
-              icon: const Icon(Icons.play_circle_outline_rounded, size: 16, color: AppTheme.blue600),
+              icon: Icon(Icons.play_circle_outline_rounded, size: 16, color: colors.blue600),
               label: Text('跳转视频 ${_fmtJump(stem.chunkStartTime!)}',
-                  style: const TextStyle(fontSize: 12, color: AppTheme.blue600)),
+                  style: TextStyle(fontSize: 12, color: colors.blue600)),
               style: TextButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 4),
                 minimumSize: const Size(0, 24),
@@ -200,41 +202,43 @@ class QuizReviewCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: colors.cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderMuted),
+        border: Border.all(color: colors.borderMuted),
       ),
       child: content,
     );
   }
 
   // ── 单选选项 ──
-  Widget _buildChoiceOptions(bool submitted, QuizVerdictData? v) {
+  Widget _buildChoiceOptions(BuildContext context, bool submitted, QuizVerdictData? v) {
     return Column(children: [
-      for (int i = 0; i < stem.options.length; i++) _choiceTile(i, submitted, v),
+      for (int i = 0; i < stem.options.length; i++) _choiceTile(context, i, submitted, v),
     ]);
   }
 
-  Widget _choiceTile(int i, bool submitted, QuizVerdictData? v) {
+  Widget _choiceTile(BuildContext context, int i, bool submitted, QuizVerdictData? v) {
+    final colors = context.colors;
     final isSelected = v?.userChoiceIndex == i;
     // 揭示态(submitted)就高亮正确项(绿)——不依赖 correct 判分:错题本「查看答案」
     // 时学生可能没自测,这时也要看到正确答案。
     final isCorrect = submitted && v?.correctIndex == i;
     // 学生错选:已选 + 已揭示 + 不是正确项。仅在交卷/揭示态标红。
     final isWrongPick = submitted && isSelected && !isCorrect;
-    Color bg = Colors.white;
-    Color border = AppTheme.borderMuted;
+    // 状态语义色(选中紫/正确绿/错误红)用浅色块保留,辨识度高、亮暗通用。
+    Color bg = colors.cardColor;
+    Color border = colors.borderMuted;
     if (submitted) {
       if (isCorrect) {
         bg = const Color(0xFFECFDF5);
-        border = AppTheme.accentGreen;
+        border = colors.accentGreen;
       } else if (isWrongPick) {
         bg = const Color(0xFFFEF2F2);
         border = const Color(0xFFEF4444);
       }
     } else if (isSelected) {
       bg = const Color(0xFFF5F3FF);
-      border = AppTheme.violet500;
+      border = colors.violet500;
     }
     return GestureDetector(
       onTap: submitted ? null : () => onPickChoice?.call(i),
@@ -249,15 +253,15 @@ class QuizReviewCard extends StatelessWidget {
             height: 20,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              border: Border.all(color: isSelected ? AppTheme.violet500 : const Color(0xFFCBD5E1)),
-              color: isSelected ? AppTheme.violet500 : Colors.transparent,
+              border: Border.all(color: isSelected ? colors.violet500 : colors.slate300),
+              color: isSelected ? colors.violet500 : Colors.transparent,
             ),
             alignment: Alignment.center,
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text('${_optionTag(i)}${stem.options[i]}', style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
-          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
+          Expanded(child: Text('${_optionTag(i)}${stem.options[i]}', style: TextStyle(fontSize: 13, color: colors.slate700))),
+          if (isCorrect) Icon(Icons.check_circle, size: 16, color: colors.accentGreen),
           if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
         ]),
       ),
@@ -267,28 +271,29 @@ class QuizReviewCard extends StatelessWidget {
   // ── 多选选项 ──
   // 选项区只标绿(正确项),不标红——红绿混在选项里分不清「我选的」和「对的」。
   // 学生作答的对错归属放底部 _buildMultiDetail 明细里用带颜色文字说清楚。
-  Widget _buildMultiOptions(bool submitted, QuizVerdictData? v) {
+  Widget _buildMultiOptions(BuildContext context, bool submitted, QuizVerdictData? v) {
     final picks = v?.userMultiIndices ?? <int>{};
     // 揭示态(submitted)就高亮正确项(绿)——不依赖 correct 判分(同 choice 逻辑)。
     final correctSet = submitted ? (v?.correctIndices ?? <int>{}) : <int>{};
     return Column(children: [
-      for (int i = 0; i < stem.options.length; i++) _multiTile(i, picks, correctSet, submitted),
+      for (int i = 0; i < stem.options.length; i++) _multiTile(context, i, picks, correctSet, submitted),
     ]);
   }
 
-  Widget _multiTile(int i, Set<int> picks, Set<int> correctSet, bool submitted) {
+  Widget _multiTile(BuildContext context, int i, Set<int> picks, Set<int> correctSet, bool submitted) {
+    final colors = context.colors;
     final isSelected = picks.contains(i);
     final isCorrect = submitted && correctSet.contains(i);
-    Color bg = Colors.white;
-    Color border = AppTheme.borderMuted;
+    Color bg = colors.cardColor;
+    Color border = colors.borderMuted;
     if (submitted) {
       if (isCorrect) {
         bg = const Color(0xFFECFDF5);
-        border = AppTheme.accentGreen;
+        border = colors.accentGreen;
       }
     } else if (isSelected) {
       bg = const Color(0xFFF5F3FF);
-      border = AppTheme.violet500;
+      border = colors.violet500;
     }
     return GestureDetector(
       onTap: submitted ? null : () => onToggleMulti?.call(i),
@@ -303,15 +308,15 @@ class QuizReviewCard extends StatelessWidget {
             height: 20,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: isSelected ? AppTheme.violet500 : const Color(0xFFCBD5E1)),
-              color: isSelected ? AppTheme.violet500 : Colors.transparent,
+              border: Border.all(color: isSelected ? colors.violet500 : colors.slate300),
+              color: isSelected ? colors.violet500 : Colors.transparent,
             ),
             alignment: Alignment.center,
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text('${_optionTag(i)}${stem.options[i]}', style: const TextStyle(fontSize: 13, color: Color(0xFF334155)))),
-          if (isCorrect) const Icon(Icons.check_circle, size: 16, color: AppTheme.accentGreen),
+          Expanded(child: Text('${_optionTag(i)}${stem.options[i]}', style: TextStyle(fontSize: 13, color: colors.slate700))),
+          if (isCorrect) Icon(Icons.check_circle, size: 16, color: colors.accentGreen),
         ]),
       ),
     );
@@ -320,7 +325,8 @@ class QuizReviewCard extends StatelessWidget {
   // ── 填空 ──
   // interactive: TextField;submitted: Container 模拟输入框(对绿错红边)留内容只读。
   // 用 Container 而非 readOnly TextField:避免在 build 里 new TextEditingController 泄漏。
-  Widget _buildFill(bool submitted, QuizVerdictData? v) {
+  Widget _buildFill(BuildContext context, bool submitted, QuizVerdictData? v) {
+    final colors = context.colors;
     if (submitted) {
       final userText = v?.userFillText ?? '';
       final isCorrect = v?.correct ?? false;
@@ -347,14 +353,14 @@ class QuizReviewCard extends StatelessWidget {
       onChanged: (_) => onFillChanged?.call(),
       decoration: InputDecoration(
         hintText: '输入你的答案',
-        hintStyle: const TextStyle(color: AppTheme.slate400, fontSize: 13),
+        hintStyle: TextStyle(color: colors.slate400, fontSize: 13),
         filled: true,
-        fillColor: const Color(0xFFF8FAFC),
-        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.borderMuted)),
-        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: AppTheme.borderMuted)),
+        fillColor: colors.backgroundColor,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: colors.borderMuted)),
+        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: colors.borderMuted)),
         contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
       ),
-      style: const TextStyle(fontSize: 14, color: AppTheme.slate900),
+      style: TextStyle(fontSize: 14, color: colors.textWhite),
     );
   }
 
@@ -362,6 +368,7 @@ class QuizReviewCard extends StatelessWidget {
   // 三态:correct 全对(绿)、partial 部分对(琥珀黄,多选漏选但没多错)、都 false 错(红)。
   // 只展示标题行(回答正确!/部分正确/答案不正确),正确答案/明细/解析放 _buildReviewFooter
   // (那里不依赖判分,错题本「查看答案」无判分时也能展示)。
+  // 横幅用状态语义浅色块(绿/琥珀/红),亮暗通用,保留。
   Widget _buildVerdictBanner(QuizVerdictData v) {
     final isPartial = !(v.correct ?? false) && v.partial;
     final Color bannerBg = (v.correct ?? false)
@@ -400,7 +407,8 @@ class QuizReviewCard extends StatelessWidget {
   // 含:multi 明细「你的选择/正确答案/多选了/漏选了」、错时正确答案、解析。
   // 单独抽出:错题本「查看答案」时无判分(correct=null),也要展示正确答案和解析;
   // 交卷态(correct 非 null)时和横幅一起出现,信息不重复(横幅只给标题,这里给明细)。
-  Widget _buildReviewFooter(QuizVerdictData v) {
+  Widget _buildReviewFooter(BuildContext context, QuizVerdictData v) {
+    final colors = context.colors;
     final children = <Widget>[];
     // 多选题:选项区只标正确项,这里用底部明细把「你的选择/正确答案/多选/漏选」用
     // 带颜色的选项文字列清楚。
@@ -408,8 +416,8 @@ class QuizReviewCard extends StatelessWidget {
       children.add(Container(
         margin: const EdgeInsets.only(top: 8),
         padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(color: const Color(0xFFF8FAFC), borderRadius: BorderRadius.circular(8)),
-        child: _buildMultiDetail(v),
+        decoration: BoxDecoration(color: colors.slate100, borderRadius: BorderRadius.circular(8)),
+        child: _buildMultiDetail(context, v),
       ));
     }
     // 错时(或填空题)给正确答案。fill 由 _buildFill 回放了「你填的」,这里补正确答案。
@@ -423,7 +431,7 @@ class QuizReviewCard extends StatelessWidget {
     if (v.explanation.isNotEmpty) {
       children.add(Padding(
         padding: const EdgeInsets.only(top: 6),
-        child: MarkdownView(data: v.explanation, textScale: textScale, baseTextColor: AppTheme.textMuted),
+        child: MarkdownView(data: v.explanation, textScale: textScale, baseTextColor: colors.textMuted),
       ));
     }
     if (children.isEmpty) return const SizedBox.shrink();
@@ -432,7 +440,8 @@ class QuizReviewCard extends StatelessWidget {
 
   // 多选题底部明细:选项区干净(只标正确项),这里用带颜色的选项文字把对错归属说清楚。
   // 你选的:选对的项绿、选错的项红;正确答案:全绿;多选/漏选项橙字提示。
-  Widget _buildMultiDetail(QuizVerdictData v) {
+  Widget _buildMultiDetail(BuildContext context, QuizVerdictData v) {
+    final colors = context.colors;
     final picks = v.userMultiIndices;
     final correctIdxs = v.correctIndices;
     final pickedSet = picks.toSet();
@@ -445,7 +454,7 @@ class QuizReviewCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (picks.isNotEmpty) ...[
-          const Text('你的选择', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          Text('你的选择', style: TextStyle(fontSize: 11, color: colors.textMuted, fontWeight: FontWeight.bold)),
           const SizedBox(height: 4),
           // 一行一项:选对绿、选错红。
           for (final i in picks)
@@ -456,7 +465,7 @@ class QuizReviewCard extends StatelessWidget {
                     fontWeight: FontWeight.bold)),
         ],
         const SizedBox(height: 6),
-        const Text('正确答案', style: TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+        Text('正确答案', style: TextStyle(fontSize: 11, color: colors.textMuted, fontWeight: FontWeight.bold)),
         const SizedBox(height: 4),
         for (final i in correctIdxs)
           Text('${label(i)}. ${stem.options[i]}',

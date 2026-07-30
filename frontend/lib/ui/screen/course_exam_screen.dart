@@ -180,12 +180,13 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
+      backgroundColor: colors.backgroundColor,
       appBar: AppBar(
         title: Text('${widget.courseTitle} · 课程考试'),
-        backgroundColor: Colors.white,
-        foregroundColor: AppTheme.slate900,
+        backgroundColor: colors.cardColor,
+        foregroundColor: colors.slate900,
         elevation: 0,
       ),
       body: _buildBody(),
@@ -193,9 +194,9 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   }
 
   Widget _buildBody() {
-    if (_statusLoading) return Center(child: loadingSpinner());
+    if (_statusLoading) return Center(child: loadingSpinner(context));
     if (_statusError != null) {
-      return errorStateBox(_statusError!, _loadStatus, message: '加载考试状态失败');
+      return errorStateBox(context, _statusError!, _loadStatus, message: '加载考试状态失败');
     }
     // 已交卷(report 或 exam.submitted)→ 阅卷报告。
     final submitted = _report != null || _exam?.submitted == true;
@@ -214,6 +215,7 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   // ── 题库不足 / 功能未启用 ──
   Widget _buildUnavailable(String reason) {
     return emptyStateBox(
+      context: context,
       icon: Icons.lock_outline_rounded,
       headline: '暂时不能考试',
       hint: reason,
@@ -224,6 +226,7 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   // ── 可考,展示开考入口 ──
   Widget _buildReady() {
     final tv = TvMode.instance.isActive;
+    final colors = context.colors;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 640),
@@ -233,23 +236,23 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const Icon(Icons.emoji_events_rounded, size: 64, color: AppTheme.blue600),
+              Icon(Icons.emoji_events_rounded, size: 64, color: colors.blue600),
               const SizedBox(height: 16),
               const Text(
                 '准备好考试了吗?',
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
-              const Text(
+              Text(
                 '综合这门课的知识点出题,检验整体掌握程度。',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+                style: TextStyle(color: colors.textMuted, fontSize: 14),
               ),
               const SizedBox(height: 24),
               if (tv)
-                const Text(
+                Text(
                   '请用平板或手机开考(电视做题体验差)',
-                  style: TextStyle(color: AppTheme.textMuted, fontSize: 13),
+                  style: TextStyle(color: colors.textMuted, fontSize: 13),
                 )
               else
                 Button3D.blue(
@@ -294,11 +297,12 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   }
 
   Widget _buildScoreHeader(ExamView exam, bool submitted) {
+    final colors = context.colors;
     if (!submitted) {
       return Padding(
         padding: const EdgeInsets.only(bottom: 12),
         child: Text('共 ${exam.questions.length} 道题',
-          style: const TextStyle(fontSize: 15, color: AppTheme.textMuted)),
+          style: TextStyle(fontSize: 15, color: colors.textMuted)),
       );
     }
     // 已交卷但拿不到 report(取 active exam 回来、只有 submitted=true 没带成绩)时,
@@ -312,9 +316,9 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
           color: const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(14),
         ),
-        child: const Text('本次考试已交卷,成绩见交卷时的报告。',
+        child: Text('本次考试已交卷,成绩见交卷时的报告。',
           textAlign: TextAlign.center,
-          style: TextStyle(color: AppTheme.textMuted, fontSize: 14)),
+          style: TextStyle(color: colors.textMuted, fontSize: 14)),
       );
     }
     final score = _report!.score;

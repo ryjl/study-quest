@@ -205,11 +205,11 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
         future: _future,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done && _liveList == null) {
-            return loadingSpinner();
+            return loadingSpinner(context);
           }
           if (snapshot.hasError && _liveList == null) {
             return errorStateBox(
-              snapshot.error.toString(), _refresh,
+              context, snapshot.error.toString(), _refresh,
               message: '加载错题本失败',
             );
           }
@@ -237,20 +237,21 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
 
   // 真正的空状态(学生从没错过题):引导去学习。
   Widget _buildEmpty() {
+    final colors = context.colors;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.spellcheck_rounded, size: 56, color: AppTheme.textMuted),
+            Icon(Icons.spellcheck_rounded, size: 56, color: colors.textMuted),
             const SizedBox(height: 16),
             const Text('还没有错题', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            const Text(
+            Text(
               '去「学习大厅」做 AI 练习或课程考试,\n做错的题会自动出现在这里,方便复习。',
               textAlign: TextAlign.center,
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 14, height: 1.5),
+              style: TextStyle(color: colors.textMuted, fontSize: 14, height: 1.5),
             ),
             const SizedBox(height: 24),
             Button3D.blue(
@@ -269,6 +270,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
   // 过滤空状态:学生有错题,但当前筛选(未掌握/某课程)下没有。保留 header + 过滤行,
   // 避免整页变空让用户以为页面坏了、要切大 tab 才恢复(问题#2)。
   Widget _buildFilterEmpty(int unmastered) {
+    final colors = context.colors;
     return Padding(
       padding: portraitAwarePadding(context),
       child: CustomScrollView(
@@ -282,13 +284,13 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.filter_list_off_rounded, size: 48, color: AppTheme.textMuted),
+                    Icon(Icons.filter_list_off_rounded, size: 48, color: colors.textMuted),
                     const SizedBox(height: 12),
-                    const Text('当前筛选下没有错题',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.slate900)),
+                    Text('当前筛选下没有错题',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: colors.slate900)),
                     const SizedBox(height: 6),
-                    const Text('换个课程,或切回「全部」看看全部错题。',
-                      style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+                    Text('换个课程,或切回「全部」看看全部错题。',
+                      style: TextStyle(color: colors.textMuted, fontSize: 13)),
                   ],
                 ),
               ),
@@ -327,6 +329,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
 
   Widget _buildHeader(int total, int masteredCount, int unmasteredCount) {
     final tv = TvMode.instance.isActive;
+    final colors = context.colors;
     return Padding(
       padding: const EdgeInsets.only(top: 16, bottom: 8),
       child: Column(
@@ -339,10 +342,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: AppTheme.slate100, borderRadius: BorderRadius.circular(12),
+                  color: colors.slate100, borderRadius: BorderRadius.circular(12),
                 ),
                 child: Text('共 $total 题',
-                  style: const TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+                  style: TextStyle(fontSize: 13, color: colors.textMuted)),
               ),
               const SizedBox(width: 8),
               // 进度:已掌握 / 未掌握,让掌握进度可见。
@@ -358,10 +361,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               const Spacer(),
               // 整批重做:TV 模式隐藏(电视做题体验差),给提示。
               if (tv)
-                const Padding(
-                  padding: EdgeInsets.only(left: 8),
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
                   child: Text('重做请用平板/手机',
-                    style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                    style: TextStyle(color: colors.textMuted, fontSize: 12)),
                 )
               else
                 Button3D.blue(
@@ -396,9 +399,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
 
   // 掌握状态过滤:未掌握(N) / 已掌握(N) / 全部。带计数(从全部视图算)。
   Widget _buildFilterChip() {
+    final colors = context.colors;
     return Container(
       decoration: BoxDecoration(
-        color: AppTheme.slate100, borderRadius: BorderRadius.circular(20),
+        color: colors.slate100, borderRadius: BorderRadius.circular(20),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
@@ -414,6 +418,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
 
   Widget _filterSeg(String label, bool? value) {
     final selected = _masteredFilter == value;
+    final colors = context.colors;
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -425,11 +430,11 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         margin: const EdgeInsets.symmetric(vertical: 2),
         decoration: BoxDecoration(
-          color: selected ? AppTheme.blue600 : Colors.transparent,
+          color: selected ? colors.blue600 : Colors.transparent,
           borderRadius: BorderRadius.circular(18),
         ),
         child: Text(label, style: TextStyle(
-          fontSize: 12, color: selected ? Colors.white : AppTheme.textMuted,
+          fontSize: 12, color: selected ? Colors.white : colors.textMuted,
           fontWeight: selected ? FontWeight.bold : FontWeight.normal,
         )),
       ),
@@ -438,16 +443,17 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
 
   // 课程过滤下拉。
   Widget _buildCourseChip() {
+    final colors = context.colors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: AppTheme.slate100, borderRadius: BorderRadius.circular(20),
+        color: colors.slate100, borderRadius: BorderRadius.circular(20),
       ),
       child: DropdownButton<int>(
         value: _courseFilter,
         underline: const SizedBox(),
         isDense: true,
-        style: const TextStyle(fontSize: 12, color: AppTheme.textMuted),
+        style: TextStyle(fontSize: 12, color: colors.textMuted),
         items: [
           const DropdownMenuItem(value: 0, child: Text('全部课程')),
           ..._courses.map((c) => DropdownMenuItem(value: c.id, child: Text(c.title))),
@@ -467,6 +473,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     final expanded = _expanded.contains(item.questionId);
     final courseName = _coursesTitle(item.courseId);
     final hasOptions = item.type == 'choice' || item.type == 'multi_choice';
+    final colors = context.colors;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 720),
@@ -474,10 +481,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
           margin: const EdgeInsets.only(bottom: 14),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: colors.cardColor,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: item.mastered ? const Color(0xFFD1FAE5) : AppTheme.borderMuted,
+              color: item.mastered ? const Color(0xFFD1FAE5) : colors.borderMuted,
             ),
           ),
           child: Column(
@@ -492,18 +499,18 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                   decoration: BoxDecoration(
-                    color: AppTheme.blue100, borderRadius: BorderRadius.circular(8),
+                    color: colors.blue100, borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(Icons.book_outlined, size: 12, color: AppTheme.blue600),
+                      Icon(Icons.book_outlined, size: 12, color: colors.blue600),
                       const SizedBox(width: 4),
                       Flexible(
                         child: Text(
                           courseName ?? '未知课程',
                           maxLines: 1, overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 11, color: AppTheme.blue600, fontWeight: FontWeight.w600),
+                          style: TextStyle(fontSize: 11, color: colors.blue600, fontWeight: FontWeight.w600),
                         ),
                       ),
                     ],
@@ -532,10 +539,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(expanded ? Icons.expand_less : Icons.lightbulb_outline_rounded,
-                        size: 18, color: AppTheme.blue600),
+                        size: 18, color: colors.blue600),
                     const SizedBox(width: 4),
                     Text(expanded ? '收起答案' : '查看答案',
-                      style: const TextStyle(color: AppTheme.blue600, fontSize: 13, fontWeight: FontWeight.bold)),
+                      style: TextStyle(color: colors.blue600, fontSize: 13, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
@@ -553,7 +560,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: item.mastered ? const Color(0xFFD1FAE5) : AppTheme.slate100,
+                    color: item.mastered ? const Color(0xFFD1FAE5) : colors.slate100,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Row(
@@ -562,13 +569,13 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                       Icon(
                         item.mastered ? Icons.check_circle : Icons.check_circle_outline,
                         size: 15,
-                        color: item.mastered ? const Color(0xFF10B981) : AppTheme.textMuted,
+                        color: item.mastered ? const Color(0xFF10B981) : colors.textMuted,
                       ),
                       const SizedBox(width: 4),
                       Text(
                         item.mastered ? '已掌握 · 点取消' : '标记掌握',
                         style: TextStyle(
-                          color: item.mastered ? const Color(0xFF065F46) : AppTheme.textMuted,
+                          color: item.mastered ? const Color(0xFF065F46) : colors.textMuted,
                           fontSize: 12, fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -770,14 +777,15 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
   @override
   Widget build(BuildContext context) {
     final submitted = _results != null;
+    final colors = context.colors;
     return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
+      backgroundColor: colors.backgroundColor,
       appBar: AppBar(
         // 标题带题量(问题#7):让学生一眼看到这张复习卷有几题,而不是只看到「重做错题」
         // 误以为只有 1 题。配合后端 RedoWrongBookQuiz 的 log,题量异常时可定位。
         title: Text('重做错题 · 共 ${widget.questions.length} 题'),
-        backgroundColor: Colors.white,
-        foregroundColor: AppTheme.slate900,
+        backgroundColor: colors.cardColor,
+        foregroundColor: colors.slate900,
         elevation: 0,
       ),
       body: Center(

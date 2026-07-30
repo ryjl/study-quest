@@ -112,6 +112,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     final subjectGradient = AppTheme.getSubjectGradientFromColor(resolveSubject(widget.course.subject, _subjectsCatalog).color);
     // Use the course's real first tag if defined (no more mock tags).
     final tagsList = widget.course.tagsList;
@@ -119,15 +120,15 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
     return Scaffold(
       body: Container(
-        color: AppTheme.backgroundColor, // slate-50 background
+        color: colors.backgroundColor, // slate-50 background
         child: FutureBuilder(
           future: _combinedFuture,
           builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
-              return loadingSpinner();
+              return loadingSpinner(context);
             }
             if (snapshot.hasError) {
-              return errorStateBox(snapshot.error.toString(), _refreshData);
+              return errorStateBox(context, snapshot.error.toString(), _refreshData);
             }
 
             final episodes = snapshot.data![0] as List<Episode>;
@@ -136,6 +137,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
             if (episodes.isEmpty) {
               return emptyStateBox(
+                context: context,
                 icon: Icons.video_library_outlined,
                 headline: '该课程库下暂无课时视频',
                 hint: '请登录管理后台导入相关的网盘视频资源。',
@@ -168,7 +170,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               children: [
                 // Sticky Top Bar with White 3D Back button
                 Container(
-                  color: Colors.white.withValues(alpha: 0.7),
+                  color: colors.cardColor.withValues(alpha: 0.7),
                   padding: EdgeInsets.symmetric(
                     horizontal: isPortrait(context) ? 16.0 : 40.0,
                     vertical: 16.0,
@@ -179,10 +181,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                         onPressed: () => Navigator.pop(context),
                         child: Row(
-                          children: const [
-                            Icon(Icons.arrow_back_rounded, size: 18, color: AppTheme.textMuted),
-                            SizedBox(width: 8),
-                            Text('返回大厅', style: TextStyle(color: AppTheme.textMuted)),
+                          children: [
+                            Icon(Icons.arrow_back_rounded, size: 18, color: colors.textMuted),
+                            const SizedBox(width: 8),
+                            Text('返回大厅', style: TextStyle(color: colors.textMuted)),
                           ],
                         ),
                       ),
@@ -235,12 +237,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                         Container(
                           padding: EdgeInsets.all(isPortrait(context) ? 16 : 32),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: colors.cardColor,
                             borderRadius: BorderRadius.circular(36),
-                            border: Border.all(color: AppTheme.borderMuted, width: 2.0),
+                            border: Border.all(color: colors.borderMuted, width: 2.0),
                             boxShadow: [
                               BoxShadow(
-                                color: AppTheme.slate900.withValues(alpha: 0.02),
+                                color: colors.slate900.withValues(alpha: 0.02),
                                 blurRadius: 20,
                                 offset: const Offset(0, 4),
                               )
@@ -255,15 +257,15 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                   Container(
                                     padding: const EdgeInsets.all(8),
                                     decoration: BoxDecoration(
-                                      color: AppTheme.blue100,
+                                      color: colors.blue100,
                                       borderRadius: BorderRadius.circular(12),
                                     ),
-                                    child: const Icon(Icons.list_alt_rounded, color: AppTheme.blue600, size: 24),
+                                    child: Icon(Icons.list_alt_rounded, color: colors.blue600, size: 24),
                                   ),
                                   const SizedBox(width: 14),
-                                  const Text(
+                                  Text(
                                     '闯关目录',
-                                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+                                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: colors.textWhite),
                                   ),
                                 ],
                               ),
@@ -290,8 +292,8 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                                 width: 6,
                                                 height: 24,
                                                 decoration: BoxDecoration(
-                                                  gradient: const LinearGradient(
-                                                    colors: [Color(0xFF60A5FA), AppTheme.blue600],
+                                                  gradient: LinearGradient(
+                                                    colors: [const Color(0xFF60A5FA), colors.blue600],
                                                     begin: Alignment.topCenter,
                                                     end: Alignment.bottomCenter,
                                                   ),
@@ -301,7 +303,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                                               const SizedBox(width: 12),
                                               Text(
                                                 group.title,
-                                                style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppTheme.textWhite),
+                                                style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: colors.textWhite),
                                               ),
                                             ],
                                           ),
@@ -350,6 +352,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   ///   - 陈旧提示:生成后又有新课时补进来,诚实告诉学生"可能未涵盖最新内容"。
   ///     学生端不能触发刷新(课程总览是 admin 手动维护的 course-unique 内容)。
   Widget _buildCourseSummaryCard(BuildContext context) {
+    final colors = context.colors;
     return FutureBuilder<CourseSummary?>(
       future: _courseSummaryFuture,
       builder: (context, snapshot) {
@@ -365,12 +368,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           margin: const EdgeInsets.only(bottom: 0),
           padding: EdgeInsets.all(isPortrait(context) ? 16 : 28),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: colors.cardColor,
             borderRadius: BorderRadius.circular(28),
-            border: Border.all(color: AppTheme.borderMuted, width: 2.0),
+            border: Border.all(color: colors.borderMuted, width: 2.0),
             boxShadow: [
               BoxShadow(
-                color: AppTheme.slate900.withValues(alpha: 0.02),
+                color: colors.slate900.withValues(alpha: 0.02),
                 blurRadius: 20,
                 offset: const Offset(0, 4),
               )
@@ -394,16 +397,16 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       child: const Icon(Icons.auto_stories_outlined, color: Color(0xFFD97706), size: 22),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         '课程总览',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: colors.textWhite),
                       ),
                     ),
                     Icon(
                       _summaryExpanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
                       size: 26,
-                      color: AppTheme.textMuted,
+                      color: colors.textMuted,
                     ),
                   ],
                 ),
@@ -443,7 +446,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   padding: const EdgeInsets.only(top: 4),
                   child: Text(
                     '点开看完整总览 →',
-                    style: const TextStyle(fontSize: 12, color: AppTheme.slate400),
+                    style: TextStyle(fontSize: 12, color: colors.slate400),
                   ),
                 ),
               if (_summaryExpanded) ...[
@@ -463,12 +466,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     if (summary.generatedAt != null)
                       Text(
                         '生成于 ${_formatSummaryDate(summary.generatedAt!)}',
-                        style: const TextStyle(fontSize: 11, color: AppTheme.slate400),
+                        style: TextStyle(fontSize: 11, color: colors.slate400),
                       ),
                     if ((summary.modelUsed ?? '').isNotEmpty)
                       Text(
                         '模型 ${summary.modelUsed}',
-                        style: const TextStyle(fontSize: 11, color: AppTheme.slate400),
+                        style: TextStyle(fontSize: 11, color: colors.slate400),
                       ),
                   ],
                 ),
@@ -493,6 +496,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     required String? firstTag,
     required int progressPercent,
   }) {
+    final colors = context.colors;
     final compact = isPortrait(context);
 
     final details = Column(
@@ -566,18 +570,18 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: colors.cardColor,
           borderRadius: BorderRadius.circular(28),
           boxShadow: const [
             BoxShadow(color: Colors.black12, blurRadius: 10)
           ],
-          border: Border.all(color: Colors.white, width: 2),
+          border: Border.all(color: colors.cardColor, width: 2),
         ),
         child: Column(
           children: [
-            const Text(
+            Text(
               '学习进度',
-              style: TextStyle(color: AppTheme.slate400, fontSize: 11, fontWeight: FontWeight.w900),
+              style: TextStyle(color: colors.slate400, fontSize: 11, fontWeight: FontWeight.w900),
             ),
             const SizedBox(height: 4),
             Row(
@@ -586,11 +590,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               children: [
                 Text(
                   '$progressPercent',
-                  style: const TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: Color(0xFF1E293B)),
+                  style: TextStyle(fontSize: 48, fontWeight: FontWeight.w900, color: colors.textWhite),
                 ),
-                const Text(
+                Text(
                   '%',
-                  style: TextStyle(fontSize: 18, color: AppTheme.slate400, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 18, color: colors.slate400, fontWeight: FontWeight.bold),
                 ),
               ],
             ),
@@ -645,10 +649,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
   }
 
   Widget _buildThumbnailPlaceholder() {
+    final colors = context.colors;
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [AppTheme.slate400, AppTheme.textMuted],
+          colors: [colors.slate400, colors.textMuted],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -673,6 +678,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
           : '$m:${sec.toString().padLeft(2, '0')}';
     }
 
+    final colors = context.colors;
     final durationLabel = fmt(totalSeconds);
     final hasResume = resumeSeconds > 5 && !isCompleted;
     // Percentage watched (clamped, only meaningful when total is known).
@@ -696,7 +702,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
         child: FocusButton(
           padding: const EdgeInsets.all(16.0),
           borderRadius: 20,
-          borderColor: AppTheme.borderMuted,
+          borderColor: colors.borderMuted,
           onPressed: () {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -712,11 +718,11 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 height: 68,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
-                  color: AppTheme.slate100,
-                  border: Border.all(color: AppTheme.borderMuted, width: 1.5),
+                  color: colors.slate100,
+                  border: Border.all(color: colors.borderMuted, width: 1.5),
                 ),
-                child: const Center(
-                  child: Icon(Icons.lock_outline_rounded, color: AppTheme.slate400, size: 26),
+                child: Center(
+                  child: Icon(Icons.lock_outline_rounded, color: colors.slate400, size: 26),
                 ),
               ),
               const SizedBox(width: 16),
@@ -726,20 +732,20 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                   children: [
                     Text(
                       ep.title,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         fontSize: 16,
-                        color: AppTheme.slate400,
+                        color: colors.slate400,
                       ),
                     ),
                     const SizedBox(height: 8),
                     Row(
-                      children: const [
-                        Icon(Icons.lock_clock_outlined, size: 12, color: AppTheme.slate400),
-                        SizedBox(width: 4),
+                      children: [
+                        Icon(Icons.lock_clock_outlined, size: 12, color: colors.slate400),
+                        const SizedBox(width: 4),
                         Text(
                           '等待解锁',
-                          style: TextStyle(fontSize: 11, color: AppTheme.slate400, fontWeight: FontWeight.bold),
+                          style: TextStyle(fontSize: 11, color: colors.slate400, fontWeight: FontWeight.bold),
                         ),
                       ],
                     ),
@@ -757,7 +763,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
       child: FocusButton(
         padding: const EdgeInsets.all(16.0),
         borderRadius: 20,
-        borderColor: AppTheme.borderMuted,
+        borderColor: colors.borderMuted,
         onPressed: () {
           // 直接播放:课前探索任务已改为在播放器右侧 helper panel 常驻显示
           // (player_screen 的 _buildPreAdventureSection),不再前置弹窗打断。
@@ -771,7 +777,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               height: 68,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                color: AppTheme.slate100,
+                color: colors.slate100,
                 border: Border.all(
                   color: isCompleted ? const Color(0xFFA7F3D0) : const Color(0xFFCBD5E1),
                   width: 1.5,
@@ -837,7 +843,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
-                      color: isCompleted ? AppTheme.slate400 : AppTheme.textWhite,
+                      color: isCompleted ? colors.slate400 : colors.textWhite,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -852,18 +858,18 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: AppTheme.slate100,
+                          color: colors.slate100,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppTheme.borderMuted),
+                          border: Border.all(color: colors.borderMuted),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            const Icon(Icons.watch_later_outlined, size: 12, color: AppTheme.textMuted),
+                            Icon(Icons.watch_later_outlined, size: 12, color: colors.textMuted),
                             const SizedBox(width: 4),
                             Text(
                               durationLabel,
-                              style: const TextStyle(fontSize: 11, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                              style: TextStyle(fontSize: 11, color: colors.textMuted, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
@@ -875,10 +881,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       Builder(builder: (btnContext) {
                         // 不可用时整套配色降到中性灰,视觉上明确"现在用不了"。
                         final enabled = aiAvailability == AiAvailability.enabled;
-                        final bgColor = enabled ? const Color(0xFFF5F3FF) : AppTheme.slate100;
-                        final borderColor = enabled ? const Color(0xFFDDD6FE) : AppTheme.borderMuted;
-                        final iconColor = enabled ? AppTheme.violet500 : AppTheme.slate400;
-                        final textColor = enabled ? const Color(0xFF6D28D9) : AppTheme.slate400;
+                        final bgColor = enabled ? const Color(0xFFF5F3FF) : colors.slate100;
+                        final borderColor = enabled ? const Color(0xFFDDD6FE) : colors.borderMuted;
+                        final iconColor = enabled ? AppTheme.violet500 : colors.slate400;
+                        final textColor = enabled ? const Color(0xFF6D28D9) : colors.slate400;
                         return GestureDetector(
                           onTap: () {
                             if (!enabled) {
@@ -948,7 +954,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       child: LinearProgressIndicator(
                         value: resumePct / 100,
                         minHeight: 4,
-                        backgroundColor: AppTheme.borderMuted,
+                        backgroundColor: colors.borderMuted,
                         valueColor:
                             const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
                       ),
@@ -959,7 +965,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
             ),
 
             // Caret right
-            const Icon(Icons.chevron_right_rounded, color: AppTheme.slate400, size: 24),
+            Icon(Icons.chevron_right_rounded, color: colors.slate400, size: 24),
           ],
         ),
       ),

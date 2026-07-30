@@ -50,17 +50,18 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
     final series = widget.series;
     final subj = resolveSubject(series.subject, _subjectsCatalog);
     final gradient = AppTheme.getSubjectGradientFromColor(subj.color);
+    final colors = context.colors;
 
     return Scaffold(
-      backgroundColor: AppTheme.backgroundColor,
+      backgroundColor: colors.backgroundColor,
       body: FutureBuilder<ReadingSeriesDetail>(
         future: _detailFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return loadingSpinner();
+            return loadingSpinner(context);
           }
           if (snapshot.hasError) {
-            return errorStateBox(snapshot.error.toString(), _loadData,
+            return errorStateBox(context, snapshot.error.toString(), _loadData,
                 message: '加载系列失败！');
           }
 
@@ -74,7 +75,7 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
               SliverAppBar(
                 expandedHeight: 220,
                 pinned: true,
-                backgroundColor: AppTheme.primaryColor,
+                backgroundColor: colors.primaryColor,
                 flexibleSpace: FlexibleSpaceBar(
                   title: Text(
                     series.title,
@@ -107,9 +108,9 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
                       if (series.description.isNotEmpty) ...[
                         Text(
                           series.description,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 15,
-                            color: AppTheme.textMuted,
+                            color: colors.textMuted,
                             height: 1.6,
                           ),
                         ),
@@ -118,7 +119,7 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
 
                       // Books section
                       if (books.isNotEmpty) ...[
-                        _sectionTitle('📕 书籍 (${books.length})'),
+                        _sectionTitle(context, '📕 书籍 (${books.length})'),
                         const SizedBox(height: 12),
                         _buildShelfBoard(
                           children: books.map((b) {
@@ -148,7 +149,7 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
 
                       // Articles section
                       if (articles.isNotEmpty) ...[
-                        _sectionTitle('🌐 文章 (${articles.length})'),
+                        _sectionTitle(context, '🌐 文章 (${articles.length})'),
                         const SizedBox(height: 12),
                         _buildShelfBoard(
                           children: articles.map((a) {
@@ -176,12 +177,12 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
                       ],
 
                       if (books.isEmpty && articles.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 40),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 40),
                           child: Center(
                             child: Text(
                               '该系列还没有内容',
-                              style: TextStyle(color: AppTheme.textMuted, fontSize: 16),
+                              style: TextStyle(color: colors.textMuted, fontSize: 16),
                             ),
                           ),
                         ),
@@ -209,9 +210,9 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
     );
   }
 
-  Widget _sectionTitle(String text) => sectionTitle(text);
+  Widget _sectionTitle(BuildContext context, String text) => sectionTitle(context, text);
 
-  Widget _buildShelfBoard({required List<Widget> children}) => buildShelfBoard(children: children);
+  Widget _buildShelfBoard({required List<Widget> children}) => buildShelfBoard(context, children: children);
 
   Widget _buildCoverTile({
     required String coverUrl,

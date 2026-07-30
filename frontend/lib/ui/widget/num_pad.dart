@@ -52,10 +52,11 @@ class _NumPadState extends State<NumPad> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return GlassPanel(
       borderRadius: 24.0,
-      baseColor: Colors.white.withValues(alpha: 0.85),
-      borderColor: Colors.white,
+      baseColor: colors.cardColor.withValues(alpha: 0.92),
+      borderColor: colors.cardColor,
       borderWidth: 1.5,
       padding: const EdgeInsets.all(24),
       child: ConstrainedBox(
@@ -72,15 +73,15 @@ class _NumPadState extends State<NumPad> {
               children: [
                 Text(
                   widget.title,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontFamily: 'Quicksand',
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
-                    color: AppTheme.textWhite,
+                    color: colors.textWhite,
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.close, color: AppTheme.textMuted),
+                  icon: Icon(Icons.close, color: colors.textMuted),
                   onPressed: widget.onCancel,
                 ),
               ],
@@ -92,7 +93,7 @@ class _NumPadState extends State<NumPad> {
               height: 54,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.05),
+                color: colors.slate900.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(
@@ -104,10 +105,10 @@ class _NumPadState extends State<NumPad> {
                     width: 12,
                     height: 12,
                     decoration: BoxDecoration(
-                      color: filled ? AppTheme.primaryColor : Colors.transparent,
+                      color: filled ? colors.primaryColor : Colors.transparent,
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: filled ? AppTheme.primaryColor : AppTheme.textMuted.withValues(alpha: 0.3),
+                        color: filled ? colors.primaryColor : colors.textMuted.withValues(alpha: 0.3),
                         width: 2,
                       ),
                     ),

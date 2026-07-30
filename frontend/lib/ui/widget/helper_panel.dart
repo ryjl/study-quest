@@ -50,11 +50,12 @@ class HelperPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return Container(
       width: 360,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(left: BorderSide(color: AppTheme.borderMuted, width: 2)),
+      decoration: BoxDecoration(
+        color: colors.cardColor,
+        border: Border(left: BorderSide(color: colors.borderMuted, width: 2)),
       ),
       // FocusScope(独立焦点域)+ ClampingScrollPhysics 解决两个 D-pad 焦点问题:
       //  1. 之前用 BouncingScrollPhysics(iOS 弹性),D-pad 垂直键被 Scrollable
@@ -79,19 +80,19 @@ class HelperPanel extends StatelessWidget {
               children: [
                 Container(
                   padding: const EdgeInsets.all(8),
-                  decoration: const BoxDecoration(
-                    color: AppTheme.blue100,
+                  decoration: BoxDecoration(
+                    color: colors.blue100,
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(Icons.psychology_rounded,
-                      color: AppTheme.blue600, size: 24),
+                  child: Icon(Icons.psychology_rounded,
+                      color: colors.blue600, size: 24),
                 ),
                 const SizedBox(width: 12),
                 Text('随堂助手',
                     style: TextStyle(
                         fontSize: _tvScaled(20),
                         fontWeight: FontWeight.w900,
-                        color: AppTheme.textWhite)),
+                        color: colors.textWhite)),
                 // 右上角关闭按钮已移除:panel 显隐统一由播放器的全屏按钮控制,
                 // 不再给用户多个关闭入口(减少心智负担)。
               ],
@@ -103,7 +104,7 @@ class HelperPanel extends StatelessWidget {
                 style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: _tvScaled(15),
-                    color: AppTheme.textWhite)),
+                    color: colors.textWhite)),
             const SizedBox(height: 28),
 
             // Attachments section
@@ -112,9 +113,9 @@ class HelperPanel extends StatelessWidget {
                     fontSize: _tvScaled(12),
                     fontWeight: FontWeight.w900,
                     letterSpacing: 1.5,
-                    color: AppTheme.textMuted)),
+                    color: colors.textMuted)),
             const SizedBox(height: 12),
-            _buildAttachmentsSection(),
+            _buildAttachmentsSection(context),
             const SizedBox(height: 28),
 
             // Pre-adventure tasks
@@ -126,24 +127,24 @@ class HelperPanel extends StatelessWidget {
                         fontSize: _tvScaled(12),
                         fontWeight: FontWeight.w900,
                         letterSpacing: 1.5,
-                        color: AppTheme.textMuted)),
+                        color: colors.textMuted)),
                 Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(
-                    color: AppTheme.blue100,
+                    color: colors.blue100,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text('带着问题看',
                       style: TextStyle(
                           fontSize: _tvScaled(10),
                           fontWeight: FontWeight.bold,
-                          color: AppTheme.blue600)),
+                          color: colors.blue600)),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            _buildPreAdventureSection(),
+            _buildPreAdventureSection(context),
             const SizedBox(height: 28),
 
             // AI 学习入口 —— 常驻 helper panel,不随顶栏自动隐藏。比顶栏那个
@@ -218,7 +219,8 @@ class HelperPanel extends StatelessWidget {
     );
   }
 
-  Widget _buildAttachmentsSection() {
+  Widget _buildAttachmentsSection(BuildContext context) {
+    final colors = context.colors;
     if (loadingExtras) {
       return const Padding(
         padding: EdgeInsets.symmetric(vertical: 8),
@@ -231,21 +233,23 @@ class HelperPanel extends StatelessWidget {
     }
     if (attachments.isEmpty) {
       return _placeholderTile(
+        context,
         icon: Icons.picture_as_pdf_outlined,
         title: '暂无配套讲义',
-        accent: AppTheme.accentOrange,
+        accent: colors.accentOrange,
       );
     }
     return Column(
       children: attachments.map((att) {
         final isPdf = att.isPdf;
         final accent =
-            isPdf ? AppTheme.accentOrange : AppTheme.violet500;
+            isPdf ? colors.accentOrange : colors.violet500;
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
           child: FocusButton(
             onPressed: () => onOpenAttachment(att),
             borderRadius: 14,
+            // PDF/附件用语义暖色块(PDF 橙系、附件紫系),亮暗均保留浅色块以标识类型。
             baseColor: isPdf
                 ? const Color(0xFFFFF7ED)
                 : const Color(0xFFF5F3FF),
@@ -266,7 +270,7 @@ class HelperPanel extends StatelessWidget {
                       overflow: TextOverflow.ellipsis),
                 ),
                 Icon(Icons.chevron_right_rounded,
-                    color: AppTheme.slate400, size: _tvScaled(18)),
+                    color: colors.slate400, size: _tvScaled(18)),
               ],
             ),
           ),
@@ -275,7 +279,7 @@ class HelperPanel extends StatelessWidget {
     );
   }
 
-  Widget _buildPreAdventureSection() {
+  Widget _buildPreAdventureSection(BuildContext context) {
     // Phase 2:数据源切到 /ai-summary 的 pre_adventure(课程详情页传进来的
     // preAdventureTasks 也来自 summary)。优先用显式入参(列表页已缓存),
     // 否则取本屏 lazy 加载的 _summary.preAdventure。
@@ -284,32 +288,35 @@ class HelperPanel extends StatelessWidget {
         : (summary?.preAdventure.map((p) => p.prompt).toList() ?? const []);
     if (tasks.isEmpty) {
       return _placeholderTile(
+        context,
         icon: Icons.casino_outlined,
         title: '本节暂无探索任务',
-        accent: const Color(0xFF3B82F6),
+        accent: AppTheme.primaryColor,
       );
     }
     return Column(
       children: List.generate(tasks.length, (i) {
         return Padding(
           padding: const EdgeInsets.only(bottom: 10),
-          child: _taskCard(i + 1, tasks[i]),
+          child: _taskCard(context, i + 1, tasks[i]),
         );
-      }),
+      }).toList(),
     );
   }
 
   Widget _placeholderTile(
+      BuildContext context,
       {required IconData icon,
       required String title,
       required Color accent}) {
+    final colors = context.colors;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
       decoration: BoxDecoration(
-        color: AppTheme.backgroundColor,
+        color: colors.backgroundColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderMuted),
+        border: Border.all(color: colors.borderMuted),
       ),
       child: Row(
         children: [
@@ -317,7 +324,7 @@ class HelperPanel extends StatelessWidget {
           const SizedBox(width: 10),
           Text(title,
               style: TextStyle(
-                  color: AppTheme.textMuted,
+                  color: colors.textMuted,
                   fontWeight: FontWeight.bold,
                   fontSize: _tvScaled(13))),
         ],
@@ -325,13 +332,14 @@ class HelperPanel extends StatelessWidget {
     );
   }
 
-  Widget _taskCard(int index, String text) {
+  Widget _taskCard(BuildContext context, int index, String text) {
+    final colors = context.colors;
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: AppTheme.backgroundColor,
+        color: colors.backgroundColor,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppTheme.borderMuted),
+        border: Border.all(color: colors.borderMuted),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -340,21 +348,21 @@ class HelperPanel extends StatelessWidget {
             width: 24,
             height: 24,
             alignment: Alignment.center,
-            decoration: const BoxDecoration(
-              color: AppTheme.blue100,
+            decoration: BoxDecoration(
+              color: colors.blue100,
               shape: BoxShape.circle,
             ),
             child: Text('$index',
                 style: TextStyle(
                     fontWeight: FontWeight.w900,
-                    color: AppTheme.blue600,
+                    color: colors.blue600,
                     fontSize: _tvScaled(11))),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Text(text,
                 style: TextStyle(
-                    color: Color(0xFF475569),
+                    color: colors.slate600,
                     fontWeight: FontWeight.bold,
                     fontSize: _tvScaled(13),
                     height: 1.4)),

@@ -50,19 +50,21 @@ class MarkdownView extends StatelessWidget {
     this.baseTextColor,
   });
 
-  // 设计 token。提到 widget 顶层 const 是为了 styleSheet 闭包里方便引用。
-  static const Color _defaultTextColor = Color(0xFF334155); // Slate-700
+  // 设计 token。代码块 / 表格用浅色块装饰(亮暗模式均如此)——业界 IDE 暗色模式
+  // 的代码块也常用比正文区略浅的独立色块,保证代码可读且有视觉区分,故不跟随主题
+  // 切换底色。正文文字色(_defaultTextColor)跟随主题:暗色用浅文字,亮色用深文字。
   static const Color _tableHeadBg = AppTheme.slate100; // Slate-100
   static const Color _tableBorder = Color(0xFFCBD5E1); // Slate-300
   static const Color _codeBlockBg = AppTheme.slate100; // Slate-100
   static const Color _codeBlockText = AppTheme.slate900; // Slate-900
-  static const Color _mutedText = AppTheme.textMuted; // Slate-500
   static const Color _inlineCodeBg = AppTheme.borderMuted; // Slate-200
 
   @override
   Widget build(BuildContext context) {
-    final Color textColor = baseTextColor ?? _defaultTextColor;
-    final MarkdownStyleSheet sheet = _buildStyleSheet(context, textColor);
+    // 默认正文色跟随主题:调用方未传 baseTextColor 时,亮色=深文字、暗色=浅文字。
+    final Color textColor = baseTextColor ?? context.colors.textWhite;
+    final Color muted = context.colors.textMuted;
+    final MarkdownStyleSheet sheet = _buildStyleSheet(context, textColor, muted);
 
     return MarkdownBody(
       data: _normalizeMarkdown(data),
@@ -134,7 +136,7 @@ class MarkdownView extends StatelessWidget {
   /// [textScale] 缩放。表格用 [IntrinsicColumnWidth](每列按内容自适应宽度),
   /// 配合 build() 里注册的 _TableScrollWrapper——超宽表格会横向滚动,而不是
   /// 溢出盖到相邻文字。
-  MarkdownStyleSheet _buildStyleSheet(BuildContext context, Color textColor) {
+  MarkdownStyleSheet _buildStyleSheet(BuildContext context, Color textColor, Color muted) {
     final double scale = textScale <= 0 ? 1.0 : textScale;
     final base = MarkdownStyleSheet.fromTheme(Theme.of(context));
 
@@ -172,7 +174,7 @@ class MarkdownView extends StatelessWidget {
       ),
       h6: base.h6?.copyWith(
         fontSize: (base.h6?.fontSize ?? 14) * scale,
-        color: _mutedText,
+        color: muted,
         fontWeight: FontWeight.w600,
       ),
       strong: base.strong?.copyWith(
@@ -183,10 +185,10 @@ class MarkdownView extends StatelessWidget {
       a: const TextStyle(color: AppTheme.blue600), // Blue-600
       listBullet: TextStyle(
         fontSize: 16 * scale,
-        color: _mutedText,
+        color: muted,
       ),
       blockquote: TextStyle(
-        color: _mutedText,
+        color: muted,
         fontSize: (base.blockquote?.fontSize ?? 15) * scale,
       ),
       blockquoteDecoration: BoxDecoration(

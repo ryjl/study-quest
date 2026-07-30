@@ -146,9 +146,45 @@ seek bar 聚焦态（识别焦点位置）：
 
 ---
 
+## PAD 暗色模式（新增 2026-07）
+
+PAD 端原先只有浅色主题（与 TV 深色分工）。本次新增用户可选的暗色模式，三态切换：浅色 / 深色 / 跟随系统（设置页 → 主题外观）。
+
+### 三端深色分工
+
+| 端 | 浅色 | 深色 | 说明 |
+|---|---|---|---|
+| PAD（Flutter） | 默认 | 用户可选 | 通过 `ThemeExtension`（`AppColors` light/dark）+ `MaterialApp.themeMode` 实现 |
+| TV（Kotlin） | — | 固定 | TV 客厅场景固定深色，无切换 |
+
+### PAD 暗色 token 取值
+
+与 TV 深色分工对齐（同用 slate ramp，底色取向一致）。语义 token 名不变（`textWhite`/`textMuted`/`borderMuted` 等），亮暗取值不同：
+
+| Token | 亮色（默认） | 暗色 | 说明 |
+|---|---|---|---|
+| `backgroundColor` | `slate50` `#F8FAFC` | `slate900` `#0F172A` | 页面背景 |
+| `cardColor` | `#FFFFFF` | `slate800` `#1E293B` | 卡片/容器底 |
+| `textWhite`（主文字） | `slate800` `#1E293B` | `slate100` `#F1F5F9` | 深底取浅、浅底取深 |
+| `textMuted`（静音文字） | `slate500` `#64748B` | `slate400` `#94A3B8` | |
+| `borderMuted`（边框） | `slate200` `#E2E8F0` | `slate700` `#334155` | |
+| `primaryColor`/`accentGreen`/`accentOrange` | 两端一致 | 两端一致 | 品牌色不随明暗变 |
+| 渐变（brand/levelBadge/学科渐变） | 两端一致 | 两端一致 | 品牌渐变跨端共享 |
+
+### 暗色实现要点
+
+- **不随主题切换的固定色**：状态语义色块（正确绿 `#ECFDF5`、错误红 `#FEF2F2`、选中紫 `#F5F3FF`、警告琥珀 `#FFFBEB`）——亮暗通用，保留浅色块以保证状态辨识；代码块/表格装饰色（slate100 底）同理保留浅色块。
+- **视频播放器**：黑底是固有需求（视频本身黑底），亮暗模式下播放器 overlay 控件保持白图标/深底，不跟随主题。
+- **context 感知取色**：业务代码用 `context.colors.xxx`（`AppColorsX` 扩展，从 `Theme.of(context).extension<AppColors>()` 读取）；`AppTheme.xxx` 静态常量保留为浅色默认值，供 const 上下文（渐变、工厂构造默认值）使用。
+
+---
+
 ## 参考实现
 
-- **PAD（Flutter）**：`frontend/lib/theme.dart` 的 `AppTheme` 类。色板/渐变/圆角/`switchDecoration`（焦点 BoxDecoration helper）全部在此。
+- **PAD（Flutter）**：
+  - `frontend/lib/theme/app_colors.dart` —— `AppColors`（ThemeExtension，亮/暗两套语义 token）+ `AppColorsX`（context.colors 扩展）。
+  - `frontend/lib/theme.dart` —— `AppTheme` 门面：`lightTheme`/`darkTheme` ThemeData 构建、渐变/圆角/`switchDecoration`/`getSubjectGradientFromColor` 等亮度无关常量与 helper。
+  - `frontend/lib/service/theme_prefs.dart` —— `ThemePrefs`（ChangeNotifier，三态持久化 + `themeMode`）。
 - **TV（Kotlin）**：`tv-android/app/src/main/java/com/revin/studyquest/tv/ui/theme/`（阶段 1 Agent B 实现 `StudyQuestTheme` + `Color.kt` + `Type.kt` + `Shape.kt`）。
 
 两端 token 改动 → 改本文档 → 两端同步。

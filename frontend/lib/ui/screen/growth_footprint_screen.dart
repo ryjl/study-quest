@@ -59,6 +59,8 @@ class GrowthFootprintScreen extends StatelessWidget {
 
         final completedCount = progressList.where((p) => p.isCompleted).length;
 
+        final colors = context.colors;
+
         // Real accumulated study minutes from watch-seconds across all episodes.
         final totalWatchSeconds =
             progressList.fold<int>(0, (sum, p) => sum + p.watchSeconds);
@@ -86,7 +88,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                   fontFamily: 'Quicksand',
                   fontSize: isPortrait(context) ? 22 : 28,
                   fontWeight: FontWeight.w900,
-                  color: AppTheme.textWhite,
+                  color: colors.textWhite,
                 ),
               ),
               const SizedBox(height: 6),
@@ -94,7 +96,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                 '看看你取得了多少成就！',
                 style: TextStyle(
                   fontSize: 14,
-                  color: AppTheme.textMuted,
+                  color: colors.textMuted,
                   fontWeight: FontWeight.bold,
                 ),
               ),
@@ -152,6 +154,7 @@ class GrowthFootprintScreen extends StatelessWidget {
     required int completedCount,
   }) {
     final compact = isPortrait(context);
+    final colors = context.colors;
     final gap = compact ? const SizedBox(height: 16) : const SizedBox(width: 24);
 
     Widget card1 = _metricCard(
@@ -167,7 +170,7 @@ class GrowthFootprintScreen extends StatelessWidget {
       gradient: const [Color(0xFF3B82F6), Color(0xFF60A5FA)],
       shadowColor: const Color(0xFF3B82F6),
       label: '专注学习时长',
-      labelColor: AppTheme.blue100,
+      labelColor: colors.blue100,
       icon: Icons.watch_later_rounded,
       value: '$studyMinutes',
       unit: '分钟',
@@ -273,6 +276,7 @@ class GrowthFootprintScreen extends StatelessWidget {
 
   /// Left bento panel: recent points-ledger activity (timeline).
   Widget _buildTimelinePanel(BuildContext context, List<PointsLedger> ledger) {
+    final colors = context.colors;
     return GlassPanel(
       padding: EdgeInsets.all(isPortrait(context) ? 20 : 32),
       child: Column(
@@ -283,15 +287,15 @@ class GrowthFootprintScreen extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: AppTheme.blue100,
+                  color: colors.blue100,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.history_rounded, color: AppTheme.blue600, size: 24),
+                child: Icon(Icons.history_rounded, color: colors.blue600, size: 24),
               ),
               const SizedBox(width: 14),
-              const Text(
+              Text(
                 '最近动态',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.textWhite),
               ),
             ],
           ),
@@ -299,10 +303,10 @@ class GrowthFootprintScreen extends StatelessWidget {
 
           // Dynamic timeline items
           if (ledger.isEmpty)
-            const SizedBox(
+            SizedBox(
               height: 200,
               child: Center(
-                child: Text('暂无最近活动', style: TextStyle(color: AppTheme.textMuted)),
+                child: Text('暂无最近活动', style: TextStyle(color: colors.textMuted)),
               ),
             )
           else
@@ -323,7 +327,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                         width: 44,
                         height: 44,
                         decoration: BoxDecoration(
-                          color: AppTheme.blue100,
+                          color: colors.blue100,
                           shape: BoxShape.circle,
                           border: Border.all(color: Colors.white, width: 3),
                           boxShadow: const [
@@ -344,9 +348,9 @@ class GrowthFootprintScreen extends StatelessWidget {
                         child: Container(
                           padding: const EdgeInsets.all(16),
                           decoration: BoxDecoration(
-                            color: const Color(0xFFF8FAFC),
+                            color: colors.backgroundColor,
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: AppTheme.borderMuted),
+                            border: Border.all(color: colors.borderMuted),
                           ),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -366,7 +370,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                                     const SizedBox(height: 4),
                                     Text(
                                       formatLedgerTime(item.createdAt),
-                                      style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
+                                      style: TextStyle(color: colors.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
                                     ),
                                   ],
                                 ),
@@ -376,12 +380,12 @@ class GrowthFootprintScreen extends StatelessWidget {
                                 decoration: BoxDecoration(
                                   color: isGain
                                       ? const Color(0xFFFFEDD5)
-                                      : AppTheme.slate100,
+                                      : colors.slate100,
                                   borderRadius: BorderRadius.circular(10),
                                   border: Border.all(
                                     color: isGain
                                         ? const Color(0xFFFFDBB5)
-                                        : AppTheme.borderMuted,
+                                        : colors.borderMuted,
                                   ),
                                 ),
                                 child: Text(
@@ -389,7 +393,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                                   style: TextStyle(
                                     color: isGain
                                         ? AppTheme.accentOrange
-                                        : AppTheme.textMuted,
+                                        : colors.textMuted,
                                     fontWeight: FontWeight.w900,
                                     fontSize: 13,
                                   ),
@@ -411,6 +415,7 @@ class GrowthFootprintScreen extends StatelessWidget {
 
   /// Right bento panel: honor wall (badge list).
   Widget _buildBadgeWallPanel(BuildContext context, List<BadgeStatus> badges, int unlockedStars, int totalStars) {
+    final colors = context.colors;
     return GlassPanel(
       padding: EdgeInsets.all(isPortrait(context) ? 20 : 32),
       child: Column(
@@ -427,9 +432,9 @@ class GrowthFootprintScreen extends StatelessWidget {
                 child: const Icon(Icons.military_tech_rounded, color: Color(0xFFD97706), size: 24),
               ),
               const SizedBox(width: 14),
-              const Text(
+              Text(
                 '荣誉墙',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: colors.textWhite),
               ),
             ],
           ),
@@ -437,17 +442,17 @@ class GrowthFootprintScreen extends StatelessWidget {
 
           // Badges widgets (real data)
           if (badges.isEmpty)
-            const SizedBox(
+            SizedBox(
               height: 120,
               child: Center(
-                child: Text('暂无成就', style: TextStyle(color: AppTheme.textMuted)),
+                child: Text('暂无成就', style: TextStyle(color: colors.textMuted)),
               ),
             )
           else
             Column(
               children: [
                 for (int i = 0; i < badges.length; i++) ...[
-                  _buildBadgeItem(badges[i]),
+                  _buildBadgeItem(context, badges[i]),
                   if (i < badges.length - 1) const SizedBox(height: 16),
                 ],
               ],
@@ -476,7 +481,8 @@ class GrowthFootprintScreen extends StatelessWidget {
 
   /// One badge row in the honor wall. Multi-tier badges show tier dots + a
   /// progress bar toward the next tier; single-tier badges show lock/unlock.
-  Widget _buildBadgeItem(BadgeStatus st) {
+  Widget _buildBadgeItem(BuildContext context, BadgeStatus st) {
+    final colors = context.colors;
     final unlocked = st.unlocked;
     final token = BadgeStyle.tokenFor(st.badge.code, st.badge.ruleType);
     final icon = token.icon;
@@ -489,10 +495,10 @@ class GrowthFootprintScreen extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: colors.cardColor,
           borderRadius: BorderRadius.circular(20),
           border: Border.all(
-            color: unlocked ? AppTheme.borderMuted : AppTheme.slate100,
+            color: unlocked ? colors.borderMuted : colors.slate100,
             width: 2,
           ),
         ),
@@ -517,7 +523,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                       Flexible(
                         child: Text(
                           st.badge.title,
-                          style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: AppTheme.textWhite),
+                          style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15, color: colors.textWhite),
                         ),
                       ),
                       if (multiTier && unlocked && st.tier >= st.tierCount - 1) ...[
@@ -529,17 +535,17 @@ class GrowthFootprintScreen extends StatelessWidget {
                   const SizedBox(height: 4),
                   Text(
                     st.badge.description,
-                    style: const TextStyle(color: AppTheme.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
+                    style: TextStyle(color: colors.textMuted, fontSize: 11, fontWeight: FontWeight.bold),
                   ),
                   if (multiTier) ...[
                     const SizedBox(height: 8),
-                    _buildTierProgress(st),
+                    _buildTierProgress(context, st),
                   ],
                 ],
               ),
             ),
             if (!multiTier && !unlocked)
-              const Icon(Icons.lock_rounded, color: AppTheme.slate400, size: 16),
+              Icon(Icons.lock_rounded, color: colors.slate400, size: 16),
           ],
         ),
       ),
@@ -547,7 +553,8 @@ class GrowthFootprintScreen extends StatelessWidget {
   }
 
   /// Tier dots (●●●○○) + a progress bar showing progress → next tier.
-  Widget _buildTierProgress(BadgeStatus st) {
+  Widget _buildTierProgress(BuildContext context, BadgeStatus st) {
+    final colors = context.colors;
     final cleared = st.tier + 1; // 0 if none cleared
     final total = st.tierCount;
     final maxed = st.tier >= 0 && st.tier >= total - 1;
@@ -560,7 +567,7 @@ class GrowthFootprintScreen extends StatelessWidget {
           Icon(
             i <= st.tier ? Icons.circle : Icons.circle_outlined,
             size: 8,
-            color: i <= st.tier ? BadgeStyle.colorFor(st.badge.ruleType) : const Color(0xFFCBD5E1),
+            color: i <= st.tier ? BadgeStyle.colorFor(st.badge.ruleType) : colors.slate300,
           ),
         ],
         const SizedBox(width: 8),
@@ -569,7 +576,7 @@ class GrowthFootprintScreen extends StatelessWidget {
           style: TextStyle(
             fontSize: 10,
             fontWeight: FontWeight.w900,
-            color: maxed ? const Color(0xFFF59E0B) : AppTheme.textMuted,
+            color: maxed ? const Color(0xFFF59E0B) : colors.textMuted,
           ),
         ),
       ],
@@ -595,7 +602,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                 child: LinearProgressIndicator(
                   value: frac,
                   minHeight: 5,
-                  backgroundColor: AppTheme.slate100,
+                  backgroundColor: colors.slate100,
                   valueColor: AlwaysStoppedAnimation<Color>(BadgeStyle.colorFor(st.badge.ruleType)),
                 ),
               ),
@@ -603,7 +610,7 @@ class GrowthFootprintScreen extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               '${st.progress}/${st.nextTier}',
-              style: const TextStyle(fontSize: 9, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: 9, color: colors.textMuted, fontWeight: FontWeight.bold),
             ),
           ],
         ),

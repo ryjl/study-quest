@@ -13,9 +13,9 @@ import 'button_3d.dart';
 
 /// The standard loading spinner shown while a FutureBuilder is awaiting.
 /// Wraps a primary-colored CircularProgressIndicator in a Center.
-Widget loadingSpinner() {
-  return const Center(
-    child: CircularProgressIndicator(color: AppTheme.primaryColor),
+Widget loadingSpinner(BuildContext context) {
+  return Center(
+    child: CircularProgressIndicator(color: context.colors.primaryColor),
   );
 }
 
@@ -24,16 +24,17 @@ Widget loadingSpinner() {
 /// [onRetry] is the refresh callback (e.g. the screen's `_loadData`).
 /// [message] is the headline (defaults to a generic failure line; callers pass
 /// a screen-specific one when appropriate).
-Widget errorStateBox(String error, VoidCallback onRetry, {String message = '加载失败，请重试！'}) {
+Widget errorStateBox(BuildContext context, String error, VoidCallback onRetry, {String message = '加载失败，请重试！'}) {
+  final colors = context.colors;
   return Center(
     child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         const Icon(Icons.error_outline, size: 48, color: Colors.redAccent),
         const SizedBox(height: 16),
-        Text(message, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(message, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colors.textWhite)),
         const SizedBox(height: 8),
-        Text(error, style: const TextStyle(color: AppTheme.textMuted), textAlign: TextAlign.center),
+        Text(error, style: TextStyle(color: colors.textMuted), textAlign: TextAlign.center),
         const SizedBox(height: 24),
         Button3D.blue(onPressed: onRetry, child: const Text('重试加载')),
       ],
@@ -43,21 +44,23 @@ Widget errorStateBox(String error, VoidCallback onRetry, {String message = '加�
 
 /// A centered empty state with an icon, headline, hint, and optional refresh.
 Widget emptyStateBox({
+  required BuildContext context,
   required IconData icon,
   required String headline,
   required String hint,
   String refreshLabel = '刷新',
   VoidCallback? onRefresh,
 }) {
+  final colors = context.colors;
   return Center(
     child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(icon, size: 56, color: AppTheme.textMuted),
+        Icon(icon, size: 56, color: colors.textMuted),
         const SizedBox(height: 16),
-        Text(headline, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        Text(headline, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colors.textWhite)),
         const SizedBox(height: 8),
-        Text(hint, style: const TextStyle(fontSize: 13, color: AppTheme.textMuted), textAlign: TextAlign.center),
+        Text(hint, style: TextStyle(fontSize: 13, color: colors.textMuted), textAlign: TextAlign.center),
         if (onRefresh != null) ...[
           const SizedBox(height: 24),
           Button3D.blue(onPressed: onRefresh, child: Text(refreshLabel)),

@@ -56,10 +56,10 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
         future: _readingRoomFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return loadingSpinner();
+            return loadingSpinner(context);
           }
           if (snapshot.hasError) {
-            return errorStateBox(snapshot.error.toString(), _loadData,
+            return errorStateBox(context, snapshot.error.toString(), _loadData,
                 message: '加载阅读室失败，请检查网络！');
           }
 
@@ -79,6 +79,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
           final isEmpty = filteredSeries.isEmpty &&
               filteredBooks.isEmpty &&
               filteredArticles.isEmpty;
+          final colors = context.colors;
 
           return FocusTraversalGroup(
             child: Padding(
@@ -93,22 +94,22 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
                     children: [
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: const [
+                        children: [
                           Text(
                             '阅读室',
                             style: TextStyle(
                               fontFamily: 'Quicksand',
                               fontSize: 32,
                               fontWeight: FontWeight.w900,
-                              color: AppTheme.textWhite,
+                              color: colors.textWhite,
                             ),
                           ),
-                          SizedBox(height: 6),
+                          const SizedBox(height: 6),
                           Text(
                             '翻开一本书，开启一段旅程 📖',
                             style: TextStyle(
                               fontSize: 15,
-                              color: AppTheme.textMuted,
+                              color: colors.textMuted,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -122,25 +123,25 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
                   TextField(
                     focusNode: _searchFocusNode,
                     onChanged: (val) => setState(() => _searchQuery = val),
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: colors.textWhite),
                     decoration: InputDecoration(
                       hintText: '搜索书名或文章...',
-                      hintStyle: const TextStyle(color: AppTheme.textMuted),
-                      prefixIcon: const Icon(Icons.search_rounded, color: AppTheme.textMuted),
+                      hintStyle: TextStyle(color: colors.textMuted),
+                      prefixIcon: Icon(Icons.search_rounded, color: colors.textMuted),
                       filled: true,
-                      fillColor: Colors.white,
+                      fillColor: colors.cardColor,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
+                        borderSide: BorderSide(color: colors.borderMuted, width: 2.0),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2.0),
+                        borderSide: BorderSide(color: colors.primaryColor, width: 2.0),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),
-                        borderSide: const BorderSide(color: Color(0xFFE2E8F0), width: 2.0),
+                        borderSide: BorderSide(color: colors.borderMuted, width: 2.0),
                       ),
                     ),
                   ),
@@ -148,6 +149,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
 
                   if (isEmpty)
                     emptyStateBox(
+                      context: context,
                       icon: Icons.menu_book_outlined,
                       headline: '阅读室还没有内容',
                       hint: '请让爸爸妈妈在后台分配阅读资源吧！',
@@ -157,7 +159,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
                   else ...[
                     // Series section — bookshelf rows
                     if (filteredSeries.isNotEmpty) ...[
-                      _sectionTitle('📚 系列'),
+                      _sectionTitle(context, '📚 系列'),
                       const SizedBox(height: 12),
                       ...filteredSeries.map((s) => _buildSeriesShelfRow(s)),
                       if (filteredBooks.isNotEmpty || filteredArticles.isNotEmpty)
@@ -166,7 +168,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
 
                     // Standalone books section
                     if (filteredBooks.isNotEmpty) ...[
-                      _sectionTitle('📕 单本（PDF）'),
+                      _sectionTitle(context, '📕 单本（PDF）'),
                       const SizedBox(height: 12),
                       _buildBookShelfRow(filteredBooks),
                       if (filteredArticles.isNotEmpty)
@@ -175,7 +177,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
 
                     // Standalone articles section
                     if (filteredArticles.isNotEmpty) ...[
-                      _sectionTitle('🌐 单文（网页）'),
+                      _sectionTitle(context, '🌐 单文（网页）'),
                       const SizedBox(height: 12),
                       _buildArticleShelfRow(filteredArticles),
                     ],
@@ -190,7 +192,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
     );
   }
 
-  Widget _sectionTitle(String text) => sectionTitle(text);
+  Widget _sectionTitle(BuildContext context, String text) => sectionTitle(context, text);
 
   /// A series shelf row: a "bookshelf board" with the series cover + title,
   /// tappable to enter the series detail.
@@ -202,7 +204,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
       child: FocusButton(
         padding: EdgeInsets.zero,
         borderRadius: 20,
-        borderColor: const Color(0xFFE2E8F0),
+        borderColor: context.colors.borderMuted,
         onPressed: () {
           Navigator.push(
             context,
@@ -248,7 +250,7 @@ class _ReadingRoomScreenState extends State<ReadingRoomScreen> {
 
   /// The "bookshelf board" — a semi-transparent gradient container with a
   /// dark bottom border simulating the shelf edge.
-  Widget _buildShelfBoard({required List<Widget> children}) => buildShelfBoard(children: children);
+  Widget _buildShelfBoard({required List<Widget> children}) => buildShelfBoard(context, children: children);
 
   /// Cover tile for a standalone book — tilted with shadow, tappable.
   Widget _buildBookCover(ReadingBook book) {

@@ -45,6 +45,7 @@ class _LoginScreenState extends State<LoginScreen> {
     // 跳不到「取消 / 保存并重试」按钮。dpadEscapeFocusNode 在 EditableText 之前
     // 截断方向键转 nextFocus/previousFocus,字母数字回车放行给输入。
     final ipFocusNode = dpadEscapeFocusNode();
+    final colors = context.colors;
     showDialog(
       context: context,
       barrierDismissible: true,
@@ -53,14 +54,14 @@ class _LoginScreenState extends State<LoginScreen> {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(24),
           ),
-          backgroundColor: Colors.white,
+          backgroundColor: colors.cardColor,
           title: Row(
-            children: const [
-              Icon(Icons.lan_rounded, color: AppTheme.primaryColor, size: 28),
-              SizedBox(width: 12),
+            children: [
+              Icon(Icons.lan_rounded, color: colors.primaryColor, size: 28),
+              const SizedBox(width: 12),
               Text(
                 '配置服务器地址',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: AppTheme.textWhite),
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 20, color: colors.textWhite),
               ),
             ],
           ),
@@ -68,41 +69,41 @@ class _LoginScreenState extends State<LoginScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
+              Text(
                 '请输入后端 API 的局域网或外网穿透地址：',
-                style: TextStyle(fontSize: 14, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                style: TextStyle(fontSize: 14, color: colors.textMuted, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
               TextField(
                 controller: controller,
                 focusNode: ipFocusNode,
                 autofocus: true,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 16, fontWeight: FontWeight.bold, color: AppTheme.textWhite),
+                style: TextStyle(fontFamily: 'monospace', fontSize: 16, fontWeight: FontWeight.bold, color: colors.textWhite),
                 decoration: InputDecoration(
                   filled: true,
-                  fillColor: const Color(0xFFF1F5F9),
+                  fillColor: colors.slate100,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: Color(0xFFCBD5E1), width: 1.5),
+                    borderSide: BorderSide(color: colors.slate300, width: 1.5),
                   ),
                   focusedBorder: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
-                    borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2),
+                    borderSide: BorderSide(color: colors.primaryColor, width: 2),
                   ),
                   hintText: 'http://192.168.x.x:8080',
-                  hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+                  hintStyle: TextStyle(color: colors.slate400),
                 ),
               ),
               const SizedBox(height: 12),
               Row(
-                children: const [
-                  Icon(Icons.info_rounded, color: AppTheme.textMuted, size: 14),
-                  SizedBox(width: 6),
+                children: [
+                  Icon(Icons.info_rounded, color: colors.textMuted, size: 14),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       '例如 http://192.168.1.100:8080，请确保与后端在同一局域网',
-                      style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold),
+                      style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.bold),
                     ),
                   ),
                 ],
@@ -112,11 +113,11 @@ class _LoginScreenState extends State<LoginScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('取消', style: TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold, fontSize: 16)),
+              child: Text('取消', style: TextStyle(color: colors.textMuted, fontWeight: FontWeight.bold, fontSize: 16)),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primaryColor,
+                backgroundColor: colors.primaryColor,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
@@ -176,6 +177,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     // 整屏 FocusTraversalGroup:用户卡 / 设置按钮 / 错误态按钮 / PIN 键盘
     // 共享一个 reading-order 遍历链,D-pad 才能在它们之间自然移动。
     return FocusTraversalGroup(
@@ -191,12 +193,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 child: FocusButton(
                   padding: const EdgeInsets.all(12),
                   borderRadius: 16,
-                  baseColor: Colors.white.withValues(alpha: 0.8),
-                  borderColor: AppTheme.borderMuted,
+                  baseColor: colors.cardColor.withValues(alpha: 0.8),
+                  borderColor: colors.borderMuted,
                   onPressed: _showIpConfigDialog,
-                  child: const Icon(
+                  child: Icon(
                     Icons.settings_rounded,
-                    color: AppTheme.primaryColor,
+                    color: colors.primaryColor,
                     size: 28,
                   ),
                 ),
@@ -212,14 +214,14 @@ class _LoginScreenState extends State<LoginScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       // LOGO & Title
-                      const Text(
+                      Text(
                         'StudyQuest',
                         style: TextStyle(
                           fontFamily: 'Quicksand',
                           fontSize: 54,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 2,
-                          color: AppTheme.primaryColor,
+                          color: colors.primaryColor,
                         ),
                       ),
                       const SizedBox(height: 8),
@@ -229,7 +231,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 6,
-                          color: AppTheme.primaryColor.withValues(alpha: 0.7),
+                          color: colors.primaryColor.withValues(alpha: 0.7),
                         ),
                       ),
                       const SizedBox(height: 48),
@@ -239,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         future: _usersFuture,
                         builder: (context, snapshot) {
                           if (snapshot.connectionState == ConnectionState.waiting) {
-                            return const CircularProgressIndicator(color: AppTheme.primaryColor);
+                            return CircularProgressIndicator(color: colors.primaryColor);
                           }
                           if (snapshot.hasError) {
                             return _buildErrorBox(snapshot.error.toString());
@@ -311,6 +313,7 @@ class _LoginScreenState extends State<LoginScreen> {
 }
 
   Widget _buildUsersGrid(List<User> users) {
+    final colors = context.colors;
     return Wrap(
       spacing: 24,
       runSpacing: 24,
@@ -335,7 +338,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 height: 90,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 3),
+                  border: Border.all(color: colors.cardColor, width: 3),
                   image: user.avatarUrl.isNotEmpty
                       ? DecorationImage(
                           image: NetworkImage(user.avatarUrl),
@@ -344,18 +347,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       : null,
                 ),
                 child: user.avatarUrl.isEmpty
-                    ? const Icon(Icons.person, size: 44, color: AppTheme.textMuted)
+                    ? Icon(Icons.person, size: 44, color: colors.textMuted)
                     : null,
               ),
               const SizedBox(height: 14),
               // Nickname
               Text(
                 user.nickname,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'Quicksand',
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: AppTheme.textWhite,
+                  color: colors.textWhite,
                 ),
               ),
               const SizedBox(height: 6),
@@ -363,12 +366,12 @@ class _LoginScreenState extends State<LoginScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.05),
+                  color: colors.slate900.withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   user.role.toUpperCase(),
-                  style: const TextStyle(fontSize: 10, color: AppTheme.textMuted, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 10, color: colors.textMuted, fontWeight: FontWeight.bold),
                 ),
               ),
             ],
@@ -379,6 +382,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildErrorBox(String error) {
+    final colors = context.colors;
     return GlassPanel(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -386,14 +390,14 @@ class _LoginScreenState extends State<LoginScreen> {
         children: [
           const Icon(Icons.warning_amber_rounded, size: 48, color: Colors.redAccent),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             '无法连接到 StudyQuest 服务器',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppTheme.textWhite),
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colors.textWhite),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             '请检查您的局域网连接或配置正确的服务器 IP。',
-            style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+            style: TextStyle(color: colors.textMuted, fontSize: 14),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
@@ -409,9 +413,9 @@ class _LoginScreenState extends State<LoginScreen> {
               FocusButton(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 baseColor: Colors.transparent,
-                borderColor: AppTheme.primaryColor,
+                borderColor: colors.primaryColor,
                 onPressed: _showIpConfigDialog,
-                child: const Text('去配置 IP', style: TextStyle(color: AppTheme.primaryColor)),
+                child: Text('去配置 IP', style: TextStyle(color: colors.primaryColor)),
               ),
             ],
           ),
@@ -421,21 +425,22 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Widget _buildEmptyBox() {
+    final colors = context.colors;
     return GlassPanel(
       padding: const EdgeInsets.all(24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.supervised_user_circle, size: 48, color: AppTheme.textMuted),
+          Icon(Icons.supervised_user_circle, size: 48, color: colors.textMuted),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             '系统尚未创建任何用户',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: AppTheme.textWhite),
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: colors.textWhite),
           ),
           const SizedBox(height: 8),
-          const Text(
+          Text(
             '请登录后台管理系统 (Admin Web) 添加学生账户。',
-            style: TextStyle(color: AppTheme.textMuted, fontSize: 14),
+            style: TextStyle(color: colors.textMuted, fontSize: 14),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 20),

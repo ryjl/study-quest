@@ -182,11 +182,12 @@ class _MainNavigationState extends State<MainNavigation> {
   /// Bottom navigation bar for narrow/portrait layouts. Mirrors the four tabs
   /// in the sidebar ([_buildNavItem] order).
   Widget _buildBottomNav() {
+    final colors = context.colors;
     return BottomNavigationBar(
       type: BottomNavigationBarType.fixed,
       currentIndex: _selectedTab,
-      selectedItemColor: AppTheme.blue600,
-      unselectedItemColor: AppTheme.textMuted,
+      selectedItemColor: colors.blue600,
+      unselectedItemColor: colors.textMuted,
       selectedFontSize: 12,
       unselectedFontSize: 12,
       onTap: (i) {
@@ -215,11 +216,12 @@ class _MainNavigationState extends State<MainNavigation> {
   /// nickname and points in a single row — a slimmed-down version of the
   /// sidebar's profile card.
   Widget _buildCompactHeader(User user) {
+    final colors = context.colors;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(bottom: BorderSide(color: AppTheme.slate100, width: 1.5)),
+      decoration: BoxDecoration(
+        color: colors.cardColor,
+        border: Border(bottom: BorderSide(color: colors.slate100, width: 1.5)),
       ),
       child: Row(
         children: [
@@ -238,15 +240,15 @@ class _MainNavigationState extends State<MainNavigation> {
                   ),
                 ),
                 child: Container(
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: Colors.white,
+                    color: colors.cardColor,
                   ),
                   padding: const EdgeInsets.all(1.5),
                   child: ClipOval(
                     child: user.avatarUrl.isNotEmpty
                         ? Image.network(user.avatarUrl, fit: BoxFit.cover)
-                        : const Icon(Icons.person, color: AppTheme.textMuted, size: 20),
+                        : Icon(Icons.person, color: colors.textMuted, size: 20),
                   ),
                 ),
               ),
@@ -260,7 +262,7 @@ class _MainNavigationState extends State<MainNavigation> {
                       colors: [Color(0xFFFB923C), Color(0xFFFACC15)],
                     ),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: Colors.white, width: 1),
+                    border: Border.all(color: colors.cardColor, width: 1),
                   ),
                   child: Text(
                     'Lv.${_levelForPoints()}',
@@ -282,10 +284,10 @@ class _MainNavigationState extends State<MainNavigation> {
               children: [
                 Text(
                   user.nickname,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontWeight: FontWeight.w900,
                     fontSize: 14,
-                    color: AppTheme.textWhite,
+                    color: colors.textWhite,
                   ),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -293,9 +295,9 @@ class _MainNavigationState extends State<MainNavigation> {
                 const SizedBox(height: 2),
                 Text(
                   user.role == 'student' ? '四年级' : '家长',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 10,
-                    color: AppTheme.textMuted,
+                    color: colors.textMuted,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
@@ -332,23 +334,25 @@ class _MainNavigationState extends State<MainNavigation> {
   }
 
   Widget _buildSidebar(User? user) {
+    final colors = context.colors;
     return Container(
       width: 280,
-      decoration: const BoxDecoration(
-        color: Colors.white,
+      decoration: BoxDecoration(
+        color: colors.cardColor,
         border: Border(
-          right: BorderSide(color: AppTheme.slate100, width: 2.0),
+          right: BorderSide(color: colors.slate100, width: 2.0),
         ),
         boxShadow: [
           BoxShadow(
-            color: Color(0x0800000),
+            color: colors.slate900.withValues(alpha: 0.08),
             blurRadius: 30,
-            offset: Offset(8, 0),
+            offset: const Offset(8, 0),
           ),
         ],
       ),
       child: LayoutBuilder(
         builder: (context, constraints) {
+          final innerColors = context.colors;
           return SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
@@ -386,13 +390,13 @@ class _MainNavigationState extends State<MainNavigation> {
                             ),
                           ),
                           const SizedBox(width: 12),
-                          const Text(
+                          Text(
                             '学途奇旅',
                             style: TextStyle(
                               fontFamily: 'Quicksand',
                               fontWeight: FontWeight.w900,
                               fontSize: 20,
-                              color: AppTheme.textWhite,
+                              color: innerColors.textWhite,
                               letterSpacing: -0.5,
                             ),
                           ),
@@ -406,13 +410,14 @@ class _MainNavigationState extends State<MainNavigation> {
                         margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [AppTheme.blue100, Colors.white],
+                          // profile 卡用蓝白渐变;暗色下改成 cardColor 单色避免蓝→黑突兀。
+                          gradient: LinearGradient(
+                            colors: [innerColors.blue100, innerColors.cardColor],
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
                           ),
                           borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: const Color(0xFFDBEAFE), width: 1.0),
+                          border: Border.all(color: innerColors.slate200, width: 1.0),
                         ),
                         child: Column(
                           children: [
@@ -432,15 +437,15 @@ class _MainNavigationState extends State<MainNavigation> {
                                         ),
                                       ),
                                       child: Container(
-                                        decoration: const BoxDecoration(
+                                        decoration: BoxDecoration(
                                           shape: BoxShape.circle,
-                                          color: Colors.white,
+                                          color: innerColors.cardColor,
                                         ),
                                         padding: const EdgeInsets.all(2.0),
                                         child: ClipOval(
                                           child: user.avatarUrl.isNotEmpty
                                               ? Image.network(user.avatarUrl, fit: BoxFit.cover)
-                                              : const Icon(Icons.person, color: AppTheme.textMuted),
+                                              : Icon(Icons.person, color: innerColors.textMuted),
                                         ),
                                       ),
                                     ),
@@ -454,7 +459,7 @@ class _MainNavigationState extends State<MainNavigation> {
                                             colors: [Color(0xFFFB923C), Color(0xFFFACC15)],
                                           ),
                                           borderRadius: BorderRadius.circular(10),
-                                          border: Border.all(color: Colors.white, width: 1.5),
+                                          border: Border.all(color: innerColors.cardColor, width: 1.5),
                                         ),
                                         child: Text(
                                           'Lv.${_levelForPoints()}',
@@ -475,10 +480,10 @@ class _MainNavigationState extends State<MainNavigation> {
                                     children: [
                                       Text(
                                         user.nickname,
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontWeight: FontWeight.w900,
                                           fontSize: 18,
-                                          color: AppTheme.textWhite,
+                                          color: innerColors.textWhite,
                                         ),
                                         overflow: TextOverflow.ellipsis,
                                       ),
@@ -486,14 +491,14 @@ class _MainNavigationState extends State<MainNavigation> {
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                                         decoration: BoxDecoration(
-                                          color: AppTheme.borderMuted,
+                                          color: innerColors.borderMuted,
                                           borderRadius: BorderRadius.circular(6),
                                         ),
                                         child: Text(
                                           user.role == 'student' ? '四年级' : '家长',
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 10,
-                                            color: AppTheme.textMuted,
+                                            color: innerColors.textMuted,
                                             fontWeight: FontWeight.bold,
                                           ),
                                         ),
@@ -508,12 +513,12 @@ class _MainNavigationState extends State<MainNavigation> {
                             Container(
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
-                                color: Colors.white,
+                                color: innerColors.cardColor,
                                 borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: AppTheme.borderMuted),
+                                border: Border.all(color: innerColors.borderMuted),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppTheme.slate900.withValues(alpha: 0.04),
+                                    color: innerColors.slate900.withValues(alpha: 0.04),
                                     blurRadius: 8,
                                     offset: const Offset(0, 2),
                                   ),
@@ -534,12 +539,12 @@ class _MainNavigationState extends State<MainNavigation> {
                                         child: const Icon(Icons.star_rounded, color: AppTheme.accentOrange, size: 18),
                                       ),
                                       const SizedBox(width: 8),
-                                      const Text(
+                                      Text(
                                         '我的积分',
                                         style: TextStyle(
                                           fontWeight: FontWeight.w800,
                                           fontSize: 13,
-                                          color: AppTheme.textWhite,
+                                          color: innerColors.textWhite,
                                         ),
                                       ),
                                     ],
@@ -589,13 +594,13 @@ class _MainNavigationState extends State<MainNavigation> {
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.logout_rounded, color: AppTheme.slate400, size: 18),
-                            SizedBox(width: 8),
+                          children: [
+                            Icon(Icons.logout_rounded, color: innerColors.slate400, size: 18),
+                            const SizedBox(width: 8),
                             Text(
                               '退出当前账号',
                               style: TextStyle(
-                                color: AppTheme.slate400,
+                                color: innerColors.slate400,
                                 fontWeight: FontWeight.bold,
                                 fontSize: 14,
                               ),
@@ -625,6 +630,7 @@ class _MainNavigationState extends State<MainNavigation> {
 
   // _buildNavItemWithBadge 同 _buildNavItem,但图标带未掌握数角标(错题本专用)。
   Widget _buildNavItemWithBadge(int index, IconData icon, String label, int badge) {
+    final colors = context.colors;
     return _buildNavItemRaw(
       index: index,
       icon: icon,
@@ -634,7 +640,7 @@ class _MainNavigationState extends State<MainNavigation> {
         label: Text('$badge'),
         child: Icon(
           icon,
-          color: _selectedTab == index ? AppTheme.blue600 : AppTheme.textMuted,
+          color: _selectedTab == index ? colors.blue600 : colors.textMuted,
           size: 22,
         ),
       ),
@@ -648,13 +654,14 @@ class _MainNavigationState extends State<MainNavigation> {
     required Widget? iconWidget,
   }) {
     final active = _selectedTab == index;
+    final colors = context.colors;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       child: FocusButton(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         borderRadius: 20,
-        baseColor: active ? AppTheme.blue100 : Colors.transparent,
-        borderColor: active ? const Color(0xFFDBEAFE) : Colors.transparent,
+        baseColor: active ? colors.blue100 : Colors.transparent,
+        borderColor: active ? colors.slate200 : Colors.transparent,
         onPressed: () {
           setState(() => _selectedTab = index);
           _loadUserPoints();
@@ -667,7 +674,7 @@ class _MainNavigationState extends State<MainNavigation> {
                 width: 5,
                 height: 24,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF3B82F6),
+                  color: colors.primaryColor,
                   borderRadius: BorderRadius.circular(3),
                 ),
               ),
@@ -675,7 +682,7 @@ class _MainNavigationState extends State<MainNavigation> {
             iconWidget ??
                 Icon(
                   icon,
-                  color: active ? AppTheme.blue600 : AppTheme.textMuted,
+                  color: active ? colors.blue600 : colors.textMuted,
                   size: 22,
                 ),
             const SizedBox(width: 16),
@@ -685,7 +692,7 @@ class _MainNavigationState extends State<MainNavigation> {
                 style: TextStyle(
                   fontWeight: FontWeight.bold,
                   fontSize: 15,
-                  color: active ? AppTheme.blue600 : AppTheme.textMuted,
+                  color: active ? colors.blue600 : colors.textMuted,
                   fontFamily: 'Quicksand',
                 ),
               ),

@@ -202,6 +202,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   Widget _buildBody() {
+    final colors = context.colors;
     if (_error != null) {
       return Center(
         child: Padding(
@@ -212,7 +213,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
               const Icon(Icons.error_outline, size: 64, color: Colors.red),
               const SizedBox(height: 16),
               Text(_error!, textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppTheme.textMuted)),
+                  style: TextStyle(color: colors.textMuted)),
               const SizedBox(height: 16),
               ElevatedButton(
                 onPressed: () {
@@ -236,13 +237,13 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             children: [
               const CircularProgressIndicator(),
               const SizedBox(height: 16),
-              const Text('正在下载 PDF...', style: TextStyle(color: AppTheme.textMuted)),
+              Text('正在下载 PDF...', style: TextStyle(color: colors.textMuted)),
               if (_downloadProgress > 0) ...[
                 const SizedBox(height: 8),
                 Text(
                   '${(_downloadProgress * 100).round()}%',
-                  style: const TextStyle(
-                    color: AppTheme.primaryColor,
+                  style: TextStyle(
+                    color: colors.primaryColor,
                     fontWeight: FontWeight.bold,
                   ),
                 ),

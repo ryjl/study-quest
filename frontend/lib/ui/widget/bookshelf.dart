@@ -10,20 +10,23 @@ import 'tv_focus.dart';
 /// kill a ~100-line copy-paste of `_buildCoverTile` plus its three peers.
 
 /// Section heading used above each shelf row.
-Widget sectionTitle(String text) {
+Widget sectionTitle(BuildContext context, String text) {
   return Text(
     text,
-    style: const TextStyle(
+    style: TextStyle(
       fontSize: 18,
       fontWeight: FontWeight.w900,
-      color: AppTheme.textWhite,
+      color: context.colors.textWhite,
     ),
   );
 }
 
 /// The "bookshelf board" — a semi-transparent gradient container with a
 /// dark bottom border simulating the shelf edge.
-Widget buildShelfBoard({required List<Widget> children}) {
+///
+/// 暖色渐变(木质书架外观)与主题明暗无关 —— 书架本身就是木色拟物,亮暗模式下
+/// 都保留这个暖色底,只让边框跟随主题。
+Widget buildShelfBoard(BuildContext context, {required List<Widget> children}) {
   return Container(
     width: double.infinity,
     padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
@@ -34,7 +37,7 @@ Widget buildShelfBoard({required List<Widget> children}) {
         colors: [Color(0xFFFFF7ED), Color(0xFFFEF3C7)],
       ),
       borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: AppTheme.borderMuted, width: 2.0),
+      border: Border.all(color: context.colors.borderMuted, width: 2.0),
     ),
     child: Wrap(
       spacing: 16,
@@ -102,6 +105,7 @@ class _BookCoverTileState extends State<BookCoverTile> {
     const coverHeight = 180.0;
     // onTap 为 null 时(占位空槽位)不需要聚焦,直接渲染纯视觉。
     final tappable = widget.onTap != null;
+    final colors = context.colors;
     final tile = Transform.rotate(
       angle: -0.03,
       child: AnimatedContainer(
@@ -111,12 +115,12 @@ class _BookCoverTileState extends State<BookCoverTile> {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           border: _focused
-              ? Border.all(color: AppTheme.primaryColor, width: 2.5)
+              ? Border.all(color: colors.primaryColor, width: 2.5)
               : null,
           boxShadow: [
             BoxShadow(
               color: _focused
-                  ? AppTheme.primaryColor.withValues(alpha: 0.45)
+                  ? colors.primaryColor.withValues(alpha: 0.45)
                   : const Color(0x33000000),
               blurRadius: _focused ? 16 : 8,
               offset: Offset(3, _focused ? 0 : 5),
@@ -163,15 +167,15 @@ class _BookCoverTileState extends State<BookCoverTile> {
                 children: [
                   Row(
                     children: [
-                      Icon(widget.badgeIcon, size: 14, color: AppTheme.textMuted),
+                      Icon(widget.badgeIcon, size: 14, color: colors.textMuted),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
                           widget.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
-                            color: AppTheme.textWhite,
+                            color: colors.textWhite,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -181,7 +185,7 @@ class _BookCoverTileState extends State<BookCoverTile> {
                   ),
                   Text(
                     widget.subtitle,
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                    style: TextStyle(fontSize: 11, color: colors.textMuted),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),

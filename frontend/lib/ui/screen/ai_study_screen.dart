@@ -441,28 +441,29 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     // TV 模式强制最大档(1.4)——TV 上靠远距离观看,且 TV 不渲染字号调整按钮,
     // 用一个 effectiveScale 统一覆盖所有 MarkdownView / Text 的缩放,避免读 UiPrefs。
     final double effectiveScale =
         TvMode.instance.isActive ? 1.4 : UiPrefs.instance.aiTextScale;
     return Scaffold(
-      backgroundColor: const Color(0xFFF8FAFC),
+      backgroundColor: colors.backgroundColor,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: colors.cardColor,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_rounded, color: AppTheme.textMuted),
+          icon: Icon(Icons.arrow_back_rounded, color: colors.textMuted),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
           widget.episode.title,
-          style: const TextStyle(color: AppTheme.slate900, fontSize: 16, fontWeight: FontWeight.w600),
+          style: TextStyle(color: colors.slate900, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         // 字号调整按钮(需求 #6)。TV 模式下隐藏——TV 永远走最大档,调了也没用。
         actions: [
           if (!TvMode.instance.isActive)
             IconButton(
-              icon: const Icon(Icons.format_size_rounded, color: AppTheme.textMuted),
+              icon: Icon(Icons.format_size_rounded, color: colors.textMuted),
               tooltip: '字号',
               onPressed: () => _showTextScaleMenu(context),
             ),
@@ -494,14 +495,15 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // 选中后写 SharedPreferences 持久化 + setState 触发整页重建,所有 MarkdownView
   // 的 textScale 跟着更新。沿用 _showFilterBottomSheet 的风格(圆角顶部 + 白底)。
   void _showTextScaleMenu(BuildContext context) {
+    final colors = context.colors;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (sheetCtx) {
         return Container(
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          decoration: BoxDecoration(
+            color: colors.cardColor,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: Column(
@@ -511,9 +513,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(children: [
-                  const Icon(Icons.format_size_rounded, size: 18, color: AppTheme.slate900),
+                  Icon(Icons.format_size_rounded, size: 18, color: colors.slate900),
                   const SizedBox(width: 8),
-                  const Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+                  Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.slate900)),
                 ]),
               ),
               for (int i = 0; i < UiPrefs.aiScaleLabels.length; i++)
@@ -522,18 +524,18 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                     // 4 档依次给个大小递增的字号图标,直观表达档位语义。
                     [Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded][i],
                     size: [16, 20, 24, 28][i].toDouble(),
-                    color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : AppTheme.slate400,
+                    color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : colors.slate400,
                   ),
                   title: Text(
                     UiPrefs.aiScaleLabels[i],
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: UiPrefs.instance.aiTextScaleIndex == i ? FontWeight.w700 : FontWeight.w500,
-                      color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : const Color(0xFF334155),
+                      color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : colors.slate700,
                     ),
                   ),
                   trailing: UiPrefs.instance.aiTextScaleIndex == i
-                      ? const Icon(Icons.check_rounded, color: AppTheme.violet500)
+                      ? Icon(Icons.check_rounded, color: AppTheme.violet500)
                       : null,
                   onTap: () async {
                     await UiPrefs.instance.setAiTextScaleIndex(i);
@@ -561,6 +563,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     if (!_historyLoading && _history.isEmpty) {
       return const SizedBox.shrink();
     }
+    final colors = context.colors;
     return _Card(
       child: Theme(
         // Keep the per-quiz ExpansionTile visuals consistent with the card.
@@ -568,17 +571,17 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         child: ExpansionTile(
           initiallyExpanded: false,
           tilePadding: EdgeInsets.zero,
-          iconColor: AppTheme.textMuted,
-          collapsedIconColor: AppTheme.textMuted,
+          iconColor: colors.textMuted,
+          collapsedIconColor: colors.textMuted,
           title: Row(children: [
-            const Icon(Icons.history_rounded, size: 16, color: AppTheme.textMuted),
+            Icon(Icons.history_rounded, size: 16, color: colors.textMuted),
             const SizedBox(width: 6),
-            const Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+            Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.slate900)),
             const SizedBox(width: 8),
             if (_historyLoading)
               const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
             else
-              Text('${_history.length} 套', style: const TextStyle(fontSize: 12, color: AppTheme.slate400)),
+              Text('${_history.length} 套', style: TextStyle(fontSize: 12, color: colors.slate400)),
           ]),
           children: [
             for (final h in _history) _HistoryQuizCard(
@@ -603,16 +606,17 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     if (s == null || s.isEmpty) {
       return const SizedBox.shrink(); // no summary → hide, AI add-on absence is normal
     }
+    final colors = context.colors;
     return _Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
+        Row(children: [
           Icon(Icons.auto_awesome_rounded, size: 16, color: AppTheme.violet500),
-          SizedBox(width: 6),
-          Text('AI 重点总结', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+          const SizedBox(width: 6),
+          Text('AI 重点总结', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.slate900)),
         ]),
         if (s.headline.isNotEmpty) ...[
           const SizedBox(height: 10),
-          Text(s.headline, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1E293B))),
+          Text(s.headline, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: colors.textWhite)),
         ],
         // 知识点小节(Phase F):按知识点分组的结构化要点,比平铺更像学习笔记。
         // 优先展示 sections;如果老数据没有 sections 才回退到平铺 keyPoints。
@@ -628,7 +632,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                   ...sec.points.map((p) => _PointItem(
                         data: p,
                         textScale: textScale,
-                        textColor: const Color(0xFF334155),
+                        textColor: colors.slate700,
                       )),
                 ]),
               )),
@@ -637,7 +641,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           ...s.keyPoints.map((p) => _PointItem(
                 data: p,
                 textScale: textScale,
-                textColor: const Color(0xFF334155),
+                textColor: colors.slate700,
               )),
         ],
         // 方法/技巧/公式(Phase F):单独拎出来便于速查。
@@ -702,8 +706,8 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             children: s.concepts
                 .map((c) => Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(color: AppTheme.blue100, borderRadius: BorderRadius.circular(6)),
-                      child: Text(c, style: const TextStyle(fontSize: 11, color: Color(0xFF1D4ED8))),
+                      decoration: BoxDecoration(color: colors.blue100, borderRadius: BorderRadius.circular(6)),
+                      child: Text(c, style: TextStyle(fontSize: 11, color: colors.blue600)),
                     ))
                 .toList(),
           ),
@@ -731,15 +735,16 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // 时直接隐藏卡片——不做任何降级(quiz 的 agent_feedback 副产品不再在这里展示,
   // 避免和 advice 语义重复)。
   Widget _buildAdviceCard(double textScale) {
+    final colors = context.colors;
     // generating 态:advice 正在生成,展示占位卡片(比直接隐藏更连贯)。
     if (_adviceStatus == AdviceStatus.generating) {
-      return const _Card(
+      return _Card(
         child: Padding(
-          padding: EdgeInsets.all(16),
+          padding: const EdgeInsets.all(16),
           child: Row(children: [
-            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
-            SizedBox(width: 10),
-            Text('正在分析你的学习情况…', style: TextStyle(fontSize: 13, color: AppTheme.textMuted)),
+            const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+            const SizedBox(width: 10),
+            Text('正在分析你的学习情况…', style: TextStyle(fontSize: 13, color: colors.textMuted)),
           ]),
         ),
       );
@@ -751,10 +756,10 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     if (advice.isEmpty) return const SizedBox.shrink();
     return _Card(
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Row(children: [
-          Icon(Icons.lightbulb_outline_rounded, size: 16, color: Color(0xFFF59E0B)),
-          SizedBox(width: 6),
-          Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+        Row(children: [
+          Icon(Icons.lightbulb_outline_rounded, size: 16, color: const Color(0xFFF59E0B)),
+          const SizedBox(width: 6),
+          Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.slate900)),
         ]),
         const SizedBox(height: 8),
         // 学习建议正文是 agent 跨知识点综合分析,鼓励输出 markdown 列表/加粗/对比表格。
@@ -762,7 +767,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         MarkdownView(
           data: advice,
           textScale: textScale,
-          baseTextColor: const Color(0xFF334155),
+          baseTextColor: colors.slate700,
         ),
       ]),
     );
@@ -776,15 +781,16 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       return const _Card(child: Padding(padding: EdgeInsets.all(24), child: Center(child: CircularProgressIndicator())));
     }
     if (_quizStatus == QuizStatus.generating) {
-      return const _Card(
+      final colors = context.colors;
+      return _Card(
         child: Padding(
-          padding: EdgeInsets.all(32),
+          padding: const EdgeInsets.all(32),
           child: Column(children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 12),
-            Text('正在为你生成练习…', style: TextStyle(fontSize: 14, color: AppTheme.textMuted)),
-            SizedBox(height: 4),
-            Text('AI 正在分析这节课内容并针对你的学习情况出题', style: TextStyle(fontSize: 11, color: AppTheme.slate400)),
+            const CircularProgressIndicator(),
+            const SizedBox(height: 12),
+            Text('正在为你生成练习…', style: TextStyle(fontSize: 14, color: colors.textMuted)),
+            const SizedBox(height: 4),
+            Text('AI 正在分析这节课内容并针对你的学习情况出题', style: TextStyle(fontSize: 11, color: colors.slate400)),
           ]),
         ),
       );
@@ -809,16 +815,17 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     final questions = _quiz!.questions;
     // 交卷态:后端 quiz.submitted(重进已交卷的卷子)或本地 _submitted(刚点完提交全部)。
     final submitted = _quiz!.submitted || _submitted;
+    final colors = context.colors;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 8),
         child: Row(children: [
-          const Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+          Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.slate900)),
           const SizedBox(width: 8),
           if (submitted)
-            const Text('已交卷', style: TextStyle(fontSize: 12, color: AppTheme.accentGreen, fontWeight: FontWeight.w600))
+            Text('已交卷', style: TextStyle(fontSize: 12, color: AppTheme.accentGreen, fontWeight: FontWeight.w600))
           else
-            Text('${_answeredCount()}/${questions.length} 已答', style: const TextStyle(fontSize: 12, color: AppTheme.slate400)),
+            Text('${_answeredCount()}/${questions.length} 已答', style: TextStyle(fontSize: 12, color: colors.slate400)),
           const Spacer(),
           TextButton.icon(
             onPressed: _regenerate,
@@ -958,6 +965,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // done 态入口卡:已做过本节练习(上次交卷已归档),但当前没有 active quiz。
   // 不自动出新题——引导学生点「重新生成」主动做新一套,或去上方历史练习 review。
   Widget _buildDoneCard() {
+    final colors = context.colors;
     return _Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -965,13 +973,13 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           children: [
             const Icon(Icons.task_alt_rounded, size: 40, color: AppTheme.accentGreen),
             const SizedBox(height: 12),
-            const Text('本节练习已做完一套',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+            Text('本节练习已做完一套',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.slate900)),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               '上次的成绩已存进上方「历史练习」,点开可查看对错。\n想做一套新题?点下面按钮重新生成。',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.5),
+              style: TextStyle(fontSize: 12, color: colors.textMuted, height: 1.5),
             ),
             const SizedBox(height: 16),
             SizedBox(
@@ -1001,21 +1009,22 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // 点「重试生成」走 _regenerate → RegenerateQuiz,这条路径后端故意绕过冷却
   // (admin/用户主动行为 = escape hatch),所以冷却中学生仍能手动恢复。
   Widget _buildCoolingCard() {
+    final colors = context.colors;
     return _Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            const Icon(Icons.sentiment_neutral_rounded, size: 40, color: AppTheme.textMuted),
+            Icon(Icons.sentiment_neutral_rounded, size: 40, color: colors.textMuted),
             const SizedBox(height: 12),
-            const Text('AI 出题暂时卡住了',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: AppTheme.slate900)),
+            Text('AI 出题暂时卡住了',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.slate900)),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               '这节课的内容比较长,AI 多次尝试生成练习都没成功,已暂停自动重试。\n'
               '可以点下面按钮手动重试一次,或联系老师检查 AI 配置。',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 12, color: AppTheme.textMuted, height: 1.5),
+              style: TextStyle(fontSize: 12, color: colors.textMuted, height: 1.5),
             ),
             const SizedBox(height: 16),
             SizedBox(
@@ -1046,13 +1055,14 @@ class _Card extends StatelessWidget {
   const _Card({required this.child});
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: colors.cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppTheme.borderMuted),
+        border: Border.all(color: colors.borderMuted),
       ),
       child: child,
     );
@@ -1084,13 +1094,14 @@ class _HistoryQuizCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     // Header is always visible; questions only when expanded.
     return Container(
       margin: const EdgeInsets.only(top: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
+        color: colors.slate50,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppTheme.borderMuted),
+        border: Border.all(color: colors.borderMuted),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Header row (tap to toggle).
@@ -1101,16 +1112,16 @@ class _HistoryQuizCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
             child: Row(children: [
               Icon(expanded ? Icons.expand_less_rounded : Icons.chevron_right_rounded,
-                  size: 18, color: AppTheme.textMuted),
+                  size: 18, color: colors.textMuted),
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
                   // ArchivedAt is when it was superseded; fall back to generatedAt.
                   quiz.archivedAt.isNotEmpty ? quiz.archivedAt : quiz.generatedAt,
-                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF334155)),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.slate700),
                 ),
               ),
-              Text('${quiz.questionCount} 题', style: const TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+              Text('${quiz.questionCount} 题', style: TextStyle(fontSize: 11, color: colors.textMuted)),
               const SizedBox(width: 8),
               if (quiz.wrongCount > 0)
                 Container(

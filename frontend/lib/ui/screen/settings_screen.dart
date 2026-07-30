@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../service/theme_prefs.dart';
 import '../../service/tv_mode.dart';
 import '../../theme.dart';
 import '../responsive.dart';
@@ -55,6 +57,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     final compact = isPortrait(context);
+    final colors = context.colors;
     // 整屏 FocusTraversalGroup:IP 输入框 / 保存按钮 / 开关 / 清理按钮 /
     // 登出按钮共享一个 reading-order 遍历链,D-pad 才能在它们之间自然移动。
     return FocusTraversalGroup(
@@ -66,10 +69,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
           Text(
             '系统设置',
-            style: TextStyle(fontFamily: 'Quicksand', fontSize: compact ? 22 : 28, fontWeight: FontWeight.w900, color: AppTheme.textWhite),
+            style: TextStyle(fontFamily: 'Quicksand', fontSize: compact ? 22 : 28, fontWeight: FontWeight.w900, color: colors.textWhite),
           ),
           const SizedBox(height: 6),
-          const Text('配置你的专属学习环境 ⚙️', style: TextStyle(color: AppTheme.textMuted, fontWeight: FontWeight.bold)),
+          Text('配置你的专属学习环境 ⚙️', style: TextStyle(color: colors.textMuted, fontWeight: FontWeight.bold)),
           const SizedBox(height: 32),
 
           // Server settings card
@@ -85,18 +88,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Container(
                         padding: const EdgeInsets.all(8),
-                        decoration: const BoxDecoration(
-                          color: AppTheme.blue100,
+                        decoration: BoxDecoration(
+                          color: colors.blue100,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.shield_rounded, color: AppTheme.blue600, size: 24),
+                        child: Icon(Icons.shield_rounded, color: colors.blue600, size: 24),
                       ),
                       const SizedBox(width: 12),
-                      const Text('高级配置（家长专区）', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppTheme.textWhite)),
+                      Text('高级配置（家长专区）', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: colors.textWhite)),
                     ],
                   ),
                   const SizedBox(height: 24),
-                  const Text('后端 API 地址 (API Endpoint)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                  Text('后端 API 地址 (API Endpoint)', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
                   const SizedBox(height: 12),
                   // Wide: input + button side by side. Narrow: stacked so the
                   // text field gets full width and the button sits below it.
@@ -119,11 +122,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                   const SizedBox(height: 12),
                   Row(
-                    children: const [
-                      Icon(Icons.info_rounded, color: AppTheme.textMuted, size: 14),
-                      SizedBox(width: 6),
+                    children: [
+                      Icon(Icons.info_rounded, color: colors.textMuted, size: 14),
+                      const SizedBox(width: 6),
                       Expanded(
-                        child: Text('离开局域网时，请输入内网穿透或虚拟局域网（如 ZeroTier）的 API 地址。', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                        child: Text('离开局域网时，请输入内网穿透或虚拟局域网（如 ZeroTier）的 API 地址。', style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
                       ),
                     ],
                   ),
@@ -145,14 +148,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     children: [
                       Container(
                         padding: const EdgeInsets.all(8),
-                        decoration: const BoxDecoration(
-                          color: AppTheme.blue100,
+                        decoration: BoxDecoration(
+                          color: colors.blue100,
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.settings_suggest_rounded, color: AppTheme.blue600, size: 24),
+                        child: Icon(Icons.settings_suggest_rounded, color: colors.blue600, size: 24),
                       ),
                       const SizedBox(width: 12),
-                      const Text('播放设置（本地偏好）', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: AppTheme.textWhite)),
+                      Text('播放设置（本地偏好）', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18, color: colors.textWhite)),
                     ],
                   ),
                   const SizedBox(height: 24),
@@ -169,10 +172,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       return _tvFocusableTile(
                         SwitchListTile(
                           contentPadding: EdgeInsets.zero,
-                          title: const Text('硬件加速解码 (HW Acceleration)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
-                          subtitle: const Text('开启后使用硬件加速解码，若播放异常请关闭', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                          title: Text('硬件加速解码 (HW Acceleration)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: colors.textWhite)),
+                          subtitle: Text('开启后使用硬件加速解码，若播放异常请关闭', style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
                           value: isEnabled,
-                          activeThumbColor: AppTheme.primaryColor,
+                          activeThumbColor: colors.primaryColor,
                           onChanged: (val) async {
                             final prefs = await SharedPreferences.getInstance();
                             await prefs.setBool('enable_hw_acceleration', val);
@@ -182,7 +185,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       );
                     },
                   ),
-                  const Divider(color: AppTheme.borderMuted, height: 32),
+                  Divider(color: colors.borderMuted, height: 32),
+                  // Theme selection —— 浅色 / 深色 / 跟随系统三选一。
+                  // 走 ThemePrefs(provider),改完即时生效(MaterialApp rebuild)。
+                  _tvFocusableTile(
+                    Consumer<ThemePrefs>(
+                      builder: (context, tp, _) {
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Text('主题外观', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: colors.textWhite)),
+                            ),
+                            const SizedBox(height: 8),
+                            // SegmentedButton 自带 TV 焦点(D-pad 左右切换 + Enter 选中),
+                            // 外层 _tvFocusableTile 再补一层焦点高亮。
+                            Center(
+                              child: SegmentedButton<ThemePref>(
+                                segments: [
+                                  ButtonSegment(value: ThemePref.light, label: Text(ThemePref.light.label)),
+                                  ButtonSegment(value: ThemePref.dark, label: Text(ThemePref.dark.label)),
+                                  ButtonSegment(value: ThemePref.system, label: Text(ThemePref.system.label)),
+                                ],
+                                selected: {tp.value},
+                                onSelectionChanged: (s) => tp.set(s.first),
+                                style: ButtonStyle(
+                                  backgroundColor: WidgetStateProperty.resolveWith((states) {
+                                    if (states.contains(WidgetState.selected)) return colors.primaryColor;
+                                    return null;
+                                  }),
+                                  foregroundColor: WidgetStateProperty.resolveWith((states) {
+                                    if (states.contains(WidgetState.selected)) return Colors.white;
+                                    return colors.textWhite;
+                                  }),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 4),
+                              child: Text('选择浅色 / 深色 / 跟随系统暗色设置。即时生效。', style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  Divider(color: colors.borderMuted, height: 32),
                   // TV 模式预览(调试):给 MuMu 模拟器(PAD 形态)开发用,
                   // 打开后强制走 TV 分支布局,这样不用真机 TV 也能验证 TV 页面。
                   // 真机 TV 走自动检测,本开关对其无影响(本来就走 TV)。
@@ -190,10 +240,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   _tvFocusableTile(
                     SwitchListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('预览 TV 模式(调试)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
-                      subtitle: const Text('打开后 App 强制使用 TV 布局,用于在模拟器上验证 TV 体验。重启 App 后生效。', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                      title: Text('预览 TV 模式(调试)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: colors.textWhite)),
+                      subtitle: Text('打开后 App 强制使用 TV 布局,用于在模拟器上验证 TV 体验。重启 App 后生效。', style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
                       value: TvMode.instance.forceEnabled,
-                      activeThumbColor: AppTheme.primaryColor,
+                      activeThumbColor: colors.primaryColor,
                       onChanged: (val) async {
                         await TvMode.instance.setForceEnabled(val);
                         widget.onPreferencesChanged();
@@ -205,13 +255,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       },
                     ),
                   ),
-                  const Divider(color: AppTheme.borderMuted, height: 32),
+                  Divider(color: colors.borderMuted, height: 32),
                   // Cache Cleaning
                   _tvFocusableTile(
                     ListTile(
                       contentPadding: EdgeInsets.zero,
-                      title: const Text('清理本地缓存空间', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: AppTheme.textWhite)),
-                      subtitle: const Text('清理 PDF 讲义和临时缓存的媒体文件', style: TextStyle(color: AppTheme.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
+                      title: Text('清理本地缓存空间', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: colors.textWhite)),
+                      subtitle: Text('清理 PDF 讲义和临时缓存的媒体文件', style: TextStyle(color: colors.textMuted, fontSize: 12, fontWeight: FontWeight.bold)),
                       trailing: Button3D.white(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         onPressed: () async {
@@ -249,18 +299,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 32),
             FocusButton(
               baseColor: Colors.transparent,
-              borderColor: AppTheme.borderMuted,
+              borderColor: colors.borderMuted,
               onPressed: widget.onLogout,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
-                children: const [
-                  Icon(Icons.logout_rounded, color: AppTheme.slate400, size: 18),
-                  SizedBox(width: 8),
+                children: [
+                  Icon(Icons.logout_rounded, color: colors.slate400, size: 18),
+                  const SizedBox(width: 8),
                   Text(
                     '退出当前账号',
                     style: TextStyle(
-                      color: AppTheme.slate400,
+                      color: colors.slate400,
                       fontWeight: FontWeight.bold,
                       fontSize: 14,
                     ),
@@ -277,25 +327,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildIpTextField() {
+    final colors = context.colors;
     return TextField(
       controller: widget.ipController,
       focusNode: _ipFocusNode,
-      style: const TextStyle(fontFamily: 'monospace', fontSize: 15, color: AppTheme.textWhite, fontWeight: FontWeight.bold),
+      style: TextStyle(fontFamily: 'monospace', fontSize: 15, color: colors.textWhite, fontWeight: FontWeight.bold),
       decoration: InputDecoration(
         filled: true,
-        fillColor: Colors.white,
+        fillColor: colors.cardColor,
         contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: Color(0xFFCBD5E1), width: 1.5),
+          borderSide: BorderSide(color: colors.slate300, width: 1.5),
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppTheme.primaryColor, width: 2),
+          borderSide: BorderSide(color: colors.primaryColor, width: 2),
         ),
-        prefixIcon: const Icon(Icons.lan, color: AppTheme.primaryColor),
+        prefixIcon: Icon(Icons.lan, color: colors.primaryColor),
         hintText: 'http://192.168.x.x:8080',
-        hintStyle: const TextStyle(color: AppTheme.textMuted),
+        hintStyle: TextStyle(color: colors.textMuted),
       ),
     );
   }

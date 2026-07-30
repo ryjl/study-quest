@@ -4,6 +4,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:provider/provider.dart';
 import 'config.dart';
 import 'service/auth_service.dart';
+import 'service/theme_prefs.dart';
 import 'service/tv_mode.dart';
 import 'service/ui_prefs.dart';
 import 'theme.dart';
@@ -30,6 +31,9 @@ void main() {
     // Android TV 模式检测(自动识别真机 TV + 调试强制开关)。启动时读一次进内存,
     // 之后 UI 各处直接读 TvMode.instance.isActive 判断走 PAD 还是 TV 布局。
     await TvMode.instance.load();
+    // 主题偏好(浅色/深色/跟随系统)——读一次进内存,之后通过 provider 驱动
+    // MaterialApp.themeMode;设置页改完 notifyListeners 即时生效。
+    await ThemePrefs.instance.load();
 
     final authService = AuthService();
     await authService.init();
@@ -38,6 +42,7 @@ void main() {
       MultiProvider(
         providers: [
           ChangeNotifierProvider<AuthService>.value(value: authService),
+          ChangeNotifierProvider<ThemePrefs>.value(value: ThemePrefs.instance),
         ],
         child: const StudyQuestApp(),
       ),
@@ -71,10 +76,13 @@ class StudyQuestApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final auth = Provider.of<AuthService>(context);
+    final themePrefs = Provider.of<ThemePrefs>(context);
 
     return MaterialApp(
       title: 'StudyQuest',
       theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      themeMode: themePrefs.themeMode,
       debugShowCheckedModeBanner: false,
       home: auth.isAuthenticated ? const MainNavigation() : const LoginScreen(),
     );

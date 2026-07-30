@@ -7,8 +7,8 @@ class FocusButton extends StatefulWidget {
   final Widget child;
   final VoidCallback onPressed;
   final double borderRadius;
-  final Color baseColor;
-  final Color borderColor;
+  final Color? baseColor;
+  final Color? borderColor;
   final EdgeInsets padding;
   final FocusNode? focusNode;
   final bool autoFocus;
@@ -18,8 +18,8 @@ class FocusButton extends StatefulWidget {
     required this.child,
     required this.onPressed,
     this.borderRadius = AppTheme.borderRadiusValue,
-    this.baseColor = AppTheme.cardColor,
-    this.borderColor = AppTheme.borderMuted,
+    this.baseColor,
+    this.borderColor,
     this.padding = const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     this.focusNode,
     this.autoFocus = false,
@@ -58,6 +58,7 @@ class _FocusButtonState extends State<FocusButton> {
   @override
   Widget build(BuildContext context) {
     final active = _hasFocus || _isHovered;
+    final colors = context.colors;
 
     return Focus(
       focusNode: _focusNode,
@@ -85,12 +86,12 @@ class _FocusButtonState extends State<FocusButton> {
             child: GlassPanel(
               borderRadius: widget.borderRadius,
               hasFocus: active,
-              baseColor: active ? AppTheme.primaryColor.withValues(alpha: 0.12) : widget.baseColor,
-              borderColor: active ? AppTheme.primaryColor : widget.borderColor,
+              baseColor: active ? colors.primaryColor.withValues(alpha: 0.12) : widget.baseColor,
+              borderColor: active ? colors.primaryColor : widget.borderColor,
               padding: widget.padding,
               child: DefaultTextStyle(
                 style: TextStyle(
-                  color: AppTheme.textWhite,
+                  color: colors.textWhite,
                   fontSize: 16,
                   fontWeight: active ? FontWeight.bold : FontWeight.w600,
                   fontFamily: 'Quicksand',

@@ -92,7 +92,7 @@ void main() {
   group('sectionTitle', () {
     testWidgets('renders the text with w900 weight', (tester) async {
       await tester.pumpWidget(
-        MaterialApp(home: Scaffold(body: sectionTitle('Hello'))),
+        MaterialApp(home: Scaffold(body: Builder(builder: (ctx) => sectionTitle(ctx, 'Hello')))),
       );
       final text = tester.widget<Text>(find.text('Hello'));
       expect(text.style?.fontWeight, FontWeight.w900);
@@ -104,9 +104,10 @@ void main() {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
-            body: buildShelfBoard(
+            body: Builder(builder: (ctx) => buildShelfBoard(
+              ctx,
               children: const [SizedBox(width: 50, height: 50)],
-            ),
+            )),
           ),
         ),
       );

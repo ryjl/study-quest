@@ -126,10 +126,10 @@ class _CourseListScreenState extends State<CourseListScreen> {
         future: _combinedFuture,
         builder: (context, AsyncSnapshot<List<dynamic>> snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return loadingSpinner();
+            return loadingSpinner(context);
           }
           if (snapshot.hasError) {
-            return errorStateBox(snapshot.error.toString(), _loadData,
+            return errorStateBox(context, snapshot.error.toString(), _loadData,
                 message: '加载失败，请检查网络或后端配置！');
           }
 
@@ -186,22 +186,22 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     final isNarrow = constraints.maxWidth < 600;
                     final headerContent = Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
+                      children: [
                         Text(
                           '学习大厅',
                           style: TextStyle(
                             fontFamily: 'Quicksand',
                             fontSize: 32,
                             fontWeight: FontWeight.w900,
-                            color: AppTheme.textWhite,
+                            color: context.colors.textWhite,
                           ),
                         ),
-                        SizedBox(height: 6),
+                        const SizedBox(height: 6),
                         Text(
                           '今天想探索哪个领域呢？🚀',
                           style: TextStyle(
                             fontSize: 15,
-                            color: AppTheme.textMuted,
+                            color: context.colors.textMuted,
                             fontWeight: FontWeight.bold,
                           ),
                         ),
@@ -303,7 +303,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       child: Container(
                         height: tv ? 56 : 48,
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: context.colors.cardColor,
                             borderRadius: BorderRadius.circular(24),
                             boxShadow: [
                               BoxShadow(
@@ -321,16 +321,16 @@ class _CourseListScreenState extends State<CourseListScreen> {
                             style: TextStyle(
                               fontSize: tv ? 18 : 14,
                               fontWeight: FontWeight.bold,
-                              color: AppTheme.textWhite,
+                              color: context.colors.textWhite,
                             ),
                             decoration: InputDecoration(
                               hintText: '搜索课程名称...',
                               hintStyle: TextStyle(
-                                color: AppTheme.textMuted,
+                                color: context.colors.textMuted,
                                 fontSize: tv ? 18 : 14,
                               ),
                               prefixIcon: Icon(Icons.search_rounded,
-                                  color: AppTheme.textMuted, size: tv ? 24 : 20),
+                                  color: context.colors.textMuted, size: tv ? 24 : 20),
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 16, vertical: 14),
@@ -344,8 +344,8 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       FocusButton(
                         onPressed: _showFilterBottomSheet,
                         borderRadius: 24,
-                        baseColor: Colors.white,
-                        borderColor: AppTheme.borderMuted,
+                        baseColor: context.colors.cardColor,
+                        borderColor: context.colors.borderMuted,
                         padding: EdgeInsets.zero,
                         child: SizedBox(
                           height: tv ? 56 : 48,
@@ -354,7 +354,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                             alignment: Alignment.center,
                             children: [
                               Icon(Icons.tune_rounded,
-                                  color: AppTheme.textMuted, size: tv ? 26 : 24),
+                                  color: context.colors.textMuted, size: tv ? 26 : 24),
                               if (_selectedGrade != '全部' ||
                                   _selectedTagIDs.isNotEmpty)
                                 Positioned(
@@ -427,6 +427,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                 // allowed in an unbounded-height scroll view).
                 filteredCourses.isEmpty
                     ? emptyStateBox(
+                        context: context,
                         icon: Icons.school_outlined,
                         headline: '没有找到已授权的课程库',
                         hint: '请让爸爸妈妈在后台给您分配可学习的课程吧！',
@@ -496,11 +497,12 @@ class _CourseListScreenState extends State<CourseListScreen> {
     final cardLabel = tag.isEmpty ? gradeLabel : '$tag | $gradeLabel';
     // TV 大字模式:卡片各处字号放大,提升远距离可读性。
     final tv = TvMode.instance.isActive;
+    final colors = context.colors;
 
     return FocusButton(
       padding: EdgeInsets.zero,
       borderRadius: 28,
-      borderColor: AppTheme.borderMuted,
+      borderColor: colors.borderMuted,
       onPressed: () {
         Navigator.push(
           context,
@@ -596,7 +598,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
-                      color: AppTheme.slate100,
+                      color: colors.slate100,
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
                     ),
@@ -604,7 +606,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       _getSubjectName(course.subject),
                       style: TextStyle(
                         fontSize: tv ? 12 : 9,
-                        color: AppTheme.textMuted,
+                        color: colors.textMuted,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -617,7 +619,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                     style: TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: tv ? 17 : 13,
-                      color: AppTheme.textWhite,
+                      color: colors.textWhite,
                     ),
                   ),
                   const Spacer(),
@@ -640,7 +642,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                             fontSize: tv ? 13 : 10,
                           ),
                         ),
-                        const Icon(Icons.arrow_forward_rounded, color: AppTheme.textMuted, size: 14),
+                        Icon(Icons.arrow_forward_rounded, color: colors.textMuted, size: 14),
                       ],
                     ),
                 ],
@@ -725,6 +727,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
   }
 
   void _showFilterBottomSheet() {
+    final colors = context.colors;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
@@ -733,9 +736,9 @@ class _CourseListScreenState extends State<CourseListScreen> {
         return StatefulBuilder(
           builder: (context, setModalState) {
             return Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              decoration: BoxDecoration(
+                color: colors.cardColor,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
               ),
               padding: const EdgeInsets.all(24.0),
               child: Column(
@@ -745,16 +748,16 @@ class _CourseListScreenState extends State<CourseListScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text('高级筛选', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textWhite)),
+                      Text('高级筛选', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: colors.textWhite)),
                       IconButton(
-                        icon: const Icon(Icons.close_rounded, color: AppTheme.textMuted),
+                        icon: Icon(Icons.close_rounded, color: colors.textMuted),
                         onPressed: () => Navigator.pop(context),
                       ),
                     ],
                   ),
                   const SizedBox(height: 24),
-                  
-                  const Text('适合学段', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textMuted)),
+
+                  Text('适合学段', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: colors.textMuted)),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 10,
@@ -767,12 +770,12 @@ class _CourseListScreenState extends State<CourseListScreen> {
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
-                            color: active ? Colors.white : AppTheme.textMuted,
+                            color: active ? Colors.white : colors.textMuted,
                           )
                         ),
                         selected: active,
                         selectedColor: AppTheme.primaryColor,
-                        backgroundColor: AppTheme.slate100,
+                        backgroundColor: colors.slate100,
                         showCheckmark: false,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide.none),
                         onSelected: (val) {
@@ -782,10 +785,10 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       );
                     }).toList(),
                   ),
-                  
+
                   if (_tagsCatalog.isNotEmpty) ...[
                     const SizedBox(height: 32),
-                    const Text('课程标签', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppTheme.textMuted)),
+                    Text('课程标签', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: colors.textMuted)),
                     const SizedBox(height: 12),
                     Wrap(
                       spacing: 10,
@@ -798,15 +801,15 @@ class _CourseListScreenState extends State<CourseListScreen> {
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
-                              color: active ? const Color(0xFF047857) : AppTheme.textMuted,
+                              color: active ? const Color(0xFF047857) : colors.textMuted,
                             )
                           ),
                           selected: active,
                           selectedColor: const Color(0xFFD1FAE5),
-                          backgroundColor: AppTheme.slate100,
+                          backgroundColor: colors.slate100,
                           showCheckmark: false,
                           shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12), 
+                            borderRadius: BorderRadius.circular(12),
                             side: active ? const BorderSide(color: Color(0xFF34D399), width: 1.5) : BorderSide.none
                           ),
                           onSelected: (val) {
@@ -820,7 +823,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                       }).toList(),
                     ),
                   ],
-                  
+
                   const SizedBox(height: 40),
                   SizedBox(
                     width: double.infinity,
@@ -875,12 +878,13 @@ class _SubjectTabState extends State<_SubjectTab> {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     // 颜色规则表:active 全亮;非 active 时 focused 提亮(0.6→1.0),否则暗淡。
     final color = widget.active
-        ? AppTheme.textWhite
+        ? colors.textWhite
         : (_focused
-            ? AppTheme.textWhite.withValues(alpha: 0.95)
-            : AppTheme.textMuted.withValues(alpha: 0.6));
+            ? colors.textWhite.withValues(alpha: 0.95)
+            : colors.textMuted.withValues(alpha: 0.6));
     return TvFocus(
       autoFocus: widget.autoFocus,
       onFocusChange: (v) => setState(() => _focused = v),
