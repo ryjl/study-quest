@@ -542,11 +542,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
           SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
           SingleActivator(LogicalKeyboardKey.mediaPlay): ActivateIntent(),
           SingleActivator(LogicalKeyboardKey.mediaPause): ActivateIntent(),
-          // escape → 控件显隐分层(有菜单时被 Dialog 路由的 DismissIntent 截获
-          // 关菜单,不会到这里)。browserBack/goBack(系统返回键)→ 退出页面分层。
-          // 两者语义分开:escape 管控件,返回键管退出。菜单内按返回键也由 Dialog
-          // 层先处理(关菜单),无菜单时才退出页面。
-          SingleActivator(LogicalKeyboardKey.escape): DismissIntent(),
+          // escape → 控件显隐分层。**绑到自定义 _ToggleControlsIntent,不用框架 DismissIntent**
+          // —— DismissIntent 会被 MaterialPageRoute 的 _DismissModalAction 抢走(它的 invoke 是
+          // maybePop,会退出播放页),见 _ToggleControlsIntent 注释。有菜单时 Dialog 路由自己
+          // 的 DismissIntent 关菜单,不冲突(菜单在更高层路由)。
+          // browserBack/goBack(系统返回键)→ 退出页面分层,走 BACK 通道(PopScope)。
+          SingleActivator(LogicalKeyboardKey.escape): const _ToggleControlsIntent(),
           SingleActivator(LogicalKeyboardKey.browserBack): const _PopPlayerIntent(),
           SingleActivator(LogicalKeyboardKey.goBack): const _PopPlayerIntent(),
         },
@@ -555,7 +556,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ActivateIntent: CallbackAction<ActivateIntent>(
               onInvoke: (_) => _togglePlayPause(),
             ),
-            DismissIntent: CallbackAction<DismissIntent>(
+            _ToggleControlsIntent: CallbackAction<_ToggleControlsIntent>(
               onInvoke: (_) => _handleDismiss(),
             ),
             _PopPlayerIntent: CallbackAction<_PopPlayerIntent>(
@@ -659,28 +660,50 @@ class _PlayerScreenState extends State<PlayerScreen> {
     return KeyEventResult.ignored;
   }
 
-  /// escape 键分层(控件显隐)。菜单(Dialog)打开时,Dialog 路由自带
-  /// DismissIntent 关闭,不会走到这里。这里只处理无菜单的情况:
-  /// 控件显示 → 收控件;控件隐藏 → 唤出控件。escape 不退出页面 —— 退出走
-  /// 返回键(browserBack/goBack)→ _handlePop。
+ /// escape 键分层(控件显隐)。菜单(Dialog)打开时,Dialog 路由自带
+  /// DismissIntent 关闭,不会走到这里。ESC 与系统返回键统一走 [_applyEscLayering]
+  /// 分层(见下,mumu/TV 上 ESC 常被系统当 back,两者行为需一致)。
   void _handleDismiss() {
-    if (_controlsVisible) {
-      setState(() => _controlsVisible = false);
-      return;
-    }
-    // 控件隐藏:唤出控件。
-    _toggleControls();
+    _applyEscLayering();
   }
 
   /// 系统返回键(browserBack)/ESC 分层。由 PopScope 拦截所有 pop 来源后调用。
   /// 菜单(Dialog)打开时,Dialog 路由在栈顶,系统 back 先 pop Dialog(关菜单),
-  /// 不会到这里。这里处理无菜单的情况:控件显示 → 关控件;控件隐藏 → 退出页面。
-  /// (mumu/TV 上 ESC 常被系统当 back 走这条路径,所以 ESC 与返回键行为统一。)
+  /// 不会到这里。ESC 与系统返回键统一走 [_applyEscLayering] 分层。
   void _handlePop() {
+    _applyEscLayering();
+  }
+
+  /// ESC / 系统返回键的统一分层(YouTube/B站 式):
+  ///   - 全屏 + 控件隐藏 → **唤出控件**(不退出):全屏沉浸态按 ESC 不该粗暴退出,
+  ///     先给用户操作控件的机会。
+  ///   - 全屏 + 控件可见 → **退出全屏**(回带 AI 侧边栏的非全屏态):退出全屏而非
+  ///     直接退出页面,避免误触。
+  ///   - 非全屏 + 控件可见 → 关控件。
+  ///   - 非全屏 + 控件隐藏 → 退出页面(真正 pop)。
+  /// 菜单(Dialog)打开时不走这里 —— 系统返回键先 pop Dialog 关菜单,ESC 的
+  /// DismissIntent 由 Dialog 路由截获关菜单。
+  void _applyEscLayering() {
+    if (_isFullscreen) {
+      if (!_controlsVisible) {
+        // 全屏隐藏 → 唤出控件。
+        _toggleControls();
+        return;
+      }
+      // 全屏可见 → 退出全屏(控件保持可见,非全屏态控件常驻不 auto-hide)。
+      setState(() {
+        _isFullscreen = false;
+        _controlsVisible = true;
+      });
+      _scheduleAutoHide();
+      return;
+    }
     if (_controlsVisible) {
+      // 非全屏可见 → 关控件。
       setState(() => _controlsVisible = false);
       return;
     }
+    // 非全屏隐藏 → 退出页面。
     Navigator.of(context).pop();
   }
 
@@ -1648,7 +1671,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-/// 系统返回键(browserBack/goBack)的 Intent。与 DismissIntent(escape)分开:
+/// ESC 键的 Intent。**不能用框架的 DismissIntent** —— MaterialPageRoute 会给 push 进来的
+/// route 注册一个 `DismissIntent: _DismissModalAction`(见 Flutter routes.dart:1198),它的
+/// invoke 是 `Navigator.maybePop()`,会直接 pop 掉播放页。用 DismissIntent 绑 escape,焦点
+/// 一旦不在本屏 Actions 子树内,ESC 就命中 ModalRoute 的 pop action → 播放页被退出。
+/// 改用本屏专属 Intent,杜绝和 ModalRoute 抢 DismissIntent。见 _handleDismiss。
+class _ToggleControlsIntent extends Intent {
+  const _ToggleControlsIntent();
+}
+
+/// 系统返回键(browserBack/goBack)的 Intent。与 escape 分开:
 /// escape 管控件显隐,返回键管退出页面(菜单内则先关菜单)。见 _handlePop。
 class _PopPlayerIntent extends Intent {
   const _PopPlayerIntent();
