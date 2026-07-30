@@ -25,7 +25,7 @@ type ReadingBookService interface {
 	// (hash lookup → size+path lookup → self-heal the cached path).
 	GetStreamURL(bookID uint, userAgent string) (*storage.DownloadLink, error)
 
-	// CanAccess checks whether a user can access a book. Admin/parent always
+	// CanAccess checks whether a user can access a book. Admin always
 	// pass. A student passes if they have direct book access OR series access
 	// to the book's parent series (series access implies child access, matching
 	// the Course→Episode model where course access grants all episodes).
@@ -198,7 +198,7 @@ func (s *readingBookService) GetStreamURL(bookID uint, userAgent string) (*stora
 // CanAccess implements the series-inheritance access model: a student with
 // series access can open any book in that series, even without a direct
 // UserReadingBookAccess row. This matches the Course→Episode semantics where
-// course access grants all episodes. Admin/parent bypass entirely.
+// course access grants all episodes. Admin bypass entirely.
 func (s *readingBookService) CanAccess(userID uint, userRole string, bookID uint) (bool, error) {
 	if model.IsStaffRole(userRole) {
 		return true, nil

@@ -187,6 +187,7 @@ Always run `make test` before declaring backend work done.
 - **踩坑详情** → `docs/pitfalls/{backend,frontend,tools}.md`
 - **模块深度** → `docs/modules/<module>/`（ai/storage/frontend）
 - **开发环境 / 调试** → `docs/dev-setup.md`
+- **部署 / 公网安全** → `docs/deployment.md`
 - **待办 idea** → `TODO.md`
 
 ## 文档约定

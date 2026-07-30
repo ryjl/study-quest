@@ -279,7 +279,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         children: [
                           NumPad(
                             title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
-                            maxDigits: 4, // standard 4-digit PIN
+                            maxDigits: 6, // 6-digit PIN (security: 6-digit minimum)
                             onSubmit: _onSubmitPin,
                             onCancel: _onCancelPin,
                           ),

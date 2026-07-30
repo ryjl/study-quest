@@ -101,11 +101,11 @@ func (h *courseHandler) GetCourses(c *gin.Context) {
 
 	// Annotate each course card with the drip-unlock summary so the student can
 	// see the cadence + next unlock from the course grid without entering each
-	// course. Only resolved for student/teen roles: admins/parents manage
-	// content and the drip schedule is irrelevant to their view (and resolving
-	// per-course would do needless work). Cheap enough for typical course-list
-	// sizes (<~20), each resolve is in-memory math + one small query.
-	if userRole != "admin" && userRole != "parent" && h.unlockService != nil {
+	// course. Only resolved for the student role: admins manage content and the
+	// drip schedule is irrelevant to their view (and resolving per-course would
+	// do needless work). Cheap enough for typical course-list sizes (<~20),
+	// each resolve is in-memory math + one small query.
+	if !model.IsStaffRole(userRole) && h.unlockService != nil {
 		for i := range out {
 			annotateWithUnlock(&out[i], h.unlockService, userID)
 		}
@@ -251,14 +251,14 @@ func (h *courseHandler) GetEpisodesByCourse(c *gin.Context) {
 		return
 	}
 
-	// Apply unlock gating for student/teen roles. Admin/parent see everything
+	// Apply unlock gating for student roles. Admin see everything
 	// (they manage content, not consume it under a drip schedule). For gated
 	// roles we resolve the visible-episode set and mark the rest locked so the
 	// client can render them greyed-out with a lock affordance.
 	userRoleVal, _ := c.Get("userRole")
 	userIDVal, _ := c.Get("userID")
 	role, _ := userRoleVal.(string)
-	if role == "admin" || role == "parent" {
+	if model.IsStaffRole(role) {
 		c.JSON(http.StatusOK, episodes)
 		return
 	}

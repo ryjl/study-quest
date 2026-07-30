@@ -99,7 +99,7 @@ func (h *episodeHandler) GetSubtitleVTT(c *gin.Context) {
 // caller can `return` immediately.
 //
 // Fail-closed: a non-staff request with no trustworthy userID is rejected
-// (401). Staff roles (admin/parent) bypass entirely. A nil storageSourceRepo
+// (401). Staff roles (admin) bypass entirely. A nil storageSourceRepo
 // (feature not wired) short-circuits to allow. An episode with no SourceID is
 // denied (it can't stream without a bound source).
 func (h *episodeHandler) checkEpisodeSourceAccess(c *gin.Context, episodeID uint) bool {
@@ -189,10 +189,10 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 		return
 	}
 
-	// Unlock gate: a student/teen must have the episode visible under their
+	// Unlock gate: a student must have the episode visible under their
 	// (user, course) unlock resolution before we hand out the stream URL.
 	// Without this, the episode-list filtering could be bypassed by simply
-	// guessing an episode id. Admin/parent roles bypass the gate (they manage
+	// guessing an episode id. Admin roles bypass the gate (they manage
 	// content, not consume it under a drip schedule).
 	//
 	// This gate must FAIL CLOSED: if we can't establish a valid userID for a
@@ -204,7 +204,7 @@ func (h *episodeHandler) GetPlayInfo(c *gin.Context) {
 	if h.unlockService != nil {
 		roleVal, hasRole := c.Get("userRole")
 		role, _ := roleVal.(string)
-		if role != "admin" && role != "parent" {
+		if !model.IsStaffRole(role) {
 			uidVal, hasUID := c.Get("userID")
 			uid, uidOK := uidVal.(uint)
 			if !hasRole || !hasUID || !uidOK {

@@ -11,6 +11,7 @@ import {
   roleLabel,
   formatWatchTime,
   fmtSec,
+  isValidPin,
 } from './format';
 import { gradeDisplay } from './types';
 
@@ -178,15 +179,19 @@ describe('roleLabel', () => {
   // Consolidated from Dashboard.tsx + WatchHistory.tsx (byte-identical).
 
   it('maps known roles to Chinese labels', () => {
+    // Only student/admin remain after the role simplification (teen/parent
+    // removed). Verify the surviving labels + that the removed roles now fall
+    // through to the passthrough branch.
     expect(roleLabel('student')).toBe('学生');
-    expect(roleLabel('teen')).toBe('青少年');
-    expect(roleLabel('parent')).toBe('家长');
     expect(roleLabel('admin')).toBe('管理员');
   });
 
   it('passes unknown roles through unchanged', () => {
     expect(roleLabel('teacher')).toBe('teacher');
     expect(roleLabel('')).toBe('');
+    // Removed roles are no longer special-cased — they pass through too.
+    expect(roleLabel('teen')).toBe('teen');
+    expect(roleLabel('parent')).toBe('parent');
   });
 });
 
@@ -235,5 +240,33 @@ describe('fmtSec', () => {
     expect(fmtSec(125)).toBe('2:05');
     expect(fmtSec(599)).toBe('9:59');
     expect(fmtSec(3605)).toBe('60:05');
+  });
+});
+
+describe('isValidPin', () => {
+  // PIN rule: exactly 6 digits. Mirrors the backend ErrPinInvalid check
+  // (user_service.go: len(pin) != 6). Kept in sync so the admin form rejects
+  // bad input client-side before the round-trip.
+
+  it('accepts exactly 6 digits', () => {
+    expect(isValidPin('123456')).toBe(true);
+    expect(isValidPin('000000')).toBe(true);
+    expect(isValidPin('999999')).toBe(true);
+  });
+
+  it('rejects too few digits', () => {
+    expect(isValidPin('')).toBe(false);
+    expect(isValidPin('1')).toBe(false);
+    expect(isValidPin('12345')).toBe(false); // 5 digits — was valid under the old 4-6 rule
+  });
+
+  it('rejects too many digits', () => {
+    expect(isValidPin('1234567')).toBe(false);
+  });
+
+  it('rejects non-digits', () => {
+    expect(isValidPin('abcdef')).toBe(false);
+    expect(isValidPin('12345a')).toBe(false);
+    expect(isValidPin(' 123456')).toBe(false);
   });
 });

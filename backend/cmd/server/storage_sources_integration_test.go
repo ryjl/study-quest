@@ -191,25 +191,25 @@ func TestStorageGrantTimeGateRefuses(t *testing.T) {
 	}
 }
 
-// TestStorageStaffBypassesAccessGate: a parent-role user is never subject to
+// TestStorageStaffBypassesAccessGate: an admin-role user is never subject to
 // the source whitelist — they can reach any episode's play-info regardless of
 // their own whitelist.
 func TestStorageStaffBypassesAccessGate(t *testing.T) {
 	env := newTestEnv(t)
 	srcB := env.createStorageSource(t, "B", "webdav", "http://b", false)
-	courseID := env.createCourse(t, "家长课", "math", nil)
+	courseID := env.createCourse(t, "管理员课", "math", nil)
 	epID := env.createEpisode(t, courseID, "第1节")
 	env.setEpisodeSource(t, epID, srcB)
 
-	parentID := env.createUser(t, "家长", "parent")
-	env.grantAccess(t, parentID, courseID)
-	// Give the parent a restrictive whitelist — it must be IGNORED for staff.
-	env.setStorageWhitelist(t, parentID, []uint{})
+	adminID := env.createUser(t, "管理员", "admin")
+	env.grantAccess(t, adminID, courseID)
+	// Give the admin a restrictive whitelist — it must be IGNORED for staff.
+	env.setStorageWhitelist(t, adminID, []uint{})
 
-	// parent's play-info: NOT 403 (staff bypass; may be 500 from unreachable storage).
-	resp := env.doAsUser(t, parentID, http.MethodGet, "/api/v1/episodes/"+itoa(epID)+"/play-info", nil)
+	// admin's play-info: NOT 403 (staff bypass; may be 500 from unreachable storage).
+	resp := env.doAsUser(t, adminID, http.MethodGet, "/api/v1/episodes/"+itoa(epID)+"/play-info", nil)
 	if resp.Code == http.StatusForbidden {
-		t.Errorf("parent should bypass source gate, got 403 (body: %s)", resp.Body.String())
+		t.Errorf("admin should bypass source gate, got 403 (body: %s)", resp.Body.String())
 	}
 }
 

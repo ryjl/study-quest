@@ -12,6 +12,7 @@ User _user(int id) => User(
       nickname: 'user$id',
       avatarUrl: '',
       role: 'student',
+      grade: '四年级',
     );
 
 void main() {
@@ -38,16 +39,19 @@ void main() {
       // swallows it and sends no device_name, which is the tested fallback.
       ApiService.bindTestClient(MockClient((req) async {
         return http.Response(
-          jsonEncode({'token': 'tok-xyz', 'role': 'student', 'user_id': 3}),
+          jsonEncode({'token': 'tok-xyz', 'role': 'student', 'grade': '四年级', 'user_id': 3}),
           200,
+          // 含中文(grade)必须带 utf-8 content-type,否则 http.Response 默认 latin1 编码会抛异常。
+          headers: const {'content-type': 'application/json; charset=utf-8'},
         );
       }));
 
       final svc = AuthService();
-      final ok = await svc.login(_user(3), '1234');
+      final ok = await svc.login(_user(3), '123456');
       expect(ok, isTrue);
       expect(svc.isAuthenticated, isTrue);
       expect(svc.currentUser?.id, 3);
+      expect(svc.currentUser?.grade, '四年级');
       expect(ApiService.authToken, 'tok-xyz');
 
       final prefs = await SharedPreferences.getInstance();
@@ -159,7 +163,7 @@ void main() {
         return http.Response('{"error":"unauthorized"}', 401);
       }));
       final svc = AuthService();
-      await svc.login(_user(1), '1234');
+      await svc.login(_user(1), '123456');
       expect(svc.isAuthenticated, isTrue);
 
       // A protected call that 401s should trigger logout via onUnauthorized.

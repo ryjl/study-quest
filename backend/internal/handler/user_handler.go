@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -40,6 +41,7 @@ func (h *userHandler) GetUsers(c *gin.Context) {
 		Nickname  string `json:"nickname"`
 		AvatarURL string `json:"avatar_url"`
 		Role      string `json:"role"`
+		Grade     string `json:"grade"`
 	}
 
 	res := make([]userResponse, len(users))
@@ -49,6 +51,7 @@ func (h *userHandler) GetUsers(c *gin.Context) {
 			Nickname:  u.Nickname,
 			AvatarURL: u.AvatarURL,
 			Role:      u.Role,
+			Grade:     u.Grade,
 		}
 	}
 
@@ -62,14 +65,26 @@ func (h *userHandler) Login(c *gin.Context) {
 		DeviceName string `json:"device_name"` // optional; OS-level device label for the admin device list
 	}
 
-	if !bindJSON(c, &req) { return }
+	if !bindJSON(c, &req) {
+		return
+	}
 
 	valid, err := h.userService.Authenticate(req.UserID, req.Pin)
 	if err != nil {
-		// On the login path, any failure to even look up the user (deleted
-		// account, DB error) is surfaced as a generic 401 — both to avoid
-		// distinguishing "no such user" from "wrong PIN" for an attacker, and
-		// because a 500 here would leak that the userID is the lookup key.
+		// Account lockout is surfaced distinctly (429, matching the per-IP
+		// limiter) so a legitimate user who fat-fingered into a lockout gets a
+		// hint to wait rather than a generic "incorrect PIN".
+		if errors.Is(err, service.ErrAccountLocked) {
+			c.Header("Retry-After", "900") // 15 min hint; matches default lockout window
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": "account temporarily locked due to repeated failed logins, please try again later",
+			})
+			return
+		}
+		// Any other failure to look up the user (deleted account, DB error) is
+		// surfaced as a generic 401 — both to avoid distinguishing "no such
+		// user" from "wrong PIN" for an attacker, and because a 500 here would
+		// leak that the userID is the lookup key.
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "incorrect user PIN code"})
 		return
 	}
@@ -79,14 +94,15 @@ func (h *userHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// Resolve role for the response (Authenticate returns only bool). Reusing
-	// the existing GetUsers list keeps this PR scoped; a dedicated GetByID on
-	// the service would be a cleaner follow-up.
-	var role string
+	// Resolve role/grade for the response (Authenticate returns only bool).
+	// Reusing the existing GetUsers list keeps this PR scoped; a dedicated
+	// GetByID on the service would be a cleaner follow-up.
+	var role, grade string
 	if users, lerr := h.userService.GetUsers(); lerr == nil {
 		for _, u := range users {
 			if u.ID == req.UserID {
 				role = u.Role
+				grade = u.Grade
 				break
 			}
 		}
@@ -103,6 +119,7 @@ func (h *userHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token":   token, // opaque session token (NOT the user ID)
 		"role":    role,
+		"grade":   grade,
 		"user_id": req.UserID,
 	})
 }

@@ -36,12 +36,12 @@ func NewCourseService(cr repository.CourseRepository, ur repository.UserReposito
 }
 
 func (s *courseService) GetCourses(userID uint, userRole string, grade string, subjectID uint, contentType model.ContentType) ([]model.Course, error) {
-	// Admin or Parent can view all courses
-	if userRole == model.RoleAdmin || userRole == model.RoleParent {
+	// Admin can view all courses
+	if model.IsStaffRole(userRole) {
 		return s.courseRepo.List(grade, subjectID, contentType, nil)
 	}
 
-	// Students/Teens are restricted to granted courses only
+	// Students are restricted to granted courses only
 	allowedIDs, err := s.userRepo.GetAccessList(userID)
 	if err != nil {
 		return nil, err

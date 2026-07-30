@@ -78,6 +78,7 @@ class AuthService extends ChangeNotifier {
         'Nickname': user.nickname,
         'AvatarURL': user.avatarUrl,
         'Role': user.role,
+        'Grade': user.grade,
       }));
       await prefs.setString(_keyAuthToken, token);
       notifyListeners();

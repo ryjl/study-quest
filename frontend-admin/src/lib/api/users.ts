@@ -13,12 +13,13 @@ export const users = {
     avatar_url?: string;
     pin: string;
     role: string;
+    grade?: string;
   }): Promise<User> {
     return request('/admin/api/users', { method: 'POST', body: JSON.stringify(body) });
   },
   async updateUser(
     id: number,
-    body: { nickname: string; avatar_url?: string; pin?: string; role: string },
+    body: { nickname: string; avatar_url?: string; pin?: string; role: string; grade?: string },
   ): Promise<User> {
     return request(`/admin/api/users/${id}`, { method: 'PUT', body: JSON.stringify(body) });
   },

@@ -15,7 +15,7 @@ import (
 // ReadingHandler serves the /api/v1/readings* client endpoints (Flutter).
 // Mirrors EpisodeHandler/CourseHandler: the stream endpoint 302-redirects to the
 // storage provider URL (same as episode.Stream), and access is gated fail-closed
-// for non-admin/parent roles.
+// for non-admin roles.
 type ReadingHandler interface {
 	GetReadingRoom(c *gin.Context)
 	GetSeries(c *gin.Context)
@@ -140,7 +140,7 @@ func (h *readingHandler) toClientArticleDTO(a model.ReadingArticle) clientReadin
 }
 
 // requireStudentIdentity extracts (userID, role) from the gin context and
-// returns ok=false for a non-admin/parent request lacking trustworthy identity.
+// returns ok=false for a non-admin request lacking trustworthy identity.
 // Mirrors the fail-closed gate in episode_handler.GetPlayInfo.
 func requireStudentIdentity(c *gin.Context) (uint, string, bool) {
 	roleVal, hasRole := c.Get("userRole")
@@ -229,8 +229,8 @@ func (h *readingHandler) GetSeries(c *gin.Context) {
 		return
 	}
 
-	// Access gate: admin/parent bypass; students need series access.
-	if role != "admin" && role != "parent" {
+	// Access gate: admin bypass; students need series access.
+	if !model.IsStaffRole(role) {
 		allowed, aerr := h.seriesService.HasSeriesAccess(uid, uint(id))
 		if aerr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check series access"})

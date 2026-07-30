@@ -294,7 +294,7 @@ class _MainNavigationState extends State<MainNavigation> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  user.role == 'student' ? '四年级' : '家长',
+                  gradeOrRoleLabel(user),
                   style: TextStyle(
                     fontSize: 10,
                     color: colors.textMuted,
@@ -495,7 +495,7 @@ class _MainNavigationState extends State<MainNavigation> {
                                           borderRadius: BorderRadius.circular(6),
                                         ),
                                         child: Text(
-                                          user.role == 'student' ? '四年级' : '家长',
+                                          gradeOrRoleLabel(user),
                                           style: TextStyle(
                                             fontSize: 10,
                                             color: innerColors.textMuted,

@@ -32,8 +32,6 @@ import {
 
 export const ROLES = [
   { key: 'student', label: '学生', color: '#60a5fa' },
-  { key: 'teen', label: '青少年', color: '#fbbf24' },
-  { key: 'parent', label: '家长', color: '#34d399' },
   { key: 'admin', label: '管理员', color: '#6366f1' },
 ];
 
@@ -95,7 +93,10 @@ export function Users() {
       ) : users.length === 0 ? (
         <EmptyState icon={<UsersIcon size={32} />} title="暂无用户" hint="创建第一个学生账号开始使用" />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border/60 bg-card">
+        // NOTE: no overflow-hidden on this wrapper — it clips the row action
+        // DropdownMenu (⋯) which drops below the table, hiding 设备管理/编辑/
+        // 删除 on the last rows. The border + bg-card carry the card look.
+        <div className="rounded-lg border border-border/60 bg-card">
           <table className="w-full">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted">

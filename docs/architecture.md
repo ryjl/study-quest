@@ -298,9 +298,31 @@ Go struct 的 `json:` tag ↔ `frontend-admin/src/lib/types.ts` interface ↔
   受保护路由挂 `UserAuth`
 - **worker 协议**：预共享密钥 `X-Ingest-Key`(环境变量),不走任何 session
 
-### 速率限制
+### 角色体系
 
-`/api/v1/users/login` 挂 `RateLimit` 中间件(防 PIN 码爆破)。
+只有两个角色:`student`(学生,受内容解锁门控)和 `admin`(管理员,绕过所有
+学生级访问门控)。`IsStaffRole(role)` 判断是否绕过门控,目前即 `role == admin`。
+所有权限判断统一走 `IsStaffRole`,不散落字符串比较。`User.Grade` 是自由文本年级标签
+(如"四年级"/"初二"),由 admin 设置,仅用于显示(徽章优先显示 grade,空则显示角色中文),
+不参与权限判断。
+
+### 速率限制 / 登录防护(双层)
+
+学生端 PIN 登录 `/api/v1/users/login` 有**两层**爆破防护,叠加生效:
+
+1. **按 IP 限流**(middleware 层,`LoginRateLimitMiddleware`):同一源 IP 15 分钟内
+   最多 5 次**尝试**(不区分成功/失败)。挡单机爆破,但换 IP 池可绕。
+2. **按 user_id 账户锁定**(service 层,`loginLockout`):同一账户 15 分钟内累计 5 次
+   **失败**即锁,锁定期内即使 PIN 正确也返回 429;成功登录重置计数。挡跨 IP 池针对
+   单账户爆破。锁定状态在内存,进程重启即清(家庭部署可接受,与 IP 限流同哲学)。
+
+两者都返回 HTTP 429 + `Retry-After` 头。PIN 为 **6 位数字**(熵 ~20 bit),配合双层
+锁定,在线爆破在家庭场景下不可行;离线攻击靠 bcrypt hash + DB 不暴露公网(详见
+`docs/deployment.md`)。
+
+> ⚠️ **admin 后台登录 `/admin/api/login` 当前无任何限流**(路由裸挂,见 `router.go`),
+> 且默认密码为 `admin`。公网部署**必须**立即登录后台改密码,并建议反代层对 admin
+> login 路径加额外限流。详见 `docs/deployment.md`。
 
 ### 错误响应不泄露内部细节
 
