@@ -8,6 +8,11 @@ class NumPad extends StatefulWidget {
   final int maxDigits;
   final Function(String) onSubmit;
   final VoidCallback onCancel;
+  /// Whether digit entry is active. When false (e.g. during an account
+  /// lockout) digit/backspace/clear keys ignore input so the user can't keep
+  /// firing submits into a locked backend. The close (✕) button stays active
+  /// so the user can still dismiss the pad.
+  final bool enabled;
 
   const NumPad({
     Key? key,
@@ -15,6 +20,7 @@ class NumPad extends StatefulWidget {
     this.maxDigits = 6,
     required this.onSubmit,
     required this.onCancel,
+    this.enabled = true,
   }) : super(key: key);
 
   @override
@@ -28,6 +34,7 @@ class NumPadState extends State<NumPad> {
   String _currentPin = '';
 
   void _onKeyPress(String value) {
+    if (!widget.enabled) return;
     if (_currentPin.length < widget.maxDigits) {
       setState(() {
         _currentPin += value;
@@ -40,6 +47,7 @@ class NumPadState extends State<NumPad> {
   }
 
   void _backspace() {
+    if (!widget.enabled) return;
     if (_currentPin.isNotEmpty) {
       setState(() {
         _currentPin = _currentPin.substring(0, _currentPin.length - 1);
@@ -48,6 +56,7 @@ class NumPadState extends State<NumPad> {
   }
 
   void _clear() {
+    if (!widget.enabled) return;
     setState(() {
       _currentPin = '';
     });

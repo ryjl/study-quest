@@ -56,4 +56,26 @@ void main() {
     expect(submitted, 1);
     expect(submittedPin, '123456');
   });
+
+  testWidgets('enabled=false ignores digit key presses (lockout freeze)',
+      (tester) async {
+    final key = GlobalKey<NumPadState>();
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: NumPad(
+        key: key,
+        maxDigits: 6,
+        enabled: false, // simulates the locked state
+        onSubmit: (_) => fail('must not submit while disabled'),
+        onCancel: () {},
+      )),
+    ));
+    await tester.pumpAndSettle();
+
+    // Tapping digits must not buffer anything while disabled.
+    for (final d in '123456'.split('')) {
+      await tester.tap(find.text(d).last);
+      await tester.pump();
+    }
+    expect(key.currentState!.isClear, isTrue, reason: 'digits ignored while disabled');
+  });
 }

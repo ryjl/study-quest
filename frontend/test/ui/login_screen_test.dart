@@ -27,4 +27,33 @@ void main() {
       expect(formatLockoutWait(901), '15 分 1 秒');
     });
   });
+
+  // The countdown timer recomputes the message each second from the unlock
+  // instant. This verifies the "remaining seconds" math that drives it — i.e.
+  // a 15-minute lockout, 5 real minutes later, shows "10 分钟" (not the frozen
+  // original "15 分钟"). The timer machinery itself (Timer.periodic + setState)
+  // is glue built on top of these two pure functions.
+  group('secondsUntilUnlock', () {
+    test('15-min lockout, 5 min later → 600s (→ "10 分钟")', () {
+      final locked = DateTime(2026, 7, 30, 12, 0, 0);
+      final now = locked.add(const Duration(minutes: 5));
+      final remaining = secondsUntilUnlock(locked.add(const Duration(minutes: 15)), now);
+      expect(remaining, 600);
+      expect(formatLockoutWait(remaining), '10 分钟');
+    });
+
+    test('decrements each second', () {
+      final locked = DateTime(2026, 7, 30, 12, 0, 0);
+      final unlock = locked.add(const Duration(seconds: 30));
+      expect(secondsUntilUnlock(unlock, locked), 30);
+      expect(secondsUntilUnlock(unlock, locked.add(const Duration(seconds: 10))), 20);
+      expect(secondsUntilUnlock(unlock, locked.add(const Duration(seconds: 29))), 1);
+    });
+
+    test('returns ≤ 0 once elapsed (triggers the unlock branch)', () {
+      final unlock = DateTime(2026, 7, 30, 12, 0, 0);
+      expect(secondsUntilUnlock(unlock, unlock), 0);
+      expect(secondsUntilUnlock(unlock, unlock.add(const Duration(seconds: 1))), -1);
+    });
+  });
 }

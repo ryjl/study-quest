@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -30,10 +31,26 @@ class _LoginScreenState extends State<LoginScreen> {
   // against a full buffer and the user couldn't retype).
   final GlobalKey<NumPadState> _numPadKey = GlobalKey<NumPadState>();
 
+  // Account-lockout countdown. When the backend returns 429 + Retry-After we
+  // freeze input and tick down the remaining wait once per second so the user
+  // sees the real time-to-retry (15:00 → 14:59 → ...) instead of a static
+  // snapshot. _lockedUntil is the absolute unlock instant; the remaining
+  // seconds are derived from it each tick so we never drift.
+  Timer? _lockTimer;
+  DateTime? _lockedUntil;
+
+  bool get _isLocked => _lockedUntil != null;
+
   @override
   void initState() {
     super.initState();
     _refreshUsers();
+  }
+
+  @override
+  void dispose() {
+    _lockTimer?.cancel();
+    super.dispose();
   }
 
   void _refreshUsers() {
@@ -180,16 +197,55 @@ class _LoginScreenState extends State<LoginScreen> {
     _numPadKey.currentState?.clear();
 
     if (result.locked) {
-      setState(() {
-        _errorMessage = result.retryAfterSeconds != null
-            ? '尝试次数过多，请 ${formatLockoutWait(result.retryAfterSeconds!)} 后重试'
-            : '尝试次数过多，账户已临时锁定，请稍后重试';
-      });
+      _startLockout(result.retryAfterSeconds);
     } else {
       setState(() {
         _errorMessage = 'PIN 码错误，请重试！';
       });
     }
+  }
+
+  /// Begins (or refreshes) the account-lockout countdown. When [retrySeconds]
+  /// is known we freeze input and tick the message once per second so the
+  /// displayed wait shrinks in real time; when it's null (backend gave no
+  /// Retry-After) we still freeze input but show a static message. The
+  /// countdown auto-clears when it reaches zero, restoring input.
+  void _startLockout(int? retrySeconds) {
+    _lockTimer?.cancel();
+    if (retrySeconds == null) {
+      // No exact window from the backend: freeze input, show a static hint.
+      // The backend still gate-keeps — a later attempt either succeeds or
+      // returns 429 again, which refreshes the countdown with a real value.
+      setState(() {
+        _lockedUntil = DateTime.now();
+        _errorMessage = '尝试次数过多，账户已临时锁定，请稍后重试';
+      });
+      return;
+    }
+    setState(() {
+      _lockedUntil = DateTime.now().add(Duration(seconds: retrySeconds));
+      _errorMessage = '尝试次数过多，请 ${formatLockoutWait(retrySeconds)} 后重试';
+    });
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) {
+        _lockTimer?.cancel();
+        return;
+      }
+      final remaining = secondsUntilUnlock(_lockedUntil!, DateTime.now());
+      if (remaining <= 0) {
+        // Unlock: restore input and clear the message so the user can retry.
+        _lockTimer!.cancel();
+        _lockTimer = null;
+        setState(() {
+          _lockedUntil = null;
+          _errorMessage = '';
+        });
+      } else {
+        setState(() {
+          _errorMessage = '尝试次数过多，请 ${formatLockoutWait(remaining)} 后重试';
+        });
+      }
+    });
   }
 
   @override
@@ -298,6 +354,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             key: _numPadKey,
                             title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
                             maxDigits: 6, // 6-digit PIN (security: 6-digit minimum)
+                            enabled: !_isLocked, // freeze entry during lockout
                             onSubmit: _onSubmitPin,
                             onCancel: _onCancelPin,
                           ),
@@ -482,5 +539,13 @@ String formatLockoutWait(int seconds) {
   final m = seconds ~/ 60;
   final s = seconds % 60;
   return s == 0 ? '$m 分钟' : '$m 分 $s 秒';
+}
+
+/// Seconds left until [lockedUntil], measured against [now] (injectable so
+/// tests can advance virtual time without waiting). Returns ≤ 0 once the
+/// lockout has elapsed. The countdown timer ticks this once per second to
+/// refresh the message (15:00 → 14:59 → … → 0 → unlock).
+int secondsUntilUnlock(DateTime lockedUntil, DateTime now) {
+  return lockedUntil.difference(now).inSeconds;
 }
 
