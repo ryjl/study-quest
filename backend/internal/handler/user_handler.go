@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"studyquest/backend/internal/service"
@@ -73,9 +74,15 @@ func (h *userHandler) Login(c *gin.Context) {
 	if err != nil {
 		// Account lockout is surfaced distinctly (429, matching the per-IP
 		// limiter) so a legitimate user who fat-fingered into a lockout gets a
-		// hint to wait rather than a generic "incorrect PIN".
+		// hint to wait rather than a generic "incorrect PIN". The Retry-After
+		// value comes from the lockout's actual remaining window (oldest
+		// counted failure + window), so it reflects real time-to-unlock — the
+		// client displays this countdown but never decides lock state itself.
 		if errors.Is(err, service.ErrAccountLocked) {
-			c.Header("Retry-After", "900") // 15 min hint; matches default lockout window
+			remaining := h.userService.LockoutRemaining(req.UserID)
+			if remaining > 0 {
+				c.Header("Retry-After", strconv.Itoa(remaining))
+			}
 			c.JSON(http.StatusTooManyRequests, gin.H{
 				"error": "account temporarily locked due to repeated failed logins, please try again later",
 			})

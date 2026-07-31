@@ -29,10 +29,12 @@ void main() {
   });
 
   // The countdown timer recomputes the message each second from the unlock
-  // instant. This verifies the "remaining seconds" math that drives it — i.e.
-  // a 15-minute lockout, 5 real minutes later, shows "10 分钟" (not the frozen
-  // original "15 分钟"). The timer machinery itself (Timer.periodic + setState)
-  // is glue built on top of these two pure functions.
+  // instant the backend reported. This is DISPLAY-ONLY: the frontend never
+  // decides whether the account is locked (that's the backend's call on every
+  // login attempt). These tests verify the "remaining seconds" math that
+  // drives the message — e.g. a backend-reported 15-min wait, 5 real minutes
+  // later, shows "10 分钟" (not the frozen original "15 分钟"). The timer
+  // machinery (Timer.periodic + setState) is glue over these two pure funcs.
   group('secondsUntilUnlock', () {
     test('15-min lockout, 5 min later → 600s (→ "10 分钟")', () {
       final locked = DateTime(2026, 7, 30, 12, 0, 0);
@@ -50,7 +52,7 @@ void main() {
       expect(secondsUntilUnlock(unlock, locked.add(const Duration(seconds: 29))), 1);
     });
 
-    test('returns ≤ 0 once elapsed (triggers the unlock branch)', () {
+    test('returns ≤ 0 once elapsed (clears the hint; backend still gates)', () {
       final unlock = DateTime(2026, 7, 30, 12, 0, 0);
       expect(secondsUntilUnlock(unlock, unlock), 0);
       expect(secondsUntilUnlock(unlock, unlock.add(const Duration(seconds: 1))), -1);

@@ -61,6 +61,44 @@ func (l *loginLockout) locked(userID uint) bool {
 	return len(fresh) >= l.max
 }
 
+// remaining returns how many seconds until the account unlocks, or 0 if it
+// isn't locked. The lock lifts as soon as the OLDEST counted failure ages out
+// of the window (sliding window), so the unlock instant is
+// oldestFailure + window. This is the authoritative "when can the user retry"
+// value the backend surfaces to the client via Retry-After — the client only
+// displays it, never decides on its own.
+func (l *loginLockout) remaining(userID uint) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	cutoff := l.now().Add(-l.window)
+	fresh := l.fails[userID][:0]
+	for _, t := range l.fails[userID] {
+		if t.After(cutoff) {
+			fresh = append(fresh, t)
+		}
+	}
+	l.fails[userID] = fresh
+	if len(fresh) < l.max {
+		return 0
+	}
+	// fresh isn't sorted by time in general, but recordFailure always appends
+	// "now", and now only moves forward, so the entries are in ascending order
+	// in practice — fresh[0] is the oldest. Find the min defensively anyway.
+	oldest := fresh[0]
+	for _, t := range fresh[1:] {
+		if t.Before(oldest) {
+			oldest = t
+		}
+	}
+	unlockAt := oldest.Add(l.window)
+	d := int(unlockAt.Sub(l.now()).Seconds())
+	if d < 0 {
+		return 0
+	}
+	return d
+}
+
 // recordFailure appends a failure timestamp for user_id. Called by
 // Authenticate after a PIN mismatch (not after a "user not found" lookup —
 // those have no user_id to key on and are already covered by the IP limiter +

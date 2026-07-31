@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -295,8 +296,20 @@ func TestLoginFlow_AccountLockout(t *testing.T) {
 	if resp.Code != http.StatusTooManyRequests {
 		t.Fatalf("after threshold: expected 429, got %d (body: %s)", resp.Code, resp.Body.String())
 	}
-	if resp.Header().Get("Retry-After") == "" {
-		t.Error("locked response should carry a Retry-After header")
+	// Retry-After must be the lockout's REAL remaining seconds (not a hardcoded
+	// constant): right after lockout it should be close to the 15-min window.
+	// We assert it parses as an int within (0, window] so the test is stable
+	// without depending on real-time clock skew.
+	ra := resp.Header().Get("Retry-After")
+	if ra == "" {
+		t.Fatal("locked response should carry a Retry-After header")
+	}
+	secs, err := strconv.Atoi(ra)
+	if err != nil {
+		t.Fatalf("Retry-After %q is not an integer: %v", ra, err)
+	}
+	if secs <= 0 || secs > 900 {
+		t.Errorf("Retry-After = %ds, want within (0, 900] just after lockout", secs)
 	}
 }
 

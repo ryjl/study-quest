@@ -104,3 +104,54 @@ func TestLoginLockout_OldFailuresPruned(t *testing.T) {
 		t.Fatal("stale failure should have been pruned; account should not be locked")
 	}
 }
+
+func TestLoginLockout_Remaining(t *testing.T) {
+	l, t0 := lockoutClock(t)
+	uid := uint(30)
+
+	// Not locked → 0.
+	if r := l.remaining(uid); r != 0 {
+		t.Fatalf("unlocked remaining = %d, want 0", r)
+	}
+
+	// Hit the threshold. The unlock instant = oldest failure + window.
+	// Record failures across a span so we can verify remaining reflects the
+	// OLDEST counted failure, not the latest. Each recordFailure is followed
+	// by a 2-min advance, so after max iterations: failures landed at
+	// +0,+2,+4,+6,+8 min and the clock is at +10 min. Oldest = 10 min ago.
+	for i := 0; i < DefaultLockoutMax; i++ {
+		l.recordFailure(uid)
+		*t0 = t0.Add(2 * time.Minute)
+	}
+	// remaining = window(15min) − 10min since oldest = 5min = 300s.
+	r := l.remaining(uid)
+	if r != 300 {
+		t.Fatalf("locked remaining = %ds, want 300 (window − oldest span)", r)
+	}
+
+	// 1 min later → oldest 11min ago → 4min = 240s left.
+	*t0 = t0.Add(time.Minute)
+	if r := l.remaining(uid); r != 240 {
+		t.Errorf("after 1 min: remaining = %d, want 240", r)
+	}
+
+	// Once the oldest failure ages out of the window the count drops below
+	// threshold and the account unlocks → remaining 0. Oldest was 11min ago;
+	// advance 5 more min so it's 16min ago (> 15min window).
+	*t0 = t0.Add(5 * time.Minute)
+	if r := l.remaining(uid); r != 0 {
+		t.Errorf("once oldest ages out: remaining = %d, want 0 (unlocked)", r)
+	}
+}
+
+func TestLoginLockout_RemainingUnlocked(t *testing.T) {
+	l, _ := lockoutClock(t)
+	uid := uint(31)
+	// Below threshold: remaining must read 0 even with some failures.
+	for i := 0; i < DefaultLockoutMax-1; i++ {
+		l.recordFailure(uid)
+	}
+	if r := l.remaining(uid); r != 0 {
+		t.Fatalf("below threshold: remaining = %d, want 0", r)
+	}
+}

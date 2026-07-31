@@ -16,6 +16,11 @@ type UserService interface {
 	CreateUser(nickname, avatarURL, pin, role, grade string) (*model.User, error)
 	UpdateUser(id uint, nickname, avatarURL, pin, role, grade string) (*model.User, error)
 	Authenticate(userID uint, pin string) (bool, error)
+	// LockoutRemaining reports seconds until the account unlocks (0 if not
+	// locked). The backend is the sole authority on lock state; the handler
+	// surfaces this via the Retry-After header so the client can display an
+	// accurate countdown instead of guessing.
+	LockoutRemaining(userID uint) int
 	DeleteUser(id uint) error
 	GrantCourseAccess(userID, courseID uint) error
 	RevokeCourseAccess(userID, courseID uint) error
@@ -124,6 +129,10 @@ func (s *userService) Authenticate(userID uint, pin string) (bool, error) {
 	}
 	s.lockout.reset(userID)
 	return true, nil
+}
+
+func (s *userService) LockoutRemaining(userID uint) int {
+	return s.lockout.remaining(userID)
 }
 
 func (s *userService) GrantCourseAccess(userID, courseID uint) error {

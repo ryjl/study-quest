@@ -31,15 +31,17 @@ class _LoginScreenState extends State<LoginScreen> {
   // against a full buffer and the user couldn't retype).
   final GlobalKey<NumPadState> _numPadKey = GlobalKey<NumPadState>();
 
-  // Account-lockout countdown. When the backend returns 429 + Retry-After we
-  // freeze input and tick down the remaining wait once per second so the user
-  // sees the real time-to-retry (15:00 → 14:59 → ...) instead of a static
-  // snapshot. _lockedUntil is the absolute unlock instant; the remaining
-  // seconds are derived from it each tick so we never drift.
+  // Lockout countdown — DISPLAY ONLY. The backend is the single source of
+  // truth for whether an account is locked: every login attempt is decided
+  // server-side, and a 429 + Retry-After refreshes this message. We do NOT
+  // freeze input or "unlock" on the client — that would let a user bypass the
+  // lock by restarting the app (this state is in-memory only). The timer just
+  // makes the hint count down in real time (15:00 → 14:59 → …) so the user
+  // sees the wait shrinking instead of a frozen "15 分钟". When it hits zero
+  // we only clear the message; the user is free to retry, and if the backend
+  // is still locking it will 429 again and refresh the countdown.
   Timer? _lockTimer;
-  DateTime? _lockedUntil;
-
-  bool get _isLocked => _lockedUntil != null;
+  DateTime? _lockCountdownEnd;
 
   @override
   void initState() {
@@ -197,7 +199,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _numPadKey.currentState?.clear();
 
     if (result.locked) {
-      _startLockout(result.retryAfterSeconds);
+      _showLockoutMessage(result.retryAfterSeconds);
     } else {
       setState(() {
         _errorMessage = 'PIN 码错误，请重试！';
@@ -205,25 +207,25 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  /// Begins (or refreshes) the account-lockout countdown. When [retrySeconds]
-  /// is known we freeze input and tick the message once per second so the
-  /// displayed wait shrinks in real time; when it's null (backend gave no
-  /// Retry-After) we still freeze input but show a static message. The
-  /// countdown auto-clears when it reaches zero, restoring input.
-  void _startLockout(int? retrySeconds) {
+  /// Shows (or refreshes) the lockout hint based on the backend's last 429.
+  /// Display-only: this never freezes input or decides when the user may
+  /// retry — that's the backend's call. We just count down the [retrySeconds]
+  /// the server handed us so the message shrinks in real time. When it reaches
+  /// zero we clear the message; the user can retry, and if still locked the
+  /// backend returns 429 again and refreshes this hint.
+  void _showLockoutMessage(int? retrySeconds) {
     _lockTimer?.cancel();
     if (retrySeconds == null) {
-      // No exact window from the backend: freeze input, show a static hint.
-      // The backend still gate-keeps — a later attempt either succeeds or
-      // returns 429 again, which refreshes the countdown with a real value.
+      // No Retry-After header (rare — a reverse proxy stripping it). Show a
+      // static hint; the next attempt will get a fresh verdict from backend.
       setState(() {
-        _lockedUntil = DateTime.now();
+        _lockCountdownEnd = null;
         _errorMessage = '尝试次数过多，账户已临时锁定，请稍后重试';
       });
       return;
     }
     setState(() {
-      _lockedUntil = DateTime.now().add(Duration(seconds: retrySeconds));
+      _lockCountdownEnd = DateTime.now().add(Duration(seconds: retrySeconds));
       _errorMessage = '尝试次数过多，请 ${formatLockoutWait(retrySeconds)} 后重试';
     });
     _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -231,13 +233,14 @@ class _LoginScreenState extends State<LoginScreen> {
         _lockTimer?.cancel();
         return;
       }
-      final remaining = secondsUntilUnlock(_lockedUntil!, DateTime.now());
+      final remaining = secondsUntilUnlock(_lockCountdownEnd!, DateTime.now());
       if (remaining <= 0) {
-        // Unlock: restore input and clear the message so the user can retry.
+        // Countdown elapsed: stop the timer and clear the hint. We do NOT
+        // gate further attempts on this — the backend is the lock authority.
         _lockTimer!.cancel();
         _lockTimer = null;
         setState(() {
-          _lockedUntil = null;
+          _lockCountdownEnd = null;
           _errorMessage = '';
         });
       } else {
@@ -354,7 +357,10 @@ class _LoginScreenState extends State<LoginScreen> {
                             key: _numPadKey,
                             title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
                             maxDigits: 6, // 6-digit PIN (security: 6-digit minimum)
-                            enabled: !_isLocked, // freeze entry during lockout
+                            // NOTE: input is NOT frozen during a lockout — the
+                            // backend is the lock authority, so the user may
+                            // retry anytime; a still-locked attempt returns 429
+                            // and refreshes the countdown hint.
                             onSubmit: _onSubmitPin,
                             onCancel: _onCancelPin,
                           ),
