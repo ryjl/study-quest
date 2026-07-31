@@ -159,6 +159,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   double _volumeIndicatorVal = 0.0;
   bool _showBrightnessIndicator = false;
   double _brightnessIndicatorVal = 0.0;
+  // 用户是否在播放器内改过亮度(用于 dispose 时决定是否还原系统亮度)。
+  // 不还原会导致退出后整台设备亮度保持低值,直到重启或手动去系统设置调。
+  bool _brightnessChanged = false;
   bool _showFastForwardIndicator = false;
   String _fastForwardText = '';
   Timer? _indicatorTimer;
@@ -230,6 +233,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
       DeviceOrientation.portraitUp,
       DeviceOrientation.portraitDown,
     ]);
+    // 还原系统亮度:用户在播放器内调过低亮度后,若不还原,退出后整台设备会一直
+    // 保持低亮度(直到重启)。只在确实改过亮度时 reset(避免无谓的系统调用)。
+    // dispose 是同步的,fire-and-forget 即可;reset 失败忽略(设备/权限问题)。
+    if (_brightnessChanged) {
+      ScreenBrightness().resetScreenBrightness().catchError((_) {});
+    }
     super.dispose();
   }
 
@@ -316,6 +325,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
           if (_selectedSubtitle == 0) {
             _autoSelectDefaultSubtitle(options);
           }
+        }
+      });
+
+      // 监听播放中途错误(CDN 断流、解码失败等)。初始化阶段的错误由上面的
+      // try/catch 覆盖;这里捕获的是播放已就绪后发生的断流——原版不监听,用户只会
+      // 看到画面冻住无提示无重试。只在引擎已就绪 + 已拿到时长后显示错误页,避免
+      // 把初始化时的非致命 error(某些源的编解码警告)误判成致命错误。
+      _player.stream.error.listen((msg) {
+        if (!mounted || msg.isEmpty) return;
+        if (_engineReady && _player.state.duration > Duration.zero) {
+          setState(() => _errorMessage = '播放出错,可能是网络中断:$msg');
         }
       });
 
@@ -615,8 +635,19 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       if (!buffering || !_player.state.playing) {
                         return const SizedBox.shrink();
                       }
-                      return const Center(
-                        child: CircularProgressIndicator(color: Colors.white70),
+                      // 裸 spinner 在网络差时让 K12 学生困惑(以为卡死)。加"缓冲中…"
+                      // 文字明确状态;网络慢时这比一个无声转圈更安心。
+                      return Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: const [
+                            CircularProgressIndicator(color: Colors.white70),
+                            SizedBox(height: 12),
+                            Text('缓冲中…',
+                                style: TextStyle(
+                                    color: Colors.white70, fontSize: 13)),
+                          ],
+                        ),
                       );
                     },
                   ),
@@ -754,6 +785,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Future<void> _setBrightness(double val) async {
     try {
       await ScreenBrightness().setScreenBrightness(val.clamp(0.0, 1.0));
+      _brightnessChanged = true;
     } catch (_) {}
   }
   Future<double> _getBrightness() async {
@@ -1221,9 +1253,11 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     bufferedColor: Colors.white38,
                   ),
                   thumbShape: RoundSliderThumbShape(
-                      enabledThumbRadius: _seekBarFocused ? 10 : 7),
+                      // 非聚焦态 thumb 适度加大(7→8),K12 低龄用户手指拖动精度差,
+                      // 原 7px 在手机横屏上容易戳偏。
+                      enabledThumbRadius: _seekBarFocused ? 10 : 8),
                   overlayShape: RoundSliderOverlayShape(
-                      overlayRadius: _seekBarFocused ? 18 : 14),
+                      overlayRadius: _seekBarFocused ? 18 : 20),
                 ),
                 child: Slider(
                   value: displayMs,
@@ -1442,6 +1476,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         PlayerSettingsMenu<double>(
           icon: Icons.speed_rounded,
           selectedValue: _rate,
+          // 倍速≠1.0 时图标高亮,让学生一眼看出当前在加速播放。
+          active: _rate != 1.0,
           options: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
               .map((r) => PlayerMenuOption(value: r, label: '${r}x'))
               .toList(),
@@ -1456,6 +1492,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         PlayerSettingsMenu<int>(
           icon: Icons.subtitles_rounded,
           selectedValue: _selectedSubtitle,
+          // 字幕已开启(非「关闭」)时图标高亮,一眼看出字幕状态。
+          active: _selectedSubtitle != 0,
           menuTitle: '字幕选择',
           options: subtitleOptions.asMap().entries.map((entry) {
             final opt = entry.value;
@@ -1474,6 +1512,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
         PlayerSettingsMenu<int>(
           icon: Icons.format_size_rounded,
           selectedValue: UiPrefs.instance.subtitleSizeIndex,
+          // 字幕字号≠默认「中」(档位 1)时高亮。
+          active: UiPrefs.instance.subtitleSizeIndex != 1,
           menuTitle: '字幕大小',
           options: UiPrefs.subtitleSizeLabels
               .asMap()
@@ -1496,6 +1536,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     _player.state.track.audio.id == 'auto')
                 ? null
                 : _player.state.track.audio.id,
+            // 选了非默认(非 auto/no)音轨时高亮。
+            active: _player.state.track.audio.id != 'no' &&
+                _player.state.track.audio.id != 'auto',
             menuTitle: '音轨选择',
             options: audioOptions.map((opt) {
               final track = opt['track'] as AudioTrack;
@@ -1636,6 +1679,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildErrorScreen() {
+    // 错误页用纯黑视频沉浸背景(与亮暗主题无关),控件文字用白色/white70,
+    // 不走 context.colors —— 视频错误态始终是深色,亮暗一致。
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
@@ -1646,13 +1691,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
             children: [
               const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
               const SizedBox(height: 16),
+              // 错误图标保留红色警示,但正文文字改浅色:原版整段红色在黑底上刺眼且
+              // 错误信息可能很长(CDN 报错堆栈),红色长文对 K12 学生不友好。
+              Text('播放遇到问题',
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+              const SizedBox(height: 8),
               Text(_errorMessage,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 16, color: Colors.redAccent)),
+                  style: const TextStyle(fontSize: 13, color: Colors.white70)),
               const SizedBox(height: 32),
-              Button3D.white(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('返回上一页'),
+              // 两个动作:重试(重新初始化视频)+ 返回。重试覆盖"CDN 偶发断流/重连"
+              // 这类可恢复场景,不必每次出错都强退重进。
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Button3D.blue(
+                    onPressed: () {
+                      setState(() {
+                        _errorMessage = '';
+                        _engineReady = false;
+                      });
+                      _initializeVideo();
+                    },
+                    child: const Text('重试'),
+                  ),
+                  const SizedBox(width: 16),
+                  Button3D.white(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('返回'),
+                  ),
+                ],
               ),
             ],
           ),

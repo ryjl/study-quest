@@ -132,11 +132,12 @@ class QuizReviewCard extends StatelessWidget {
     final hasVerdict = _submitted && v != null && v.correct != null;
     final content = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // 题序号 + 题型标签:让卷子像正式试卷。填空琥珀、多选紫、单选蓝。
-        // 标签用浅色块+深色字(固定的"标签"视觉),亮暗均如此以保证辨识。
+        // 题序标签用 cardColor(语义自适应),融入卡片靠 textMuted 文字标识;题型标签
+        // 用固定浅色块(蓝/紫/琥珀)+ 深色字,亮暗一致以保证辨识。
         Row(children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-            decoration: BoxDecoration(color: colors.slate100, borderRadius: BorderRadius.circular(5)),
+            decoration: BoxDecoration(color: colors.cardColor, borderRadius: BorderRadius.circular(5)),
             child: Text('第${stem.index + 1}题', style: TextStyle(fontSize: 10, color: colors.textMuted)),
           ),
           const SizedBox(width: 6),
@@ -260,7 +261,11 @@ class QuizReviewCard extends StatelessWidget {
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text('${_optionTag(i)}${stem.options[i]}', style: TextStyle(fontSize: 13, color: colors.slate700))),
+          // 选项文字:默认态(cardColor 底)用 textWhite 跟主题自适应;选中/正确/错误
+          // 高亮态背景是固定浅色块(浅紫/浅绿/浅红),必须用固定深字 slate800 才不撞色。
+          Expanded(
+              child: Text('${_optionTag(i)}${stem.options[i]}',
+                  style: TextStyle(fontSize: 13, color: bg == colors.cardColor ? colors.textWhite : colors.slate800))),
           if (isCorrect) Icon(Icons.check_circle, size: 16, color: colors.accentGreen),
           if (isWrongPick) const Icon(Icons.cancel, size: 16, color: Color(0xFFEF4444)),
         ]),
@@ -315,7 +320,11 @@ class QuizReviewCard extends StatelessWidget {
             child: isSelected ? const Icon(Icons.check, size: 12, color: Colors.white) : null,
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text('${_optionTag(i)}${stem.options[i]}', style: TextStyle(fontSize: 13, color: colors.slate700))),
+          // 选项文字:默认态(cardColor 底)用 textWhite 跟主题自适应;选中/正确/错误
+          // 高亮态背景是固定浅色块(浅紫/浅绿/浅红),必须用固定深字 slate800 才不撞色。
+          Expanded(
+              child: Text('${_optionTag(i)}${stem.options[i]}',
+                  style: TextStyle(fontSize: 13, color: bg == colors.cardColor ? colors.textWhite : colors.slate800))),
           if (isCorrect) Icon(Icons.check_circle, size: 16, color: colors.accentGreen),
         ]),
       ),
@@ -416,7 +425,10 @@ class QuizReviewCard extends StatelessWidget {
       children.add(Container(
         margin: const EdgeInsets.only(top: 8),
         padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(color: colors.slate100, borderRadius: BorderRadius.circular(8)),
+        decoration: BoxDecoration(
+            color: colors.cardColor,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colors.borderMuted)),
         child: _buildMultiDetail(context, v),
       ));
     }

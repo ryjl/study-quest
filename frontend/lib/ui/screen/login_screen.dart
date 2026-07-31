@@ -26,6 +26,10 @@ class _LoginScreenState extends State<LoginScreen> {
   User? _selectedUser;
   bool _showPinPad = false;
   String _errorMessage = '';
+  // 登录请求进行中。期间禁用 NumPad 防重复提交(自动提交满 6 位即触发,网络慢时
+  // 用户可能再按 C 重输触发第二次 login(),两次请求竞速状态不可测),并显示"登录中…"
+  // 反馈,而非让用户对着静止的界面干等。
+  bool _isAuthenticating = false;
   // Controls the NumPad so we can clear the buffered PIN after a wrong attempt
   // (auto-submit fills maxDigits; without a clear the next digit would no-op
   // against a full buffer and the user couldn't retype).
@@ -104,7 +108,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 style: TextStyle(fontFamily: 'monospace', fontSize: 16, fontWeight: FontWeight.bold, color: colors.textWhite),
                 decoration: InputDecoration(
                   filled: true,
-                  fillColor: colors.slate100,
+                  // 用 backgroundColor(页面底色,比 cardColor 卡片底深一档)做输入框
+                  // 填充:dialog 自身是 cardColor,深色模式下 slate100 浅底叠 textWhite
+                  // 浅字会撞色看不见;改用语义自适应的底色保证亮暗都和卡片有层次且字可见。
+                  fillColor: colors.backgroundColor,
                   contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(16),
@@ -176,14 +183,33 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() {
       _showPinPad = false;
       _selectedUser = null;
+      _isAuthenticating = false;
     });
   }
 
   Future<void> _onSubmitPin(String pin) async {
-    if (_selectedUser == null) return;
+    if (_selectedUser == null || _isAuthenticating) return;
 
     final authService = Provider.of<AuthService>(context, listen: false);
-    final result = await authService.login(_selectedUser!, pin);
+    setState(() {
+      _isAuthenticating = true;
+      _errorMessage = '';
+    });
+    LoginResult result;
+    try {
+      result = await authService.login(_selectedUser!, pin);
+    } catch (_) {
+      // 网络错误(超时/服务器无响应):login 链路无 try/catch,异常会向上抛成
+      // 未处理异常(红屏),且下方的 clear() 走不到 → NumPad 永远卡在满 6 位,
+      // 用户再按任何键都 no-op,只能强杀 App。这里兜底:清缓冲 + 人话提示 + 解锁。
+      if (!mounted) return;
+      _numPadKey.currentState?.clear();
+      setState(() {
+        _isAuthenticating = false;
+        _errorMessage = '网络连接失败，请检查网络后重试';
+      });
+      return;
+    }
 
     if (result.success) {
       if (!mounted) return;
@@ -197,6 +223,7 @@ class _LoginScreenState extends State<LoginScreen> {
     // Failed: always clear the pad so the user starts fresh (auto-submit fills
     // maxDigits, so without this the buffer stays full).
     _numPadKey.currentState?.clear();
+    setState(() => _isAuthenticating = false);
 
     if (result.locked) {
       _showLockoutMessage(result.retryAfterSeconds);
@@ -361,10 +388,25 @@ class _LoginScreenState extends State<LoginScreen> {
                             // backend is the lock authority, so the user may
                             // retry anytime; a still-locked attempt returns 429
                             // and refreshes the countdown hint.
+                            // 但登录请求进行中要禁用(_isAuthenticating),防重复提交。
+                            enabled: !_isAuthenticating,
                             onSubmit: _onSubmitPin,
                             onCancel: _onCancelPin,
                           ),
-                          if (_errorMessage.isNotEmpty) ...[
+                          if (_isAuthenticating) ...[
+                            const SizedBox(height: 20),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: const [
+                                SizedBox(
+                                    width: 16, height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2)),
+                                SizedBox(width: 10),
+                                Text('登录中…',
+                                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                              ],
+                            ),
+                          ] else if (_errorMessage.isNotEmpty) ...[
                             const SizedBox(height: 20),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
@@ -420,16 +462,23 @@ class _LoginScreenState extends State<LoginScreen> {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(color: colors.cardColor, width: 3),
-                  image: user.avatarUrl.isNotEmpty
-                      ? DecorationImage(
-                          image: NetworkImage(user.avatarUrl),
-                          fit: BoxFit.cover,
-                        )
-                      : null,
                 ),
-                child: user.avatarUrl.isEmpty
-                    ? Icon(Icons.person, size: 44, color: colors.textMuted)
-                    : null,
+                child: ClipOval(
+                  // 用 Image.network + errorBuilder 兜底(对齐 bookshelf/reading):
+                  // 原 DecorationImage(NetworkImage) 无 onError,头像 URL 非空但
+                  // 加载失败(404/内网穿透失效)时 debug 抛异常、release 渲染成空圆圈。
+                  // errorBuilder 回退到 person 占位图标,保证始终有可辨识的头像。
+                  child: user.avatarUrl.isEmpty
+                      ? Center(child: Icon(Icons.person, size: 44, color: colors.textMuted))
+                      : Image.network(
+                          user.avatarUrl,
+                          fit: BoxFit.cover,
+                          width: 90,
+                          height: 90,
+                          errorBuilder: (_, __, ___) => Center(
+                              child: Icon(Icons.person, size: 44, color: colors.textMuted)),
+                        ),
+                ),
               ),
               const SizedBox(height: 14),
               // Nickname
@@ -447,7 +496,12 @@ class _LoginScreenState extends State<LoginScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(
-                  color: colors.slate900.withValues(alpha: 0.05),
+                  // 凹槽底深色感知:亮色 slate900@5% 浅灰,深色 textWhite@5% 浅凹槽
+                  // (slate900 在深色下=背景色,5% 透明会消失)。
+                  color: (Theme.of(context).brightness == Brightness.dark
+                          ? colors.textWhite
+                          : colors.slate900)
+                      .withValues(alpha: 0.05),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(

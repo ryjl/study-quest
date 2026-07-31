@@ -156,16 +156,15 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
         _busy = false;
       });
       // 提示错题已加入错题本(发现性:考试做错的题也进错题本)。
+      // 原本带「去复习」action,但 onPressed 是 maybePop(只回上一页,并没去错题本),
+      // 文案与行为不符且跨路由切 tab 在 TV(错题本 tab 被过滤)下不可达,反而误导。
+      // 改为纯提示:错题本入口在主页 tab,学生回到大厅自然能看到未掌握 badge。
       final wrongCount = report.results.where((r) => !r.correct).length;
       if (wrongCount > 0) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('$wrongCount 道错题已加入错题本'),
-            action: SnackBarAction(
-              label: '去复习',
-              onPressed: () => Navigator.of(context).maybePop(),
-            ),
-            duration: const Duration(seconds: 5),
+            content: Text('$wrongCount 道错题已加入错题本,可到「错题本」复习'),
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -181,16 +180,40 @@ class _CourseExamScreenState extends State<CourseExamScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Scaffold(
-      backgroundColor: colors.backgroundColor,
-      appBar: AppBar(
-        title: Text('${widget.courseTitle} · 课程考试'),
-        backgroundColor: colors.cardColor,
-        foregroundColor: colors.slate900,
-        elevation: 0,
+    // 开考期间(_busy)用全屏半透明遮罩拦截交互:原版只有按钮内置转圈,弱网下用户
+    // 可能误触 AppBar 返回键,导致开考请求结果丢失或重复触发。遮罩覆盖整个页面
+    // (含返回键),并显示居中 loading 明确告知"正在出卷"。
+    return Stack(children: [
+      Scaffold(
+        backgroundColor: colors.backgroundColor,
+        appBar: AppBar(
+          title: Text('${widget.courseTitle} · 课程考试'),
+          backgroundColor: colors.cardColor,
+          foregroundColor: colors.textWhite,
+          elevation: 0,
+        ),
+        body: _buildBody(),
       ),
-      body: _buildBody(),
-    );
+      if (_busy)
+        Positioned.fill(
+          child: AbsorbPointer(
+            child: ColoredBox(
+              color: colors.backgroundColor.withValues(alpha: 0.6),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text('正在为你出卷…',
+                        style: TextStyle(color: colors.textMuted, fontSize: 14)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+    ]);
   }
 
   Widget _buildBody() {

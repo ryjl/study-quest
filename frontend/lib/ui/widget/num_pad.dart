@@ -137,7 +137,13 @@ class NumPadState extends State<NumPad> {
               height: 54,
               alignment: Alignment.center,
               decoration: BoxDecoration(
-                color: colors.slate900.withValues(alpha: 0.05),
+                // 凹槽底:亮色用 slate900@5%(深色叠白卡→浅灰凹槽);深色下 slate900
+                // 恰是背景色,5% 透明≈透明,凹槽层次消失。深色改用 textWhite@6%
+                // (浅色叠深底→可见的浅凹槽),两端都有层次。
+                color: (Theme.of(context).brightness == Brightness.dark
+                        ? colors.textWhite
+                        : colors.slate900)
+                    .withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(16),
               ),
               child: Row(

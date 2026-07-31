@@ -6,7 +6,6 @@ import '../../service/api_service.dart';
 import '../../theme.dart';
 import '../responsive.dart';
 import '../widget/badge_style.dart';
-import '../widget/button_3d.dart';
 import '../widget/glass_panel.dart';
 
 /// 成长足迹 dashboard — gradient metric cards + timeline + honor wall.
@@ -380,7 +379,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                                 decoration: BoxDecoration(
                                   color: isGain
                                       ? const Color(0xFFFFEDD5)
-                                      : colors.slate100,
+                                      : colors.cardColor,
                                   borderRadius: BorderRadius.circular(10),
                                   border: Border.all(
                                     color: isGain
@@ -459,9 +458,15 @@ class GrowthFootprintScreen extends StatelessWidget {
             ),
 
           const SizedBox(height: 24),
-          Button3D.white(
-            onPressed: () {},
+          // 星数汇总:纯展示(不是可点按钮),用与白按钮同款的圆角容器呈现,避免误导用户
+          // 以为可点击。原 Button3D.white(onPressed: (){}) 是个空回调死按钮。
+          Container(
             padding: const EdgeInsets.symmetric(vertical: 14),
+            decoration: BoxDecoration(
+              color: colors.cardColor,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: colors.borderMuted, width: 2.0),
+            ),
             child: Center(
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -469,7 +474,10 @@ class GrowthFootprintScreen extends StatelessWidget {
                   const Icon(Icons.star_rounded, size: 18, color: Color(0xFFF59E0B)),
                   const SizedBox(width: 6),
                   Text('$unlockedStars / $totalStars',
-                      style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                      style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                          color: colors.textWhite)),
                 ],
               ),
             ),
@@ -602,7 +610,7 @@ class GrowthFootprintScreen extends StatelessWidget {
                 child: LinearProgressIndicator(
                   value: frac,
                   minHeight: 5,
-                  backgroundColor: colors.slate100,
+                  backgroundColor: colors.borderMuted,
                   valueColor: AlwaysStoppedAnimation<Color>(BadgeStyle.colorFor(st.badge.ruleType)),
                 ),
               ),

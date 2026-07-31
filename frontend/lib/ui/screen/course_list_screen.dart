@@ -171,7 +171,11 @@ class _CourseListScreenState extends State<CourseListScreen> {
             // 视觉顺序自然跳到下方第一个课程卡片(D-pad 下)或旁边筛选按钮(右),
             // 而不会被限制在某个子分组里。
             child: FocusTraversalGroup(
-              child: SingleChildScrollView(
+              child: RefreshIndicator(
+                // 下拉刷新:正常浏览态(数据已加载)也能手动刷新,而非只能靠
+                // errorStateBox 的"刷新"按钮。返回 Future 让指示器知道何时收起。
+                onRefresh: () async => _loadData(),
+                child: SingleChildScrollView(
                 // Wrap the whole layout in a vertical scroller. Without this the
                 // fixed-height Column overflows ("bottom overflowed by N pixels")
                 // whenever the course grid + filters exceed the viewport (e.g.
@@ -463,6 +467,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
               ],
             ),
           ),
+            ), // RefreshIndicator 闭合
             ),
         );
         },
@@ -598,9 +603,9 @@ class _CourseListScreenState extends State<CourseListScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
-                      color: colors.slate100,
+                      color: colors.cardColor,
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
+                      border: Border.all(color: colors.borderMuted, width: 1),
                     ),
                     child: Text(
                       _getSubjectName(course.subject),
@@ -775,7 +780,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                         ),
                         selected: active,
                         selectedColor: AppTheme.primaryColor,
-                        backgroundColor: colors.slate100,
+                        backgroundColor: colors.backgroundColor,
                         showCheckmark: false,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide.none),
                         onSelected: (val) {
@@ -806,7 +811,7 @@ class _CourseListScreenState extends State<CourseListScreen> {
                           ),
                           selected: active,
                           selectedColor: const Color(0xFFD1FAE5),
-                          backgroundColor: colors.slate100,
+                          backgroundColor: colors.backgroundColor,
                           showCheckmark: false,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),

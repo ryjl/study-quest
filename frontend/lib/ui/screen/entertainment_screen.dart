@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:study_quest/model/course.dart';
 import 'package:study_quest/service/api_service.dart';
 import 'package:study_quest/ui/screen/course_detail_screen.dart';
+import '../../theme.dart';
+import '../widget/focus_button.dart';
+import '../widget/state_widgets.dart';
+import '../widget/tv_focus.dart';
 
 /// EntertainmentScreen shows fun videos (content_type=entertainment). It's a
 /// simplified CourseListScreen — no subject/grade filters, no "continue
@@ -20,6 +24,9 @@ class EntertainmentScreen extends StatefulWidget {
 class _EntertainmentScreenState extends State<EntertainmentScreen> {
   late Future<List<Course>> _coursesFuture;
   String _searchQuery = '';
+  // 焦点陷阱修复(对齐 reading_room):搜索框 TextField 默认吞方向键,D-pad 进了出不来。
+  // dpadEscapeFocusNode 截断方向键转 nextFocus/previousFocus,字母数字放行。
+  late final FocusNode _searchFocusNode = dpadEscapeFocusNode();
 
   @override
   void initState() {
@@ -27,15 +34,27 @@ class _EntertainmentScreenState extends State<EntertainmentScreen> {
     _loadData();
   }
 
+  @override
+  void dispose() {
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
   void _loadData() {
     _coursesFuture = ApiService.fetchCourses(widget.activeUserId,
         contentType: 'entertainment');
+    // 必须触发重建:FutureBuilder 靠拿到新的 future 引用才重新订阅。缺这一行会导致
+    // 下拉刷新和从详情页返回 .then((_)=>_loadData()) 时数据不更新(对照 reading_room)。
+    setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F4FF),
+      // 透明底让 MainNavigation 的页面底色(backgroundColor)透出,深色模式下不再
+      // 是硬编码浅紫一片。原 Color(0xFFF8F4FF) 是亮色专属,深色下刺眼且与其余屏脱节。
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -46,33 +65,52 @@ class _EntertainmentScreenState extends State<EntertainmentScreen> {
                   const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
               child: Row(
                 children: [
-                  const Icon(Icons.movie_rounded,
-                      color: Color(0xFF8B5CF6), size: 32),
+                  Icon(Icons.movie_rounded,
+                      color: colors.violet500, size: 32),
                   const SizedBox(width: 12),
-                  const Text(
+                  Text(
                     '娱乐',
                     style: TextStyle(
-                        fontSize: 24, fontWeight: FontWeight.bold),
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: colors.textWhite),
                   ),
                   const Spacer(),
                   SizedBox(
                     width: 200,
                     child: TextField(
+                      focusNode: _searchFocusNode,
+                      onChanged: (v) => setState(() => _searchQuery = v),
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: colors.textWhite),
                       decoration: InputDecoration(
                         hintText: '搜索...',
-                        prefixIcon: const Icon(Icons.search, size: 20),
+                        hintStyle: TextStyle(color: colors.textMuted),
+                        prefixIcon:
+                            Icon(Icons.search, size: 20, color: colors.textMuted),
                         isDense: true,
                         contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12, vertical: 8),
                         border: OutlineInputBorder(
                           borderRadius: BorderRadius.circular(12),
-                          borderSide: BorderSide.none,
+                          borderSide: BorderSide(color: colors.borderMuted, width: 1.5),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: colors.primaryColor, width: 2),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: colors.borderMuted, width: 1.5),
                         ),
                         filled: true,
-                        fillColor: Colors.white,
+                        // 用主题卡片色(亮=白 / 暗=slate800)而非硬编码白:深色模式下白底
+                        // 与默认 TextField 浅色文字撞色看不见,取 context.colors.cardColor
+                        // 跟随主题。
+                        fillColor: colors.cardColor,
                       ),
-                      onChanged: (v) =>
-                          setState(() => _searchQuery = v),
                     ),
                   ),
                 ],
@@ -88,45 +126,38 @@ class _EntertainmentScreenState extends State<EntertainmentScreen> {
                   builder: (context, snapshot) {
                     if (snapshot.connectionState ==
                         ConnectionState.waiting) {
-                      return const Center(
-                          child: CircularProgressIndicator());
+                      return loadingSpinner(context);
                     }
                     if (snapshot.hasError) {
-                      return Center(
-                          child: Text('加载失败: ${snapshot.error}'));
+                      return errorStateBox(
+                          context, snapshot.error.toString(), _loadData,
+                          message: '加载失败，请检查网络！');
                     }
 
-                    final courses = snapshot.data ?? [];
-                    final filtered = courses.where((c) {
-                      return c.title
-                          .toLowerCase()
-                          .contains(_searchQuery.toLowerCase());
-                    }).toList();
+                    final all = snapshot.data ?? const <Course>[];
+                    final filtered = all
+                        .where((c) =>
+                            _searchQuery.isEmpty ||
+                            c.title
+                                .toLowerCase()
+                                .contains(_searchQuery.toLowerCase()))
+                        .toList();
 
                     if (filtered.isEmpty) {
-                      return ListView(children: [
-                        const SizedBox(height: 120),
-                        Center(
-                          child: Column(
-                            children: [
-                              const Icon(Icons.movie_filter_outlined,
-                                  size: 64, color: Colors.grey),
-                              const SizedBox(height: 16),
-                              Text(
-                                courses.isEmpty
-                                    ? '还没有娱乐视频'
-                                    : '没有匹配的视频',
-                                style: const TextStyle(
-                                    color: Colors.grey, fontSize: 16),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ]);
+                      return emptyStateBox(
+                        context: context,
+                        icon: Icons.movie_filter_outlined,
+                        headline: _searchQuery.isEmpty ? '还没有娱乐视频' : '没有匹配的视频',
+                        hint: _searchQuery.isEmpty
+                            ? '请让爸爸妈妈在后台添加娱乐内容吧！'
+                            : '换个关键词试试',
+                        refreshLabel: '刷新',
+                        onRefresh: _loadData,
+                      );
                     }
 
                     return GridView.builder(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
                       gridDelegate:
                           const SliverGridDelegateWithMaxCrossAxisExtent(
                         maxCrossAxisExtent: 280,
@@ -137,8 +168,13 @@ class _EntertainmentScreenState extends State<EntertainmentScreen> {
                       itemCount: filtered.length,
                       itemBuilder: (context, index) {
                         final course = filtered[index];
-                        return GestureDetector(
-                          onTap: () {
+                        // 用 FocusButton 包卡片(对齐 course_list / reading_room):
+                        // TV D-pad 才能聚焦选中;裸 GestureDetector 在 TV 上无法点入。
+                        return FocusButton(
+                          padding: EdgeInsets.zero,
+                          borderRadius: 20,
+                          borderColor: colors.borderMuted,
+                          onPressed: () {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
@@ -173,10 +209,13 @@ class _EntertainmentCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(20),
-        color: Colors.white,
+        // 卡片底接入主题(原硬编码 Colors.white,深色下白卡与浅字撞色)。
+        color: colors.cardColor,
+        border: Border.all(color: colors.borderMuted),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.06),
@@ -200,10 +239,10 @@ class _EntertainmentCard extends StatelessWidget {
                     Image.network(
                       course.coverUrl,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _gradientBanner(),
+                      errorBuilder: (_, __, ___) => _gradientBanner(colors),
                     )
                   else
-                    _gradientBanner(),
+                    _gradientBanner(colors),
                   // Play icon overlay
                   const Positioned(
                     bottom: 8,
@@ -230,22 +269,23 @@ class _EntertainmentCard extends StatelessWidget {
                       course.title,
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
+                        color: colors.textWhite,
                       ),
                     ),
                     const Spacer(),
                     Row(
                       children: [
                         Icon(Icons.play_circle_outline,
-                            size: 14, color: Colors.grey[400]),
+                            size: 14, color: colors.textMuted),
                         const SizedBox(width: 4),
                         Text(
                           '${course.tagsList.isEmpty ? "" : course.tagsList.first}',
                           style: TextStyle(
                             fontSize: 11,
-                            color: Colors.grey[500],
+                            color: colors.textMuted,
                           ),
                         ),
                       ],
@@ -260,17 +300,19 @@ class _EntertainmentCard extends StatelessWidget {
     );
   }
 
-  Widget _gradientBanner() {
+  Widget _gradientBanner(AppColors colors) {
     return Container(
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF8B5CF6), Color(0xFF6366F1)],
+          // 品牌渐变(两端一致,作娱乐 tab 的视觉标识),保留;改用 token 取色保持同步。
+          colors: [colors.violet500, colors.indigo500],
         ),
       ),
-      child: const Center(
-        child: Icon(Icons.movie_rounded, color: Colors.white38, size: 48),
+      child: Center(
+        child: Icon(Icons.movie_rounded,
+            color: Colors.white.withValues(alpha: 0.4), size: 48),
       ),
     );
   }

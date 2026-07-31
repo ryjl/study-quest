@@ -82,7 +82,14 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     _courseSummaryFuture = ApiService.fetchCourseSummary(widget.activeUserId, widget.course.id);
     // Compose the combined future ONCE here so FutureBuilder sees a stable
     // reference across rebuilds (see _combinedFuture comment above).
-    _combinedFuture = Future.wait([_episodesFuture, _progressFuture, _chaptersFuture]);
+    //
+    // 容错策略:episodes 是本页核心(课时列表),失败必须进 error 态给重试;
+    // progress/chapters 是辅助(完成勾选/续播位置/章节分组),失败应降级为空列表
+    // 而非拖垮整页——否则单个辅助接口偶发失败会让课时列表都看不到,体验更差。
+    // 用 .catchError((_) => <T>[]) 把辅助 future 包成永不抛错。
+    final safeProgress = _progressFuture.catchError((_) => <UserProgress>[]);
+    final safeChapters = _chaptersFuture.catchError((_) => <Chapter>[]);
+    _combinedFuture = Future.wait([_episodesFuture, safeProgress, safeChapters]);
     setState(() {});
     // After episodes load, prefetch enrichment data in the background.
     _episodesFuture.then((eps) => _prefetchEnrichment(eps)).catchError((_) {});
@@ -194,7 +201,10 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
 
                 // Scrollable main content
                 Expanded(
-                  child: SingleChildScrollView(
+                  child: RefreshIndicator(
+                    // 下拉刷新:正常浏览态也能手动刷新课时/进度,而非只能靠 errorStateBox。
+                    onRefresh: () async => _refreshData(),
+                    child: SingleChildScrollView(
                     physics: const BouncingScrollPhysics(),
                     padding: EdgeInsets.symmetric(
                       horizontal: isPortrait(context) ? 16.0 : 40.0,
@@ -333,6 +343,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       ],
                     ),
                   ),
+                    ), // RefreshIndicator 闭合
                 ),
               ],
             );
@@ -718,7 +729,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                 height: 68,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(12),
-                  color: colors.slate100,
+                  color: colors.cardColor,
                   border: Border.all(color: colors.borderMuted, width: 1.5),
                 ),
                 child: Center(
@@ -777,9 +788,9 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
               height: 68,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
-                color: colors.slate100,
+                color: colors.cardColor,
                 border: Border.all(
-                  color: isCompleted ? const Color(0xFFA7F3D0) : const Color(0xFFCBD5E1),
+                  color: isCompleted ? const Color(0xFFA7F3D0) : colors.borderMuted,
                   width: 1.5,
                 ),
               ),
@@ -843,7 +854,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 16,
-                      color: isCompleted ? colors.slate400 : colors.textWhite,
+                      color: isCompleted ? colors.textMuted : colors.textWhite,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -858,7 +869,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                         decoration: BoxDecoration(
-                          color: colors.slate100,
+                          color: colors.cardColor,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(color: colors.borderMuted),
                         ),
@@ -881,10 +892,12 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
                       Builder(builder: (btnContext) {
                         // 不可用时整套配色降到中性灰,视觉上明确"现在用不了"。
                         final enabled = aiAvailability == AiAvailability.enabled;
-                        final bgColor = enabled ? const Color(0xFFF5F3FF) : colors.slate100;
+                        // disabled 态用 cardColor 底 + textMuted 字/图标(语义自适应),
+                        // 不再用 slate100 浅底 + slate400 字(深色下浅底浅字撞色看不见)。
+                        final bgColor = enabled ? const Color(0xFFF5F3FF) : colors.cardColor;
                         final borderColor = enabled ? const Color(0xFFDDD6FE) : colors.borderMuted;
-                        final iconColor = enabled ? AppTheme.violet500 : colors.slate400;
-                        final textColor = enabled ? const Color(0xFF6D28D9) : colors.slate400;
+                        final iconColor = enabled ? AppTheme.violet500 : colors.textMuted;
+                        final textColor = enabled ? const Color(0xFF6D28D9) : colors.textMuted;
                         return GestureDetector(
                           onTap: () {
                             if (!enabled) {

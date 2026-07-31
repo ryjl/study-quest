@@ -50,14 +50,16 @@ class MarkdownView extends StatelessWidget {
     this.baseTextColor,
   });
 
-  // 设计 token。代码块 / 表格用浅色块装饰(亮暗模式均如此)——业界 IDE 暗色模式
-  // 的代码块也常用比正文区略浅的独立色块,保证代码可读且有视觉区分,故不跟随主题
-  // 切换底色。正文文字色(_defaultTextColor)跟随主题:暗色用浅文字,亮色用深文字。
-  static const Color _tableHeadBg = AppTheme.slate100; // Slate-100
-  static const Color _tableBorder = Color(0xFFCBD5E1); // Slate-300
-  static const Color _codeBlockBg = AppTheme.slate100; // Slate-100
-  static const Color _codeBlockText = AppTheme.slate900; // Slate-900
-  static const Color _inlineCodeBg = AppTheme.borderMuted; // Slate-200
+  // 设计 token。代码块 / 表格的底色 / 文字色 / 边框跟随主题(亮=浅块深字、暗=深块
+  // 浅字),避免深色模式下浮一块固定浅色区显得突兀。代码块/表头底用 backgroundColor
+  // (亮=slate50 / 暗=slate900),比 cardColor 卡片底深一档,保证代码块/表头在卡片上
+  // 仍是可辨识的独立色块(原 slate100 浅灰也是同理:比白卡片略深);inline code 用
+  // borderMuted 底(亮=slate200 / 暗=slate700)。
+  static Color _tableHeadBg(AppColors c) => c.backgroundColor;
+  static Color _tableBorder(AppColors c) => c.borderMuted;
+  static Color _codeBlockBg(AppColors c) => c.backgroundColor;
+  static Color _codeBlockText(AppColors c) => c.textWhite;
+  static Color _inlineCodeBg(AppColors c) => c.borderMuted;
 
   @override
   Widget build(BuildContext context) {
@@ -139,6 +141,7 @@ class MarkdownView extends StatelessWidget {
   MarkdownStyleSheet _buildStyleSheet(BuildContext context, Color textColor, Color muted) {
     final double scale = textScale <= 0 ? 1.0 : textScale;
     final base = MarkdownStyleSheet.fromTheme(Theme.of(context));
+    final c = context.colors;
 
     return base.copyWith(
       p: base.p?.copyWith(
@@ -192,10 +195,10 @@ class MarkdownView extends StatelessWidget {
         fontSize: (base.blockquote?.fontSize ?? 15) * scale,
       ),
       blockquoteDecoration: BoxDecoration(
-        color: _tableHeadBg,
+        color: _tableHeadBg(c),
         borderRadius: const BorderRadius.all(Radius.circular(6)),
         border: Border(
-          left: BorderSide(color: _tableBorder, width: 3),
+          left: BorderSide(color: _tableBorder(c), width: 3),
         ),
       ),
       blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -203,13 +206,13 @@ class MarkdownView extends StatelessWidget {
         fontFamily: 'monospace',
         fontFamilyFallback: const ['RobotoMono', 'Courier New'],
         fontSize: (base.code?.fontSize ?? 14) * scale,
-        color: _codeBlockText,
-        backgroundColor: _inlineCodeBg,
+        color: _codeBlockText(c),
+        backgroundColor: _inlineCodeBg(c),
       ),
       codeblockDecoration: BoxDecoration(
-        color: _codeBlockBg,
+        color: _codeBlockBg(c),
         borderRadius: const BorderRadius.all(Radius.circular(8)),
-        border: Border.all(color: _tableBorder, width: 1),
+        border: Border.all(color: _tableBorder(c), width: 1),
       ),
       codeblockPadding: const EdgeInsets.all(12),
       // —— 表格 ——
@@ -231,7 +234,7 @@ class MarkdownView extends StatelessWidget {
       tableColumnWidth: const IntrinsicColumnWidth(),
       // TableBorder.all 没有 borderRadius 参数(Flutter 的 Table 边线本身不
       // 支持圆角),这里按默认 markdown 表格风格,留细灰边框即可。
-      tableBorder: TableBorder.all(color: _tableBorder, width: 1),
+      tableBorder: TableBorder.all(color: _tableBorder(c), width: 1),
       tablePadding: const EdgeInsets.only(top: 4, bottom: 4),
     );
   }
@@ -276,14 +279,15 @@ class _SvgCodeInterceptor extends MarkdownElementBuilder {
     // 非 svg 代码块:自己渲染成带样式的代码块(复用 MarkdownView 的设计 token)。
     // 取 code 元素的纯文本作为代码内容。
     final code = _extractCodeText(element);
+    final c = context.colors;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: MarkdownView._codeBlockBg,
+        color: MarkdownView._codeBlockBg(c),
         borderRadius: const BorderRadius.all(Radius.circular(8)),
-        border: Border.all(color: MarkdownView._tableBorder, width: 1),
+        border: Border.all(color: MarkdownView._tableBorder(c), width: 1),
       ),
       child: SelectableText(
         code,
@@ -291,7 +295,7 @@ class _SvgCodeInterceptor extends MarkdownElementBuilder {
           fontFamily: 'monospace',
           fontFamilyFallback: const ['RobotoMono', 'Courier New'],
           fontSize: 14,
-          color: MarkdownView._codeBlockText,
+          color: MarkdownView._codeBlockText(c),
           height: 1.4,
         ),
       ),
@@ -407,13 +411,14 @@ class _SvgViewState extends State<_SvgView> {
 
   /// 降级视图:一行小灰字提示 + 等宽源码块。
   Widget _fallback() {
+    final c = context.colors;
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppTheme.slate100, // Slate-100
+        color: MarkdownView._codeBlockBg(c),
         borderRadius: const BorderRadius.all(Radius.circular(8)),
-        border: Border.all(color: AppTheme.borderMuted, width: 1),
+        border: Border.all(color: MarkdownView._tableBorder(c), width: 1),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -423,7 +428,7 @@ class _SvgViewState extends State<_SvgView> {
             '(图表渲染失败,显示源码)',
             style: TextStyle(
               fontSize: 12,
-              color: AppTheme.textMuted, // Slate-500
+              color: c.textMuted,
             ),
           ),
           const SizedBox(height: 6),
@@ -433,7 +438,7 @@ class _SvgViewState extends State<_SvgView> {
               fontFamily: 'monospace',
               fontFamilyFallback: const ['RobotoMono', 'Courier New'],
               fontSize: 12,
-              color: AppTheme.slate900, // Slate-900
+              color: MarkdownView._codeBlockText(c),
               height: 1.4,
             ),
           ),

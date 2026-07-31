@@ -362,7 +362,7 @@ class HelperPanel extends StatelessWidget {
           Expanded(
             child: Text(text,
                 style: TextStyle(
-                    color: colors.slate600,
+                    color: colors.textWhite,
                     fontWeight: FontWeight.bold,
                     fontSize: _tvScaled(13),
                     height: 1.4)),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../service/update_service.dart';
+import '../../theme.dart';
 
 /// Update dialog shown when a newer APK build is available. Downloads the APK
 /// with a progress bar, then hands off to the system installer.
@@ -41,11 +42,13 @@ class _UpdateDialogState extends State<UpdateDialog> {
       );
       // The system installer is now showing; leave the dialog as-is. If the
       // user cancels the install, they'll re-trigger the check next launch.
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() {
           _downloading = false;
-          _error = e.toString();
+          // 不把 e.toString()(如 SocketException 堆栈)直接展示给 K12 用户,改成人话
+          // 文案。具体错误已在 service 层按场景抛出(HTTP 码/安装器),这里统一兜底。
+          _error = '下载失败，请检查网络后重试';
         });
       }
     }
@@ -54,6 +57,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
   @override
   Widget build(BuildContext context) {
     final u = widget.update;
+    final colors = context.colors;
     return PopScope(
       // Prevent back-button dismissal when force-update.
       canPop: !widget.forceUpdate,
@@ -77,7 +81,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text('大小: ${_formatBytes(u.downloadSize)}',
-                    style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                    style: TextStyle(fontSize: 12, color: colors.textMuted)),
               ),
             if (_downloading) ...[
               const SizedBox(height: 16),
@@ -96,6 +100,15 @@ class _UpdateDialogState extends State<UpdateDialog> {
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
               child: const Text('稍后'),
+            ),
+          // 下载中给非强制更新一个取消出口:原版下载中两个按钮都被隐藏,若下载
+          // 卡住(进度停滞又不抛异常)用户会被钉死在弹窗里。取消=关闭弹窗放弃这次
+          // 更新(底层下载是孤儿,但下次启动会重新检查、且同文件名会被覆盖)。
+          // force-update 不给出口(产品意图:必须更新)。
+          if (!widget.forceUpdate && _downloading)
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('取消'),
             ),
           if (!_downloading)
             ElevatedButton(

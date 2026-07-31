@@ -47,6 +47,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   // Summary.
   EpisodeSummary? _summary;
   bool _summaryLoading = true;
+  // summary 加载失败标志:区分"真没总结"(null + 无误)和"网络挂了"(error)。
+  // 原来失败时直接隐藏卡片,学生分不清是这节没总结还是断网,也没有重试入口。
+  bool _summaryError = false;
 
   // Quiz state machine: loading → generating/ready/unavailable → (answering | submitted)。
   QuizStatus? _quizStatus;
@@ -110,11 +113,14 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
   }
 
   Future<void> _loadSummary() async {
+    if (mounted) setState(() => _summaryError = false);
     try {
       final s = await ApiService.fetchEpisodeSummary(widget.activeUserId, widget.episode.id);
       if (mounted) setState(() => _summary = s);
     } catch (_) {
-      // best-effort; the card just stays hidden
+      // 失败不静默隐藏:设置错误态,_buildSummarySection 会渲染"加载失败·重试"卡片,
+      // 让学生能区分"这节没总结"和"网络挂了",并给重试入口。
+      if (mounted) setState(() => _summaryError = true);
     } finally {
       if (mounted) setState(() => _summaryLoading = false);
     }
@@ -457,7 +463,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         ),
         title: Text(
           widget.episode.title,
-          style: TextStyle(color: colors.slate900, fontSize: 16, fontWeight: FontWeight.w600),
+          style: TextStyle(color: colors.textWhite, fontSize: 16, fontWeight: FontWeight.w600),
         ),
         // 字号调整按钮(需求 #6)。TV 模式下隐藏——TV 永远走最大档,调了也没用。
         actions: [
@@ -513,9 +519,9 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
                 child: Row(children: [
-                  Icon(Icons.format_size_rounded, size: 18, color: colors.slate900),
+                  Icon(Icons.format_size_rounded, size: 18, color: colors.textWhite),
                   const SizedBox(width: 8),
-                  Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.slate900)),
+                  Text('字号', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.textWhite)),
                 ]),
               ),
               for (int i = 0; i < UiPrefs.aiScaleLabels.length; i++)
@@ -524,14 +530,14 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                     // 4 档依次给个大小递增的字号图标,直观表达档位语义。
                     [Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded, Icons.text_fields_rounded][i],
                     size: [16, 20, 24, 28][i].toDouble(),
-                    color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : colors.slate400,
+                    color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : colors.textMuted,
                   ),
                   title: Text(
                     UiPrefs.aiScaleLabels[i],
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: UiPrefs.instance.aiTextScaleIndex == i ? FontWeight.w700 : FontWeight.w500,
-                      color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : colors.slate700,
+                      color: UiPrefs.instance.aiTextScaleIndex == i ? AppTheme.violet500 : colors.textWhite,
                     ),
                   ),
                   trailing: UiPrefs.instance.aiTextScaleIndex == i
@@ -576,12 +582,12 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           title: Row(children: [
             Icon(Icons.history_rounded, size: 16, color: colors.textMuted),
             const SizedBox(width: 6),
-            Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.slate900)),
+            Text('历史练习', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.textWhite)),
             const SizedBox(width: 8),
             if (_historyLoading)
               const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
             else
-              Text('${_history.length} 套', style: TextStyle(fontSize: 12, color: colors.slate400)),
+              Text('${_history.length} 套', style: TextStyle(fontSize: 12, color: colors.textMuted)),
           ]),
           children: [
             for (final h in _history) _HistoryQuizCard(
@@ -602,6 +608,30 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
     if (_summaryLoading) {
       return const _Card(child: Center(child: Padding(padding: EdgeInsets.all(24), child: CircularProgressIndicator())));
     }
+    // 加载失败:给明确的"加载失败·重试"卡片,而非静默消失。
+    // (区分:summary==null && !_summaryError → 这节真没总结,AI 没开/没素材属正常,隐藏。)
+    if (_summaryError) {
+      final colors = context.colors;
+      return _Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(children: [
+            Icon(Icons.cloud_off_rounded, size: 18, color: colors.textMuted),
+            const SizedBox(width: 8),
+            Expanded(child: Text('总结加载失败,请检查网络后重试',
+                style: TextStyle(fontSize: 13, color: colors.textMuted))),
+            TextButton.icon(
+              onPressed: () {
+                setState(() => _summaryLoading = true);
+                _loadSummary();
+              },
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('重试'),
+            ),
+          ]),
+        ),
+      );
+    }
     final s = _summary;
     if (s == null || s.isEmpty) {
       return const SizedBox.shrink(); // no summary → hide, AI add-on absence is normal
@@ -612,7 +642,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         Row(children: [
           Icon(Icons.auto_awesome_rounded, size: 16, color: AppTheme.violet500),
           const SizedBox(width: 6),
-          Text('AI 重点总结', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.slate900)),
+          Text('AI 重点总结', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.textWhite)),
         ]),
         if (s.headline.isNotEmpty) ...[
           const SizedBox(height: 10),
@@ -632,7 +662,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
                   ...sec.points.map((p) => _PointItem(
                         data: p,
                         textScale: textScale,
-                        textColor: colors.slate700,
+                        textColor: colors.textWhite,
                       )),
                 ]),
               )),
@@ -641,7 +671,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
           ...s.keyPoints.map((p) => _PointItem(
                 data: p,
                 textScale: textScale,
-                textColor: colors.slate700,
+                textColor: colors.textWhite,
               )),
         ],
         // 方法/技巧/公式(Phase F):单独拎出来便于速查。
@@ -759,7 +789,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         Row(children: [
           Icon(Icons.lightbulb_outline_rounded, size: 16, color: const Color(0xFFF59E0B)),
           const SizedBox(width: 6),
-          Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.slate900)),
+          Text('AI 学习建议', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: colors.textWhite)),
         ]),
         const SizedBox(height: 8),
         // 学习建议正文是 agent 跨知识点综合分析,鼓励输出 markdown 列表/加粗/对比表格。
@@ -767,7 +797,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
         MarkdownView(
           data: advice,
           textScale: textScale,
-          baseTextColor: colors.slate700,
+          baseTextColor: colors.textWhite,
         ),
       ]),
     );
@@ -790,7 +820,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             const SizedBox(height: 12),
             Text('正在为你生成练习…', style: TextStyle(fontSize: 14, color: colors.textMuted)),
             const SizedBox(height: 4),
-            Text('AI 正在分析这节课内容并针对你的学习情况出题', style: TextStyle(fontSize: 11, color: colors.slate400)),
+            Text('AI 正在分析这节课内容并针对你的学习情况出题', style: TextStyle(fontSize: 11, color: colors.textMuted)),
           ]),
         ),
       );
@@ -820,12 +850,12 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
       Padding(
         padding: const EdgeInsets.only(left: 4, bottom: 8),
         child: Row(children: [
-          Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.slate900)),
+          Text('练习', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: colors.textWhite)),
           const SizedBox(width: 8),
           if (submitted)
             Text('已交卷', style: TextStyle(fontSize: 12, color: AppTheme.accentGreen, fontWeight: FontWeight.w600))
           else
-            Text('${_answeredCount()}/${questions.length} 已答', style: TextStyle(fontSize: 12, color: colors.slate400)),
+            Text('${_answeredCount()}/${questions.length} 已答', style: TextStyle(fontSize: 12, color: colors.textMuted)),
           const Spacer(),
           TextButton.icon(
             onPressed: _regenerate,
@@ -974,7 +1004,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             const Icon(Icons.task_alt_rounded, size: 40, color: AppTheme.accentGreen),
             const SizedBox(height: 12),
             Text('本节练习已做完一套',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.slate900)),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.textWhite)),
             const SizedBox(height: 6),
             Text(
               '上次的成绩已存进上方「历史练习」,点开可查看对错。\n想做一套新题?点下面按钮重新生成。',
@@ -1018,7 +1048,7 @@ class _AiStudyScreenState extends State<AiStudyScreen> {
             Icon(Icons.sentiment_neutral_rounded, size: 40, color: colors.textMuted),
             const SizedBox(height: 12),
             Text('AI 出题暂时卡住了',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.slate900)),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: colors.textWhite)),
             const SizedBox(height: 6),
             Text(
               '这节课的内容比较长,AI 多次尝试生成练习都没成功,已暂停自动重试。\n'
@@ -1099,7 +1129,7 @@ class _HistoryQuizCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(top: 8),
       decoration: BoxDecoration(
-        color: colors.slate50,
+        color: colors.cardColor,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: colors.borderMuted),
       ),
@@ -1118,7 +1148,7 @@ class _HistoryQuizCard extends StatelessWidget {
                 child: Text(
                   // ArchivedAt is when it was superseded; fall back to generatedAt.
                   quiz.archivedAt.isNotEmpty ? quiz.archivedAt : quiz.generatedAt,
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.slate700),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: colors.textWhite),
                 ),
               ),
               Text('${quiz.questionCount} 题', style: TextStyle(fontSize: 11, color: colors.textMuted)),

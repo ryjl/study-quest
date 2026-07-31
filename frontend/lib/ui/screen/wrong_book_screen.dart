@@ -287,7 +287,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                     Icon(Icons.filter_list_off_rounded, size: 48, color: colors.textMuted),
                     const SizedBox(height: 12),
                     Text('当前筛选下没有错题',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: colors.slate900)),
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: colors.textWhite)),
                     const SizedBox(height: 6),
                     Text('换个课程,或切回「全部」看看全部错题。',
                       style: TextStyle(color: colors.textMuted, fontSize: 13)),
@@ -306,7 +306,10 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     return Padding(
       padding: portraitAwarePadding(context),
       child: FocusTraversalGroup(
-        child: CustomScrollView(
+        child: RefreshIndicator(
+          // 下拉刷新:正常浏览态也能手动刷新错题列表(_refresh = setState(_loadData))。
+          onRefresh: _refresh,
+          child: CustomScrollView(
           slivers: [
             SliverToBoxAdapter(child: _buildHeader(items.length, mastered, unmasteredCount)),
             // 用 SliverList 而非 SliverGrid:错题本是阅读复习场景,展开看答案+解析需要
@@ -323,6 +326,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
             ),
           ],
         ),
+        ), // RefreshIndicator 闭合
       ),
     );
   }
@@ -342,7 +346,9 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: colors.slate100, borderRadius: BorderRadius.circular(12),
+                  color: colors.cardColor,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: colors.borderMuted),
                 ),
                 child: Text('共 $total 题',
                   style: TextStyle(fontSize: 13, color: colors.textMuted)),
@@ -402,7 +408,9 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     final colors = context.colors;
     return Container(
       decoration: BoxDecoration(
-        color: colors.slate100, borderRadius: BorderRadius.circular(20),
+        color: colors.cardColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.borderMuted),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 4),
       child: Row(
@@ -447,7 +455,9 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       decoration: BoxDecoration(
-        color: colors.slate100, borderRadius: BorderRadius.circular(20),
+        color: colors.cardColor,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.borderMuted),
       ),
       child: DropdownButton<int>(
         value: _courseFilter,
@@ -560,8 +570,11 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   decoration: BoxDecoration(
-                    color: item.mastered ? const Color(0xFFD1FAE5) : colors.slate100,
+                    // 已掌握态用固定浅绿块+深绿字(两端一致保留);未掌握态用 backgroundColor
+                    // (页面底色,比 cardColor 卡片底深一档)+ 边框,深色下不再浅底浅字撞色。
+                    color: item.mastered ? const Color(0xFFD1FAE5) : colors.backgroundColor,
                     borderRadius: BorderRadius.circular(8),
+                    border: item.mastered ? null : Border.all(color: colors.borderMuted),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -785,7 +798,7 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
         // 误以为只有 1 题。配合后端 RedoWrongBookQuiz 的 log,题量异常时可定位。
         title: Text('重做错题 · 共 ${widget.questions.length} 题'),
         backgroundColor: colors.cardColor,
-        foregroundColor: colors.slate900,
+        foregroundColor: colors.textWhite,
         elevation: 0,
       ),
       body: Center(
