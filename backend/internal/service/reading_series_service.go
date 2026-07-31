@@ -8,11 +8,11 @@ import (
 
 // ReadingSeriesService handles ReadingSeries business operations and the
 // aggregated reading-room view. Mirrors CourseService for the admin-vs-student
-// access split (admin/parent pass nil, students pass their access list).
+// access split (admin pass nil, students pass their access list).
 type ReadingSeriesService interface {
 	GetSeries(userID uint, userRole string, grade string, subjectID uint) ([]model.ReadingSeries, error)
 	GetSeriesByID(id uint) (*model.ReadingSeries, error)
-	// HasSeriesAccess checks direct series access for a student. Admin/parent
+	// HasSeriesAccess checks direct series access for a student. Admin
 	// always pass. Used by GetSeries to gate the detail endpoint.
 	HasSeriesAccess(userID, seriesID uint) (bool, error)
 	CreateSeries(title, description string, grades []model.Grade, subjectID uint, coverURL string, sortOrder int, tagIDs []uint) (*model.ReadingSeries, error)
@@ -153,7 +153,7 @@ func (s *readingSeriesService) DeleteSeries(id uint) error {
 	return s.seriesRepo.Delete(id)
 }
 
-// GetReadingRoom builds the one-shot shelf view. For admin/parent: all series
+// GetReadingRoom builds the one-shot shelf view. For admin: all series
 // + all standalone (series_id=0) books/articles. For students: visible series +
 // books/articles the user has direct access to whose parent series is NOT in
 // the user's visible-series set (those are reachable inside the series detail,

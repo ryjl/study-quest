@@ -44,4 +44,13 @@ func init() {
 	// 能力当前不可用",前端据此隐藏作业入口而不是显示崩页。和 aiService==nil 的早返回
 	// 用同样的 503 + 文案,保证两条降级路径的响应一致。
 	registerAppError(service.ErrHomeworkNotEnabled, http.StatusServiceUnavailable, "作业功能未启用")
+
+	// PIN 长度校验:必须是 6 位数字。原来用临时 errors.New,走默认 500;
+	// 改为 sentinel 后映射 400,admin 能拿到明确提示而非笼统服务器错误。
+	registerAppError(service.ErrPinInvalid, http.StatusBadRequest, "PIN 必须为 6 位数字")
+
+	// 账户级登录锁定:同一 user_id 在窗口内失败达阈值(默认 5 次/15 分钟)
+	// 即锁。与按 IP 的限流(也返回 429)口径一致,补的是"换 IP 池绕过 IP 限流"
+	// 这条缝隙。锁定状态在内存,重启即清(家庭部署可接受,与 IP 限流同哲学)。
+	registerAppError(service.ErrAccountLocked, http.StatusTooManyRequests, "账户登录尝试过多,请稍后再试")
 }

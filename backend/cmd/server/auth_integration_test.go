@@ -3,12 +3,13 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // loginUser posts the real login flow and returns the opaque token. Uses the
-// admin-create-user PIN ("1234") that testhelper.createUser sets.
+// admin-create-user PIN ("123456") that testhelper.createUser sets.
 func loginUser(t *testing.T, env *testEnv, userID uint, pin string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{"user_id": userID, "pin": pin})
@@ -39,7 +40,7 @@ func TestLoginFlow_HappyPath(t *testing.T) {
 	env := newTestEnv(t)
 	uid := env.createUser(t, "alice", "student")
 
-	tok := loginUser(t, env, uid, "1234")
+	tok := loginUser(t, env, uid, "123456")
 
 	// The issued token must authenticate a protected endpoint.
 	resp := env.doAsUserToken(t, tok, http.MethodGet, "/api/v1/subjects", nil)
@@ -53,7 +54,7 @@ func TestLoginFlow_WrongPin(t *testing.T) {
 	env := newTestEnv(t)
 	uid := env.createUser(t, "bob", "student")
 
-	body, _ := json.Marshal(map[string]any{"user_id": uid, "pin": "9999"})
+	body, _ := json.Marshal(map[string]any{"user_id": uid, "pin": "999999"})
 	resp := env.doRaw(t, http.MethodPost, "/api/v1/users/login", body)
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong PIN: expected 401, got %d", resp.Code)
@@ -63,7 +64,7 @@ func TestLoginFlow_WrongPin(t *testing.T) {
 // TestLoginFlow_UnknownUser verifies login for a non-existent user is rejected.
 func TestLoginFlow_UnknownUser(t *testing.T) {
 	env := newTestEnv(t)
-	body, _ := json.Marshal(map[string]any{"user_id": 999999, "pin": "1234"})
+	body, _ := json.Marshal(map[string]any{"user_id": 999999, "pin": "123456"})
 	resp := env.doRaw(t, http.MethodPost, "/api/v1/users/login", body)
 	if resp.Code != http.StatusUnauthorized {
 		t.Fatalf("unknown user: expected 401, got %d", resp.Code)
@@ -75,7 +76,7 @@ func TestLoginFlow_UnknownUser(t *testing.T) {
 func TestLogout_InvalidatesToken(t *testing.T) {
 	env := newTestEnv(t)
 	uid := env.createUser(t, "carol", "student")
-	tok := loginUser(t, env, uid, "1234")
+	tok := loginUser(t, env, uid, "123456")
 
 	// Logout via the real endpoint (carries the token in Authorization).
 	req := newRequest(http.MethodPost, "/api/v1/users/logout", nil)
@@ -109,8 +110,8 @@ func TestMultiDevice_SameUserIndependentSessions(t *testing.T) {
 	uid := env.createUser(t, "eve", "student")
 
 	// Two logins on "different devices".
-	tokA := loginUser(t, env, uid, "1234")
-	tokB := loginUser(t, env, uid, "1234")
+	tokA := loginUser(t, env, uid, "123456")
+	tokB := loginUser(t, env, uid, "123456")
 	if tokA == tokB {
 		t.Fatal("two logins returned the same token; multi-device support broken")
 	}
@@ -129,8 +130,8 @@ func TestMultiDevice_SameUserIndependentSessions(t *testing.T) {
 func TestAdminKick_RevokeSingleDevice(t *testing.T) {
 	env := newTestEnv(t)
 	uid := env.createUser(t, "frank", "student")
-	tokA := loginUser(t, env, uid, "1234")
-	tokB := loginUser(t, env, uid, "1234")
+	tokA := loginUser(t, env, uid, "123456")
+	tokB := loginUser(t, env, uid, "123456")
 
 	// Admin revokes device A.
 	path := "/admin/api/users/" + itoa(uid) + "/sessions/" + tokA
@@ -153,9 +154,9 @@ func TestAdminKick_RevokeSingleDevice(t *testing.T) {
 func TestAdminKick_RevokeAllDevices(t *testing.T) {
 	env := newTestEnv(t)
 	uid := env.createUser(t, "grace", "student")
-	tokA := loginUser(t, env, uid, "1234")
-	tokB := loginUser(t, env, uid, "1234")
-	tokC := loginUser(t, env, uid, "1234")
+	tokA := loginUser(t, env, uid, "123456")
+	tokB := loginUser(t, env, uid, "123456")
+	tokC := loginUser(t, env, uid, "123456")
 
 	path := "/admin/api/users/" + itoa(uid) + "/sessions"
 	if resp := env.do(t, http.MethodDelete, path, nil); resp.Code != http.StatusOK {
@@ -174,8 +175,8 @@ func TestAdminKick_CrossUserIsolation(t *testing.T) {
 	env := newTestEnv(t)
 	uid1 := env.createUser(t, "heidi", "student")
 	uid2 := env.createUser(t, "ivan", "student")
-	tok1 := loginUser(t, env, uid1, "1234")
-	tok2 := loginUser(t, env, uid2, "1234")
+	tok1 := loginUser(t, env, uid1, "123456")
+	tok2 := loginUser(t, env, uid2, "123456")
 
 	// Revoke all of user 1.
 	env.do(t, http.MethodDelete, "/admin/api/users/"+itoa(uid1)+"/sessions", nil)
@@ -195,7 +196,7 @@ func TestAdminListSessions_ShowsDeviceName(t *testing.T) {
 	uid := env.createUser(t, "judy", "student")
 
 	// Login with a device_name.
-	body, _ := json.Marshal(map[string]any{"user_id": uid, "pin": "1234", "device_name": "客厅iPad"})
+	body, _ := json.Marshal(map[string]any{"user_id": uid, "pin": "123456", "device_name": "客厅iPad"})
 	resp := env.doRaw(t, http.MethodPost, "/api/v1/users/login", body)
 	if resp.Code != http.StatusOK {
 		t.Fatalf("login: %d (body: %s)", resp.Code, resp.Body.String())
@@ -222,7 +223,7 @@ func TestAdminListSessions_ShowsDeviceName(t *testing.T) {
 func TestAdminUpdateSessionNote(t *testing.T) {
 	env := newTestEnv(t)
 	uid := env.createUser(t, "karl", "student")
-	tok := loginUser(t, env, uid, "1234")
+	tok := loginUser(t, env, uid, "123456")
 
 	patch := env.do(t, http.MethodPatch, "/admin/api/sessions/"+tok+"/note", map[string]any{"note": "客厅那台"})
 	if patch.Code != http.StatusOK {
@@ -265,4 +266,165 @@ func TestIngestRoute_OpenByDefaultInTestEnv(t *testing.T) {
 		t.Fatalf("ingest should be open with empty key; got 401 (body: %s)", w.Body.String())
 	}
 	// We don't care about the exact non-401 code (likely 400 from the handler).
+}
+
+// TestLoginFlow_AccountLockout verifies the per-user account lockout fires at
+// the threshold: after 5 wrong PINs a 6th attempt — even with the CORRECT PIN
+// — returns 429 (not 401) with a Retry-After header, matching the per-IP
+// limiter's response shape. The unlock-by-window semantics are covered by the
+// service unit tests (which can inject a clock); the integration layer can only
+// assert the lock trigger without real sleeping.
+func TestLoginFlow_AccountLockout(t *testing.T) {
+	env := newTestEnv(t)
+	uid := env.createUser(t, "lockee", "student")
+	wrongBody := func() []byte {
+		b, _ := json.Marshal(map[string]any{"user_id": uid, "pin": "999999"})
+		return b
+	}
+
+	// Up to the threshold: wrong PIN returns 401.
+	for i := 0; i < 5; i++ {
+		resp := env.doRaw(t, http.MethodPost, "/api/v1/users/login", wrongBody())
+		if resp.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: expected 401, got %d", i, resp.Code)
+		}
+	}
+
+	// 6th attempt with the CORRECT pin is locked → 429.
+	correctBody, _ := json.Marshal(map[string]any{"user_id": uid, "pin": "123456"})
+	resp := env.doRaw(t, http.MethodPost, "/api/v1/users/login", correctBody)
+	if resp.Code != http.StatusTooManyRequests {
+		t.Fatalf("after threshold: expected 429, got %d (body: %s)", resp.Code, resp.Body.String())
+	}
+	// Retry-After must be the lockout's REAL remaining seconds (not a hardcoded
+	// constant): right after lockout it should be close to the 15-min window.
+	// We assert it parses as an int within (0, window] so the test is stable
+	// without depending on real-time clock skew.
+	ra := resp.Header().Get("Retry-After")
+	if ra == "" {
+		t.Fatal("locked response should carry a Retry-After header")
+	}
+	secs, err := strconv.Atoi(ra)
+	if err != nil {
+		t.Fatalf("Retry-After %q is not an integer: %v", ra, err)
+	}
+	if secs <= 0 || secs > 900 {
+		t.Errorf("Retry-After = %ds, want within (0, 900] just after lockout", secs)
+	}
+}
+
+// TestLoginFlow_GradeInResponse verifies the login response includes the user's
+// grade label alongside role/user_id/token.
+func TestLoginFlow_GradeInResponse(t *testing.T) {
+	env := newTestEnv(t)
+	// Create a user with a grade directly via the admin API (createUser helper
+	// doesn't pass grade).
+	createBody, _ := json.Marshal(map[string]any{
+		"nickname": "graded",
+		"pin":      "123456",
+		"role":     "student",
+		"grade":    "四年级",
+	})
+	cr := env.do(t, http.MethodPost, "/admin/api/users", json.RawMessage(createBody))
+	if cr.Code != http.StatusOK {
+		t.Fatalf("create graded user: %d (body: %s)", cr.Code, cr.Body.String())
+	}
+	var created struct {
+		ID uint `json:"id"`
+	}
+	json.Unmarshal(cr.Body.Bytes(), &created)
+
+	loginBody, _ := json.Marshal(map[string]any{"user_id": created.ID, "pin": "123456"})
+	resp := env.doRaw(t, http.MethodPost, "/api/v1/users/login", loginBody)
+	if resp.Code != http.StatusOK {
+		t.Fatalf("login: %d (body: %s)", resp.Code, resp.Body.String())
+	}
+	var out struct {
+		Grade string `json:"grade"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode login response: %v", err)
+	}
+	if out.Grade != "四年级" {
+		t.Fatalf("login grade = %q, want 四年级", out.Grade)
+	}
+}
+
+// TestCreateUser_RejectsShortPin verifies the PIN-length sentinel maps to 400
+// (not the old default 500) so the admin gets an actionable message.
+func TestCreateUser_RejectsShortPin(t *testing.T) {
+	env := newTestEnv(t)
+	body, _ := json.Marshal(map[string]any{
+		"nickname": "shortpin",
+		"pin":      "12345", // 5 digits — under the 6-digit minimum
+		"role":     "student",
+	})
+	resp := env.do(t, http.MethodPost, "/admin/api/users", json.RawMessage(body))
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("short PIN: expected 400, got %d (body: %s)", resp.Code, resp.Body.String())
+	}
+}
+
+// TestAdminCreateUser_PersistsGrade verifies grade round-trips through the
+// admin create + list endpoints.
+func TestAdminCreateUser_PersistsGrade(t *testing.T) {
+	env := newTestEnv(t)
+	body, _ := json.Marshal(map[string]any{
+		"nickname": "graded2",
+		"pin":      "123456",
+		"role":     "student",
+		"grade":    "初二",
+	})
+	cr := env.do(t, http.MethodPost, "/admin/api/users", json.RawMessage(body))
+	if cr.Code != http.StatusOK {
+		t.Fatalf("create: %d (body: %s)", cr.Code, cr.Body.String())
+	}
+	var created struct {
+		ID    uint   `json:"id"`
+		Grade string `json:"grade"`
+	}
+	json.Unmarshal(cr.Body.Bytes(), &created)
+	if created.Grade != "初二" {
+		t.Fatalf("create response grade = %q, want 初二", created.Grade)
+	}
+
+	// The user list must also carry grade.
+	list := env.do(t, http.MethodGet, "/admin/api/users", nil)
+	var users []struct {
+		ID    uint   `json:"id"`
+		Grade string `json:"grade"`
+	}
+	json.Unmarshal(list.Body.Bytes(), &users)
+	var found bool
+	for _, u := range users {
+		if u.ID == created.ID && u.Grade == "初二" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("grade not persisted in user list: %+v", users)
+	}
+}
+
+// TestAdminUpdateUser_Grade verifies grade is editable via the update endpoint.
+func TestAdminUpdateUser_Grade(t *testing.T) {
+	env := newTestEnv(t)
+	uid := env.createUser(t, "gradeedit", "student")
+
+	body, _ := json.Marshal(map[string]any{
+		"nickname": "gradeedit",
+		"role":     "student",
+		"grade":    "高三",
+	})
+	resp := env.do(t, http.MethodPut, "/admin/api/users/"+itoa(uid), json.RawMessage(body))
+	if resp.Code != http.StatusOK {
+		t.Fatalf("update: %d (body: %s)", resp.Code, resp.Body.String())
+	}
+	var updated struct {
+		Grade string `json:"grade"`
+	}
+	json.Unmarshal(resp.Body.Bytes(), &updated)
+	if updated.Grade != "高三" {
+		t.Fatalf("update grade = %q, want 高三", updated.Grade)
+	}
 }

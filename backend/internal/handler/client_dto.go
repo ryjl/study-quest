@@ -39,7 +39,7 @@ type clientCourseDTO struct {
 	TagIDs         []uint   `json:"TagIDs"`   // tag ids (for ID-based filtering)
 	GradeDisplay   string `json:"GradeDisplay"`
 	AttachmentJSON string `json:"AttachmentJSON"`
-	// Unlock summary — populated for student/teen roles only (admin/parent see
+	// Unlock summary — populated for student roles only (admin see
 	// everything, so the drip state is meaningless for them). Zero values
 	// (UnlockStrategy="" / UnlockedCount=0) signal "no drip schedule" to the
 	// client, which then hides the badge.

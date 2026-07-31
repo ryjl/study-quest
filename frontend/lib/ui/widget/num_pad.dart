@@ -8,6 +8,11 @@ class NumPad extends StatefulWidget {
   final int maxDigits;
   final Function(String) onSubmit;
   final VoidCallback onCancel;
+  /// Whether digit entry is active. When false (e.g. during an account
+  /// lockout) digit/backspace/clear keys ignore input so the user can't keep
+  /// firing submits into a locked backend. The close (✕) button stays active
+  /// so the user can still dismiss the pad.
+  final bool enabled;
 
   const NumPad({
     Key? key,
@@ -15,16 +20,21 @@ class NumPad extends StatefulWidget {
     this.maxDigits = 6,
     required this.onSubmit,
     required this.onCancel,
+    this.enabled = true,
   }) : super(key: key);
 
   @override
-  State<NumPad> createState() => _NumPadState();
+  State<NumPad> createState() => NumPadState();
 }
 
-class _NumPadState extends State<NumPad> {
+/// Public so the login screen can clear the pad via a GlobalKey after a wrong
+/// PIN (the auto-submit fills maxDigits, so without an external clear the next
+/// keystroke would start from a full buffer and silently no-op).
+class NumPadState extends State<NumPad> {
   String _currentPin = '';
 
   void _onKeyPress(String value) {
+    if (!widget.enabled) return;
     if (_currentPin.length < widget.maxDigits) {
       setState(() {
         _currentPin += value;
@@ -37,6 +47,7 @@ class _NumPadState extends State<NumPad> {
   }
 
   void _backspace() {
+    if (!widget.enabled) return;
     if (_currentPin.isNotEmpty) {
       setState(() {
         _currentPin = _currentPin.substring(0, _currentPin.length - 1);
@@ -45,9 +56,42 @@ class _NumPadState extends State<NumPad> {
   }
 
   void _clear() {
+    if (!widget.enabled) return;
     setState(() {
       _currentPin = '';
     });
+  }
+
+  /// External reset: clears the buffered PIN and dot indicators. Called by the
+  /// login screen on a wrong PIN so the user starts fresh instead of seeing a
+  /// full row of dots with no way to retype.
+  void clear() {
+    if (_currentPin.isNotEmpty) {
+      setState(() {
+        _currentPin = '';
+      });
+    }
+  }
+
+  /// Whether no digits are currently buffered. Exposed (read-only) so tests
+  /// can assert the pad was cleared after a failed attempt.
+  bool get isClear => _currentPin.isEmpty;
+
+  /// Test-friendly submit: invokes the same [onSubmit] callback the auto-submit
+  /// path uses when maxDigits is reached, without depending on tap synthesis
+  /// (which is flaky under the login overlay's BackdropFilter/Stack). Also
+  /// fills the dot buffer so [clear]'s effect is observable. Production code
+  /// never calls this — it's for widget tests driving the login screen.
+  @visibleForTesting
+  void submit(String pin) {
+    setState(() {
+      _currentPin = pin.length > widget.maxDigits
+          ? pin.substring(0, widget.maxDigits)
+          : pin;
+    });
+    if (_currentPin.length == widget.maxDigits) {
+      widget.onSubmit(_currentPin);
+    }
   }
 
   @override

@@ -19,7 +19,7 @@ type ReadingArticleService interface {
 	UpdateArticle(id uint, seriesID uint, sortOrder int, title, sourceURL, whitelistDomains, coverURL string, grades []model.Grade, subjectID uint, tagIDs []uint) (*model.ReadingArticle, error)
 	DeleteArticle(id uint) error
 
-	// CanAccess checks whether a user can access an article. Admin/parent
+	// CanAccess checks whether a user can access an article. Admin
 	// always pass. A student passes if they have direct article access OR
 	// series access to the article's parent series (same inheritance model as
 	// books).

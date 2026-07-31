@@ -128,10 +128,6 @@ export function roleLabel(role: string): string {
   switch (role) {
     case 'student':
       return '学生';
-    case 'teen':
-      return '青少年';
-    case 'parent':
-      return '家长';
     case 'admin':
       return '管理员';
     default:
@@ -159,4 +155,10 @@ export function fmtSec(s: number): string {
   const m = Math.floor(s / 60);
   const sec = s % 60;
   return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+// PIN must be exactly 6 digits (security: 6-digit minimum). Extracted from the
+// UserEditModal so it's testable and the rule has a single source of truth.
+export function isValidPin(pin: string): boolean {
+  return /^\d{6}$/.test(pin);
 }

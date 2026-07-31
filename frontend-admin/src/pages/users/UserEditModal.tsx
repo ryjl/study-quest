@@ -11,6 +11,7 @@ import { Modal } from '../../components/ui';
 import { ImageUpload } from '../../components/inputs';
 import { useToast } from '../../lib/toast';
 import { ROLES } from './Users';
+import { isValidPin } from '../../lib/format';
 
 export function UserEditModal({
   user,
@@ -27,21 +28,23 @@ export function UserEditModal({
   const [avatarUrl, setAvatarUrl] = useState(user?.avatar_url ?? '');
   const [pin, setPin] = useState('');
   const [role, setRole] = useState(user?.role ?? 'student');
+  const [grade, setGrade] = useState(user?.grade ?? '');
 
   const saveMut = useMutation({
     mutationFn: async () => {
       if (!nickname.trim()) throw new Error('请输入昵称');
-      if (!isEdit && !/^\d{4,6}$/.test(pin)) throw new Error('PIN 必须为 4-6 位数字');
+      if (!isEdit && !isValidPin(pin)) throw new Error('PIN 必须为 6 位数字');
       if (isEdit) {
-        const body: { nickname: string; avatar_url?: string; pin?: string; role: string } = {
+        const body: { nickname: string; avatar_url?: string; pin?: string; role: string; grade?: string } = {
           nickname: nickname.trim(),
           avatar_url: avatarUrl,
           role,
+          grade,
         };
         if (pin) body.pin = pin;
         return api.updateUser(user!.id, body);
       }
-      return api.createUser({ nickname: nickname.trim(), avatar_url: avatarUrl, pin, role });
+      return api.createUser({ nickname: nickname.trim(), avatar_url: avatarUrl, pin, role, grade });
     },
     onSuccess: () => {
       toast.success(isEdit ? '用户已更新' : '用户已创建');
@@ -79,9 +82,20 @@ export function UserEditModal({
             className="input"
             value={pin}
             onChange={(e) => setPin(e.target.value)}
-            placeholder="4-6 位数字"
+            placeholder="6 位数字"
             required={!isEdit}
-            pattern="\d{4,6}"
+            pattern="\d{6}"
+            maxLength={6}
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted">年级（选填，如：四年级 / 初二）</label>
+          <input
+            className="input"
+            value={grade}
+            onChange={(e) => setGrade(e.target.value)}
+            placeholder="留空则显示角色"
+            maxLength={32}
           />
         </div>
         <div>

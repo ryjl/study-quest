@@ -22,3 +22,14 @@ var ErrSubjectInUse = errors.New("subject is still referenced by courses or badg
 // re-target or delete the badges first). The subject's own auto-generated
 // subject_<key> badge does NOT trigger this: the delete path removes it.
 var ErrSubjectHasBadges = errors.New("subject is still referenced by hand-authored badge rules")
+
+// ErrPinInvalid is returned when CreateUser/UpdateUser is given a PIN that
+// isn't exactly 6 digits. The handler maps it to a 400 (not 500) so the admin
+// gets an actionable message rather than a generic server error.
+var ErrPinInvalid = errors.New("PIN code must be exactly 6 digits")
+
+// ErrAccountLocked is returned by Authenticate when a user has exceeded the
+// failed-login threshold within the lockout window. The handler maps it to 429
+// (consistent with the per-IP login limiter) so brute-force attempts are
+// throttled per account, not just per source IP.
+var ErrAccountLocked = errors.New("account temporarily locked due to repeated failed logins")

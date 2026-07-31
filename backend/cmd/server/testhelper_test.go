@@ -447,7 +447,7 @@ func (e *testEnv) createUser(t *testing.T, nickname, role string) uint {
 	t.Helper()
 	resp := e.do(t, http.MethodPost, "/admin/api/users", map[string]any{
 		"nickname": nickname,
-		"pin":      "1234",
+		"pin":      "123456",
 		"role":     role,
 	})
 	if resp.Code != http.StatusOK {

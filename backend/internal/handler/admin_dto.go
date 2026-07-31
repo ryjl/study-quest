@@ -211,6 +211,7 @@ type userDTO struct {
 	Nickname           string   `json:"nickname"`
 	AvatarURL          string   `json:"avatar_url"`
 	Role               string   `json:"role"`
+	Grade              string   `json:"grade"`
 	CurrentPoints      int      `json:"current_points"`
 	TotalEarnedPoints  int      `json:"total_earned_points"`
 	CourseAccess       []uint   `json:"course_access"`
@@ -293,6 +294,7 @@ func (h *adminHandler) toUserDTO(u model.User, b userStatsBatch) userDTO {
 		Nickname:             u.Nickname,
 		AvatarURL:            u.AvatarURL,
 		Role:                 u.Role,
+		Grade:                u.Grade,
 		CurrentPoints:        cp,
 		TotalEarnedPoints:    tp,
 		CourseAccess:         access,

@@ -12,7 +12,7 @@ import (
 	"studyquest/backend/internal/service"
 )
 
-// AIHandler serves the CLIENT-facing AI endpoints (the student/parent Flutter
+// AIHandler serves the CLIENT-facing AI endpoints (the student/admin Flutter
 // app reading a summary). Distinct from the admin AI endpoints (admin_ai.go) —
 // different auth (UserAuth vs AdminAuth), different surface (read-only summary
 // vs full CRUD+observability). Kept as its own handler to avoid bloating
@@ -355,7 +355,7 @@ func (h *aiHandler) GetEpisodeQuizHistory(c *gin.Context) {
 }
 
 // requireUserID reads the authenticated user's ID from the gin context (set by
-// UserAuthMiddleware). Staff roles (admin/parent) are also accepted — they can
+// UserAuthMiddleware). Staff roles (admin) are also accepted — they can
 // preview quizzes. Writes a 401 and returns false when no trustworthy identity
 // is present (fail-closed, mirroring GetPlayInfo's gate).
 func requireUserID(c *gin.Context) (uint, bool) {

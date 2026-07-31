@@ -170,6 +170,7 @@ export interface User {
   nickname: string;
   avatar_url: string;
   role: string;
+  grade?: string;
   created_at?: string;
   updated_at?: string;
   current_points?: number;

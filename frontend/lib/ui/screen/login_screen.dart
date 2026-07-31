@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -25,11 +26,33 @@ class _LoginScreenState extends State<LoginScreen> {
   User? _selectedUser;
   bool _showPinPad = false;
   String _errorMessage = '';
+  // Controls the NumPad so we can clear the buffered PIN after a wrong attempt
+  // (auto-submit fills maxDigits; without a clear the next digit would no-op
+  // against a full buffer and the user couldn't retype).
+  final GlobalKey<NumPadState> _numPadKey = GlobalKey<NumPadState>();
+
+  // Lockout countdown — DISPLAY ONLY. The backend is the single source of
+  // truth for whether an account is locked: every login attempt is decided
+  // server-side, and a 429 + Retry-After refreshes this message. We do NOT
+  // freeze input or "unlock" on the client — that would let a user bypass the
+  // lock by restarting the app (this state is in-memory only). The timer just
+  // makes the hint count down in real time (15:00 → 14:59 → …) so the user
+  // sees the wait shrinking instead of a frozen "15 分钟". When it hits zero
+  // we only clear the message; the user is free to retry, and if the backend
+  // is still locking it will 429 again and refresh the countdown.
+  Timer? _lockTimer;
+  DateTime? _lockCountdownEnd;
 
   @override
   void initState() {
     super.initState();
     _refreshUsers();
+  }
+
+  @override
+  void dispose() {
+    _lockTimer?.cancel();
+    super.dispose();
   }
 
   void _refreshUsers() {
@@ -158,21 +181,74 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _onSubmitPin(String pin) async {
     if (_selectedUser == null) return;
-    
-    final authService = Provider.of<AuthService>(context, listen: false);
-    final success = await authService.login(_selectedUser!, pin);
 
-    if (success) {
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final result = await authService.login(_selectedUser!, pin);
+
+    if (result.success) {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const MainNavigation()),
       );
+      return;
+    }
+
+    // Failed: always clear the pad so the user starts fresh (auto-submit fills
+    // maxDigits, so without this the buffer stays full).
+    _numPadKey.currentState?.clear();
+
+    if (result.locked) {
+      _showLockoutMessage(result.retryAfterSeconds);
     } else {
       setState(() {
         _errorMessage = 'PIN 码错误，请重试！';
       });
     }
+  }
+
+  /// Shows (or refreshes) the lockout hint based on the backend's last 429.
+  /// Display-only: this never freezes input or decides when the user may
+  /// retry — that's the backend's call. We just count down the [retrySeconds]
+  /// the server handed us so the message shrinks in real time. When it reaches
+  /// zero we clear the message; the user can retry, and if still locked the
+  /// backend returns 429 again and refreshes this hint.
+  void _showLockoutMessage(int? retrySeconds) {
+    _lockTimer?.cancel();
+    if (retrySeconds == null) {
+      // No Retry-After header (rare — a reverse proxy stripping it). Show a
+      // static hint; the next attempt will get a fresh verdict from backend.
+      setState(() {
+        _lockCountdownEnd = null;
+        _errorMessage = '尝试次数过多，账户已临时锁定，请稍后重试';
+      });
+      return;
+    }
+    setState(() {
+      _lockCountdownEnd = DateTime.now().add(Duration(seconds: retrySeconds));
+      _errorMessage = '尝试次数过多，请 ${formatLockoutWait(retrySeconds)} 后重试';
+    });
+    _lockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) {
+        _lockTimer?.cancel();
+        return;
+      }
+      final remaining = secondsUntilUnlock(_lockCountdownEnd!, DateTime.now());
+      if (remaining <= 0) {
+        // Countdown elapsed: stop the timer and clear the hint. We do NOT
+        // gate further attempts on this — the backend is the lock authority.
+        _lockTimer!.cancel();
+        _lockTimer = null;
+        setState(() {
+          _lockCountdownEnd = null;
+          _errorMessage = '';
+        });
+      } else {
+        setState(() {
+          _errorMessage = '尝试次数过多，请 ${formatLockoutWait(remaining)} 后重试';
+        });
+      }
+    });
   }
 
   @override
@@ -278,8 +354,13 @@ class _LoginScreenState extends State<LoginScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           NumPad(
+                            key: _numPadKey,
                             title: '验证 ${_selectedUser!.nickname} 的 PIN 码',
-                            maxDigits: 4, // standard 4-digit PIN
+                            maxDigits: 6, // 6-digit PIN (security: 6-digit minimum)
+                            // NOTE: input is NOT frozen during a lockout — the
+                            // backend is the lock authority, so the user may
+                            // retry anytime; a still-locked attempt returns 429
+                            // and refreshes the countdown hint.
                             onSubmit: _onSubmitPin,
                             onCancel: _onCancelPin,
                           ),
@@ -452,5 +533,25 @@ class _LoginScreenState extends State<LoginScreen> {
       ),
     );
   }
+}
+
+/// Formats a Retry-After seconds value into a friendly "X 分 Y 秒" / "X 分钟" /
+/// "X 秒" string for the lockout message. Top-level so it's unit-testable
+/// without pumping the whole login screen (the overlay's BackdropFilter +
+/// async login make full widget tests brittle, and this is the only piece of
+/// real logic in the lockout UX path).
+String formatLockoutWait(int seconds) {
+  if (seconds < 60) return '$seconds 秒';
+  final m = seconds ~/ 60;
+  final s = seconds % 60;
+  return s == 0 ? '$m 分钟' : '$m 分 $s 秒';
+}
+
+/// Seconds left until [lockedUntil], measured against [now] (injectable so
+/// tests can advance virtual time without waiting). Returns ≤ 0 once the
+/// lockout has elapsed. The countdown timer ticks this once per second to
+/// refresh the message (15:00 → 14:59 → … → 0 → unlock).
+int secondsUntilUnlock(DateTime lockedUntil, DateTime now) {
+  return lockedUntil.difference(now).inSeconds;
 }
 

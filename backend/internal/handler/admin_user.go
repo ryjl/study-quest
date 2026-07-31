@@ -271,11 +271,12 @@ func (h *adminHandler) CreateUser(c *gin.Context) {
 		AvatarURL string `json:"avatar_url"`
 		Pin       string `json:"pin" binding:"required"`
 		Role      string `json:"role" binding:"required"`
+		Grade     string `json:"grade"`
 	}
 
 	if !bindJSON(c, &req) { return }
 
-	user, err := h.userService.CreateUser(req.Nickname, req.AvatarURL, req.Pin, req.Role)
+	user, err := h.userService.CreateUser(req.Nickname, req.AvatarURL, req.Pin, req.Role, req.Grade)
 	if err != nil {
 		respondError(c, err)
 		return
@@ -326,7 +327,7 @@ func (h *adminHandler) GrantAccess(c *gin.Context) {
 
 	// Storage-source whitelist gate (防呆): refuse if any episode in this course
 	// lives on a source the user's allow-list doesn't include. Staff roles
-	// (admin/parent) bypass — they manage content, not consume under the gate.
+	// (admin) bypass — they manage content, not consume under the gate.
 	if h.storageSourceRepo != nil {
 		if u, uerr := h.userRepo.FindByID(req.UserID); uerr == nil && u != nil && !model.IsStaffRole(u.Role) {
 			sourceIDs, gerr := courseSourceSet(h.episodeRepo, req.CourseID)
@@ -381,11 +382,12 @@ func (h *adminHandler) UpdateUser(c *gin.Context) {
 		AvatarURL string `json:"avatar_url"`
 		Pin       string `json:"pin"`
 		Role      string `json:"role" binding:"required"`
+		Grade     string `json:"grade"`
 	}
 
 	if !bindJSON(c, &req) { return }
 
-	user, err := h.userService.UpdateUser(id, req.Nickname, req.AvatarURL, req.Pin, req.Role)
+	user, err := h.userService.UpdateUser(id, req.Nickname, req.AvatarURL, req.Pin, req.Role, req.Grade)
 	if err != nil {
 		respondError(c, err)
 		return
