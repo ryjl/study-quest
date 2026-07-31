@@ -155,3 +155,103 @@ func TestLoginLockout_RemainingUnlocked(t *testing.T) {
 		t.Fatalf("below threshold: remaining = %d, want 0", r)
 	}
 }
+
+// TestLoginLockout_RemainingConsistentWithLocked asserts the two views never
+// disagree: whenever locked() is true remaining() must be >0, and whenever
+// remaining() is 0 locked() must be false. This guards against the two methods
+// drifting (e.g. one pruning differently than the other), which would let the
+// handler advertise a Retry-After that contradicts the actual gate.
+func TestLoginLockout_RemainingConsistentWithLocked(t *testing.T) {
+	l, t0 := lockoutClock(t)
+	uid := uint(40)
+
+	// Not locked ↔ remaining 0.
+	check := func() {
+		t.Helper()
+		lok := l.locked(uid)
+		rem := l.remaining(uid)
+		if lok && rem <= 0 {
+			t.Fatalf("locked=true but remaining=%d (must be >0)", rem)
+		}
+		if !lok && rem != 0 {
+			t.Fatalf("locked=false but remaining=%d (must be 0)", rem)
+		}
+	}
+
+	for i := 0; i < DefaultLockoutMax; i++ {
+		l.recordFailure(uid)
+		check()
+	}
+	// Locked now.
+	if !l.locked(uid) {
+		t.Fatal("expected locked at threshold")
+	}
+	// Advance time in steps; consistency must hold at every point including
+	// after the lock naturally expires.
+	for step := 0; step < 20; step++ {
+		*t0 = t0.Add(time.Minute)
+		check()
+	}
+}
+
+// TestLoginLockout_SlidingWindowNewFailureDoesNotExtendLock documents the
+// counter-intuitive-but-correct sliding-window property: the unlock instant is
+// pinned to the OLDEST counted failure + window, so a new failure recorded
+// WHILE already locked does NOT push the unlock later. The lock lifts when the
+// oldest failure ages out, regardless of newer failures. (Newer failures only
+// matter once the oldest has aged out — they then form the next window.) This
+// is the standard sliding-window limiter semantic and a likely-to-regress
+// spot, hence the explicit test.
+func TestLoginLockout_SlidingWindowNewFailureDoesNotExtendLock(t *testing.T) {
+	l, t0 := lockoutClock(t)
+	uid := uint(41)
+
+	// Reach the threshold; unlock instant = oldest(now) + window = 900s.
+	for i := 0; i < DefaultLockoutMax; i++ {
+		l.recordFailure(uid)
+	}
+	r0 := l.remaining(uid)
+	if r0 != 900 {
+		t.Fatalf("at lock: remaining = %d, want 900", r0)
+	}
+
+	// Advance 5 min, record a fresh failure (user keeps retrying while locked),
+	// then check remaining. Without the new failure it would be 600s (900−300).
+	// Because unlock is pinned to the OLDEST failure, the new failure must NOT
+	// extend it — remaining stays ~600, NOT bumped back toward 900.
+	*t0 = t0.Add(5 * time.Minute)
+	l.recordFailure(uid)
+	r1 := l.remaining(uid)
+	if r1 != 600 {
+		t.Fatalf("after +5min + new failure: remaining = %d, want 600 (oldest-pinned, not extended)", r1)
+	}
+}
+
+// TestLoginLockout_CutoffBoundary verifies the prune predicate t.After(cutoff)
+// is strict: a failure exactly at the cutoff (now−window) is pruned, one just
+// after is kept. Guards an off-by-one that would either over- or under-lock.
+func TestLoginLockout_CutoffBoundary(t *testing.T) {
+	l, t0 := lockoutClock(t)
+	uid := uint(42)
+
+	// Record exactly max failures at t0, then advance to exactly window later.
+	// cutoff = now − window = t0, and the predicate is t.After(cutoff), so the
+	// t0 failures are NOT after cutoff → pruned → account unlocks.
+	for i := 0; i < DefaultLockoutMax; i++ {
+		l.recordFailure(uid)
+	}
+	*t0 = t0.Add(DefaultLockoutWindow)
+	if l.locked(uid) {
+		t.Fatal("failures exactly at cutoff (now−window) should be pruned (strict After), account unlocked")
+	}
+
+	// Now record max failures again, but advance just shy of the window (1s
+	// before). Failures are still just-after-cutoff → kept → still locked.
+	for i := 0; i < DefaultLockoutMax; i++ {
+		l.recordFailure(uid)
+	}
+	*t0 = t0.Add(DefaultLockoutWindow - time.Second)
+	if !l.locked(uid) {
+		t.Fatal("failures 1s before window expiry should still be counted → locked")
+	}
+}

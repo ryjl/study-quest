@@ -290,3 +290,85 @@ func TestAuthenticate_LockoutIsolatedPerUser(t *testing.T) {
 		t.Fatalf("user B should be unaffected: (%v,%v)", ok, err)
 	}
 }
+
+// TestAuthenticate_LockedAttemptDoesNotRecordFailure verifies that once an
+// account is locked, further Authenticate calls (which short-circuit with
+// ErrAccountLocked BEFORE the bcrypt compare) do not keep appending failure
+// timestamps. Without this, a locked account hammered by retries would never
+// let its oldest failure age out (the window would keep sliding forward) and
+// the lock would effectively never expire. The unlock instant must stay pinned
+// to the failures that caused the lock.
+func TestAuthenticate_LockedAttemptDoesNotRecordFailure(t *testing.T) {
+	db := setupTestDB(t)
+	userRepo := repository.NewUserRepository(db)
+	t0 := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return t0 }
+	svc := NewUserService(userRepo, WithLockoutClock(now)).(*userService)
+
+	user, err := svc.CreateUser("Hammered", "", "123456", "student", "")
+	if err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	// Drive into a lockout.
+	for i := 0; i < DefaultLockoutMax; i++ {
+		svc.Authenticate(user.ID, "000000")
+	}
+	if _, err := svc.Authenticate(user.ID, "000000"); !errors.Is(err, ErrAccountLocked) {
+		t.Fatalf("expected lockout, got %v", err)
+	}
+	rem0 := svc.LockoutRemaining(user.ID)
+
+	// Hammer with many more locked attempts, advancing only a little time so
+	// nothing ages out. If these recorded failures, remaining would grow back
+	// toward the full window; since they don't, remaining only drops by the
+	// elapsed time.
+	t0 = t0.Add(1 * time.Minute) // small advance, well within window
+	for i := 0; i < 20; i++ {
+		if _, err := svc.Authenticate(user.ID, "000000"); !errors.Is(err, ErrAccountLocked) {
+			t.Fatalf("attempt %d: still expected locked, got %v", i, err)
+		}
+	}
+	rem1 := svc.LockoutRemaining(user.ID)
+
+	// rem0 was ~900; after 1 min elapsed it should be ~840. If locked attempts
+	// were recording failures, remaining would have been pushed back UP toward
+	// 900 by the 20 new timestamps. Assert it went DOWN by ~60s, not up.
+	if rem1 >= rem0 {
+		t.Fatalf("locked attempts must not record failures: remaining went %d→%d (should drop ~60s)", rem0, rem1)
+	}
+	if rem1 != rem0-60 {
+		t.Errorf("remaining = %d, want %d (only the 1-min elapsed should apply)", rem1, rem0-60)
+	}
+}
+
+// TestAuthenticate_UnknownUserDoesNotLock verifies that authentication
+// attempts against a user_id that doesn't exist never create lockout state.
+// This matters for two reasons: (1) an attacker probing user ids must not be
+// able to pollute the lockout map, and (2) the lockout is keyed by user_id, so
+// a non-existent id has nothing to key on — the per-IP limiter + generic 401
+// cover that path instead. Asserts remaining stays 0 for an unknown id even
+// after many attempts.
+func TestAuthenticate_UnknownUserDoesNotLock(t *testing.T) {
+	db := setupTestDB(t)
+	userRepo := repository.NewUserRepository(db)
+	t0 := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return t0 }
+	svc := NewUserService(userRepo, WithLockoutClock(now)).(*userService)
+
+	const unknownID = uint(99999)
+	// Many attempts against a non-existent user: each errors "user not found"
+	// before recordFailure is reached, so no lockout state accrues.
+	for i := 0; i < DefaultLockoutMax+5; i++ {
+		_, err := svc.Authenticate(unknownID, "123456")
+		if err == nil {
+			t.Fatalf("attempt %d: expected error for unknown user", i)
+		}
+		if errors.Is(err, ErrAccountLocked) {
+			t.Fatalf("attempt %d: unknown user must not surface lockout", i)
+		}
+	}
+	if r := svc.LockoutRemaining(unknownID); r != 0 {
+		t.Fatalf("unknown user accumulated lockout state: remaining=%d, want 0", r)
+	}
+}
