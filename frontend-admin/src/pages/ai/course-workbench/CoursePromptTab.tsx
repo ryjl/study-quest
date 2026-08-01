@@ -1,5 +1,5 @@
-// CoursePromptTab — 课程工作台「Prompt」tab。修复旧版断裂 5:"编辑完课程 prompt 覆盖
-// 要跳到课程页才能预览"。这里编辑 + 即时预览同页。
+// CoursePromptTab — 课程工作台「Prompt」tab:编辑课程 prompt 覆盖 + 即时预览同页
+// (改完立刻看效果,不跳外部页面)。
 //
 // 课程已由路由固定(无需选课程下拉)。复用 PromptConfigTab CoursePromptSection 的
 // 编辑逻辑(5 字段 ai_config + 两个 AI 开关 + 套用学科模板),但把"到课程页预览"按钮
@@ -76,11 +76,9 @@ export function CoursePromptTab({ courseId }: { courseId: number }) {
       if (!course) throw new Error('课程不存在');
       // 必须发完整 course body:后端 UpdateCourse 用 binding:"required" 强制 title+subject。
       // 把课程本体字段原值回传,只覆盖 ai_config + 两个 AI 开关(同 CourseModal/PromptConfigTab)。
-      const gradeValue = course.grades ?? course.grade ?? '';
       const body = {
         title: course.title,
-        grades: gradeValue,
-        grade: gradeValue,
+        grades: course.grades ?? '',
         subject: course.subject,
         content_type: course.content_type,
         cover_url: course.cover_url,
@@ -142,7 +140,7 @@ export function CoursePromptTab({ courseId }: { courseId: number }) {
       </div>
 
       <div className="flex items-center justify-between gap-2">
-        {/* 即时预览:页内打开 PreviewPromptModal,不再跳外部页面(修复旧版断裂)。
+        {/* 即时预览:页内打开 PreviewPromptModal,不跳外部页面。
             让"改完立刻看效果"成为工作台的标配——调优最需要的就是这个即时反馈环。 */}
         <button
           type="button"

@@ -17,12 +17,9 @@ import (
 // 但作业是 episode 级、不绑 user、AI 单次生成(不走 ReAct)、纯打印。
 //
 // 入口:
-//   - EnqueueHomework:v2 勾选式批量入队(admin 在 RegenTab 勾选 episode 后调),对齐
+//   - EnqueueHomework:勾选式批量入队(admin 在 RegenTab 勾选 episode 后调),对齐
 //     EnqueuePolish 范式(逐 episode 建 job + skipped map)。走通用 POST /admin/api/ai/jobs
 //     case "homework"。
-//   - EnqueueHomeworkForCourse:[DEPRECATED v2] course-level 整门课批量,照抄
-//     EnqueueSegmentForCourse 范式。前端 v2 起改用勾选式(EnqueueHomework),本方法保留
-//     兜底(其端点 POST /courses/:id/homework/generate 标废弃),二期清。
 //   - runHomeworkJob:worker 消费 job,照抄 runSummaryJob 的"单次 LLM 调用"范式
 //     (v2:MaxTokens 16000 + FinishReason=="length" 截断短路)。
 //   - GetHomeworkViewByID / ListHomeworksByCourse / HasPendingHomeworkJob:admin 预览/列表/状态
@@ -85,49 +82,13 @@ type homeworkAgentMeta struct {
 	SelfCheckResult string `json:"self_check_result,omitempty"` // Stage 3 才填
 }
 
-// EnqueueHomeworkForCourse 为某课程所有有素材的 episode 批量入队 homework job。
-// 照抄 EnqueueSegmentForCourse 范式:ListByCourse → 去重(hasPendingJob)→ 循环入队。
-func (s *aiService) EnqueueHomeworkForCourse(courseID uint) (int, error) {
-	if s.homeworkRepo == nil {
-		return 0, ErrHomeworkNotEnabled
-	}
-	episodes, err := s.episodeRepo.ListByCourse(courseID)
-	if err != nil {
-		return 0, err
-	}
-	if len(episodes) == 0 {
-		return 0, nil
-	}
-	// 去重:已有在途 homework job 的 episode 跳过。这道门对齐 EnqueueSegmentForCourse,
-	// 避免 admin 反复点"批量生成"堆出多条 homework job 重复烧 token。
-	targetIDs := make([]uint, 0, len(episodes))
-	for _, ep := range episodes {
-		if !s.hasPendingJob("homework", ep.ID) {
-			targetIDs = append(targetIDs, ep.ID)
-		}
-	}
-	if len(targetIDs) == 0 {
-		return 0, nil
-	}
-	// 复用通用 enqueue(它内部会查 episode 解析 courseID,逐条 CreateJob)。
-	enqueued, _, err := s.enqueue(targetIDs, "homework", priorityHomework)
-	if err != nil {
-		return 0, err
-	}
-	return len(enqueued), nil
-}
-
-// EnqueueHomework 为指定 episode 列表入队 homework job(v2 新增,对齐 EnqueuePolish 范式)。
-// 这是勾选式批量入队的入口:admin 在 RegenTab 勾选若干 episode,前端调
+// EnqueueHomework 为指定 episode 列表入队 homework job(对齐 EnqueuePolish 范式)。
+// 勾选式批量入队的入口:admin 在 RegenTab 勾选若干 episode,前端调
 // POST /admin/api/ai/jobs {job_type:"homework", episode_ids:[...]} → handler 走通用 switch
 // 的 case "homework" → 调本方法。
 //
-// 与 EnqueueHomeworkForCourse(整门课)的区别:这里入参就是 episodeIDs,不查 ListByCourse。
-// 去重门保留(hasPendingJob)避免重复入队。返回 (enqueued, skipped, err) 三段式,skipped
+// 去重门(hasPendingJob)避免重复入队。返回 (enqueued, skipped, err) 三段式,skipped
 // 是 episode_id → 原因的 map,handler 透传给前端展示。
-//
-// 旧的 course-level EnqueueHomeworkForCourse 保留兜底(其端点 POST /courses/:id/homework/generate
-// 标废弃但不清,二期再删),避免破坏既有调用方。
 func (s *aiService) EnqueueHomework(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error) {
 	if s.homeworkRepo == nil {
 		return nil, nil, ErrHomeworkNotEnabled
@@ -262,12 +223,9 @@ func (s *aiService) runHomeworkJob(job *model.AIJob) {
 	// 6. 构造 user prompt(本课 top chunks + 课程复习 chunks + 科目信息)。
 	userPrompt := buildHomeworkUserPrompt(retrieved, reviewChunks, subjectLabel)
 
-	// 7. 单次 LLM 调用。MaxTokens 16000(v2 从 10000 上调)——体积推算:
-	//   quiz 实测一套 8-12 题峰值 7000-8000 token,1 字符 ≈ 1.68 token(中文 LLM 实际密度)。
-	//   homework 标准语文卷(21 题+阅读理解,explanation 标可选后)≈ 14400 token,16000 覆盖
-	//   且余 1600;英语/啰嗦/长默写仍可能超(那是 v2 prompt 引号转义硬规则要根治的另一个问题,
-	//   与 MaxTokens 大小无关——LLM 在 JSON 字符串值里写未转义 ASCII 双引号触发 parse 失败)。
-	//   extractJSONObject 另有截断兜底(救回前面 N-1 道完整题),但首选还是输出不被砍断。
+	// 7. 单次 LLM 调用。MaxTokens 16000——标准语文卷(21 题+阅读理解)接近这个
+	//   量级,设大防截断。英语卷/长默写仍可能超,由 prompt 引号转义硬规则 +
+	//   extractJSONObject 截断兜底兜住。
 	start := time.Now()
 	chatResp, err := llm.Chat(ctx, ai.ChatRequest{
 		Model:       modelName,

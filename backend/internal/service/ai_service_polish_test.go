@@ -427,8 +427,8 @@ func TestRunPolishJob_AllSuccess_E2E(t *testing.T) {
 // FAILED, does NOT write back the subtitle (stays whisper/raw), does NOT chain
 // segment, and the detail names the failed chunk.
 //
-// This locks down the 2026-07-21 behavior change (partial used to be done-with-
-// partial; now it's a hard fail that halts the chain).
+// This locks down the behavior: partial is a hard fail that halts the chain
+// (not done-with-partial).
 func TestRunPolishJob_Partial_E2E(t *testing.T) {
 	// Script maxRetries (2) garbage responses so the chunk exhausts retries.
 	var resps []fakePolishResp
@@ -590,4 +590,4 @@ func TestRunPolishJob_Resume_SeedIsIdempotent(t *testing.T) {
 // polish package's unexported const, so we hardcode the same value here with a
 // comment pointing at the source. If polish.maxRetries ever changes, update this
 // too — the partial test depends on scripting exactly that many failures.
-const maxRetriesForServiceTest = 2 // == polish.maxRetries (was 3 before 2026-07-22)
+const maxRetriesForServiceTest = 2 // == polish.maxRetries

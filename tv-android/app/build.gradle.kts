@@ -9,11 +9,11 @@ plugins {
 }
 
 android {
-    namespace = "com.revin.studyquest.tv"
+    namespace = "app.studyquest.tv"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.revin.studyquest.tv"
+        applicationId = "app.studyquest.tv"
         // Compose for TV (androidx.tv:tv-material 1.0.0) 要求 API 21+。
         // 对齐 JetStreamCompose 范例 + Flutter 端的 minSdk。
         minSdk = 21

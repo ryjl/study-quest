@@ -61,8 +61,8 @@ func seedCascadeFixture(t *testing.T, db *gorm.DB, courseID, epID uint) (user, c
 // TestEpisodeDeleteCleansNoFKChildren verifies that EpisodeRepository.Delete
 // removes the AI/observability child rows.
 //
-// 2026-07-19 起,AI 表(AISummary/ContentChunk/Quiz→Question→Answer/
-// KnowledgeMemory/AIRun via AIJob)都加了 OnDelete:CASCADE,删 episode 时 DB
+// AI 表(AISummary/ContentChunk/Quiz→Question→Answer/
+// KnowledgeMemory/AIRun via AIJob)都声明了 OnDelete:CASCADE,删 episode 时 DB
 // 自动级联清。这个测试同时覆盖:
 //   - 仍需手动清的 AIJob(EpisodeID 是 *uint 无 FK)和 StudyAdvice(scope_id 多态)
 //   - 通过 CASCADE 间接清的 Question/Answer/AIRun(本轮新加 FK 之前是孤儿源)

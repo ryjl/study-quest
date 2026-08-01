@@ -289,8 +289,7 @@ type Question struct {
 	//   fill:         {"accept":["12","十二"]}
 	//   judge(未来):  {"correct":true}
 	//   short_answer(未来): {"rubric":"...","keywords":[...]}
-	// 历史:曾经有 Answer(int)/AnswerText(string) 两列承载 choice/fill 判分,2026-07-27
-	// 清数据重部署时连同 DB 列一起删除——Scoring 列成为唯一判分元数据来源。
+	// Scoring 是判分的唯一元数据来源(choice/fill 都从这里读)。
 	Scoring     string `gorm:"type:text"`
 	Explanation string `gorm:"type:text"`
 	// HasJump 标记该题是否对应一个明确的视频片段(anchor chunk)。agent 出题时
@@ -383,25 +382,6 @@ type AIRun struct {
 	// 未来)没有对应 job,FK 约束对它们是 RESTRICT —— 但目前所有 AIRun 都挂在 job 上,
 	// 这条约束现在加是安全的。等 chat 上线时若需要 ad-hoc run,届时单独处理。
 	Job AIJob `gorm:"foreignKey:JobID;constraint:OnDelete:CASCADE" json:"-"`
-}
-
-// ChatSession / ChatMessage hold the multi-turn chat (Phase D capability) so a
-// user can discuss a lesson with the agent. Tables are created in this phase so
-// the schema is stable, but the chat capability itself is implemented later.
-type ChatSession struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement"`
-	UserID     uint      `gorm:"index;not null"`
-	EpisodeID  uint      `gorm:"index;not null"`
-	CreatedAt  time.Time
-}
-
-type ChatMessage struct {
-	ID         uint      `gorm:"primaryKey;autoIncrement"`
-	SessionID  uint      `gorm:"index;not null"`
-	Role       string    `gorm:"size:20;not null"` // user | assistant
-	Content    string    `gorm:"type:text;not null"`
-	ChunkRefs  string    `gorm:"type:text"`        // JSON [{text,start_time,end_time}] for video-jump links
-	CreatedAt  time.Time
 }
 
 // StudyAdvice 是 Phase C 的 agent 驱动学习建议产物。和 quiz 不同,advice 的产出是
@@ -659,8 +639,7 @@ func (s *Subject) SetAIConfig(cfg AIConfig) {
 }
 
 // EffectiveWhisperHint: Course.AIConfig().WhisperHint 优先 → Subject.AIConfig().WhisperHint。
-// 历史:曾有三层 fallback 到 deprecated AIHint 列,2026-07-27 清数据重部署时 AIHint 列
-// 一并删除,此方法不再有第三层兜底(新库所有 course 的 whisper_hint 都在 AIConfigJSON 里)。
+// 两层回退(无第三层):whisper_hint 只存在 AIConfigJSON 里(course 或 subject 任一)。
 func (c Course) EffectiveWhisperHint(subject Subject) string {
 	if h := strings.TrimSpace(c.AIConfig().WhisperHint); h != "" {
 		return h
@@ -676,7 +655,7 @@ func (c Course) EffectiveSummaryHint(subject Subject) string {
 	return strings.TrimSpace(subject.AIConfig().SummaryHint)
 }
 
-// EffectiveQuizHint: Course > Subject(曾有三层 fallback 到 AIHint,已删)
+// EffectiveQuizHint: Course > Subject 两层回退。
 func (c Course) EffectiveQuizHint(subject Subject) string {
 	if h := strings.TrimSpace(c.AIConfig().QuizHint); h != "" {
 		return h

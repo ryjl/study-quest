@@ -45,19 +45,18 @@ export interface TagMeta {
   course_count?: number; // how many courses use this tag (delete-confirm blast radius)
 }
 
-// Runtime caches + grade helpers used to live here. They've been split out to:
-//   - ./caches.ts : setSubjectCache, subjectMeta, setTagCache, tagMetaByID
-//   - ./grades.ts : PRESET_GRADES, GRADES, gradeLabel, gradeDisplay
-// Re-exported below so existing `import { subjectMeta, gradeDisplay, ... } from
-// './types'` call sites keep resolving. New code should import from the split
-// modules directly.
+// Runtime caches + grade helpers used to live in this file. They've been split
+// out to ./caches.ts and ./grades.ts (so this file stays pure TS interfaces),
+// and are re-exported here so the common `import { subjectMeta, gradeDisplay,
+// ... } from './types'` keeps resolving. This re-export is the long-term
+// convention — call sites import from './types' by design, not as legacy.
 export {
   setSubjectCache,
   subjectMeta,
   setTagCache,
   tagMetaByID,
 } from './caches';
-export { PRESET_GRADES, GRADES, gradeLabel, gradeDisplay } from './grades';
+export { PRESET_GRADES, gradeLabel, gradeDisplay } from './grades';
 
 export interface MediaStream {
   index: number;
@@ -123,8 +122,7 @@ export interface Chapter {
 export interface Course {
   id: number;
   title: string;
-  grade: string; // comma-joined grade keys, e.g. "3,4,5" (alias for grades)
-  grades?: string; // comma-joined grade keys (new field; backend sends this)
+  grades?: string; // comma-joined grade keys, e.g. "3,4,5"
   subject: string;
   subject_id?: number;
   content_type?: string; // "learning" | "entertainment"
@@ -768,8 +766,7 @@ export interface AiQuizQuestion {
   /** multi_choice: 是否允许部分对 scoring。 */
   partial_credit?: boolean;
   /** 原始判分元数据 JSON(按 type 解析),供 admin 排查判分问题。
-   * 2026-07-27 起是正确答案的唯一来源(choice→correct_index, fill→accept):
-   * 旧的 answer/answer_text 后端字段已删,前端不再下发。 */
+   * 正确答案的唯一来源(choice→correct_index, fill→accept)。 */
   scoring?: string;
   explanation: string;
   chunk_start_time?: number | null; // joined from content_chunks, for video-jump

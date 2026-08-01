@@ -2,12 +2,10 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
 	"studyquest/backend/internal/model"
 )
@@ -225,81 +223,6 @@ func TestGetRelatedChunksNotFound(t *testing.T) {
 	out, _ := tb.Execute(context.Background(), "get_related_chunks", `{"chunk_index":99}`)
 	if !contains(out, "未找到") {
 		t.Errorf("expected not-found message, got %q", out)
-	}
-}
-
-func TestExtractJSONObject(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"balanced", `{"a":1}`, `{"a":1}`},
-		{"fenced", "```json\n{\"a\":1}\n```", `{"a":1}`},
-		{"prose-wrapped", "结果如下: {\"a\":1} 完毕", `{"a":1}`},
-		{"no-braces", "no braces here", "no braces here"},
-		// 截断兜底:走到末尾仍未平衡时,补全缺失的闭符号。这是 max_tokens 砍断输出
-		// 的真实场景(截断点常落在中文 UTF-8 多字节字符中间,报 invalid character 'é')。
-		// 补全后能被 json.Unmarshal 解析,救回前面已写完整的字段/题目。
-		{"truncated-object", `{"a":1`, `{"a":1}`},
-		{"truncated-nested", `{"a":{"b":1`, `{"a":{"b":1}}`},
-		{"truncated-array", `{"q":["x","y"`, `{"q":["x","y"]}`},
-		{"truncated-string-value", `{"a":"hel`, `{"a":"hel"}`},
-	}
-	for _, c := range cases {
-		if got := extractJSONObject(c.in); got != c.want {
-			t.Errorf("extractJSONObject(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
-
-// TestExtractJSONObjectTruncatedUTF8MidChar v2 UTF-8 字节截断盲区补测。
-// MaxTokens 截断点可能落在一个 3 字节中文汉字的中间(切了 1-2 字节),s[start:] 起点带
-// 半个 UTF-8 序列会让后续 json.Unmarshal 报 "invalid UTF-8" 而非真正的语法错误。
-// ToValidUTF8 把残缺字节剔除,保证喂给 Unmarshal 的是合法 UTF-8。
-//
-// 场景:LLM 正在写 {"a":"老师讲到中... 字符串值没闭合就被砍断,且砍断点恰好落在
-// 「中」字(\xe4\xb8\xad)的第 2 字节后(留了 \xe4\xb8 两个残缺字节)。
-// 期望:残缺字节剔除 + 字符串补闭合 + object 补闭合 → {"a":"老师讲到"}
-func TestExtractJSONObjectTruncatedUTF8MidChar(t *testing.T) {
-	// 构造输入:合法前缀 + 残缺 UTF-8 尾字节(「中」的前两字节 \xe4\xb8,第三字节被砍)。
-	input := "{\"a\":\"老师讲到" + string([]byte{0xe4, 0xb8})
-	recovered := extractJSONObject(input)
-
-	// 关键断言 1:recovered 是合法 UTF-8(没有残缺字节)。
-	if !utf8.ValidString(recovered) {
-		t.Errorf("recovered is not valid UTF-8: % x", []byte(recovered))
-	}
-	// 关键断言 2:recovered 能被 json.Unmarshal 解析(不报 invalid UTF-8)。
-	var v struct {
-		A string `json:"a"`
-	}
-	if err := json.Unmarshal([]byte(recovered), &v); err != nil {
-		t.Fatalf("recovered JSON unparseable: %v\nrecovered=%q", err, recovered)
-	}
-	// 关键断言 3:前缀的合法中文保留,残缺字节被剔除而非留作乱码。
-	if !strings.Contains(v.A, "老师讲到") {
-		t.Errorf("expected 老师讲到 in salvaged value, got %q (recovered=%s)", v.A, recovered)
-	}
-}
-
-// TestExtractJSONObjectTruncationRecoverable 验证截断兜底产出的 JSON 能被标准库
-// json.Unmarshal 解析——即救回来的不是「仍是半截」,而是结构上完整的数据。这是
-// parseQuizGeneration 在被截断的输出上能救回前面题目的前提。
-func TestExtractJSONObjectTruncationRecoverable(t *testing.T) {
-	// 模拟被 max_tokens 砍断的 quiz 输出:第一道完整、第二道只写了半个 stem。
-	truncated := `{"questions":[{"stem":"Q1","options":["A"],"answer":0},{"stem":"Q2`
-	recovered := extractJSONObject(truncated)
-	var v struct {
-		Questions []struct {
-			Stem string `json:"stem"`
-		} `json:"questions"`
-	}
-	if err := json.Unmarshal([]byte(recovered), &v); err != nil {
-		t.Fatalf("recovered JSON still unparseable: %v\nrecovered=%s", err, recovered)
-	}
-	if len(v.Questions) < 1 || v.Questions[0].Stem != "Q1" {
-		t.Errorf("expected to salvage Q1, got %+v (recovered=%s)", v.Questions, recovered)
 	}
 }
 

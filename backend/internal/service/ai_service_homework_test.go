@@ -14,7 +14,7 @@ import (
 )
 
 // ai_service_homework_test.go — 课后作业卷 service 层测试。覆盖 plan §二 的必测项:
-//   - EnqueueHomeworkForCourse:去重、批量入队、缺素材跳过
+//   - EnqueueHomework:勾选式批量入队 + 去重 + 缺素材跳过
 //   - runHomeworkJob:fake LLM 返回 fixture JSON → Homework/Section/Question 持久化 + AIRun 落库
 //   - nil-safe:homeworkRepo 未注入返回 ErrHomeworkNotEnabled
 //   - 重生成:已有 active 卷时再生成 → 旧卷 archived、新卷 Version 自增
@@ -292,33 +292,6 @@ func TestRunHomeworkJob_NoChunksFails(t *testing.T) {
 	}
 }
 
-// TestEnqueueHomeworkForCourse_Dedupes 批量入队 + 去重(已有在途 job 的 episode 跳过)。
-func TestEnqueueHomeworkForCourse_Dedupes(t *testing.T) {
-	svc, _, ids := seedHomeworkServiceFixture(t)
-	// 第一次:入队 1 条。
-	n1, err := svc.EnqueueHomeworkForCourse(ids.courseID)
-	if err != nil {
-		t.Fatalf("Enqueue #1: %v", err)
-	}
-	if n1 != 1 {
-		t.Errorf("enqueued #1 = %d; want 1", n1)
-	}
-	// 第二次:同 course,已有在途 job → 0。
-	n2, err := svc.EnqueueHomeworkForCourse(ids.courseID)
-	if err != nil {
-		t.Fatalf("Enqueue #2: %v", err)
-	}
-	if n2 != 0 {
-		t.Errorf("enqueued #2 = %d; want 0 (dedup)", n2)
-	}
-	// 清掉在途 job(模拟它跑完),再入队应能再入 1 条。
-	svc.db.Model(&model.AIJob{}).Where("job_type = 'homework'").Update("status", "done")
-	n3, _ := svc.EnqueueHomeworkForCourse(ids.courseID)
-	if n3 != 1 {
-		t.Errorf("enqueued #3 = %d; want 1 (after prior done)", n3)
-	}
-}
-
 // TestHomeworkNilSafe homeworkRepo 未注入 → 所有方法返回 ErrHomeworkNotEnabled,不 panic。
 func TestHomeworkNilSafe(t *testing.T) {
 	db := testutil.NewFileDB(t)
@@ -328,9 +301,6 @@ func TestHomeworkNilSafe(t *testing.T) {
 		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*aiService)
 	svc.Stop() // 停 worker,这些 nil-safe 方法不跑 job,worker 纯属噪音
 
-	if _, err := svc.EnqueueHomeworkForCourse(1); !errors.Is(err, ErrHomeworkNotEnabled) {
-		t.Errorf("Enqueue nil: err = %v; want ErrHomeworkNotEnabled", err)
-	}
 	if _, _, err := svc.EnqueueHomework([]uint{1}); !errors.Is(err, ErrHomeworkNotEnabled) {
 		t.Errorf("Enqueue(ids) nil: err = %v; want ErrHomeworkNotEnabled", err)
 	}

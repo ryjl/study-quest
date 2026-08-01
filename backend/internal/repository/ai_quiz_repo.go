@@ -37,8 +37,8 @@ func (r *aiContentRepo) GetQuizByID(quizID uint) (*model.Quiz, error) {
 }
 
 // DeleteQuiz 物理删一条 quiz。Question/Answer 通过 FK OnDelete:CASCADE 自动跟随清除
-// (2026-07-19 加的 FK,以前删 quiz 会把 Question/Answer 留成孤儿)。和 archive 不同:
-// archive 翻 status='archived' 保留历史;delete 彻底清除。供 admin 控制台"删除"按钮。
+// (不留孤儿)。和 archive 不同:archive 翻 status='archived' 保留历史;delete 彻底清除。
+// 供 admin 控制台"删除"按钮。
 func (r *aiContentRepo) DeleteQuiz(quizID uint) error {
 	return r.db.Delete(&model.Quiz{}, quizID).Error
 }

@@ -43,8 +43,7 @@ type AIService interface {
 	// checkbox-style batch entry). Frontend POSTs /admin/api/ai/jobs with
 	// job_type=homework, handler dispatches here. Episodes without subtitle
 	// chunks (no material) or with an in-flight homework job are skipped with
-	// a reason in the skipped map. The legacy course-level entry
-	// (EnqueueHomeworkForCourse below) is retained as deprecated fallback.
+	// a reason in the skipped map.
 	EnqueueHomework(episodeIDs []uint) (enqueued []uint, skipped map[uint]string, err error)
 	// EnqueueSegmentForCourse enqueues segment jobs for every episode of a
 	// course that already has a subtitle (the agent needs source material). Used
@@ -69,13 +68,9 @@ type AIService interface {
 	GetOrEnqueueQuiz(userID, episodeID uint) (status string, quiz *model.Quiz, err error)
 	// GetQuizForClient returns the quiz + questions in a client-safe shape: the
 	// question list NEVER exposes the correct answer/answer_text (that's revealed
-	// only after submit, via SubmitQuizAnswer). Includes per-question answered
+	// only after submit, via SubmitAllQuizAnswers). Includes per-question answered
 	// state so the client can show progress on a redo.
 	GetQuizForClient(userID, episodeID uint) (*QuizView, error)
-	// SubmitQuizAnswer grades one answer, persists it, updates memory, and
-	// returns the verdict + explanation + jump-to-video timestamp. answerIndex is
-	// used for choice, answerText for fill (exactly one is set per question type).
-	SubmitQuizAnswer(userID, questionID uint, answerIndex *int, answerText *string) (*AnswerResult, error)
 	// SubmitAllQuizAnswers 是 Phase B 的"统一交卷":一次性判分整张卷子,逐题返回
 	// 结果 + 更新 memory,然后给 quiz 盖 SubmittedAt 锁定。对已交卷的 quiz 返回
 	// ErrQuizAlreadySubmitted。answers 里缺的题视为漏答(计错误但仍 reveal 正确答案)。
@@ -145,7 +140,7 @@ type AIService interface {
 	// "正在生成"(generating)vs"无报告未生成"(显示生成按钮)。
 	HasPendingUserReportJob(userID uint) bool
 
-	// ── admin: 重新生成 + 删除(2026-07-19 这轮加)──
+	// ── admin: 重新生成 + 删除 ──
 	// 这组方法是 admin 控制台"重新生成中枢"和"删除 AI 产物"按钮的后端。
 	// 重新生成走"覆盖式":UpsertAdvice/UpsertSummary/UpsertCourseSummary 都覆盖,
 	// quiz 走 archive + 插新 active,和客户端换题语义一致。所有方法都去重在途 job。
@@ -284,11 +279,7 @@ type AIService interface {
 	ExamStats() (repository.ExamStats, error)
 	ExamSourceQuality() ([]repository.ExamSourceQualityRow, error)
 
-	// ── 课后作业卷 (TODO.md P0,episode 级通用卷,纯打印) ──
-	// EnqueueHomeworkForCourse 为某课程所有有素材(chunks)的 episode 批量入队 homework
-	// job。去重:已有在途 homework job 的 episode 跳过。返回实际入队数。nil-safe
-	// (homeworkRepo 未注入返回错误)。admin 手动触发,低优先级(=1,不饿死 quiz)。
-	EnqueueHomeworkForCourse(courseID uint) (int, error)
+	// ── 课后作业卷 (episode 级通用卷,纯打印) ──
 	// GetHomeworkViewByID 取某 homework 完整内容(sections+questions),admin 预览/打印用。
 	// 无返回 (nil,nil)。nil-safe。
 	GetHomeworkViewByID(id uint) (*HomeworkView, error)
@@ -373,8 +364,7 @@ type aiService struct {
 	polishLLMOverride ai.LLMProvider
 	// settingsRepo reads global key-value settings (the `settings` table).
 	// Used today for the `polish_concurrency` knob (how many in-flight LLM
-	// calls a polish job may make). 默认 3:实测生产中继并发 3 零 429、4 偶发 429,
-	// 3 是安全最优值(详见 polishConcurrency)。
+	// calls a polish job may make, default 3 — see polishConcurrency).
 	// nil-safe: when nil, polishConcurrency() returns 3 (the default — same as
 	// an unset settings row, since GetWithDefault("polish_concurrency","3")).
 	settingsRepo repository.SettingsRepository
@@ -500,7 +490,7 @@ func (s *aiService) EnqueueSegment(episodeIDs []uint) ([]uint, map[uint]string, 
 func (s *aiService) EnqueueSummary(episodeIDs []uint) ([]uint, map[uint]string, error) {
 	// summary 优先级 1:它是 segment 的下游产物,不阻塞任何用户交互,最低即可。
 	//
-	// 去重门(2026-07-19 加):已有在途 summary job(queued/processing)的 episode 跳过,
+	// 去重门:已有在途 summary job(queued/processing)的 episode 跳过,
 	// 进 skipped map。没这道门 admin 连点会堆多条 summary job —— worker 单线程串行跑,
 	// 堆多条只是浪费 token + 污染 job 列表(结果幂等,因 UpsertSummary 覆盖)。照抄
 	// EnqueueSegmentForCourse / runSegmentJob 链式入队用的 hasPendingJob 模式。
@@ -539,7 +529,7 @@ func (s *aiService) EnqueueSummary(episodeIDs []uint) ([]uint, map[uint]string, 
 	return enqueued, skipped, nil
 }
 
-// 作业优先级(高 = ClaimNextQueuedJob 先捞)。设计意图:
+// 作业优先级(高 = ClaimNextQueuedJob 先捞):
 //   - quiz(10):学生正盯着屏幕等出题,响应延迟最刺眼,必须最先跑。
 //   - segment(2):summary/quiz 的上游,但属于后台批量,不需要抢在 quiz 前。
 //   - summary(1):纯派生展示数据,无人在等,放到最低。
@@ -748,9 +738,9 @@ func (s *aiService) OnSubtitleCompleted(episodeID uint) {
 	// the EnqueuePolish/runPolishJob pair where re-polish IS the point.
 	shouldPolish := sub != nil && sub.Source == "whisper" && s.resolver != nil
 	// Decision log: every input that could flip shouldPolish is named on one line.
-	// This hook had ZERO observability before — the 2026-07-22 reaper-timezone bug
-	// (jobs reaped every 5 min) took hours to diagnose precisely because there was
-	// no log saying "I decided to enqueue polish" vs "I fell through to segment".
+	// This hook otherwise has no observability — without this log it's impossible
+	// to tell "I decided to enqueue polish" from "I fell through to segment", which
+	// makes diagnosing silent-no-polish bugs extremely slow.
 	log.Printf("AI: OnSubtitleCompleted ep %d: source=%q resolverNil=%v → shouldPolish=%v",
 		episodeID, subSourceForLog(sub), s.resolver == nil, shouldPolish)
 	if shouldPolish {

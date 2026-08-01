@@ -61,8 +61,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&Question{},
 		&Answer{},
 		&AIRun{},
-		&ChatSession{},
-		&ChatMessage{},
 		// Phase C — agent 驱动的学习建议(advice agent 产出)。
 		&StudyAdvice{},
 		// Phase D — 课程级总结(course-unique 纯内容总结,agent 驱动综合所有 episode)。

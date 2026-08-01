@@ -30,8 +30,8 @@ type ReadingSeriesGrade struct {
 
 // readingGradeDisplay formats a grade set for the reading-room UI. Shared by
 // all three reading models; each delegates its loaded grade rows here.
-// 2026-07-20: 改开放 tag 后调用 gradeLabelForDisplay —— 预设值本地化、
-// 自定义 tag 原样输出、legacy 数字按"N年级"格式。
+// 开放 tag 体系下调用 gradeLabelForDisplay —— 预设值本地化、自定义 tag 原样输出、
+// legacy 数字按"N年级"格式。
 func readingGradeDisplay(gs []Grade) string {
 	for _, g := range gs {
 		if g == GradeUniversal {

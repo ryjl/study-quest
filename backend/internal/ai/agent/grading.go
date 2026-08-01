@@ -33,9 +33,9 @@ func GradeChoice(q model.Question, userIndex int) bool {
 
 // choiceCorrectIndex resolves the correct option index for a single-choice
 // question from Scoring.correct_index. No fallback — Scoring is the single
-// source of truth since the deprecated Answer column was removed (2026-07-27).
-// Returns 0 (first option) when Scoring is missing; callers treat a missing
-// correct index as "ungradable" at higher layers (defensive).
+// source of truth for grading. Returns 0 (first option) when Scoring is
+// missing; callers treat a missing correct index as "ungradable" at higher
+// layers (defensive).
 func choiceCorrectIndex(q model.Question) int {
 	if s := ParseScoring(q); s != nil && s.ChoiceIndex != nil {
 		return *s.ChoiceIndex
@@ -72,8 +72,7 @@ func GradeFill(q model.Question, userText string) bool {
 }
 
 // fillAcceptableAnswers resolves the acceptable fill answers from Scoring.accept.
-// No fallback — Scoring is the single source of truth since the deprecated
-// AnswerText column was removed (2026-07-27).
+// No fallback — Scoring is the single source of truth for grading.
 func fillAcceptableAnswers(q model.Question) []string {
 	if s := ParseScoring(q); s != nil && len(s.FillAccept) > 0 {
 		return s.FillAccept

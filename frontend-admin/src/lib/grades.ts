@@ -1,14 +1,7 @@
-// Grade tag system. 2026-07-20: grade 改开放 tag 体系,不再硬编码 1-9 年级。
-// 2026-07-21: "成人" (adult) 替换为 "大学" (college) + "其它" (other)。
-// "成人"在中文教育语境联想偏向成人教育/夜校,与产品定位(中小学 + 大学/进修)
-// 不搭;新增 "其它" 作为进修/职场/考研等不归类人群的兜底。历史 DB 里的 "adult"
-// 值会作为普通自定义 tag 回显,admin 可在 Grade 管理页一次性合并到 college/other。
-//
-// PRESET_GRADES is the default tags + 中文 labels the admin form shows.
-// Historical "1"-"9" and "adult" aren't in the preset — if the DB already has
-// those values, they echo back as custom chips. The admin can add any custom
-// tag in the form (考研 / 职场 / 幼小衔接 / ...) or manage them centrally on
-// the Grades page (CRUD + rename + merge + usage counts).
+// Grade tag system: grade 是开放 tag 体系(不硬编码 1-9 年级)。PRESET_GRADES 是
+// admin 表单默认显示的 tag + 中文 label;历史 DB 里的 legacy 值("1"-"9"、"adult")
+// 不在预设里,作为普通自定义 chip 回显,admin 可在 Grade 管理页 CRUD/合并/看用量。
+// 自定义 tag(考研 / 职场 / 幼小衔接 / ...)任意加。
 //
 // Split out of types.ts so that file is pure TS interfaces (no constants /
 // runtime helpers).
@@ -22,12 +15,8 @@ export const PRESET_GRADES: { key: string; name: string }[] = [
   { key: 'universal', name: '通用' },
 ];
 
-// GRADES 保留为 PRESET_GRADES 的别名,向后兼容老引用(避免大面积改名)。
-// 新代码请直接用 PRESET_GRADES。
-export const GRADES = PRESET_GRADES;
-
 // gradeLabel 把单个 grade key 渲染成展示文字。
-//   - 预设值(primary/junior/senior/adult/universal) → 中文 label
+//   - 预设值(primary/junior/senior/college/other/universal) → 中文 label
 //   - 纯数字(legacy "1"-"9") → "<n>年级"(向后兼容老 DB 数据)
 //   - 其它(自定义 tag 如"考研") → 原样
 export function gradeLabel(key: string): string {

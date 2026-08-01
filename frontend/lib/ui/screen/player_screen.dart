@@ -142,8 +142,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isFullscreen = false;
 
   // 焦点系统的命名 FocusNode,用于 TV 下显式 ▲▼ 跳转(参考 YouTube/爱奇艺 TV)。
-  // 不再用旧的分发表 + 几何算法(几何算法在 video+panel 同 scope 时会把 panel
-  // 的 FocusButton 当候选,跳错)。改成显式:
+  // 用显式映射而非几何算法(几何算法在 video+panel 同 scope 时会把 panel 的
+  // FocusButton 当候选,跳错)。显式映射:
   //   seek bar ▲ → 顶栏返回按钮,▼ → 控制行播放按钮
   //   ◄→ 在控制行/顶栏按钮间走几何算法(同区,候选明确)
   //   ► 到控制行右边界 → 顶层 FocusScope(parentScope)跨进 helper panel
@@ -515,7 +515,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // ---------------------------------------------------------------------------
 
   // 一次性闸门:TV 模式下默认焦点落 seek bar 的初始化只跑一次。
-  // 替代了原来的 _helperPanelInitialized(它管的事已经下放到 _isFullscreen 字段初值)。
+  // (全屏状态由 _isFullscreen 字段初值承载,不在这里管。)
   bool _focusInitialized = false;
 
   @override
@@ -1405,9 +1405,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildControlsRow(Duration position, Duration duration) {
-    // 去掉了外层 Focus(focusNode: _controlsRowFocus, ...) 锚点 + _activeMenu
-    // 状态机。三个设置菜单改用 PlayerSettingsMenu(MenuAnchor + RadioMenuButton),
-    // 焦点隔离 + 几何导航 + escape 关菜单都由 framework 保证。锁按钮已删。
+    // 三个设置菜单用 PlayerSettingsMenu(Dialog,见 player_menu.dart 的焦点隔离方案),
+    // 焦点隔离 + escape 关菜单由 framework 保证。无外层 Focus 锚点 / _activeMenu 状态机。
+    // 锁按钮已删。
     final playing = _player.state.playing;
     final audioOptions = _getAudioOptions();
     final subtitleOptions = _getSubtitleOptions();
@@ -1608,9 +1608,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   /// 进入 AI 学习页的唯一入口(helper panel 的 AI 卡)。
   ///
   /// 进前暂停视频(避免后台播放含音频);返回时若用户点了 AI 页里的"跳转
-  /// 12:38"链接,pop 会带回来一个 [JumpRequest],我们 seek 过去。
-  /// 历史:这条逻辑原本在顶栏 AI 图标里,顶栏 AI 砍掉(统一入口)后搬到这,
-  /// 顺手补上原来 helper panel 入口漏掉的 JumpRequest 处理 + pause。
+  /// 12:38"链接,pop 会带回来一个 [JumpRequest],我们 seek 过去,并 pause 让用户
+  /// 先看清上下文再播放。
   Future<void> _enterAiStudy() async {
     _player.pause();
     final result = await Navigator.of(context).push(

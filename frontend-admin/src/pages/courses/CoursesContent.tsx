@@ -62,7 +62,7 @@ export function CoursesContent({ onEdit, onChanged }: { onEdit: (c: Course) => v
   const filtered = useMemo(() => {
     const f = courses.filter((c) => {
       if (gradeFilter !== 'all') {
-        const grades = (c.grade || '').split(',').map((g) => g.trim());
+        const grades = (c.grades || '').split(',').map((g) => g.trim());
         if (!grades.includes(gradeFilter)) return false;
       }
       if (subjectFilter !== 'all' && c.subject !== subjectFilter) return false;

@@ -5,7 +5,7 @@ package agent
 // 集成时把它们落库成 model.HomeworkSection / model.HomeworkQuestion(以及处理 SectionSeq
 // → SectionID 的翻译)。
 //
-// 设计意图:解析层只做"逐题校验 + 残题丢弃",不碰任何 service / repo / model 写入。
+// 解析层只做"逐题校验 + 残题丢弃",不碰任何 service / repo / model 写入。
 // 这样 service 层拿到的就是一个干净的 HomeworkDraft,直接走 persist 路径即可。
 
 // HomeworkDraft 是一次作业生成的完整结果:大题(section)和题(question)分开存放

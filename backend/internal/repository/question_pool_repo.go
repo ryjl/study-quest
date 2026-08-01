@@ -30,7 +30,7 @@ type WrongBookRow struct {
 	Type        string
 	Options     string
 	// Scoring 带下来供 service 层派生正确答案(choice→CorrectIndex, fill→CorrectText,
-	// multi→CorrectIndices)。Scoring 是唯一判分元数据来源(2026-07-27 删 Answer/AnswerText 列后)。
+	// multi→CorrectIndices)。Scoring 是唯一判分元数据来源。
 	Scoring     string
 	Explanation string
 	HasJump     bool

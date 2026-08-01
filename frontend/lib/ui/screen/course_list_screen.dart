@@ -15,7 +15,7 @@ import '../widget/subject_icon.dart';
 import '../widget/tv_focus.dart';
 import 'course_detail_screen.dart';
 
-// 2026-07-20: grade 改成开放 tag 体系,过滤栏不再写死 1-9 年级。
+// grade 是开放 tag 体系,过滤栏不写死 1-9 年级。
 // _gradeTagsCatalog 从 /api/v1/courses/grade-tags 动态拉取(5 预设 + admin 已
 // 用的自定义 tag)。fallback 用 kPresetGradeTags 兜底,保证端点失败也能过滤。
 // gradeLabelOf 现在从 catalog 查 label,找不到原样输出(自定义 tag)。
@@ -76,12 +76,12 @@ class _CourseListScreenState extends State<CourseListScreen> {
   final Set<int> _selectedTagIDs = {};
 
   // Grade-tag catalog fetched from /api/v1/courses/grade-tags. Drives the
-  // grade filter chips. 2026-07-20: grade 改开放 tag,不再写死 1-9 年级。
+  // grade filter chips. grade 是开放 tag(不写死 1-9 年级)。
   // 失败 fallback 到 kPresetGradeTags(5 个预设)。
   List<GradeTag> _gradeTagsCatalog = const [];
 
   /// "全部" + one entry per ACADEMIC subject key. Refreshed when the catalog loads.
-  /// 2026-07-20:过滤掉 entertainment 子类(动画片/电影/纪录片/综艺)——它们属于
+  /// 过滤掉 entertainment 子类(动画片/电影/纪录片/综艺)——它们属于
   /// 娱乐 tab,不应出现在学习大厅的科目过滤里。娱乐 tab 重新启用时再单独处理。
   List<String> get _subjectFilters => [
     '全部',

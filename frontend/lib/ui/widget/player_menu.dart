@@ -3,12 +3,12 @@ import 'package:flutter/material.dart';
 import '../../theme.dart';
 import 'focus_button.dart';
 
-/// 播放器设置菜单(2026-07-27 重构,从 MenuAnchor 改为 Dialog)。
+/// 播放器设置菜单,基于 Dialog 实现。
 ///
-/// **为什么放弃 MenuAnchor**:MenuAnchor 的菜单 overlay 在 Navigator 顶层渲染,
-/// 焦点归位靠 MenuController 状态机 + FocusManager 全局监听,跟手动焦点管理冲突
-/// 严重 —— 实测菜单关闭后焦点丢失到 ModalScope、ESC 后焦点消失再也点不回来、
-/// 系统返回键直接退出页面等一堆 bug,修了多轮没根治。
+/// **为什么用 Dialog 而非 MenuAnchor**:MenuAnchor 的菜单 overlay 在 Navigator 顶层
+/// 渲染,焦点归位靠 MenuController 状态机 + FocusManager 全局监听,跟手动焦点管理
+/// 冲突严重 —— 菜单关闭后焦点丢失到 ModalScope、ESC 后焦点消失、系统返回键直接
+/// 退出页面等问题难以根治。
 ///
 /// **Dialog 方案**:`showDialog` 是 Flutter 最成熟的焦点隔离机制:
 ///  - 自动 FocusScope(菜单内焦点隔离,不跑到背后视频区)

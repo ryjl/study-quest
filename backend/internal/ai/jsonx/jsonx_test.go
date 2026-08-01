@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // TestParseLLMJSON 表驱动测试 ParseLLMJSON 的整条兜底链:
@@ -207,5 +208,31 @@ func TestParseLLMJSON_RealWorldCase(t *testing.T) {
 	}
 	if !strings.Contains(got.KeyPoints[0], "毕业") {
 		t.Errorf("第一项内容异常: %q", got.KeyPoints[0])
+	}
+}
+
+// TestExtractJSONObjectTruncatedUTF8MidChar 验证 MaxTokens 截断点落在中文 UTF-8
+// 多字节字符中间(切了 1-2 字节)时的处理:s[start:] 带半个 UTF-8 序列会让后续
+// json.Unmarshal 报 "invalid UTF-8"。ToValidUTF8 剔除残缺字节,保证喂给 Unmarshal
+// 的是合法 UTF-8。
+//
+// 场景:LLM 正在写 {"a":"老师讲到中... 字符串值没闭合就被砍断,且砍断点恰好落在
+// 「中」字(\xe4\xb8\xad)的第 2 字节后(留了 \xe4\xb8 两个残缺字节)。
+// 期望:残缺字节剔除 + 字符串补闭合 + object 补闭合 → {"a":"老师讲到"}
+func TestExtractJSONObjectTruncatedUTF8MidChar(t *testing.T) {
+	input := "{\"a\":\"老师讲到" + string([]byte{0xe4, 0xb8})
+	recovered := ExtractJSONObject(input)
+
+	if !utf8.ValidString(recovered) {
+		t.Errorf("recovered is not valid UTF-8: % x", []byte(recovered))
+	}
+	var v struct {
+		A string `json:"a"`
+	}
+	if err := json.Unmarshal([]byte(recovered), &v); err != nil {
+		t.Fatalf("recovered JSON unparseable: %v\nrecovered=%q", err, recovered)
+	}
+	if !strings.Contains(v.A, "老师讲到") {
+		t.Errorf("expected 老师讲到 in salvaged value, got %q (recovered=%s)", v.A, recovered)
 	}
 }

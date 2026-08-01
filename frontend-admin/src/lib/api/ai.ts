@@ -188,7 +188,7 @@ export const ai = {
     return r.episode_ids_with_summary ?? [];
   },
 
-  // AI 控制台:重新生成 + 删除(2026-07-19 加)。
+  // AI 控制台:重新生成 + 删除。
   // regenerateUserQuiz:对某用户的某集重跑 quiz agent(替换旧 quiz)。
   async regenerateUserQuiz(userId: number, episodeId: number): Promise<{ status: string }> {
     return request(`/admin/api/ai/users/${userId}/quizzes/regenerate`, {

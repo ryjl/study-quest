@@ -42,7 +42,7 @@ func TestCourseService(t *testing.T) {
 	})
 
 	t.Run("CreateCourseCustomGradeTag", func(t *testing.T) {
-		// 2026-07-20: grade 是开放 tag 体系,任意非空 trim 字符串都合法。
+		// grade 是开放 tag 体系,任意非空 trim 字符串都合法。
 		// 不再有硬编码 enum 校验。"考研" 是自定义 tag,合法且原样显示。
 		course, err := svc.CreateCourse("Custom Tag", []model.Grade{model.Grade("考研")}, subjects["math"].ID, model.ContentLearning, "", nil, "", model.AIConfig{}, false, false)
 		if err != nil {

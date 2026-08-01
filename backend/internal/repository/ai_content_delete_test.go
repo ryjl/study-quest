@@ -15,7 +15,7 @@ func setupDeleteTestDB(t *testing.T) *gorm.DB {
 }
 
 // TestDeleteQuiz_CascadesQuestionsAndAnswers 验证删 quiz 物理 CASCADE 到 Question + Answer。
-// 这是 2026-07-19 加 FK 之后的回归保护:以前删 quiz 留 Question/Answer 成孤儿。
+// 回归保护:确保删 quiz 不留 Question/Answer 孤儿(FK OnDelete:CASCADE)。
 func TestDeleteQuiz_CascadesQuestionsAndAnswers(t *testing.T) {
 	db := setupDeleteTestDB(t)
 	courseID, epID := seedCourseWithEpisode(t, db)

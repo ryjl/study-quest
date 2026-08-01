@@ -176,7 +176,7 @@ type AdminHandler interface {
 	GetUserStudyReport(c *gin.Context)
 	// Prompt 预览:admin 调优 hint 后立刻看完整 prompt 拼装效果(不调 LLM)。
 	PreviewCoursePrompt(c *gin.Context)
-	// 重新生成 + 删除(2026-07-19 加):AI 控制台"重新生成中枢"和"删除"按钮的后端。
+	// 重新生成 + 删除:AI 控制台"重新生成中枢"和"删除"按钮的后端。
 	// regen:quiz(给某学生重出题)、advice(三档 scope 强制刷新)。
 	// delete:summary/quiz/advice/course-summary/user-report(物理删,不走 archive)。
 	RegenerateUserQuiz(c *gin.Context)
@@ -190,7 +190,6 @@ type AdminHandler interface {
 	// 课后作业卷(Homework)——episode 级通用卷(admin 批量生成 + 预览打印 + per-subject
 	// prompt 配置)。纯 admin 功能,不加客户端路由。nil-safe:aiService==nil 时各方法
 	// 返回 503。详见 admin_homework.go 头注释。
-	TriggerHomework(c *gin.Context)
 	ListHomeworks(c *gin.Context)
 	GetHomework(c *gin.Context)
 	GetHomeworkPromptConfig(c *gin.Context)

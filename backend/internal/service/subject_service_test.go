@@ -45,7 +45,7 @@ func TestSeedDefaultSubjects(t *testing.T) {
 	}
 	list, _ := svc.List()
 	// 11 academic(语数英象棋课外百科+理化生史地政)+ 4 entertainment(动画/电影/纪录片/综艺) = 15。
-	// 2026-07-20 重构:把单行 entertainment 占位换成 4 个具体娱乐子类。
+	// entertainment 拆成 4 个具体子类(不是单行占位)。
 	if len(list) != 15 {
 		t.Fatalf("expected 15 default subjects (11 academic + 4 entertainment), got %d", len(list))
 	}
@@ -71,7 +71,7 @@ func TestSeedDefaultSubjects(t *testing.T) {
 		}
 	}
 
-	// 2026-07-20 新增:Category 字段 + 娱乐子类 seed。
+	// Category 字段 + 娱乐子类 seed。
 	// 11 个学术 subject 必须 Category=academic,4 个娱乐子类(animation/movie/
 	// documentary/variety)必须 Category=entertainment。
 	categories := map[string]string{}
@@ -110,10 +110,9 @@ func TestSeedDefaultSubjects(t *testing.T) {
 	}
 }
 
-// TestSeedDefaultSubjects_XiangqiAIConfig 验证象棋(2026-07-19 升系统级)的 5 字段
-// AIConfig 被 seed 回填。以前象棋提示词在前端 aiHintTemplates.ts(死代码),
-// 现在挪到后端 subjectAISeed —— 这条测试守护"开箱即用":fresh install 的象棋课
-// 在课程级没配 hint 时,Effective*Hint 能拿到学科级 seed。
+// TestSeedDefaultSubjects_XiangqiAIConfig 验证象棋(系统级学科)的 5 字段
+// AIConfig 被 seed 回填。象棋提示词在后端 subjectAISeed —— 这条测试守护"开箱即用":
+// fresh install 的象棋课在课程级没配 hint 时,Effective*Hint 能拿到学科级 seed。
 func TestSeedDefaultSubjects_XiangqiAIConfig(t *testing.T) {
 	_, svc := newSubjectSvc(t)
 	if err := svc.SeedDefaultSubjects(); err != nil {
@@ -131,7 +130,7 @@ func TestSeedDefaultSubjects_XiangqiAIConfig(t *testing.T) {
 		t.Fatalf("xiangqi subject not seeded")
 	}
 	if !xq.IsSystem {
-		t.Errorf("xiangqi should be IsSystem=true (升系统级是 2026-07-19 的关键变更)")
+		t.Errorf("xiangqi should be IsSystem=true (系统级学科)")
 	}
 	cfg := xq.AIConfig()
 	// 5 字段都必须有 seed 内容(非空)。
@@ -205,7 +204,7 @@ func TestSeedDefaultSubjectsBackfillsExistingInstall(t *testing.T) {
 	list, _ := svc.List()
 	// 5 old + 10 new defaults (xiangqi + chemistry/biology/history/geography/politics
 	// 6 个 academic + animation/movie/documentary/variety 4 个 entertainment) + 1 user = 16。
-	// 2026-07-20 重构:entertainment 单行换成 4 个具体娱乐子类。
+	// entertainment 拆成 4 个具体子类(不是单行占位)。
 	if len(list) != 16 {
 		t.Fatalf("after backfill: expected 16 subjects (5 old + 10 new defaults + 1 user), got %d", len(list))
 	}

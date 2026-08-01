@@ -91,8 +91,8 @@ func (r *userRepo) Delete(id uint) error {
 		// UserProgress / UserPoint / PointsLedger / UserCourseAccess / WatchEvent
 		// 走显式手清(沿用旂史做法,即使部分有 OnDelete:CASCADE 也保留为 defense-in-depth)。
 		//
-		// AI 表:2026-07-19 这轮把 Quiz/Question/Answer/KnowledgeMemory/
-		// UserStudyReport 的 UserID 都加了 OnDelete:CASCADE,删 User 时 DB 自动清。
+		// AI 表:Quiz/Question/Answer/KnowledgeMemory/
+		// UserStudyReport 的 UserID 都声明了 OnDelete:CASCADE,删 User 时 DB 自动清。
 		// 但仍有两类必须手清:
 		//   - AIJob:UserID 是 *uint 无 FK(segment/summary job 不绑用户,UserID 为 nil;
 		//     quiz/advice/user_report job 才填),无 FK 就无 CASCADE,必须手清。

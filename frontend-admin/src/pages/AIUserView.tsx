@@ -315,7 +315,7 @@ function QuestionCard({ index, q, answers }: { index: number; q: AiQuizDetail['q
   } catch {
     /* keep empty */
   }
-  // 正确答案信息全在 Scoring JSON 里(2026-07-27 删 answer/answer_text 字段后)。
+  // 正确答案信息全在 Scoring JSON 里。
   // choice/multi_choice:correct_index / correct_indices;fill:accept。
   // 兜底:Scoring 缺失或解析失败时,choice 无高亮、fill 无参考答案。
   let correctIndex: number | undefined;

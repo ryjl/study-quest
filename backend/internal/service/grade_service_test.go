@@ -92,8 +92,8 @@ func TestGradeService_Merge_PresetIntoCustom(t *testing.T) {
 	seedCourseGrades(t, db, 1, []string{"adult"})
 	seedCourseGrades(t, db, 2, []string{"adult", "college"})
 
-	// Merge adult→college. "adult" isn't a preset anymore (deleted 2026-07-21),
-	// but it IS in the DB, so this should succeed.
+	// Merge adult→college. "adult" isn't a preset, but it IS in the DB, so this
+	// should succeed.
 	if err := svc.Merge("adult", "college"); err != nil {
 		t.Fatalf("Merge: %v", err)
 	}

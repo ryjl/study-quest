@@ -42,7 +42,7 @@ type MemoryRepo interface {
 
 // MemoryStore reads and updates per-user learning state. It is the read-side
 // backing for the get_user_mastery tool (quiz agent) and the write-side backing
-// for answer grading (SubmitQuizAnswer → mastery update → next-gen adaptation).
+// for answer grading (quiz/exam submit → mastery update → next-gen adaptation).
 type MemoryStore struct {
 	repo MemoryRepo
 }
@@ -120,8 +120,8 @@ func sortMasteriesWorstFirst(rows []model.KnowledgeMemory) {
 // shape (wrong costs more than right gains) is the design.
 //
 // chunkID == 0 means the question was synthetic (not tied to a chunk) — there's
-// no knowledge point to update, so this is a no-op. (A decay curve over time is
-// a planned Phase D addition; for now mastery only moves on answers.)
+// no knowledge point to update, so this is a no-op. (Mastery only moves on
+// answers; no time-based decay yet.)
 func (m *MemoryStore) RecordAnswer(ctx context.Context, userID, chunkID, episodeID, courseID uint, correct bool) error {
 	_ = ctx
 	if chunkID == 0 {

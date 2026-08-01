@@ -1,7 +1,7 @@
 // HomeworkPrintView.tsx — 作业卷卷面渲染(屏上预览 + 打印共用)。
 //
-// v2 排版强化(2026-07-26):中性现代风 · 小学高年级。从 pages/Homework.tsx 抽出来做共享
-// 组件,供 HomeworkPreviewModal(RegenTab 行内「查看作业」按钮打开)复用。
+// 排版:中性现代风 · 小学高年级。共享组件,供 HomeworkPreviewModal(RegenTab 行内
+// 「查看作业」按钮打开)复用。
 //
 // 排版设计要点(详见 homework.css 顶部注释):
 //   - 卷头:课程名 + 课时标题 + 姓名/日期简洁信息栏(无考试元素)
@@ -186,9 +186,8 @@ function SectionView({
 
 // sectionTitleWithSeq 智能拼大题标题:如果 LLM 已在 title 里写了序号前缀(如「一、选择题」
 // 「二、填空题」「1、选择题」「1. 选择题」),就不重复加;否则补 cnSeq(seq)+「、」前缀。
-// v2 修复:用户报告「二、二、填空题」重复 —— prompt 示例的 title 格式是「一、选择题」,
-// LLM 照抄带序号,组件又加一遍导致重复。正则识别已有序号前缀(中文数字或阿拉伯数字,
-// 后跟「、」或「.」+ 可选空格)。
+// prompt 示例的 title 格式是「一、选择题」,LLM 照抄带序号,组件又加一遍会重复
+// (「二、二、填空题」)。正则识别已有序号前缀(中文数字或阿拉伯数字,后跟「、」或「.」+ 可选空格)。
 const sectionSeqPrefixRe = /^[\d一二三四五六七八九十]+[、.]\s*/;
 function sectionTitleWithSeq(seq: number, title: string): string {
   const trimmed = title.trim();

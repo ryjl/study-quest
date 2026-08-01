@@ -43,7 +43,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
   List<Course> _courses = const [];
   // 展开看答案的题(questionId 集合)。
   final Set<int> _expanded = {};
-  // 就地自测的选择(问题#3):纯本地状态,不改后端。让学生在收起态先点选项回忆,
+  // 就地自测的选择:纯本地状态,不改后端。让学生在收起态先点选项回忆,
   // 展开看答案时和正确答案对比。_choiceSelf[questionId]=选中的索引;_multiSelf 是多选集合。
   // 自测≠重做:重做走单独的重做卷屏(交卷判分、改 mastery);自测只是轻量回忆。
   final Map<int, int> _choiceSelf = {};
@@ -51,7 +51,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
   final Map<int, TextEditingController> _fillSelfControllers = {};
   // 乐观更新层:覆盖 snapshot.data 的"实时"列表。toggle 掌握状态后立即生效,
   // 不用等重新拉取。每次 _loadData 清空(新过滤 = 以服务端为准),toggle 时就地改写。
-  // 之前乐观更新写到 _lastList 但 build 没用它,导致「标记掌握」看着没反应(问题#6)。
+  // 之前乐观更新写到 _lastList 但 build 没用它,导致「标记掌握」看着没反应。
   WrongBookList? _liveList;
 
   @override
@@ -86,7 +86,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
     );
     // 服务端结果回来后,把它设为乐观层的基底。注意:必须用 .then 在 future 完成时赋值,
     // 而不是在 build() 里赋值——否则 toggle 触发的 rebuild 会用同一个旧 future 的 snapshot
-    // 把 _liveList 覆盖回旧数据,乐观更新瞬间失效(问题#6 修复的回归 bug)。
+    // 把 _liveList 覆盖回旧数据,乐观更新瞬间失效。
     _future = f.then((list) {
       if (mounted) {
         setState(() => _liveList = list);
@@ -128,7 +128,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
   Future<void> _toggleMastered(WrongBookItem item) async {
     final newMastered = !item.mastered;
     // 乐观更新:就地改写 _liveList(真正驱动 build 的数据源),立即看到状态翻转。
-    // 之前写到 _lastList 但 build 没读它 → 「标记掌握」点了像没反应(问题#6)。
+    // 之前写到 _lastList 但 build 没读它 → 「标记掌握」点了像没反应。
     setState(() {
       final list = _liveList;
       if (list != null) {
@@ -214,11 +214,11 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
             );
           }
           // 数据源:乐观层(_liveList)优先——它在 _loadData 的 future.then 里被设为服务端结果,
-          // 之后 toggle 就地改写它。build 里不再触碰它的赋值,避免覆盖乐观更新(问题#6)。
+          // 之后 toggle 就地改写它。build 里不再触碰它的赋值,避免覆盖乐观更新。
           final list = _liveList ?? snapshot.data;
           final items = list?.items ?? const <WrongBookItem>[];
           // 空态分两种:真没有错题(全局首次)vs 当前过滤无结果。后者保留过滤行,
-          // 让学生能切回「全部」/换个课程,而不是整页变成空状态丢失所有 tab(问题#2)。
+          // 让学生能切回「全部」/换个课程,而不是整页变成空状态丢失所有 tab。
           // 判断依据:unmasteredCount>0 或课程过滤开启 → 学生其实有错题,只是当前视图为空。
           final unmastered = list?.unmasteredCount ?? 0;
           final hasFilter = _masteredFilter != null || _courseFilter != 0;
@@ -268,7 +268,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
   }
 
   // 过滤空状态:学生有错题,但当前筛选(未掌握/某课程)下没有。保留 header + 过滤行,
-  // 避免整页变空让用户以为页面坏了、要切大 tab 才恢复(问题#2)。
+  // 避免整页变空让用户以为页面坏了、要切大 tab 才恢复。
   Widget _buildFilterEmpty(int unmastered) {
     final colors = context.colors;
     return Padding(
@@ -501,7 +501,7 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-          // 来源 chip + 错次/streak 徽标。课程名一定显示(问题#1):题干常写「根据本课程」
+          // 来源 chip + 错次/streak 徽标。课程名一定显示:题干常写「根据本课程」
           // 却不点名是哪门课,来源 chip 是学生唯一能对上号的线索,丢了就完全不知道在问哪门。
           Row(
             children: [
@@ -563,8 +563,9 @@ class _WrongBookScreenState extends State<WrongBookScreen> {
             children: [
               const Spacer(),
               // 掌握切换:未掌握→「标记掌握」(灰);已掌握→「取消掌握」(绿,点一下退回未掌握)。
-              // 文案明确双向(问题#5:之前已掌握态只显示「已掌握」像不可点的状态标签,没有"改回未掌握"的入口)。
-              // 乐观更新走 _liveList,点击即时翻转(问题#6)。
+              // 文案明确双向:已掌握态不能只显示「已掌握」像不可点的状态标签,
+              // 要有"改回未掌握"的入口。
+              // 乐观更新走 _liveList,点击即时翻转。
               GestureDetector(
                 onTap: () => _toggleMastered(item),
                 child: Container(
@@ -794,7 +795,7 @@ class _WrongBookRedoScreenState extends State<_WrongBookRedoScreen> {
     return Scaffold(
       backgroundColor: colors.backgroundColor,
       appBar: AppBar(
-        // 标题带题量(问题#7):让学生一眼看到这张复习卷有几题,而不是只看到「重做错题」
+        // 标题带题量:让学生一眼看到这张复习卷有几题,而不是只看到「重做错题」
         // 误以为只有 1 题。配合后端 RedoWrongBookQuiz 的 log,题量异常时可定位。
         title: Text('重做错题 · 共 ${widget.questions.length} 题'),
         backgroundColor: colors.cardColor,

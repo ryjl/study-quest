@@ -33,19 +33,7 @@ import {
   Hourglass,
 } from 'lucide-react';
 
-// AI job_type → Chinese label for the activity feed title.
-const AI_JOB_TYPE_LABEL: Record<string, string> = {
-  summarize: '总结',
-  quiz: '出题',
-  advice: '建议',
-  course_summary: '课程总结',
-  user_report: '用户报告',
-  segment: '切片',
-  slice: '切片',
-};
-function aiJobTypeLabel(jobType: string): string {
-  return AI_JOB_TYPE_LABEL[jobType] ?? jobType;
-}
+import { jobTypeLabel } from '../lib/jobType';
 
 export function Dashboard() {
   // Primary stats — its loading state gates the whole page (as before).
@@ -172,7 +160,7 @@ export function Dashboard() {
     activityItems.push({
       id: `airun-${r.id}`,
       icon: <Bot size={13} />,
-      title: `AI ${aiJobTypeLabel(r.capability)}`,
+      title: `AI ${jobTypeLabel(r.capability)}`,
       detail: where || r.model_used || undefined,
       time: r.created_at,
     });

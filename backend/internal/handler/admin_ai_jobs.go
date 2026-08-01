@@ -47,9 +47,8 @@ func (h *adminHandler) EnqueueAIJobs(c *gin.Context) {
 	case "polish":
 		enqueued, skipped, err = h.aiService.EnqueuePolish(req.EpisodeIDs)
 	case "homework":
-		// v2:作业勾选式批量入队。与 segment/summary/polish 三兄弟并列,前端零改动地
-		// 复用 POST /admin/api/ai/jobs 端点(只多一个 case)。旧的 course-level 端点
-		// POST /admin/api/ai/courses/:id/homework/generate 标废弃但不清(二期再删)。
+		// 作业勾选式批量入队。与 segment/summary/polish 三兄弟并列,前端零改动地
+		// 复用 POST /admin/api/ai/jobs 端点(只多一个 case)。
 		enqueued, skipped, err = h.aiService.EnqueueHomework(req.EpisodeIDs)
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "job_type 必须是 segment / summary / polish / homework"})

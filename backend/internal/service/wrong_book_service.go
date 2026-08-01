@@ -227,10 +227,9 @@ func (s *aiService) RedoWrongBookQuiz(userID, courseID uint, limit int) ([]QuizV
 			Options: decodeOptions(r.Options), HasJump: r.HasJump,
 		})
 	}
-	// 重做题量可观测性(问题#7):用户反馈「重做一批只出了 1 题」,但代码路径无截断到 1 的逻辑
-	// (ListByUser 无 limit,只在本函数开头 limit>10 才截断)。无条件打一条 log——redo 是低频
-	// 操作(学生主动点重做一批),每次打一条完全可接受,且能覆盖最可能的场景「确实只有 1 道未
-	// 掌握」(此时 out==items==1,条件 log 会漏掉,反而看不到线索)。
+	// 重做题量可观测性:无条件打一条 log——redo 是低频操作(学生主动点重做一批),
+	// 每次打一条完全可接受,且能覆盖最可能的场景「确实只有 1 道未掌握」(此时
+	// out==items==1,条件 log 会漏掉,反而看不到线索)。
 	// unmastered=未掌握总数,returned=实际返回数(去孤儿后)。两者不等说明有孤儿题(题库里题
 	// 已删但 wrong_book_items 还有记录,join 静默丢弃)。
 	log.Printf("AI: wrong-book redo user=%d course=%d: unmastered=%d returned=%d",
@@ -277,7 +276,7 @@ func (s *aiService) SubmitWrongBookRedo(userID uint, answers []QuizAnswerInput) 
 		verdict := agent.GradeAnswerV(*q, idx, txt, indices)
 		// 全对 → 连对 streak++(达阈值 3 才 mastered,见 IncrementCorrectStreak);
 		// 漏选(部分对)/错 → UpsertOnWrong(attempt++ + streak 清零)。
-		// 漏选按"错"处理,和交卷 hook / mastery 同口径(2026-07-23 统一判定)。
+		// 漏选按"错"处理,和交卷 hook / mastery 同口径(统一判定)。
 		if verdict.Correct {
 			if _, merr := s.wrongBookRepo.IncrementCorrectStreak(userID, input.QuestionID); merr != nil {
 				log.Printf("AI: wrong-book redo increment-streak q%d: %v", input.QuestionID, merr)
@@ -351,7 +350,7 @@ func decodeOptions(raw string) []string {
 // deriveCorrectAnswer 从 WrongBookRow(带 Scoring)派生正确答案三件套,
 // 复用 redo 交卷的判分 helper(choiceAnswerIndex / fillAcceptable / ParseScoring)。
 // 这三个 helper 吃 model.Question,这里用 row 字段拼一个最小 Question 喂进去。
-// Scoring 是唯一判分元数据来源(2026-07-27 删 Answer/AnswerText 列后,不再需要那俩字段)。
+// Scoring 是唯一判分元数据来源。
 func deriveCorrectAnswer(r repository.WrongBookRow) (*int, string, []int) {
 	q := model.Question{Type: r.Type, Scoring: r.Scoring}
 	switch r.Type {

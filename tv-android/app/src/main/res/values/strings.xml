@@ -1,6 +1,6 @@
 <resources>
-    <!-- 加 "TV" 后缀:同机器可能并存 PAD(Flutter)版"学途奇旅",
-         桌面图标需区分。Flutter 版 manifest 的 android:label 是硬编码
-         "学途奇旅",不经本文件,改这里不会波及 PAD 端。 -->
-    <string name="app_name">学途奇旅 TV</string>
+    <!-- 加 "TV" 后缀:同机器可能并存 PAD(Flutter)版,桌面图标需区分。
+         Flutter 版 manifest 的 android:label 是硬编码 "StudyQuest",
+         不经本文件,改这里不会波及 PAD 端。 -->
+    <string name="app_name">StudyQuest TV</string>
 </resources>

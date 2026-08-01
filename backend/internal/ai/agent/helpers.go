@@ -3,13 +3,11 @@ package agent
 import (
 	"encoding/json"
 	"time"
-
-	"studyquest/backend/internal/ai/jsonx"
 )
 
 // Small shared helpers for the agent package: loose JSON argument parsing for
-// tools, text truncation, time formatting. JSON-object extraction(围栏剥离/
-// 截断兜底)和裸引号修复已下沉到 jsonx 包,本包通过 jsonx.ParseLLMJSON 统一解析 LLM JSON。
+// tools, text truncation, time formatting. LLM JSON 解析(围栏剥离/截断兜底/裸引号
+// 修复)统一走 jsonx.ParseLLMJSON,本包不再保留本地别名。
 
 // parseStringArg extracts a string field from a tool-call arguments JSON blob.
 // Returns "" if the field is absent or the JSON is malformed — tools treat a
@@ -66,9 +64,3 @@ func formatReviewTime(t *time.Time) string {
 	return t.Format("2006-01-02 15:04")
 }
 
-// extractJSONObject 委托到 jsonx.ExtractJSONObject。围栏剥离 + 截断兜底的实现
-// 已下沉到 jsonx 包(详见 jsonx.ExtractJSONObject 文档)。本包内多处调用仍用小写
-// 别名以保持零改动;新代码应直接用 jsonx.ParseLLMJSON(它内部已含 extract)。
-func extractJSONObject(raw string) string {
-	return jsonx.ExtractJSONObject(raw)
-}

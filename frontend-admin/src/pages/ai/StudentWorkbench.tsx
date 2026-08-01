@@ -1,5 +1,5 @@
-// StudentWorkbench — 学生级 AI 工作台。"对象即导航"重构的第二个载体:
-// 围绕「一个学生」把他的所有 AI 学习数据聚合到一个页面。
+// StudentWorkbench — 学生级 AI 工作台。"对象即导航":围绕「一个学生」把他的所有
+// AI 学习数据聚合到一个页面。
 //
 // 4 个 tab:
 //   - 概览:跨课程学习报告 + 该生待办(失败 quiz 等)
@@ -7,8 +7,7 @@
 //   - 错题:全局错题观测(该生视角)+ 重出题入口
 //   - 操作:重新生成 学习报告/建议/quiz(原 UserRegenColumn 的三个卡片)
 //
-// 修复的断裂:旧版"看学生答错(学生数据 tab)→ 重出题(内容管理→按学生)"跨 tab,
-// 现在题库/错题 和 操作 同在一个工作台。
+// 题库/错题 与 操作 同在一个工作台,看答错→重出题不用跨 tab。
 
 import { useSearchParams, useParams, Navigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';

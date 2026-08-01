@@ -22,7 +22,7 @@ import 'player_screen.dart';
 //        b) submitted(已交卷):点"提交全部" → 调 submit-all 一次性判分 → 锁定所有题,
 //           逐题显示对错 + 正确答案 + 解析 + 跳转按钮(仅 has_jump=true 的题)。
 //
-// 交卷即归档(2026-07-25):submit-all 成功后后端把该 quiz 翻成 archived,它立即进入
+// 交卷即归档:submit-all 成功后后端把该 quiz 翻成 archived,它立即进入
 // 「历史练习」面板(可点开 review 逐题结果)。重进页面时 GetOrEnqueueQuiz 因「无 active
 // 但有历史」返回 done——当前练习区渲染「已完成、点重新生成」入口,不自动出新题;只有
 // 首次(从未做过)才自动 enqueue 生成。学生点「重新生成」才生成新一套。已交卷卷子的
@@ -1226,7 +1226,7 @@ class _HistoryQuizCard extends StatelessWidget {
 /// 问题根因:`IntrinsicColumnWidth` 表格在 Row+Expanded(给子节点 tight maxWidth
 /// 约束、但 Table 需要 unbounded 宽度去量每列 intrinsic 宽度)里,flutter_markdown
 /// 的横向 SingleChildScrollView 仍可能算出错误的外部尺寸,Android pad 上尤其明显
-/// (用户实测:表格直接盖在文字上)。把表格放到 Row 外、占满父容器宽度就好。
+/// (表格会直接盖在文字上)。把表格放到 Row 外、占满父容器宽度就好。
 class _PointItem extends StatelessWidget {
   final String data;
   final double textScale;

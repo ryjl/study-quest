@@ -51,8 +51,7 @@ func TestGradeFill(t *testing.T) {
 	}
 }
 
-// TestGradeFillMalformedScoring:Scoring 是损坏 JSON 时,GradeFill 应判错不 panic
-// (以前测 AnswerText 损坏,2026-07-27 删 AnswerText 列后改成测 Scoring 损坏)。
+// TestGradeFillMalformedScoring:Scoring 是损坏 JSON 时,GradeFill 应判错不 panic。
 func TestGradeFillMalformedScoring(t *testing.T) {
 	q := model.Question{Type: QuestionFill, Scoring: "not json"}
 	if GradeFill(q, "anything") {
@@ -90,8 +89,8 @@ func TestGradeAnswerDispatch(t *testing.T) {
 }
 
 // TestChoiceCorrectIndex_NoScoring 锁定"无 Scoring 的 choice 题返回 0"这个行为。
-// 2026-07-27 删 Answer 列后,choiceCorrectIndex 不再回退老字段,而是返回 0(第一项)。
-// 这依赖于"所有 question 都有 Scoring"的不变式(清数据重部署后,runQuizJob 总写 Scoring)。
+// choiceCorrectIndex 不回退老字段,无 Scoring 时返回 0(第一项)。这依赖于"所有
+// question 都有 Scoring"的不变式(runQuizJob 总写 Scoring)。
 // 如果未来有新代码路径创建无 Scoring 的 choice 题,这里会静默判"选 A 对"——本测试
 // 显式记录该行为,提醒未来维护者这个不变式。
 func TestChoiceCorrectIndex_NoScoring(t *testing.T) {

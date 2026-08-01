@@ -248,9 +248,8 @@ export function ImportDialog({ open, onClose, onImported }: { open: boolean; onC
                   the matching category. The backend derives Course.ContentType
                   from the chosen subject's Category (import_service.go), so we
                   don't send content_type explicitly — getting the subject right
-                  is what matters. Pre-2026-07-21 this form showed ALL subjects
-                  unfiltered, mixing 动画片/电影 (entertainment) with 数学/语文
-                  (academic) in one list — confusing and error-prone. */}
+                  is what matters. The dropdown is filtered so 动画片/电影
+                  (entertainment) and 数学/语文 (academic) don't mix in one list. */}
               <div>
                 <label className="mb-1 block text-xs text-muted">内容类型</label>
                 <div className="flex gap-2">

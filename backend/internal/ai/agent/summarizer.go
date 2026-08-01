@@ -138,9 +138,9 @@ func (s *Summarizer) Summarize(ctx context.Context, req SummarizerRequest, jobID
 	chatResp, err := s.llm.Chat(ctx, ai.ChatRequest{
 		Model:       s.model,
 		Temperature: ai.DefaultTemperature,
-		// MaxTokens 集中定义在 ai.MaxTokensSummary(含依据:输出结构重 + ep123 截断断裂
-		// 事故)。极端长课若仍超限,parseSummaryJSON 走的 jsonx.ParseLLMJSON 截断兜底
-		// 会救回前面的 sections 而非全废。
+		// MaxTokens 集中定义在 ai.MaxTokensSummary。取大值是因为 summary 输出结构重,
+		// 截断会让 JSON 断裂。极端长课若仍超限,parseSummaryJSON 走的 jsonx.ParseLLMJSON
+		// 截断兜底会救回前面的 sections 而非全废。
 		MaxTokens: ai.MaxTokensSummary,
 		Messages: []ai.ChatMessage{
 			{Role: ai.RoleSystem, Content: SummarizerSystemPrompt},
@@ -261,9 +261,8 @@ func (s *Summarizer) recordRun(jobID uint, inputJSON string, resp *ai.ChatRespon
 		// 不再用"skipped"(成功失败都写 skipped,前端无法区分)。
 		SelfCheckResult: "pass",
 		DurationMs:      int(elapsed.Milliseconds()),
-		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt
-		// (原来只存精简 InputJSON 快照,调 prompt 是盲调)。失败时也记——看是哪个 prompt
-		// 导致的失败同样有价值。
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
+		// 失败时也记——看是哪个 prompt 导致的失败同样有价值。
 		SystemPromptText: systemPrompt,
 		UserPromptText:   userPrompt,
 	})
@@ -290,17 +289,16 @@ func (s *Summarizer) recordRunErr(jobID uint, inputJSON string, err error, elaps
 //   - extract(围栏剥离/散文夹带剥离):模型被要求输出纯 JSON,但中转站常裹 ```json
 //     围栏或夹带散文;extractJSONObject 挖首个平衡对象,并 RECOVER 截断输出
 //     (max_tokens 截断时闭合未完结结构,救回前面字段而非整 job 失败)。
-//   - 裸引号修复(2026-07-29,与 homework 同源故障):LLM 常在 string value 写未转义
-//     裸 ASCII 双引号(如 points 里写"象棋级别"毕业""),第一次 parse 失败时替换成
-//     中文「」再 parse。生产 ep2 两次 summary 都因裸引号失败,这套兜底救回。
+//   - 裸引号修复:LLM 常在 string value 写未转义裸 ASCII 双引号(如 points 里写
+//     "象棋级别"毕业""),第一次 parse 失败时替换成中文「」再 parse。
 //
-// 后端不支持 response_format 时(探测确认 v2ex/中转站均 400 拒绝),这是主防线;
+// 后端不支持 response_format 时(中转站/llmy 均 400 拒绝该参数),这是主防线;
 // 换支持约束解码的后端后,从 provider 层启用 response_format 即可根治,本兜底保留。
 func parseSummaryJSON(raw string) (SummaryResult, error) {
 	var result SummaryResult
 	// 统一走 jsonx.ParseLLMJSON:extract(围栏/截断)→ unmarshal → 失败则裸引号修复
 	// → 再 unmarshal。repaired 值此处不外传(summary 调用方不需要),但 repair 兜底
-	// 在 jsonx 内部生效,救回 LLM 在 string value 写裸 ASCII 双引号的故障(生产 ep2)。
+	// 在 jsonx 内部生效,救回 LLM 在 string value 写裸 ASCII 双引号的故障。
 	if _, err := jsonx.ParseLLMJSON(raw, &result); err != nil {
 		return result, fmt.Errorf("invalid JSON: %w", err)
 	}

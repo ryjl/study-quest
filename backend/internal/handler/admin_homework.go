@@ -20,39 +20,11 @@ import (
 //     case "homework"(handler admin_ai_jobs.go),前端在 RegenTab 勾选 episode 后入队。
 //     service 层对应 EnqueueHomework(episodeIDs []uint),与 EnqueueSegment/Summary/Polish
 //     三兄弟同形。单集重生成 = 勾选那一集;批量重生成 = 勾选多集。
-//   - TriggerHomework(course-level 整门课)**已废弃**(v2 标注,二期清):前端不再用它,
-//     保留仅为兜底/向后兼容。新代码请走 POST /admin/api/ai/jobs {job_type:"homework"}。
 //   - ListHomeworks 只返回 homeworks 数组,不附 pending_episodes(避免 N+1 调
 //     HasPendingHomeworkJob)。在途状态前端按 created_at + 轮询推断,或二期补一个
 //     批量状态端点。
 //   - prompt 配置端点的 subjectKey 走 query param ?key=math(不查 subjectRepo)。前端
 //     在 subject 列表页已知 key,直接透传;service 用它算默认 prompt 配方(题型/题量)。
-
-// TriggerHomework [DEPRECATED v2] 触发为某课程批量生成作业卷(整门课)。
-// v2 起前端改用勾选式:POST /admin/api/ai/jobs {job_type:"homework", episode_ids:[...]},
-// 走 admin_ai_jobs.go 的通用 switch + service.EnqueueHomework(逐 episode 入队 + skipped map)。
-// 本端点(course-level)保留兜底但不再被前端调用,二期清理时连路由一起删。
-//
-//	POST /admin/api/ai/courses/:id/homework/generate
-//
-// 返回 enqueued = 本次新入队的 episode 数(0 不算错,只是全都在途或没素材)。
-func (h *adminHandler) TriggerHomework(c *gin.Context) {
-	if h.aiService == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "AI 子系统未配置"})
-		return
-	}
-	courseID, err := parseUintParam(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的课程 id"})
-		return
-	}
-	n, err := h.aiService.EnqueueHomeworkForCourse(courseID)
-	if err != nil {
-		respondError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"enqueued": n})
-}
 
 // ListHomeworks 列某课程下所有作业卷(admin 列表页)。
 //

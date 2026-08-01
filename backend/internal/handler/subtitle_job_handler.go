@@ -77,7 +77,7 @@ func (h *subtitleJobHandler) Claim(c *gin.Context) {
 			"course_title":  res.CourseTitle,
 			"chapter_title": res.ChapterTitle,
 			// Whisper prompt context. Sourced from Course.EffectiveWhisperHint()
-			// (reads AIConfigJSON, falls back to deprecated AIHint column).
+			// (reads AIConfigJSON, with Subject-level fallback).
 			// The worker reads ONLY whisper_hint — the legacy ai_hint protocol
 			// field was removed when the worker was upgraded in lockstep.
 			"whisper_hint":  res.WhisperHint,

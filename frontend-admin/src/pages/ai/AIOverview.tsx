@@ -17,16 +17,7 @@ import { useToast } from '../../lib/toast';
 import { PageHeader } from '../../components/PageHeader';
 import { HomeworkPromptSection } from '../ai-console/HomeworkPromptSection';
 import type { AiJob } from '../../lib/types';
-
-// job_type → 中文(和 AIWorkflow 一致),让失败任务的类型一眼可读。
-const JOB_TYPE_LABEL: Record<string, string> = {
-  slice: '切片', summarize: '总结', quiz: '出题', segment: '切片',
-  summary: '总结', polish: '字幕润色', advice: '学习建议',
-  course_summary: '课程总结', user_report: '学习报告', homework: '课后作业',
-};
-function jobTypeLabel(t: string) {
-  return JOB_TYPE_LABEL[t] ?? t;
-}
+import { jobTypeLabel } from '../../lib/jobType';
 
 export function AIOverview() {
   const navigate = useNavigate();

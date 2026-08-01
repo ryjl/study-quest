@@ -161,9 +161,8 @@ function JobRow({
   const actionable = job.status === 'failed' || job.status === 'queued' || job.status === 'processing';
   // Expand-on-view for done jobs with a generated subtitle. The expanded area
   // reuses the shared SubtitleRow component (the same one SubtitleDrawer uses),
-  // so the queue page gets version toggle + polish diff for free. Pre-2026-07-21
-  // the queue only showed status — the admin had to navigate to the course tree
-  // to see what a finished job actually produced.
+  // so the queue page gets version toggle + polish diff for free, and shows the
+  // finished job's output inline (not just status).
   const [showSubtitle, setShowSubtitle] = useState(false);
   const canViewSubtitle = job.status === 'done' && job.subtitle_id != null;
   return (

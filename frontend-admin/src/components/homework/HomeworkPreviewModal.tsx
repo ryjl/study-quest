@@ -1,16 +1,16 @@
 // HomeworkPreviewModal.tsx — 作业卷预览弹窗(RegenTab 行内「查看作业」按钮打开)。
 //
-// v2 新建(2026-07-26)。和 standalone Homework.tsx(已删)的预览逻辑等价,但改为 Modal
-// 形态:勾选式生成后,每行右侧「查看作业」按钮 → 打开本 Modal → 卷面预览 + 工具栏
-// (显示答案 toggle + 打印按钮)。
+// Modal 形态:勾选式生成后,每行右侧「查看作业」按钮 → 打开本 Modal → 卷面预览 +
+// 工具栏(显示答案 toggle + 打印按钮)。
 //
-// 打印策略(v2 修复:用户报告"3 页都是第一页"重复):
-// 原方案用 @media print 的 visibility:hidden + .print-area{position:absolute},
-// 但 .print-area 在 Modal 的 position:fixed overlay 深层,absolute 元素跨页时浏览器
-// 在每页重复绘制 → 3 页都是第一页。修复:用 createPortal 把"打印专用副本"渲染到
-// body 顶层(document.body 的直接子节点),它不在 Modal overlay 里,打印态正常分页。
-// 屏上只显示 Modal 内的预览(.hw-screen-only),打印副本(.hw-print-portal)屏上 display:none、
-// 打印态显示。window.print() 结束后副本仍在 DOM(下次打印复用),Modal 关闭时一并卸载。
+// 打印策略(关键):
+// Modal 的 position:fixed overlay 深层里用 @media print 的 visibility:hidden +
+// .print-area{position:absolute} 会失效——absolute 元素跨页时浏览器在每页重复绘制
+// (每页都重复第一页)。解法:用 createPortal 把"打印专用副本"渲染到 body
+// 顶层(document.body 的直接子节点),它不在 Modal overlay 里,打印态正常分页。
+// 屏上只显示 Modal 内的预览(.hw-screen-only),打印副本(.hw-print-portal)屏上
+// display:none、打印态显示。window.print() 结束后副本仍在 DOM(下次打印复用),
+// Modal 关闭时一并卸载。
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery } from '@tanstack/react-query';

@@ -287,14 +287,13 @@ func RegisterRoutes(
 		// Phase D — admin 课程级总结(course-unique 纯内容总结,agent 驱动)。
 		adm.POST("/api/ai/courses/:id/course-summary", admin.TriggerCourseSummary)
 		adm.GET("/api/ai/courses/:id/course-summary", admin.GetCourseSummary)
-		// 2026-07-19: 课程下"哪些 episode 已有 summary"——给内容管理 tab gate
+		// 课程下"哪些 episode 已有 summary"——给内容管理 tab gate
 		// 每集"删除"按钮用(无 summary 的课时不应显示删除)。前缀 :id 与上面一致。
 		adm.GET("/api/ai/courses/:id/summaries-status", admin.ListEpisodeSummaryStatus)
 		// 课后作业卷(Homework)——episode 级通用卷,纯 admin 功能(批量生成 + 预览打印
-		// + per-subject prompt 配置)。不加客户端路由。前缀 :id 与上面 course-summary
-		// 系列一致(gin 同前缀 wildcard 名必须一致);/homeworks/:id 和 /subjects/:id 是
-		// 新前缀,不冲突。单 episode 重生成故意不注册(见 admin_homework.go 头注释)。
-		adm.POST("/api/ai/courses/:id/homework/generate", admin.TriggerHomework)
+		// + per-subject prompt 配置)。批量生成走通用 POST /api/ai/jobs {job_type:"homework"}
+		// (见 admin_ai_jobs.go);此处只有查询/预览/prompt 配置端点。前缀 :id 与上面
+		// course-summary 系列一致(gin 同前缀 wildcard 名必须一致)。
 		adm.GET("/api/ai/courses/:id/homeworks", admin.ListHomeworks)
 		adm.GET("/api/ai/homeworks/:id", admin.GetHomework)
 		adm.GET("/api/ai/subjects/:id/homework-prompt", admin.GetHomeworkPromptConfig)
@@ -307,7 +306,7 @@ func RegisterRoutes(
 		// wildcard 名字一致,用 :id 会和 :userID 冲突 panic)。
 		adm.POST("/api/ai/users/:userID/study-report", admin.TriggerUserStudyReport)
 		adm.GET("/api/ai/users/:userID/study-report", admin.GetUserStudyReport)
-		// 2026-07-19: 重新生成 + 删除(物理删)端点,AI 控制台中枢的后端。
+		// 重新生成 + 删除(物理删)端点,AI 控制台中枢的后端。
 		// regen —— 覆盖式重跑,在途 job 去重。
 		adm.POST("/api/ai/users/:userID/quizzes/regenerate", admin.RegenerateUserQuiz)
 		adm.POST("/api/ai/users/:userID/advice/regenerate", admin.RegenerateUserAdvice)

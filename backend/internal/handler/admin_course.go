@@ -169,9 +169,6 @@ func (h *adminHandler) UpdateCourse(c *gin.Context) {
 		CoverURL         string            `json:"cover_url"`
 		TagIDs           []uint            `json:"tag_ids"`
 		AttachmentJSON   string            `json:"attachment_json"`
-		// AIHint is deprecated (see CreateCourse above). Ignored; kept for
-		// backward-compatible request binding only.
-		AIHint           string            `json:"ai_hint"`
 		// AIConfig 是 5 字段的课程级 AI 提示对象(替代老的 WhisperHint/QuizHint
 		// 双字段)。非 nil → 整体覆盖;nil → 回退到老双字段(兼容旧表单)。
 		AIConfig         *aiConfigRequest  `json:"ai_config"`

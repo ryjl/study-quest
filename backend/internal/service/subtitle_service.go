@@ -127,10 +127,10 @@ type ClaimResult struct {
 	ChapterTitle string `json:"chapter_title,omitempty"`
 	// WhisperHint is the prompt context for the worker's Whisper initial_prompt
 	// (admin-authored terminology/accent notes). Derived from
-	// Course.EffectiveWhisperHint(), which reads AIConfigJSON (falling back to
-	// the deprecated AIHint column for un-migrated rows). The HTTP layer emits
-	// ONLY this field (no legacy ai_hint mirror) — the Python worker reads
-	// whisper_hint exclusively. Both ends are in the same repo and ship together,
+	// Course.EffectiveWhisperHint() (reads AIConfigJSON, with Subject-level
+	// fallback). The HTTP layer emits ONLY this field (no legacy ai_hint mirror)
+	// — the Python worker reads whisper_hint exclusively. Both ends are in the
+	// same repo and ship together,
 	// so there is no protocol-compat window to maintain.
 	WhisperHint  string `json:"whisper_hint,omitempty"`
 }
@@ -202,9 +202,9 @@ func (s *subtitleJobService) Enqueue(episodeID uint, priority int, language stri
 	if ep == nil {
 		return nil, true, SkipReasonNotFound, nil
 	}
-	// 2026-07-20:娱乐内容现在也支持生成字幕 + AI(summary/quiz/advice)链。
-	// 之前 entertainment 在这里被主动 skip 是因为"娱乐视频没必要做学习分析",
-	// 但用户反馈娱乐课(动画片/电影/纪录片)也想用 AI 讨论,所以放开。娱乐课
+	// 娱乐内容也支持生成字幕 + AI(summary/quiz/advice)链。
+	// entertainment 不再在这里 skip。
+	// 娱乐课
 	// 仍不计入学习时长/badge —— 那个开关在 progress_service 而不是这里。
 
 	// Already has a subtitle? Don't re-queue.

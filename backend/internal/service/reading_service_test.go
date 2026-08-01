@@ -263,7 +263,7 @@ func TestReadingSeriesCRUD(t *testing.T) {
 		t.Fatalf("UpdateSeries: title=%q order=%d", updated.Title, updated.SortOrder)
 	}
 
-	// Custom grade tag (2026-07-20: grade 是开放 tag 体系,"考研" 合法且原样显示).
+	// Custom grade tag (grade 是开放 tag 体系,"考研" 合法且原样显示).
 	custom, err := svc.CreateSeries("Custom Grade", "", []model.Grade{model.Grade("考研")}, subj.ID, "", 0, nil)
 	if err != nil {
 		t.Fatalf("custom grade tag '考研' should be accepted: %v", err)

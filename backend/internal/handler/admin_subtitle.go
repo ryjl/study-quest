@@ -100,8 +100,8 @@ func (h *adminHandler) ExtractSubtitle(c *gin.Context) {
 // since there's no "prior version" to compare against. The admin subtitle
 // version UI uses this to render a polished-vs-original diff so polish
 // results are auditable (a polish run that introduced a hallucinated rewrite
-// is visible at a glance, even though the 2026-07-21 validation relaxation
-// no longer blocks such rewrites upstream).
+// is visible at a glance, even though validation no longer blocks such
+// rewrites upstream).
 func (h *adminHandler) GetSubtitle(c *gin.Context) {
 	idStr := c.Param("id")
 	id, err := strconv.ParseUint(idStr, 10, 32)

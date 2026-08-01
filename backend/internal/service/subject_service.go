@@ -188,9 +188,7 @@ func (s *subjectService) Delete(id uint) error {
 // admin 已经配过的**(AIConfigJSON 非空就不动)。其余 8 个系统学科只建记录,AIConfigJSON
 // 留空(给 admin 自己配)。
 //
-// 象棋(2026-07-19 升为系统学科):以前象棋是自定义学科,提示词模板存在前端
-// aiHintTemplates.ts(已经死代码,集中化后没人调用)。现在升系统级 + 后端 seed,
-// 统一所有 hint 配置走 Subject.AIConfig,DB 一处真源,前端模板彻底删除。
+// 象棋是系统学科(后端 seed):统一所有 hint 配置走 Subject.AIConfig,DB 一处真源。
 func (s *subjectService) SeedDefaultSubjects() error {
 	// defaults 按 Category 分两大组,每组内再按使用频率排:
 	//   academic       学术学科 —— SortOrder 1-12,小学常用(语数英象棋课外百科)

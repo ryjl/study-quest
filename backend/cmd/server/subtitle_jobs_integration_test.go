@@ -716,10 +716,9 @@ func TestSubtitleJobClaimResponseContext(t *testing.T) {
 		t.Errorf("ChapterTitle = %q, want 第一章 极限与连续", got.ChapterTitle)
 	}
 	// Whisper prompt context: ClaimResult.WhisperHint carries the value from
-	// Course.EffectiveWhisperHint(subject) (sourced from AIConfigJSON, falling back
-	// to the deprecated AIHint column for un-migrated rows). The worker reads
-	// only whisper_hint now (legacy ai_hint protocol field was removed when
-	// the worker was upgraded in lockstep).
+	// Course.EffectiveWhisperHint(subject) (sourced from AIConfigJSON, with
+	// Subject-level fallback). The worker reads only whisper_hint now (legacy
+	// ai_hint protocol field was removed when the worker was upgraded in lockstep).
 	wantHint := course.EffectiveWhisperHint(mathSubject)
 	if got.WhisperHint != wantHint {
 		t.Errorf("WhisperHint = %q, want %q", got.WhisperHint, wantHint)

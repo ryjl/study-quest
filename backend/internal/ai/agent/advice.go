@@ -14,9 +14,9 @@ import (
 // quizzer 跑 ReAct loop 出结构化题目;advice 跑同一个 ReAct loop,只换 system prompt +
 // 工具集(NewAdviceToolbox),产出自然语言建议。
 //
-// 复用 agent.Run(通用 ReAct 引擎),不复制 loop 代码——这是 Phase C "全 agent 驱动"的
-// 关键:advice 不是一次性 prompt engineering,而是 agent 自己用工具查跨课程 mastery、
-// 自己决定分析深度。后续 Phase D/E(chat 等)会复用这套 loop,只换工具集。
+// 复用 agent.Run(通用 ReAct 引擎),不复制 loop 代码——advice 是"全 agent 驱动"的
+// 典型:不是一次性 prompt engineering,而是 agent 自己用工具查跨课程 mastery、
+// 自己决定分析深度。其他能力(course_summary / user_report)复用这套 loop,只换工具集。
 //
 // 和 quizzer 的差异:
 //   - 输出是自然语言(agentRes.FinalText 直接用),不解析 JSON;
@@ -67,7 +67,7 @@ type AdviceResult struct {
 	// SystemPrompt / UserPrompt 透传自 AgentResult:本次建议生成发给 LLM 的开场
 	// system+user prompt(即 Generate 入口拼好的那对 seed)。供 service 层写进
 	// ai_runs.system_prompt_text / user_prompt_text,让 admin "查看回放"能看到
-	// 这次到底发了什么 prompt(原来这两段不存,调 prompt 是盲调)。
+	// 这次到底发了什么 prompt。
 	SystemPrompt string
 	UserPrompt   string
 }

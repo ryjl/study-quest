@@ -47,7 +47,7 @@ const SUBJECT_ICONS: Record<string, ComponentType<LucideProps>> = {
   politics: Scale, // 道德与法治 — scale
   extra: Compass, // 课外百科 — compass
   entertainment: Film, // 娱乐 — film
-  // 2026-07-20 新增娱乐子类(配合 Subject.Category=entertainment)。
+  // 娱乐子类(配合 Subject.Category=entertainment)。
   animation: Clapperboard, // 动画片
   movie: Film, // 电影
   documentary: Video, // 纪录片

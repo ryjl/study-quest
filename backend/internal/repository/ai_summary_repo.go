@@ -24,8 +24,8 @@ func (r *aiContentRepo) GetSummary(episodeID uint) (*model.AISummary, error) {
 func (r *aiContentRepo) UpsertSummary(s *model.AISummary) error {
 	// UPSERT on episode_id (uniqueIndex). 重新生成必须覆盖旧行——admin 点"重新生成"
 	// 时旧行还在,如果用 db.Save(s) 而 s.ID=0,GORM 会走 INSERT,撞 uniqueIndex 报
-	// "duplicated key not allowed"(用户实测的 bug)。改用 ON CONFLICT DO UPDATE
-	// 与 UpsertCourseSummary 同模式:冲突时更新所有可变业务列(保留原 ID/CreatedAt)。
+	// "duplicated key not allowed"。改用 ON CONFLICT DO UPDATE 与 UpsertCourseSummary
+	// 同模式:冲突时更新所有可变业务列(保留原 ID/CreatedAt)。
 	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "episode_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"course_id", "summary_json", "model_used", "updated_at"}),

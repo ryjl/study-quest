@@ -11,9 +11,9 @@
 // 三层防御(本包负责后两层;第一层 response_format 由调用方在 provider 层启用):
 //  1. 【源头/根治-当前未启用】response_format:{type:"json_schema",strict:true} ——
 //     约束解码时模型物理上发不出裸引号(grammar 在 string 内禁止裸 ")。需后端支持
-//     xgrammar/guidance/outlines 或原生 OpenAI gpt-4o+。探测(2026-07-29)确认当前
-//     中转站 api.ja.870314.xyz 及后端模型 llmy 均 400 拒绝该参数(unsupported_parameter),
-//     故此层暂不可用;换后端后从 provider 层统一启用,本包的 repair 兜底继续保留。
+//     xgrammar/guidance/outlines 或原生 OpenAI gpt-4o+。当前用的中转站及后端模型
+//     均 400 拒绝该参数(unsupported_parameter),故此层暂不可用;换后端后从
+//     provider 层统一启用,本包的 repair 兜底继续保留。
 //  2. 【兜底/主防线-当前生效】ParseLLMJSON:extract(围栏/截断)→ unmarshal →
 //     失败则 RepairBareQuotes(裸引号)→ 再 unmarshal。覆盖绝大多数裸引号故障。
 //  3. 【辅助】prompt 强化:要求 LLM 输出 JSON 时用中文引号「」代替 ASCII 引号。
@@ -214,12 +214,12 @@ func RepairBareQuotesInJSON(s string) string {
 			}
 			// 在 string 内遇到 "。判断是真结束还是引语。
 			//
-			// Pair-aware(2026-07-29):如果上一个引语 " 已开未闭合(quoteOpen==false),
+			// Pair-aware:如果上一个引语 " 已开未闭合(quoteOpen==false),
 			// 那么这个 " 一定是配对的闭合引语,不管它后面是不是结构字符——因为成对性
 			// 是硬约束:开了「就该有」。这修复了"引语后跟逗号"的误判(如 summary 里
 			// ...象棋级别"毕业",之后... 的 毕业" 后面是逗号,isStringTerminator 会误判
 			// 成真字符串结束,导致引号配对错乱、后续结构全崩)。原逻辑只靠 isStringTerminator
-			// 判断,在引语恰好出现在值末尾、后面跟逗号时失效(summary ep2 生产故障)。
+			// 判断,在引语恰好出现在值末尾、后面跟逗号时失效。
 			if !quoteOpen {
 				// 已开引语未闭合 → 这个 " 是闭合引语。
 				out.WriteString("」")

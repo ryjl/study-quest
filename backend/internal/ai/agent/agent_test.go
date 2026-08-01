@@ -185,9 +185,9 @@ func TestAgentLoopMaxStepsNoAnswerReturnsErr(t *testing.T) {
 	if !errors.Is(err, ErrMaxSteps) {
 		t.Errorf("expected ErrMaxSteps, got %v", err)
 	}
-	// 可观测性契约(2026-07-29):失败时 result 非 nil 且 Trace 已填充 partial 记录,
+	// 可观测性契约:失败时 result 非 nil 且 Trace 已填充 partial 记录,
 	// 供调用方(quizzer.Generate 等)透传给 service 层落 ai_runs。这里跑了 6 步 tool
-	// 调用,trace 应有 6 步——若丢失则失败路径无 trace 可排查(生产 job8 曾中招)。
+	// 调用,trace 应有 6 步——若丢失则失败路径无 trace 可排查。
 	if res == nil {
 		t.Fatal("失败时 result 不应为 nil(契约:Trace 须填充供排查)")
 	}

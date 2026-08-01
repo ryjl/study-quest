@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -132,40 +131,17 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 	s.contentRepo.UpdateJobStatus(job.ID, "done", "", nil)
 }
 
-// recordCourseSummaryRun 写 ai_run(供 admin 观测 course summary 生成)。和 recordAdviceRun
-// 平行,但 capability="course_summary",response_text 存总结文本预览(截断,避免 ai_run
-// 行过大)。systemPrompt/userPrompt 是本次发给 LLM 的开场 prompt,写进 ai_runs.system_prompt_text /
-// user_prompt_text 供 admin "查看回放"。
+// recordCourseSummaryRun 写 ai_run(供 admin 观测 course summary 生成)。是 recordAgentRun
+// 的薄 wrapper:capability="course_summary",preview 用 500 字 / course_summary_preview key
+// 截断(比 advice 的 400 字略长,课程总结本就更长)。
 func (s *aiService) recordCourseSummaryRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, summaryText, systemPrompt, userPrompt string) {
-	preview := truncateCourseSummaryPreview(summaryText)
-	s.contentRepo.CreateRun(&model.AIRun{
-		JobID:            jobID,
-		Capability:       "course_summary",
-		InputJSON:        fmt.Sprintf(`{"job_id":%d,"turns":%d,"steps":%d}`, jobID, turns, len(trace)),
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelUsed:        modelName,
-		ResponseText:     preview,
-		TraceJSON:        agent.TraceJSON(trace),
-		SelfCheckResult:  result, // 复用字段存 course summary 的 pass/fail(无 self-check,这里记生成结果)
-		SelfCheckNote:    note,
-		DurationMs:       int(elapsed.Milliseconds()),
-		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
-		SystemPromptText: systemPrompt,
-		UserPromptText:   userPrompt,
-	})
+	s.recordAgentRun("course_summary", truncateCourseSummaryPreview(summaryText), jobID, modelName, trace, usage, turns, elapsed, result, note, systemPrompt, userPrompt)
 }
 
-// truncateCourseSummaryPreview 把课程总结文本截到 500 字(比 advice 的 400 字略长,因为课程
-// 总结本就更长)并包成 JSON 预览(ai_run.response_text)。
+// truncateCourseSummaryPreview 把课程总结文本截到 500 字并包成 `{course_summary_preview:
+// "..."}` 预览(ai_run.response_text)。底层委托 truncateTextPreview。
 func truncateCourseSummaryPreview(summaryText string) string {
-	if len([]rune(summaryText)) > 500 {
-		summaryText = string([]rune(summaryText)[:500]) + "…"
-	}
-	preview, _ := json.Marshal(map[string]any{
-		"course_summary_preview": summaryText,
-	})
-	return string(preview)
+	return truncateTextPreview(summaryText, 500, "course_summary_preview")
 }
 
 // EnqueueCourseSummary 是 admin 触发的"为某课程生成课程级总结"入口。流程:
@@ -179,7 +155,7 @@ func (s *aiService) EnqueueCourseSummary(courseID uint) (string, error) {
 	if s.resolver == nil {
 		return courseSummaryStatusUnavailable, nil
 	}
-	// 课程存在性校验(顺便反查不会用上,但给一个清晰的 early error)。
+	// 课程存在性校验(反查不会用上,但给一个清晰的 early error)。
 	course, err := s.courseRepo.FindByID(courseID)
 	if err != nil {
 		return courseSummaryStatusUnavailable, err

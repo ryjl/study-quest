@@ -17,7 +17,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 )
 
@@ -172,55 +171,6 @@ type ChatRequest struct {
 	// MaxTokens caps the response length. Set on generation steps to avoid a
 	// runaway model burning tokens; leave 0 to let the provider default apply.
 	MaxTokens int `json:"max_tokens,omitempty"`
-
-	// ResponseFormat constrains the model's output to a known shape (OpenAI
-	// "structured outputs"). When the backend supports it, json_schema strict
-	// mode enables grammar-based constrained decoding — the model physically
-	// cannot emit a token that violates the schema (e.g. a bare " inside a
-	// JSON string value), which is the only true root-cause fix for the LLM
-	// bare-quote problem. See docs/pitfalls/llm-json-quotes.md.
-	//
-	// 留空(默认)= 不约束,走 jsonx.ParseLLMJSON 的事后 repair 兜底(当前所有
-	// 生成点的状态)。探测(2026-07-29)确认当前中转站/后端对 response_format
-	// 返回 400 unsupported_parameter,故此字段当前无人设置;换支持约束解码的
-	// 后端后,各生成点用 JSONSchemaResponseFormat(...) 构造它即可启用根治。
-	// 用 json.RawMessage 而非具体 struct:OpenAI 的 response_format 形状多样
-	// (json_object / json_schema),RawMessage 让调用方塞任意形状且 omitempty 生效。
-	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
-}
-
-// JSONSchemaResponseFormat 构造一个 OpenAI "structured outputs" 的 response_format
-// (json_schema strict),用于 ChatRequest.ResponseFormat。strict=true 让后端走约束解码
-// (grammar-based),模型物理上发不出违反 schema 的 token——这是 LLM 裸引号问题的唯一
-// 根治路径(详见 docs/pitfalls/llm-json-quotes.md)。
-//
-// name 是 schema 的逻辑名(OpenAI 要求);schemaJSON 是期望输出的 JSON Schema(已序列化
-// 成 JSON 字符串的,通常由 json.Marshal(struct tag) 产出)。返回的 RawMessage 可直接赋给
-// ChatRequest.ResponseFormat。
-//
-// 当前所有后端不支持 response_format(探测 400),故此函数当前无调用方;换支持约束解码
-// 的后端后,各生成点用它构造自己的 schema 即可启用根治,parse 点无需改动(已统一走
-// jsonx.ParseLLMJSON,届时 repair 兜底保留作第二保险)。
-func JSONSchemaResponseFormat(name string, schemaJSON json.RawMessage) (json.RawMessage, error) {
-	out := struct {
-		Type       string          `json:"type"`
-		JSONSchema jsonSchemaBody `json:"json_schema"`
-	}{
-		Type: "json_schema",
-		JSONSchema: jsonSchemaBody{
-			Name:   name,
-			Strict: true,
-			Schema: schemaJSON,
-		},
-	}
-	return json.Marshal(out)
-}
-
-// jsonSchemaBody 是 response_format.json_schema 的内层结构(见 JSONSchemaResponseFormat)。
-type jsonSchemaBody struct {
-	Name   string          `json:"name"`
-	Strict bool            `json:"strict"`
-	Schema json.RawMessage `json:"schema"`
 }
 
 // Tool advertises one callable function to the model. The model sees the

@@ -107,7 +107,7 @@ type QuizResult struct {
 	// 这里记的是首次 seed(regenerate 用同一 system + 同一 user 基底,只在 user 末尾
 	// 追加审核反馈,差别对 admin 调 prompt 不关键,故只记首次 seed)。供 service
 	// 层写进 ai_runs.system_prompt_text / user_prompt_text,让 admin "查看回放"
-	// 能看到这次到底发了什么 prompt(原来这两段不存)。
+	// 能看到这次到底发了什么 prompt。
 	SystemPrompt string
 	UserPrompt   string
 }
@@ -124,9 +124,8 @@ func (q *Quizzer) Generate(ctx context.Context, req QuizzerRequest) (*QuizResult
 	agentRes, err := q.agent.Run(ctx, QuizzerSystemPrompt, userPrompt)
 	if err != nil {
 		// agent.Run 在失败时(含 ErrMaxSteps)仍返回带 partial trace 的 result——
-		// 把它透传给 service 层落 ai_runs,否则 max-steps 失败时 6 步里模型调了
-		// 什么工具、观察到什么全部丢失,无法事后排查(生产 job8 就是这样:跑满 6 步
-		// 失败但 DB 无 trace)。和下面 parse 失败的处理(line ~140)保持一致模式。
+		// 把它透传给 service 层落 ai_runs,否则 max-steps 失败时模型这 6 步里调了
+		// 什么工具、观察到什么全部丢失,无法事后排查。和下面 parse 失败的处理(line ~140)保持一致模式。
 		return &QuizResult{Trace: agentRes.Trace, Usage: agentRes.Usage, Turns: agentRes.Turns,
 			RawFinalText: agentRes.FinalText, SystemPrompt: agentRes.SystemPrompt,
 			UserPrompt: agentRes.UserPrompt},
@@ -267,7 +266,7 @@ func parseQuizGeneration(raw string) (QuizDraft, error) {
 	var resp quizGenerationResponse
 	// 统一走 jsonx.ParseLLMJSON:围栏剥离/截断兜底 + 裸引号修复。和 homework/summary
 	// 同源——quiz 出题的 LLM 也会在 string value 写裸 ASCII 双引号(题干/选项/解析里
-	// 引用术语),这里之前只用了 extractJSONObject 无裸引号修复,是最严重的遗漏。
+	// 引用术语),裸引号修复是必备兜底。
 	if _, err := jsonx.ParseLLMJSON(raw, &resp); err != nil {
 		return QuizDraft{}, fmt.Errorf("invalid quiz JSON: %w", err)
 	}

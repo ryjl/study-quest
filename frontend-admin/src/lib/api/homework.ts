@@ -3,9 +3,9 @@ import type { Homework, HomeworkPromptConfig, HomeworkView } from '../types';
 
 // homework.ts — 作业卷 API。
 //
-// v2(2026-07-26):standalone /admin/homework 页已删,生成入口并入 AI 控制台 RegenTab
-// (勾选课时 → 批量入队)。本文件保留,因为 RegenTab 的 CourseRegenColumn + 预览 Modal
-// 还用 homeworkList/homeworkGet/homeworkGetPrompt 等。卷面渲染抽到
+// standalone /admin/homework 页已删,生成入口并入 AI 控制台 RegenTab(勾选课时 →
+// 批量入队)。本文件保留,因为 RegenTab 的 CourseRegenColumn + 预览 Modal 还用
+// homeworkList/homeworkGet/homeworkGetPrompt 等。卷面渲染在
 // components/homework/HomeworkPrintView.tsx(屏上预览 + 打印共用)。
 //
 // 单/批量 episode 入队走通用 enqueueAiJobs('homework', ids)(见 ai.ts),本文件不提供

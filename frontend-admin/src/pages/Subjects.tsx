@@ -143,15 +143,11 @@ function SubjectModal({ subject, onClose }: { subject: SubjectMeta | null; onClo
   const [sortOrder, setSortOrder] = useState(0);
   // Category: academic (学习课用) or entertainment (娱乐课用). The backend
   // stores this on Subject.Category and uses it to filter the CourseModal /
-  // ImportDialog subject dropdowns by content type. Pre-2026-07-21 this field
-  // was set only at seed time and never editable — admin-created subjects were
-  // stuck at the default 'academic' forever, so an admin who created 动画片
-  // then realized they'd miscategorized it had to delete + recreate. The
-  // backend handler (subject_handler.go) already accepts category on PUT; the
-  // form just wasn't sending it.
+  // ImportDialog subject dropdowns by content type. The field is editable here
+  // (the backend handler subject_handler.go accepts category on PUT), so a
+  // miscategorized admin-created subject can be fixed without delete+recreate.
   const [category, setCategory] = useState<'academic' | 'entertainment'>('academic');
-  // 学科级 AI 提示(5 字段 hint)。2026-07-26 从 AI 控制台 Prompt tab 挪回这里——
-  // 学科和它的 AI 默认本就该在一起编辑(之前跳出去配是集中化做一半的产物)。
+  // 学科级 AI 提示(5 字段 hint)。学科和它的 AI 默认本就该在一起编辑。
   // 学科是 AI 提示的"模板源",课程覆盖会回退到这里,所以放学科定义处最自然。
   const [aiCfg, setAiCfg] = useState<AiHintFieldsValue>(emptyAiHintValue());
 

@@ -407,7 +407,7 @@ func (h *adminHandler) PreviewCoursePrompt(c *gin.Context) {
 }
 
 // ---------------------------------------------------------------------------
-// 重新生成 + 删除(2026-07-19 加):AI 控制台中枢的后端端点。
+// 重新生成 + 删除:AI 控制台中枢的后端端点。
 // ---------------------------------------------------------------------------
 
 // regenerateUserQuizRequest 是 POST /admin/api/ai/users/:userID/quizzes/regenerate 的 body。

@@ -2,7 +2,7 @@
 // delete the course summary (3-state: ready / generating / ''), and list every
 // episode with per-episode summary regen / re-polish / delete actions.
 //
-// v2 重构(2026-07-26):勾选式批量操作 + 作业并入。
+// 勾选式批量操作 + 作业并入:
 //   - 每行前加 checkbox(无字幕禁用),Set<number> 跟踪选中(抄 GlossaryTab 范式)。
 //   - 顶部批量操作区(selected.size>0 显示):「生成总结」「生成作业」「重新润色」三按钮,
 //     调 enqueueAiJobs('summary'/'homework'/'polish', [...selected])。

@@ -106,10 +106,10 @@ func (c Course) GradeDisplay() string {
 	return courseGradeDisplay(c.Grades)
 }
 
-// courseGradeDisplay formats a grade set for the UI. 2026-07-20 grade 改开放
-// tag 后:预设值用 PresetGradeLabel 本地化(如 primary→"小学"),自定义 tag
-// 原样输出。Universal 单独处理为"全学段通用"。历史上 "1"-"9" 这种纯数字
-// 兼容值仍走数字+年级拼接(向后兼容已有 DB 数据)。
+// courseGradeDisplay formats a grade set for the UI. 开放 tag 体系下:
+// 预设值用 PresetGradeLabel 本地化(如 primary→"小学"),自定义 tag 原样输出。
+// Universal 单独处理为"全学段通用"。"1"-"9" 这种纯数字兼容值走数字+年级拼接
+// (向后兼容已有 DB 数据)。
 func courseGradeDisplay(gs []CourseGrade) string {
 	for _, g := range gs {
 		if g.Grade == GradeUniversal {

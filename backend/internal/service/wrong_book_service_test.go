@@ -116,9 +116,9 @@ func TestSubmitAllQuizAnswers_WrongAnswerIncrementsOnReSubmit(t *testing.T) {
 }
 
 // TestSubmitAllQuizAnswers_PartialCountsAsWrong 多选题部分对(漏选但没多选错项)
-// 按"错"处理——漏一个正确项就是没完全掌握,该进错题本复习。这是 2026-07-23 改的一致口径:
-// mastery / 错题本 / 显示对错 三处对"漏选"用同一判定(漏选=错),避免旧版自相矛盾
-// (旧版部分对不扣 mastery 不进错题本,但 UI 显示 partial,语义混乱)。
+// 按"错"处理——漏一个正确项就是没完全掌握,该进错题本复习。这是一致口径:
+// mastery / 错题本 / 显示对错 三处对"漏选"用同一判定(漏选=错),避免部分对
+// 不扣 mastery 不进错题本但 UI 显示 partial 的自相矛盾。
 func TestSubmitAllQuizAnswers_PartialCountsAsWrong(t *testing.T) {
 	svc, repo, wrongBook := aiServiceQuizTestEnv(t)
 	const userID, episodeID, courseID = uint(1), uint(10), uint(100)

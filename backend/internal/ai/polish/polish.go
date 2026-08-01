@@ -45,11 +45,8 @@ type PolishRequest struct {
 	SkipGlossaryMining bool
 
 	// Concurrency caps the number of in-flight LLM calls. Polish enforces
-	// conc<1 → 1. Default injected by the service is 3 (实测生产中继
-	// api.ja.870314.xyz 并发 3 持续零 429,并发 4 偶发 429——3 是安全最优值,
-	// 比串行快 3 倍)。Run-time configurable via the `polish_concurrency`
-	// Setting (admin → 系统设置 → AI 性能). Was a hardcoded `const concurrency
-	// = 3` before; moved here so the service can inject the configured value.
+	// conc<1 → 1. Default injected by the service is 3. Run-time configurable
+	// via the `polish_concurrency` Setting (admin → 系统设置 → AI 性能)。
 	Concurrency int
 
 	// --- checkpoint / resume (断点续润) -----------------------------------
@@ -113,7 +110,7 @@ type CueDiff struct {
 }
 
 // GlossaryCandidate is a mined term-correction rule the LLM surfaced while
-// polishing. confidence in [0,1]. 高门槛保留(2026-07-29):只有 confidence≥0.9
+// polishing. confidence in [0,1]. 高门槛保留:只有 confidence≥0.9
 // 且 evidence_ids≥2(出现至少 2 次)的才保留——孤例和低置信度的依赖上下文、不可复用，
 // 存进字典会过拟合到具体词条。门槛在 prompt(软)+ filterGlossary(硬)两道。
 type GlossaryCandidate struct {
@@ -147,11 +144,10 @@ type PolishStats struct {
 	// ratio exceeds the soft warning threshold (length delta > 5 OR punctuation
 	// changed OR Levenshtein/maxLen > 0.5). These changes are STILL APPLIED —
 	// this is informational only, surfaced in the job detail so the admin knows
-	// how many cues to spot-check in the subtitle diff UI. The whole point of
-	// the relaxed validation (2026-07-21) is that we trust the LLM's corrections
-	// by default and let humans review questionable ones via the diff view,
-	// rather than the previous strict rules that rejected legitimate homophone
-	// fixes on short cues (考算→口算, 合不变→和不变, etc.).
+	// how many cues to spot-check in the subtitle diff UI. Polish trusts the
+	// LLM's corrections by default and lets humans review questionable ones via
+	// the diff view, rather than rejecting legitimate homophone fixes on short
+	// cues (考算→口算, 合不变→和不变, etc.) outright.
 	HighEditDistanceCount int `json:"high_edit_distance_count"`
 	// SkippedEdits counts find/replace edits that were dropped because their
 	// find substring was absent or not unique in the cue. Informational only:
@@ -174,22 +170,20 @@ type PolishStats struct {
 const (
 	chunkSize    = 150 // cues per chunk
 	chunkOverlap = 3   // overlap cues between adjacent chunks
-	// maxRetries is attempts per chunk before giving up. Was 3; dropped to 2
-	// (2026-07-22): the 3rd retry almost never helps (relay garbage repeats,
-	// unknown-id drift repeats) and just burns billed tokens. With checkpoint/
-	// resume, a chunk that exhausts retries fails the job but its done siblings
-	// survive — so a failed chunk is cheap to retry on demand rather than paying
-	// for a near-useless 3rd attempt inline.
+	// maxRetries is attempts per chunk before giving up. The 3rd retry almost
+	// never helps (relay garbage repeats, unknown-id drift repeats) and just
+	// burns billed tokens. With checkpoint/resume, a chunk that exhausts retries
+	// fails the job but its done siblings survive — so a failed chunk is cheap
+	// to retry on demand rather than paying for a near-useless extra attempt.
 	maxRetries = 2
 	// maxTokens 已上移到 ai.MaxTokensPolish(集中管理 + 实测超限 tuning 8000→12000)。
 )
 
 // ChunkLayout returns the global cue-index span [first, last] (inclusive) of
-// each chunk Polish would produce for numCues cues. Exposed so the service
-// layer can seed ai_polish_chunks rows with the same boundaries Polish will
-// use (the two MUST agree, or a chunk's persisted result won't line up with
-// the cue index it's replayed against on resume). Mirrors the chunking math
-// inside Polish exactly — if you change one, change the other.
+// each chunk Polish produces for numCues cues. It is the single source of
+// truth for chunk boundaries: Polish consumes it directly, and the service
+// layer seeds ai_polish_chunks rows from it so a chunk's persisted result
+// lines up with the cue index it's replayed against on resume.
 func ChunkLayout(numCues int) [][2]int {
 	step := chunkSize - chunkOverlap
 	var out [][2]int
@@ -214,8 +208,7 @@ func ChunkLayout(numCues int) [][2]int {
 //  3. concurrently (3-way) call the LLM per chunk, retry failed chunks (see
 //     maxRetries); chunks present in req.PriorOutcomes are SKIPPED (resume)
 //  4. validate every returned change (only unknown cue id rejects+retries;
-//     length/punctuation just flag HighEditDistance, applied anyway — the
-//     2026-07-21 relaxation)
+//     length/punctuation just flag HighEditDistance, applied anyway)
 //  5. apply validated changes back to the cues (timestamps untouched)
 //  6. reassemble SRT → VTT
 //
@@ -243,35 +236,27 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 		return nil, fmt.Errorf("polish: zero cues parsed")
 	}
 
-	// 2. Chunk with overlap. Chunk i spans [i*step, i*step+chunkSize).
-	// step = chunkSize - overlap so each chunk shares `overlap` cues with
-	// the next, giving the model cross-boundary context without duplicating
-	// work (changes for overlap cues are deduped at apply time by last-write
-	// — the later chunk sees more right-side context).
-	step := chunkSize - chunkOverlap
-	chunks := make([][]cueRef, 0, len(cues)/step+1)
-	for startIdx := 0; startIdx < len(cues); startIdx += step {
-		end := startIdx + chunkSize
-		if end > len(cues) {
-			end = len(cues)
-		}
-		blk := make([]cueRef, 0, end-startIdx)
-		for i := startIdx; i < end; i++ {
+	// 2. Chunk with overlap. step = chunkSize - overlap so each chunk shares
+	// `overlap` cues with the next, giving the model cross-boundary context
+	// without duplicating work (changes for overlap cues are deduped at apply
+	// time by last-write — the later chunk sees more right-side context).
+	// Boundaries come from ChunkLayout (the single source of truth — the service
+	// layer seeds ai_polish_chunks rows with the same layout for resume).
+	chunks := make([][]cueRef, 0, len(ChunkLayout(len(cues)))+1)
+	for _, span := range ChunkLayout(len(cues)) {
+		first, last := span[0], span[1] // inclusive
+		blk := make([]cueRef, 0, last-first+1)
+		for i := first; i <= last; i++ {
 			blk = append(blk, cueRef{GlobalIdx: i, Cue: cues[i]})
 		}
 		chunks = append(chunks, blk)
-		if end == len(cues) {
-			break
-		}
 	}
 
 	// 3. Concurrent LLM calls with a bounded semaphore. Concurrency comes from
 	// PolishRequest (injected by the service from the `polish_concurrency`
-	// Setting, default 3); <1 clamps to 1 (串行). 选 3 的依据:对生产中继
-	// api.ja.870314.xyz 的实测——并发 3 持续 3 轮零 429,并发 4 偶发 429(贴着
-	// 上限,内部计数抖动会超)。2026-07-27 的 429 风暴真相不是"单 job 并发 3 超标"
-	// (worker 是单 goroutine 串行处理 job,单 job 3 路不会让总并发超 3),而是删库前
-	// 多 job 交错 + summary/polish 同时跑导致瞬时叠加。并发可经 admin「AI 性能」调整。
+	// Setting, default 3); <1 clamps to 1 (串行)。瞬时叠加风险来自多 job 交错 /
+	// summary 与 polish 同时跑,而非单 job 内的 N 路——worker 是单 goroutine
+	// 串行处理 job。
 	conc := req.Concurrency
 	if conc < 1 {
 		conc = 1
@@ -330,22 +315,19 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 				parsed            *polishResponse
 				pErr              error
 				// promptAccum/completionAccum 累计本 chunk 所有 HTTP 成功 attempt 的
-				// token（含最终被 validation 拒掉的那些）。之前用一个 `usage` 变量在
-				// 每次 retry 时覆盖，会把前面 attempt 的 token 丢掉，导致实际花费被
-				// 漏算少计（账单比 PolishStats 显示的更高）。改成累加后统计才反映真实账单。
+				// token（含最终被 validation 拒掉的那些）。必须累加而非每次 retry 覆盖,
+				// 否则前面 attempt 的 token 会被丢掉,实际花费被漏算少计(账单比
+				// PolishStats 显示的更高)。
 				promptAccum       int
 				completionAccum   int
 				retries           int
 				chunkHighEditDist int
 			)
 			// Retry loop: re-call the LLM until the response parses AND passes
-			// structural validation. Since the 2026-07-21 relaxation, the only
-			// validation failures that trigger retry are STRUCTURAL (JSON parse
-			// error, unknown cue id) — suspicious-but-in-range text no longer
-			// fails, it just increments chunkHighEditDist. So a well-formed
-			// response with legit homophone fixes succeeds on attempt 1; only
-			// genuinely broken responses (relay garbage, lost id alignment)
-			// burn retries.
+			// structural validation. 只有 STRUCTURAL 失败(JSON parse error、unknown
+			// cue id)才触发重试——可疑但落在合理区间的文本不 fail,只累加
+			// chunkHighEditDist。所以格式正确、修了合理同音字的响应首轮即过;只有真正
+			// 损坏的响应(relay 乱码、id 对齐丢失)才会消耗重试。
 			// Labeled break (`break retryLoop`) is required because a plain
 			// `break` inside the select would only exit the select, not the
 			// for — and we'd keep re-calling polishChunk on a cancelled ctx
@@ -354,12 +336,9 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 			for attempt := 0; attempt < maxRetries; attempt++ {
 				if attempt > 0 {
 					retries++
-					// 指数退避(2s, 4s, …)给被限流的 relay 留排队窗口。原来是线性
-					// `attempt * 1s`(1s/2s),间隔太短——429 后秒级重试又撞墙,把整个
-					// retry 预算耗在 429 上。指数退避让每次重试多等一倍,relay 有机会
-					// 排空在途请求。默认并发 3(实测安全值)从源头压低 429 概率;这里是
-					// 兜底——万一并发调高了、多 job 交错叠加、或换了限流更严的 relay,
-					// 退避能争取到重试成功的机会。
+					// 指数退避(2s, 4s, …)给被限流的 relay 留排队窗口——每次重试多等一倍,
+					// relay 有机会排空在途请求。这里是兜底——万一并发调高了、多 job 交错
+					// 叠加、或换了限流更严的 relay,退避能争取到重试成功的机会。
 					backoff := time.Duration(2<<attempt) * time.Second // attempt=1→4s,2→8s…
 					select {
 					case <-time.After(backoff):
@@ -438,69 +417,18 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 	}
 	wg.Wait()
 
-	// 4. Apply changes to a map keyed by global cue index. Last write wins
-	// (the later chunk has more right-side context and is preferred). We also
-	// record before/after for the diff. Validation already ran per chunk;
-	// we additionally dedup glossary entries here.
-	//
-	// find/replace (2026-07-22): each change resolves to its final text via
-	// CueChange.resolveText (edits applied with uniqueness check, or Text
-	// fallback). We count how many edits got skipped (find not unique/absent)
-	// into skippedEdits so the admin can tell the model's find/replace wasn't
-	// precise — not a correctness gate, the rest of the change still applies.
-	editedText := make(map[int]string, len(cues))
-	var skippedEdits int
-	for _, oc := range outcomes {
-		for _, ch := range oc.changes {
-			// ch.ID is the chunk-local 1-based id → resolve to global idx.
-			// (We sent chunk-local ids in the prompt so ids stay small and
-			// dense, which models handle reliably.)
-			if ch.ID < 1 || ch.ID > len(chunks[oc.idx]) {
-				continue
-			}
-			globalIdx := chunks[oc.idx][ch.ID-1].GlobalIdx
-			final, _, skipped, _ := ch.resolveText(cues[globalIdx].Text)
-			skippedEdits += skipped
-			editedText[globalIdx] = final
-		}
-	}
-
-	// 5. Reassemble. We rebuild the SRT from the parsed cues so timestamps
-	// come straight from StartMs/EndMs (never from the model).
-	var changed int
-	diff := make([]CueDiff, 0, len(editedText))
-	for i, c := range cues {
-		newText, ok := editedText[i]
-		if !ok {
-			continue
-		}
-		// Apply every LLM-returned change that actually differs from the
-		// original. The previous design re-checked changeAllowed here as
-		// defense-in-depth; that gate is gone (2026-07-21 relaxation), so the
-		// only filter left is "is it actually a change". Recording the diff
-		// unconditionally lets the subtitle version UI show every modification
-		// for admin review — which is now the primary quality control, not
-		// the validation rules.
-		if newText != c.Text {
-			changed++
-			diff = append(diff, CueDiff{
-				ID:     i + 1, // 1-based to match SRT cue numbering
-				Before: c.Text,
-				After:  newText,
-			})
-			cues[i].Text = newText
-		}
-	}
-
-	polishedSRT := cuesToSRT(cues)
-	polishedVTT := subtitle.SrtToVtt(polishedSRT)
+	// 4-5. Apply each chunk's changes back to the cues and reassemble the
+	// polished VTT. Extracted so Polish reads as orchestration; see
+	// applyAndReassemble for the apply (last-write-wins + find/replace) and
+	// reassembly (timestamps always from the parsed cues, never the model).
+	polishedVTT, diff, changed, skippedEdits := applyAndReassemble(cues, chunks, outcomes)
 
 	// Dedup glossary across chunks by (Original, Corrected) — take the
 	// highest confidence and merge evidence ids.
 	glossary := dedupGlossary(collectGlossary(outcomes))
-	// 高门槛过滤(2026-07-29):只留 confidence≥0.9 且 evidence_ids≥2 的高频稳定规则。
+	// 高门槛过滤:只留 confidence≥0.9 且 evidence_ids≥2 的高频稳定规则。
 	// prompt 已要求模型自律,这里是硬兜底——模型不听 prompt 报了一堆孤例/低置信度,
-	// 在落库前过滤掉,避免 glossary 候选列表被噪音淹没(此前一节课动辄 100+ 候选,
+	// 在落库前过滤掉,避免 glossary 候选列表被噪音淹没(一节课动辄 100+ 候选,
 	// admin 根本审不过来,且孤例接受进字典反而过拟合到具体词条)。
 	glossary = filterGlossary(glossary)
 
@@ -540,6 +468,59 @@ func Polish(ctx context.Context, llm ai.LLMProvider, model string, req PolishReq
 		Glossary:    glossary,
 		Stats:       stats,
 	}, nil
+}
+
+// applyAndReassemble folds each chunk's changes back onto the cues and
+// rebuilds the polished VTT. Extracted from Polish so the orchestration reads
+// linearly; it has no concurrency/atomic/callback entanglement — pure data
+// in (cues + chunks + outcomes), polished VTT + diff + counts out.
+//
+// Apply is last-write-wins keyed by global cue index: the later chunk has more
+// right-side context and is preferred. find/replace changes resolve to their
+// final text via CueChange.resolveText (edits with a uniqueness check, else
+// the Text fallback); edits whose find isn't unique/absent are skipped and
+// counted into skippedEdits (informational — not a correctness gate, the rest
+// of the change still applies).
+//
+// Reassembly rebuilds the SRT from the parsed cues so timestamps always come
+// from StartMs/EndMs (never from the model). Cues whose resolved text differs
+// from the original are mutated in place and recorded in the diff so the
+// subtitle version UI can show every modification for admin review.
+func applyAndReassemble(cues []ai.SRTCue, chunks [][]cueRef, outcomes []chunkOutcome) (polishedVTT string, diff []CueDiff, changed, skippedEdits int) {
+	editedText := make(map[int]string, len(cues))
+	for _, oc := range outcomes {
+		for _, ch := range oc.changes {
+			// ch.ID is the chunk-local 1-based id → resolve to global idx.
+			// (We sent chunk-local ids in the prompt so ids stay small and
+			// dense, which models handle reliably.)
+			if ch.ID < 1 || ch.ID > len(chunks[oc.idx]) {
+				continue
+			}
+			globalIdx := chunks[oc.idx][ch.ID-1].GlobalIdx
+			final, _, skipped, _ := ch.resolveText(cues[globalIdx].Text)
+			skippedEdits += skipped
+			editedText[globalIdx] = final
+		}
+	}
+
+	diff = make([]CueDiff, 0, len(editedText))
+	for i, c := range cues {
+		newText, ok := editedText[i]
+		if !ok {
+			continue
+		}
+		if newText != c.Text {
+			changed++
+			diff = append(diff, CueDiff{
+				ID:     i + 1, // 1-based to match SRT cue numbering
+				Before: c.Text,
+				After:  newText,
+			})
+			cues[i].Text = newText
+		}
+	}
+	polishedVTT = subtitle.SrtToVtt(cuesToSRT(cues))
+	return polishedVTT, diff, changed, skippedEdits
 }
 
 // --- per-chunk call ------------------------------------------------------
@@ -711,9 +692,8 @@ func buildUserPrompt(blk []cueRef, termDict, subject string) string {
 // maxLenDelta is the hard ceiling on |Δrune length| between orig and corrected
 // text. Changes beyond this are considered structural corruption (the LLM lost
 // track of what it was doing) and STILL get applied — but they count toward
-// HighEditDistanceCount so the admin can spot-check them. The previous design
-// (threshold 2 + charOverlap ≥ 0.6) rejected these outright; the relaxed design
-// (2026-07-21) applies everything and defers judgement to the subtitle diff UI.
+// HighEditDistanceCount so the admin can spot-check them. 取向:apply
+// everything,把判断推迟到字幕 diff UI,而不是在 polish 阶段 reject。
 //
 // Why 5: legitimate homophone/terminology corrections change 1-3 characters
 // (车/炮/马/被减数/位值原理...), well within ±2. A correction that adds or
@@ -740,18 +720,14 @@ const highEditDistanceRatio = 0.5
 //     mean the LLM lost something; retrying may help. Rejecting suspicious-but-
 //     in-range text does not (the LLM will just return the same correction).
 //
-// Design shift (2026-07-21): the previous version rejected length/punctuation
-// violations and retried. This caused legitimate homophone fixes on short cues
-// to fail repeatedly (考算→口算 has |Δ|=0 and same punctuation but the old
-// charOverlap gate killed it). Now we trust the LLM's corrections by default
-// and let humans review questionable ones via the subtitle diff UI.
+// 默认信任 LLM 的修正,把可疑但落在合理区间的改动交给 admin 在字幕 diff
+// UI 复核,而不是在 polish 阶段 reject + retry。长度/标点 reject 会把短句上的
+// 合法同音字修正反复打回(考算→口算 |Δ|=0、标点不变,会被 charOverlap 闸杀掉)。
 //
-// find/replace (2026-07-22): changes may carry Edits (find/replace pairs) or a
-// Text field (whole-sentence). We resolve the final text via CueChange.
-// resolveText — which applies edits with uniqueness checks — so the high-edit-
-// distance check sees the SAME final text the apply step will produce. An empty
-// resolved text (bare id, or edits that all missed) is treated as structural
-// corruption and retried — applying it would blank the cue's subtitle text.
+// find/replace:changes 可带 Edits(find/replace 片段)或 Text 字段(整句)。最终文本
+// 统一用 CueChange.resolveText 解析(内含 edit 唯一性校验),所以 high-edit-distance
+// 检查看到的就是 apply 阶段将产出的同一份最终文本。解析出空文本(裸 id,或 edits 全
+// miss)视为结构性损坏并重试——apply 它会把该 cue 的字幕清空。
 func validateChanges(blk []cueRef, changes []CueChange) (highEditDistance int, err error) {
 	// Build a set of valid ids and the original text for each.
 	byID := make(map[int]string, len(blk))
@@ -922,10 +898,10 @@ func dedupGlossary(in []GlossaryCandidate) []GlossaryCandidate {
 }
 
 // glossaryMinConfidence / glossaryMinEvidence 是 glossary 候选的保留门槛。
-// 2026-07-29 从"confidence≥0.7 就报"收紧到"confidence≥0.9 且 evidence≥2":孤例
-// (出现 1 次)和低置信度的规则依赖上下文、不可复用,存进字典会过拟合到具体词条;
-// 而且此前一节课动辄 100+ 候选,admin 审不过来,审核流于形式。收紧后只剩真正高频
-// 稳定的规则(如象棋 车→居 全课程反复出现),数量降到个位数,人工审核才有意义。
+// glossaryMinConfidence/MinEvidence:只保留高频稳定规则。孤例(出现 1 次)和低置信度
+// 的规则依赖上下文、不可复用,存进字典会过拟合到具体词条;放低门槛会让一节课冒出
+// 100+ 候选,admin 审不过来,审核流于形式。高门槛下只剩真正高频稳定的规则(如象棋
+// 车→居 全课程反复出现),数量降到个位数,人工审核才有意义。
 const (
 	glossaryMinConfidence = 0.9
 	glossaryMinEvidence   = 2
@@ -1026,9 +1002,8 @@ type polishJSONEnvelope struct {
 
 // parsePolishJSON extracts the {changes, glossary} envelope from the model's
 // raw response. 走 jsonx.ParseLLMJSON 统一兜底链(围栏剥离 + 平衡栈截断兜底 + 裸引号
-// 修复),取代原先手写的 first/last-brace 切片(无法处理截断/嵌套对象)且补上裸引号
-// 修复——polish 之前是"双重裸奔"(既无 extractJSONObject 的平衡栈,也无 repair),
-// 字幕校对的 text/find/replace 字段里 LLM 引用术语写裸引号会直接整批失败。
+// 修复)——字幕校对的 text/find/replace 字段里 LLM 引用术语常写裸引号,需要 repair;
+// 且 LLM 响应可能截断/带嵌套对象,需要平衡栈兜底。
 func parsePolishJSON(raw string) (*polishJSONEnvelope, error) {
 	var env polishJSONEnvelope
 	if _, err := jsonx.ParseLLMJSON(raw, &env); err != nil {
@@ -1045,17 +1020,11 @@ func parsePolishJSON(raw string) (*polishJSONEnvelope, error) {
 
 // --- prompts ------------------------------------------------------------
 //
-// 2026-07-22 重写：与代码实际行为对齐 + 精简 + find/replace 输出格式。
-//
-// 历史：原提示词有「【严格规则——违反则整批结果作废】」+「3. 改动前后字符数差距
-// ≤ 2」。但 2026-07-21 那轮校验放松把 validateChanges 从「长度/标点违规 reject +
-// retry」改成「只记 HighEditDistanceCount，不拦」（唯一还 reject 的是 unknown cue
-// id），maxLenDelta 也从 2 提到 5。代码放开的那扇门，提示词还在门口拦着——模型按
-// 规则 3 自我审查，把合法的 3-5 字修正咽下去不输出，放松根本没生效。
-//
-// 现在的提示词：标题如实写「id 错误会作废，其他违规由 admin 复核」；删掉字符数
-// 规则（代码只警告不拦，提示词就不承诺）；加入 edits(find/replace) 输出格式以省
-// completion token（整句改一个字 → 只输出 find/replace 片段）。
+// 提示词与 validateChanges 的实际行为对齐:代码只对 unknown cue id 做 reject+retry,
+// 长度/标点违规只记 HighEditDistanceCount 不拦,所以提示词也不承诺字符数上限(否则
+// 模型会自我审查、把合法的 3-5 字修正咽下去不输出)。标题如实写「id 错误作废,其他
+// 违规由 admin 复核」。输出格式含 edits(find/replace 片段)以省 completion token
+// (整句改一个字 → 只输出 find/replace 片段)。
 
 // systemPrompt 是默认（含术语挖矿）的系统提示词。
 const systemPrompt = `你是字幕校对器。输入：机器转录字幕(JSON, {id,text}) + 术语字典。

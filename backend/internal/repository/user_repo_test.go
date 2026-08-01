@@ -8,8 +8,8 @@ import (
 )
 
 // TestUserDeleteCleansAIChildren verifies that UserRepository.Delete removes
-// the user's AI data. 2026-07-19 这轮把 Quiz/Question/Answer/KnowledgeMemory/
-// UserStudyReport 的 UserID 都加了 OnDelete:CASCADE,删 User 时 DB 自动级联清;
+// the user's AI data. Quiz/Question/Answer/KnowledgeMemory/
+// UserStudyReport 的 UserID 都声明了 OnDelete:CASCADE,删 User 时 DB 自动级联清;
 // AIJob/StudyAdvice 仍需手动清(UserID 是 *uint 多态 / scope_id 多态)。
 //
 // 之前 userRepo.Delete 完全不动任何 AI 表 —— 删 user 后所有 AI 数据成孤儿,

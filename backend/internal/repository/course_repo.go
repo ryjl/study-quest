@@ -127,8 +127,8 @@ func (r *courseRepo) Delete(id uint) error {
 		//
 		// GORM's declared OnDelete:CASCADE relations (chapters, quizzes, tags,
 		// course_grades via Course, and the cascade chain course→episode→
-		// subtitle/user_progress/entertainment_progress, 加上 2026-07-19 这轮
-		// 加的 AI 表级联:AISummary/ContentChunk/Quiz→Question→Answer/
+		// subtitle/user_progress/entertainment_progress, 加上 AI 表级联:
+		// AISummary/ContentChunk/Quiz→Question→Answer/
 		// KnowledgeMemory/AICourseSummary/AIRun-via-AIJob)now fire automatically
 		// because _foreign_keys=on lives in the DSN. The per-episode deletes
 		// below are kept as explicit defense-in-depth and to cover rows that

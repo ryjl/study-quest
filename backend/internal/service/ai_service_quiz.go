@@ -171,7 +171,7 @@ type QuizDetailQuestion struct {
 	ChunkID    uint   `json:"chunk_id"`
 	Stem       string `json:"stem"`
 	Options    string `json:"options"` // JSON []string (choice/multi_choice)
-	// 正确答案信息全在 Scoring 里(2026-07-27 删 Answer/AnswerText 后)。
+	// 正确答案信息全在 Scoring 里(判分元数据的唯一来源)。
 	// CorrectIndices 多选题的正确选项索引数组(choice/fill 为 nil)。admin 核对多选题答案用。
 	CorrectIndices []int `json:"correct_indices,omitempty"` // multi_choice: 正确索引
 	PartialCredit  bool  `json:"partial_credit,omitempty"`  // multi_choice: 是否允许部分对
@@ -411,13 +411,10 @@ func (s *aiService) runQuizJob(job *model.AIJob) {
 	memory := agent.NewMemoryStore(s.contentRepo) // contentRepo implements agent.MemoryRepo
 	toolbox := agent.NewQuizToolbox(deps, memory, emb, episodeID, userID, courseID)
 	// MaxTokens is generous on the generation turn: the final answer is a
-	// multi-question quiz JSON with per-question explanations. Round 3 raised the
-	// question count to 8-12 and demands stronger distractors + reasoning-based
-	// stems; the 富文本 explanation 鼓励(GFM 表格 / SVG)进一步推高单题体积。
-	// 实测一套 8-12 题峰值 7000-8000 tokens。原来给 6000 偏紧:episode 31 (象棋复盘,
-	// 2.3h/108 chunks) 的多次 quiz 生成都在 4000 tokens 附近被砍断,JSON 截断在中文
-	// UTF-8 多字节字符中间,报 "invalid character 'é' after object key:value pair"。
-	// 10000 覆盖峰值并留余量。extractJSONObject 另有截断兜底,但首选还是输出不被砍断。
+	// multi-question quiz JSON (8-12 题) with per-question explanations,富文本
+	// (GFM 表格 / SVG)进一步推高单题体积。设大防截断——截断会让 JSON 断在中文
+	// UTF-8 多字节字符中间报错。10000 覆盖典型体积并留余量。extractJSONObject
+	// 另有截断兜底,但首选还是输出不被砍断。
 	genAgent := agent.NewAgent(llm, modelName, toolbox, agent.AgentOpts{MaxSteps: ai.MaxStepsQuiz, MaxTokens: ai.MaxTokensQuiz})
 	checkAgent := agent.NewAgent(llm, modelName, nil, agent.AgentOpts{MaxSteps: ai.MaxStepsSelfCheck, MaxTokens: ai.MaxTokensQuizSelfCheck}) // self-check: short verdict
 	quizzer := agent.NewQuizzer(genAgent, checkAgent, memory, deps, llm, modelName)
@@ -538,8 +535,7 @@ func (s *aiService) recordQuizRun(jobID uint, modelName string, res *agent.QuizR
 		SelfCheckResult:  selfCheck,
 		SelfCheckNote:    note,
 		DurationMs:       int(elapsed.Milliseconds()),
-		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"
-		// 还原本次 prompt(原来只存精简 InputJSON 快照,调 prompt 是盲调)。
+		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
 		SystemPromptText: res.SystemPrompt,
 		UserPromptText:   res.UserPrompt,
 	}); err != nil {
@@ -778,85 +774,6 @@ func (s *aiService) GetQuizForClient(userID, episodeID uint) (*QuizView, error) 
 	return view, nil
 }
 
-// SubmitQuizAnswer grades one answer, records it, updates memory, and returns
-// the verdict. Exactly one of answerIndex/answerText is meaningful per type:
-// choice uses answerIndex, fill uses answerText. The unused arg is ignored.
-func (s *aiService) SubmitQuizAnswer(userID, questionID uint, answerIndex *int, answerText *string) (*AnswerResult, error) {
-	// Load the question (via a direct read — repo doesn't have GetQuestion, but
-	// we can find it by querying). Use the content repo's GetQuestions path via
-	// a minimal lookup. For simplicity and to avoid a new repo method, fetch the
-	// question row directly through a scoped helper.
-	q, err := s.getQuestion(questionID)
-	if err != nil || q == nil {
-		return nil, fmt.Errorf("question not found")
-	}
-	quiz, err := s.contentRepo.GetQuizByID(q.QuizID)
-	if err != nil || quiz == nil || quiz.UserID != userID {
-		return nil, fmt.Errorf("quiz not found for this user")
-	}
-
-	// Grade by type.
-	idx := -1
-	if answerIndex != nil {
-		idx = *answerIndex
-	}
-	txt := ""
-	if answerText != nil {
-		txt = *answerText
-	}
-	correct := agent.GradeAnswer(*q, idx, txt)
-
-	// Record the answer (append-only). QuizID is snapshotted so the answer
-	// survives a future regenerate (换题 deletes the question but the answer's
-	// QuizID + the memory state persist). UserAnswerText 持久化填空题原文,
-	// 让交卷后 / 历史 review 能回放"你当时填的什么"(choice 题留空)。
-	s.contentRepo.CreateAnswer(&model.Answer{
-		QuestionID:     questionID,
-		QuizID:         quiz.ID,
-		UserID:         userID,
-		UserAnswer:     idx,
-		UserAnswerText: txt,
-		Correct:        correct,
-		AnsweredAt:     time.Now().UTC(),
-	})
-
-	// Update memory (feedback loop). No-op for synthetic questions (chunkID=0).
-	memory := agent.NewMemoryStore(s.contentRepo)
-	if err := memory.RecordAnswer(context.Background(), userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, correct); err != nil {
-		log.Printf("AI: update memory for question %d failed: %v", questionID, err)
-		// non-fatal — the answer is recorded; memory just didn't update
-	}
-
-	// Build the result, revealing the correct answer + jump time.
-	// 三题型分别揭示:choice→CorrectIndex,fill→CorrectText,multi_choice→CorrectIndices。
-	// 注意:这条单题 submit 路径当前前端不走(前端用 submit-all),且签名不支持 multi_choice
-	// 作答(没 answerIndices 参数)。但 reveal 逻辑仍要按题型分派,避免万一调用方传
-	// multi_choice 题时把 q.Answer=0 当正确答案下发。
-	res := &AnswerResult{QuestionID: q.ID, Correct: correct, Explanation: q.Explanation}
-	switch q.Type {
-	case agent.QuestionMultiChoice:
-		if s := agent.ParseScoring(*q); s != nil {
-			res.CorrectIndices = s.MultiCorrectIndices
-		}
-	case agent.QuestionFill:
-		res.CorrectText = joinAcceptable(fillAcceptable(*q))
-	default: // choice
-		i := choiceAnswerIndex(*q)
-		res.CorrectIndex = &i
-	}
-	// Jump-to-video time from the linked chunk.
-	if q.ChunkID != 0 {
-		chunks, _ := s.contentRepo.ListChunks(quiz.EpisodeID, "subtitle")
-		for _, c := range chunks {
-			if c.ID == q.ChunkID {
-				res.ChunkStartTime = c.StartTime
-				break
-			}
-		}
-	}
-	return res, nil
-}
-
 // joinAcceptable renders the fill answer's acceptable forms for display.
 func joinAcceptable(accept []string) string {
 	out := ""
@@ -869,9 +786,8 @@ func joinAcceptable(accept []string) string {
 	return out
 }
 
-// QuizAnswerInput 是批量提交里一道题的作答。选择题填 AnswerIndex,填空题填
-// AnswerText,多选题填 AnswerIndices;其余字段留空。与单题 submit 的 request 字段名
-// 保持一致,方便前端复用。
+// QuizAnswerInput 是批量提交(SubmitAllQuizAnswers)里一道题的作答。选择题填
+// AnswerIndex,填空题填 AnswerText,多选题填 AnswerIndices;其余字段留空。
 type QuizAnswerInput struct {
 	QuestionID  uint   `json:"question_id"`
 	AnswerIndex *int   `json:"answer_index,omitempty"`
@@ -885,8 +801,7 @@ type QuizAnswerInput struct {
 // 成功后给 quiz 盖 SubmittedAt,锁定该 quiz(一次提交=一次考试)。
 //
 // 设计要点:
-//   - 复用 SubmitQuizAnswer 的判分 + memory 更新逻辑(抽到 gradeOneAnswer),保证
-//     单题与批量两条路径的判分规则完全一致。
+//   - 判分 + memory 更新逻辑与单题路径共用同一套 agent.Verdict 派生 + memory.RecordAnswer。
 //   - 已交卷(SubmittedAt != nil)的 quiz 直接拒绝(409 由 handler 转),防止重复交卷
 //     把 memory 算两遍、answer 行翻倍。
 //   - 一题没出现在 answers 里(学生漏答):不落 answer 行,返回的 result 里 correct=
@@ -998,11 +913,11 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 			// 更新 memory(feedback loop)。合成题(chunkID=0)是 no-op。
 			// memory 更新的口径:全对(correct=true)+0.1(增 mastery),否则 -0.2(扣)。
 			// 多选题部分对(漏选但没多选错项)按"错"处理:漏一个正确项就是没完全掌握,
-			// 该扣 mastery 才能让弱点浮现给 advice/考试抽题。这是 2026-07-23 改的一致口径:
+			// 该扣 mastery 才能让弱点浮现给 advice/考试抽题。这是统一口径:
 			// mastery / 错题本 / 显示对错 三处对"漏选"用同一判定(漏选=错),避免同一行为
-			// 在不同地方判得相反(旧版给部分对传 true 不扣分,导致漏选既算错进错题本又不算
-			// 错不扣 mastery,自相矛盾)。verdict.Partial 字段仍保留用于 UI 展示"漏选X/多选Y"
-			// 的明细,但它不再改变 mastery/错题本的判定。
+			// 在不同地方判得相反(部分对传 true 不扣分会与"漏选进错题本"自相矛盾)。
+			// verdict.Partial 字段仍保留用于 UI 展示"漏选X/多选Y"的明细,但它不改变
+			// mastery/错题本的判定。
 			if err := memory.RecordAnswer(ctx, userID, q.ChunkID, quiz.EpisodeID, quiz.CourseID, verdict.Correct); err != nil {
 				log.Printf("AI: update memory for question %d failed: %v", q.ID, err)
 				// non-fatal,同单题 submit 的处理:答案已记录,memory 没更新不阻断交卷
@@ -1052,8 +967,7 @@ func (s *aiService) SubmitAllQuizAnswers(userID, episodeID uint, answers []QuizA
 
 // buildAnswerResult 把一道题的判分结果组装成客户端要的 AnswerResult。choice 题
 // 给 correct_index,fill 题给 correct_text,multi_choice 题给 correct_indices + 部分对信息;
-// 有 chunk 锚点的题给 chunk_start_time。抽出来让 SubmitQuizAnswer 和
-// SubmitAllQuizAnswers 共用同一套 reveal 规则。
+// 有 chunk 锚点的题给 chunk_start_time。抽出来统一 reveal 规则。
 func buildAnswerResult(q model.Question, v agent.Verdict, chunkStart *int) AnswerResult {
 	res := AnswerResult{
 		QuestionID:     q.ID,
@@ -1082,8 +996,7 @@ func buildAnswerResult(q model.Question, v agent.Verdict, chunkStart *int) Answe
 }
 
 // fillAcceptable resolves the fill acceptable answers from Scoring.accept.
-// No fallback — Scoring is the single source since AnswerText column was
-// removed (2026-07-27).
+// No fallback — Scoring is the single source of truth for grading.
 func fillAcceptable(q model.Question) []string {
 	if s := agent.ParseScoring(q); s != nil && len(s.FillAccept) > 0 {
 		return s.FillAccept
@@ -1152,17 +1065,6 @@ func (s *aiService) regenerateQuiz(userID, episodeID uint) (string, error) {
 		return quizStatusUnavailable, err
 	}
 	return quizStatusGenerating, nil
-}
-
-// getQuestion loads one question row by ID. A direct db read (rather than a new
-// repo method) since this is the only single-question lookup — the quiz views
-// load by quiz_id via GetQuestions.
-func (s *aiService) getQuestion(id uint) (*model.Question, error) {
-	var q model.Question
-	if err := s.db.First(&q, id).Error; err != nil {
-		return nil, err
-	}
-	return &q, nil
 }
 
 // --- admin observability reads ---

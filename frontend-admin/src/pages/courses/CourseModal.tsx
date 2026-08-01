@@ -53,15 +53,12 @@ export function CreateEditCourseModal({
   useEffect(() => {
     if (open) {
       setTitle(course?.title ?? '');
-      // Backend DTO sends `grades` (plural, see admin_dto.go); the legacy
-      // `grade` singular alias may still appear on older rows. Fall back so
-      // editing an existing course preserves its grade selection instead of
-      // silently clearing it (the prior bug: reading only `grade` always got
-      // "" because the backend stopped sending that field).
-      setGrade(course?.grades ?? course?.grade ?? '');
+      // Backend DTO sends `grades` (plural, see admin_dto.go); that's the only
+      // field now. The singular `grade` alias was removed.
+      setGrade(course?.grades ?? '');
       const ct = (course?.content_type === 'entertainment' ? 'entertainment' : 'learning') as 'learning' | 'entertainment';
       setContentType(ct);
-      // 2026-07-20:不再强制 entertainment 课程用 'entertainment' 占位 subject。
+      // 不强制 entertainment 课程用 'entertainment' 占位 subject。
       // 直接保留 course.subject(可能是 animation/movie 等娱乐子类 key)。
       // 新建时若是娱乐类型,默认选第一个娱乐子类(避免空 subject)。
       if (course?.subject) {
@@ -93,12 +90,8 @@ export function CreateEditCourseModal({
       if (grades.length === 0) throw new Error('请至少选择一个适用年级');
       const body = {
         title: title.trim(),
-        // Send BOTH the new `grades` field (what the backend reads — see
-        // admin_content.go parseGrades) and the legacy `grade` alias for
-        // backward compatibility with any older middleware path.
         grades: grade,
-        grade,
-        // 2026-07-20:subject 和 content_type 不再硬绑定。直接传当前选中的 subject
+        // subject 和 content_type 不再硬绑定。直接传当前选中的 subject
         // (可能是 academic 或 entertainment 子类的 key)。后端 import_service 会
         // 根据 subject.Category 自动判定 content_type,这里仍然显式传 content_type
         // 保持一致性。
@@ -180,7 +173,7 @@ export function CreateEditCourseModal({
         </div>
 
         {/* 科目下拉:根据 content type 过滤显示对应 category 的 subject。
-            2026-07-20:不再隐藏整个块,娱乐课也能选科目(动画片/电影/纪录片/综艺)。 */}
+            娱乐课也能选科目(动画片/电影/纪录片/综艺)。 */}
         <div>
           <label className="mb-1 block text-xs text-muted">
             {isEntertainment ? '娱乐分类' : '类别 / 科目'}
@@ -209,8 +202,8 @@ export function CreateEditCourseModal({
         </div>
 
         {/* AI 提示配置已迁移到「AI 控制台 → Prompt 配置」tab,这里只留跳转入口。
-            2026-07-20:娱乐课也支持 AI(字幕→summary→quiz→advice 链已放开),
-            所以 AI 配置入口不再隐藏。课程基本信息(title/grade/subject/cover/tags)
+            娱乐课也支持 AI(字幕→summary→quiz→advice 链),所以 AI 配置入口不隐藏。
+            课程基本信息(title/grade/subject/cover/tags)
             和课程级 AI 开关仍在这里;具体的 5 字段 hint 配置挪到 AI 控制台集中管理。 */}
         <div className="flex items-center justify-between rounded-xl border border-border bg-card-2 p-3">
           <div>
@@ -224,10 +217,10 @@ export function CreateEditCourseModal({
                 toast.info('请先创建课程,再配置 AI 提示');
                 return;
               }
-              navigate(`/admin/ai-console?tab=prompt&course=${course.id}`);
+              navigate(`/admin/ai/course/${course.id}?tab=prompt`);
             }}
             className="flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-[11px] text-muted transition-colors hover:border-primary hover:text-primary"
-            title="跳转到 AI 控制台 配置该课程的 AI 提示"
+            title="配置该课程的 AI 提示"
           >
             配置 →
           </button>

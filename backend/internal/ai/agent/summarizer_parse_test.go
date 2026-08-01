@@ -6,15 +6,16 @@ import (
 )
 
 // TestParseSummaryJSONRecoversTruncated 验证 parseSummaryJSON 在模型输出被
-// MaxTokens 砍断时(生产 ep123 的真实故障:JSON 在多字节汉字中间断裂),能靠
-// extractJSONObject 的截断兜底救回前面的字段,而不是整个解析失败。
+// MaxTokens 砍断时(JSON 在多字节汉字中间断裂),能靠 extractJSONObject 的截断
+// 兜底救回前面的字段,而不是整个解析失败。
 //
-// 这是 2026-07-29 加固的核心:之前 parseSummaryJSON 用手写的 first/last-brace
-// carving,碰到截断的 JSON 直接 Unmarshal 报 "invalid character 'å' after array
-// element"(被砍断的汉字首字节),整个 summary job 失败。改用 extractJSONObject 后,
-// 它会闭合未完结的字符串和括号,让 Unmarshal 能解出前面完整的 sections。
+// 这是解析加固的核心:parseSummaryJSON 走 extractJSONObject 而非手写的
+// first/last-brace carving——碰到截断的 JSON,手写 carving 直接 Unmarshal 报
+// "invalid character 'å' after array element"(被砍断的汉字首字节),整个 summary
+// job 失败。extractJSONObject 会闭合未完结的字符串和括号,让 Unmarshal 能解出前面
+// 完整的 sections。
 func TestParseSummaryJSONRecoversTruncated(t *testing.T) {
-	// 模拟生产 ep123 的截断:points 数组第二项写到一半被砍断(末尾是半个汉字)。
+	// 模拟 MaxTokens 截断:points 数组第二项写到一半被砍断(末尾是半个汉字)。
 	// 注意末尾的 "her 是未闭合的字符串字面量——extractJSONObject 要先闭合它。
 	truncated := `{"headline":"学习物主代词", "sections": [{"title": "物主代词", "points": ["**my** = 我的", "**her`
 	got, err := parseSummaryJSON(truncated)
@@ -70,14 +71,14 @@ func TestParseSummaryJSONNormalizesNilSlices(t *testing.T) {
 }
 
 // TestParseSummaryJSONRepairsBareQuotes 验证 parseSummaryJSON 在 LLM 于 JSON
-// string value 里写未转义裸双引号时(生产 ep2 真实故障:points 里写"象棋级别"毕业""),
-// 靠 RepairBareQuotesInJSON 兜底救回,而不是整个 summary 失败。
+// string value 里写未转义裸双引号时,靠 RepairBareQuotesInJSON 兜底救回,而不是
+// 整个 summary 失败。
 //
 // 这和 homework 是同源故障——LLM 在 JSON 字符串里用裸 ASCII 双引号表达引语,
 // parser 在第一个裸引号误判字符串结束,后面中文成非法 token。prompt 加了引号转义
 // 硬规则(软约束,模型偶尔不听),这里复用 homework 的修复做硬兜底。
 func TestParseSummaryJSONRepairsBareQuotes(t *testing.T) {
-	// 模拟 ep2 的真实失败:points 里 "象棋级别"毕业"" 的裸双引号让 JSON 断裂。
+	// 模拟裸引号失败:points 里 "象棋级别"毕业"" 的裸双引号让 JSON 断裂。
 	bareQuote := `{
   "headline": "象棋升级赛与残局复盘",
   "sections": [

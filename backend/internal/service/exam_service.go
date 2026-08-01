@@ -252,7 +252,7 @@ func (s *aiService) SubmitExam(userID, examID uint, answers []QuizAnswerInput) (
 				log.Printf("AI: exam submit write answer q%d: %v", q.ID, aerr)
 			}
 			// 更新 mastery(考试交卷也更新掌握度,让 agent 下次出题反映阶段考试弱点)。
-			// 漏选(部分对)按错处理,和 quiz 交卷同口径(2026-07-23 统一判定)。
+			// 漏选(部分对)按错处理,和 quiz 交卷同口径(统一判定)。
 			if merr := memory.RecordAnswer(nil, userID, q.ChunkID, 0, exam.CourseID, verdict.Correct); merr != nil {
 				log.Printf("AI: exam submit update memory q%d: %v", q.ID, merr)
 			}

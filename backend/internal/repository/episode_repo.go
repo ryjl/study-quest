@@ -164,8 +164,8 @@ func (r *episodeRepo) Delete(id uint) error {
 		// defense-in-depth and to cover rows written before that fix landed.
 		//
 		// AI 表(AISummary/ContentChunk/KnowledgeMemory/Quiz → Question → Answer,
-		// 以及 AIRun via AIJob)现在都声明了 OnDelete:CASCADE 关系(2026-07-19 这轮加),
-		// DB 会自动级联清。只剩两类需要手动:
+		// 以及 AIRun via AIJob)都声明了 OnDelete:CASCADE 关系,DB 会自动级联清。
+		// 只剩两类需要手动:
 		//   - AIJob:EpisodeID 是 *uint(无 FK,因为 subject/user_report job 不属于任何
 		//     episode),必须手清,否则会留指向已删 episode 的孤儿 job。
 		//   - StudyAdvice scope=episode:scope_id 多态(无 FK),必须 scope-qualify 手清。

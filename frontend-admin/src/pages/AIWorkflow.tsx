@@ -4,28 +4,11 @@ import { api } from '../lib/api';
 import type { AiJob, AiJobStatus, AiJobsResponse, AiRun, AiTraceStep } from '../lib/types';
 import { fmtTime } from '../lib/format';
 import { STATUS_META, STATUS_FILTERS } from '../lib/jobStatus';
+import { jobTypeLabel } from '../lib/jobType';
 import { pollWhen } from '../lib/query';
 import { useTypedMutation } from '../lib/useTypedMutation';
 import { Modal } from '../components/ui';
 import { PageHeader } from '../components/PageHeader';
-
-// job_type → Chinese label. The backend job_type is a free string today; map
-// the two known ones and pass anything else through verbatim.
-const JOB_TYPE_LABEL: Record<string, string> = {
-  slice: '切片',
-  summarize: '总结',
-  quiz: '出题',
-  segment: '切片',
-  summary: '总结',
-  polish: '字幕润色',
-  advice: '学习建议',
-  course_summary: '课程总结',
-  user_report: '学习报告',
-};
-
-function jobTypeLabel(t: string): string {
-  return JOB_TYPE_LABEL[t] ?? t;
-}
 
 // Wall-clock duration of a finished job: completed_at - created_at, in seconds.
 // Returns '—' if either bound is missing (e.g. still processing).

@@ -21,17 +21,13 @@ const DefaultTemperature = 0.0
 // ── MaxTokens(completion 上限,按 capability 区分)──────────────────────────
 //
 // 重要认知:MaxTokens 是**上限不是预留额度**——模型生成完即 stop(返回 finish_reason=
-// "stop"),实际只消耗真实生成量的 token。设大**不会浪费 token**(设 16000 但只生成
-// 3021,就只花 3021)。设大 = 防截断安全垫;设小 = 偶发长内容中途被砍断 → JSON 断裂 →
-// 整次 parse 失败白烧几万 prompt token(代价远大于多生成几百 token)。故这些值**宁可
-// 偏大**,只在有确凿实证超限时才提。
-//
-// 实测依据(2026-07-29 生产 ai_runs):summary ep2 completion 峰值 3021;quiz ep3 峰值
-// 6142;polish 实测到 ~9700(超原 8000 设定,已提)。
+// "stop"),实际只消耗真实生成量的 token。设大**不会浪费 token**。设大 = 防截断安全垫;
+// 设小 = 偶发长内容中途被砍断 → JSON 断裂 → 整次 parse 失败白烧几万 prompt token
+// (代价远大于多生成几百 token)。故这些值**宁偏大**,只在有确凿实证超限时才提。
 const (
 	// MaxTokensSummary:课程总结(headline + sections + key_points + methods +
-	// common_mistakes + takeaway + SVG,结构最重)。实测峰值 3021;极端长课可能更高,
-	// 16000 给足安全垫,绝不因截断失败(此前 ep123 因默认上限截断断裂过)。
+	// common_mistakes + takeaway + SVG,结构最重)。极端长课可能更高,16000 给足
+	// 安全垫,绝不因截断失败。
 	MaxTokensSummary = 16000
 
 	// MaxTokensHomework:作业卷生成(多 section + 多题型 questions + scoring)。
@@ -39,7 +35,6 @@ const (
 	MaxTokensHomework = 16000
 
 	// MaxTokensQuiz:quiz 出题(多道 choice/multi_choice/fill + explanation)。
-	// 实测 ep3 峰值 6142,10000 是 1.6x 余量,保持。
 	MaxTokensQuiz = 10000
 
 	// MaxTokensQuizSelfCheck:quiz 自检的判决输出(pass/fail + 简短 note)。
@@ -47,8 +42,7 @@ const (
 	MaxTokensQuizSelfCheck = 800
 
 	// MaxTokensPolish:字幕校对(每 chunk 150 cues 的 changes/glossary diff)。
-	// 原 8000,实测 completion 到 ~9700 **确凿超过**设定(中转站不严格遵守 maxTokens,
-	// 把它当建议;但说明 8000 偏紧,极端 chunk 会被限)。提到 12000 给足。
+	// 12000 给足余量避免极端 chunk 被限。
 	MaxTokensPolish = 12000
 
 	// MaxTokensAdvice:学习建议(300-700 字,按 mastery 给方向性建议)。

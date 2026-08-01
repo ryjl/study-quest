@@ -51,12 +51,12 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		// that's human-corrected (embedded/manual). This is NOT a failure —
 		// chain to segment so downstream proceeds.
 		//
-		// Note (2026-07-21): isPolishableSource now accepts BOTH "whisper"
-		// (raw transcript) AND "llm_optimized" (already polished once). The
-		// latter is the re-polish path — admin accepts new glossary terms
-		// → Course.TermDict grows → they want the new terminology applied
-		// to an already-polished episode. Re-polish is drift-safe because
-		// polish reads RawVttContent (the immutable whisper snapshot), not
+		// isPolishableSource accepts BOTH "whisper" (raw transcript) AND
+		// "llm_optimized" (already polished once). The latter is the re-polish
+		// path — admin accepts new glossary terms → Course.TermDict grows →
+		// they want the new terminology applied to an already-polished episode.
+		// Re-polish is drift-safe because polish reads RawVttContent (the
+		// immutable whisper snapshot), not
 		// the current VttContent. See model.Subtitle.RawVttContent doc.
 		s.contentRepo.UpdateJobStatus(job.ID, "skipped",
 			"source="+sub.Source+" not eligible for polish", nil)
@@ -129,9 +129,9 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		polishInput = sub.VttContent
 	}
 
-	// Polish deadline 按 chunk 数自适应。原来是固定 20min——但生产(2026-07-29)
-	// 长字幕(ep3, 2325 cues = 16 chunk)在并发 3 下需要 ~24min,直接顶满 20min
-	// deadline,最后几个 chunk(context deadline exceeded)还没轮到跑就被取消了。
+	// Polish deadline 按 chunk 数自适应。固定 deadline 会顶满:长字幕(2000+ cues
+	// = 16 chunk)在并发 3 下需要 ~24min,最后几个 chunk(context deadline exceeded)
+	// 还没轮到跑就被取消。
 	//
 	// 每 chunk 按 5min 算上限(单 chunk 正常 ~90s,留足 retry + 中继排队 + 极端慢
 	// 调用的余量)。16 chunk → 80min 上限,够覆盖最长字幕;短字幕(2-3 chunk)
@@ -168,11 +168,9 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 		PriorOutcomes:      priorOutcomes,
 		OnChunkDone:        onChunkDone,
 		// polish_concurrency: how many in-flight LLM calls the job may make.
-		// 默认 3:实测生产中继并发 3 零 429、4 偶发 429(2026-07-29 压测)。
-		// 2026-07-27 的 429 风暴真相是多 job 交错叠加,不是单 job 并发 3 超标
-		// (worker 单 goroutine 串行处理 job)。Read from the global Setting so
-		// the admin can raise/lower it without a redeploy. polishConcurrency()
-		// is nil-safe (settingsRepo==nil → 3) and clamps garbage to [1,10].
+		// Read from the global Setting so the admin can raise/lower it without a
+		// redeploy. polishConcurrency() is nil-safe (settingsRepo==nil → 3) and
+		// clamps garbage to [1,10].
 		Concurrency: s.polishConcurrency(),
 	})
 	if err != nil {
@@ -189,27 +187,24 @@ func (s *aiService) runPolishJob(job *model.AIJob) {
 	// Build the human-readable detail string. Shared by both the partial-fail
 	// and full-success paths so the admin sees consistent telemetry regardless
 	// of outcome. Always includes: changed/total cues, glossary count, cost,
-	// high-edit-distance count (the new informational stat from the 2026-07-21
-	// validation relaxation — how many applied changes the admin should
-	// spot-check in the diff UI).
+	// high-edit-distance count (informational stat — how many applied changes
+	// the admin should spot-check in the diff UI).
 	detail := fmt.Sprintf("polished: %d/%d cues changed, %d glossary candidates, high_edit_distance=%d, cost≈%s",
 		result.Stats.ChangedCues, result.Stats.TotalCues, len(result.Glossary),
 		result.Stats.HighEditDistanceCount, result.Stats.Duration.Truncate(time.Second))
 
 	// Partial failure: at least one chunk exhausted retries without producing
 	// a valid response (network error, JSON parse failure, or structural
-	// corruption). This is the ONLY failure mode left after the 2026-07-21
-	// validation relaxation — "suspicious but well-formed" changes no longer
-	// fail, they apply with a high_edit_distance flag. So a partial now means
-	// "the LLM genuinely didn't return usable output for some chunks", not
-	// "we rejected the LLM's output as too aggressive".
+	// corruption). "Suspicious but well-formed" changes do NOT count as failure
+	// — they apply with a high_edit_distance flag. So a partial means "the LLM
+	// genuinely didn't return usable output for some chunks", not "we rejected
+	// the LLM's output as too aggressive".
 	//
-	// Behavior change (2026-07-21): partial now FAILS the job instead of
-	// marking it done. Rationale: a half-polished subtitle (some chunks raw,
-	// some polished) is worse than either pure-raw or pure-polished — it
-	// produces inconsistent terminology downstream and the admin has no clean
-	// way to tell which cues were corrected. Failing forces a conscious
-	// decision: RetryJob (re-run with the same/fixed provider) or SkipPolish
+	// Partial FAILS the job instead of marking it done. Rationale: a half-polished
+	// subtitle (some chunks raw, some polished) is worse than either pure-raw or
+	// pure-polished — it produces inconsistent terminology downstream and the
+	// admin has no clean way to tell which cues were corrected. Failing forces a
+	// conscious decision: RetryJob (re-run with the same/fixed provider) or SkipPolish
 	// (give up on polish, fall back to the raw subtitle via segment chain).
 	// We do NOT write back the partial result, so the subtitle stays at its
 	// pre-polish state (source=whisper, optimized=false) and no downstream
@@ -529,13 +524,8 @@ func countPolishChunks(vtt string) int {
 // polishConcurrency reads the `polish_concurrency` global Setting and returns
 // the number of in-flight LLM calls a polish job may make. Default 3.
 //
-// 选 3 的依据:对生产中继 api.ja.870314.xyz 的实测压力测试(2026-07-29)——并发 3
-// 持续 3 轮零 429,并发 4 偶发 429(贴着中转站上限,内部计数抖动会超)。3 是这个中转站
-// 的安全最优值,比串行(1)快 3 倍。
-//
-// 2026-07-27 的 429 风暴真相不是"单 job 并发 3 超标"(worker 是单 goroutine 串行
-// 处理 job,单 job 3 路不会让总并发超 3),而是删库前多 job 交错 + summary/polish 同时
-// 在跑导致瞬时叠加。原硬编码 3 本身是对的,只是当时缺一个可调的口子和退避策略。
+// 瞬时叠加风险来自多 job 交错 / summary 与 polish 同时跑,而非单 job 内的 N 路
+// (worker 单 goroutine 串行处理 job)。
 //
 // nil-safe (settingsRepo==nil → 3) and clamps garbage (non-numeric, ≤0, or
 // absurdly high) to the [1,10] range.

@@ -391,7 +391,7 @@ class _MainNavigationState extends State<MainNavigation> {
                           ),
                           const SizedBox(width: 12),
                           Text(
-                            '学途奇旅',
+                            'StudyQuest',
                             style: TextStyle(
                               fontFamily: 'Quicksand',
                               fontWeight: FontWeight.w900,

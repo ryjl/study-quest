@@ -12,7 +12,7 @@ import { diffSubtitles, type CueDiff } from '../lib/subtitleDiff';
  *   - SubtitleDrawer: passes onDelete so the row shows a 删除 button.
  *   - SubtitleQueue: omits onDelete (read-only view of a completed job's output).
  *
- * Version toggle + diff view (2026-07-21): when source === 'llm_optimized',
+ * Version toggle + diff view: when source === 'llm_optimized',
  * the expanded area adds a 3-way toggle:
  *   - 润色版: the current VttContent (what downstream AI / the player sees).
  *   - 原始版: RawVttContent (the pre-polish whisper snapshot).
@@ -20,10 +20,10 @@ import { diffSubtitles, type CueDiff } from '../lib/subtitleDiff';
  *     line-level background tint (red raw / green polished) AND a token-level
  *     inline color block showing exactly which chars the LLM added/removed.
  *
- * The diff is the primary audit tool for polish quality now that the upstream
- * validation has been relaxed (2026-07-21): we trust the LLM by default and
- * let humans spot-check via this view. High-edit-distance warnings from the
- * polish job detail point the admin here.
+ * The diff is the primary audit tool for polish quality: we trust the LLM by
+ * default (upstream validation only warns, doesn't block) and let humans
+ * spot-check via this view. High-edit-distance warnings from the polish job
+ * detail point the admin here.
  */
 export function SubtitleRow({
   id,

@@ -152,9 +152,8 @@ func TestPolish_AppliesValidChanges(t *testing.T) {
 }
 
 // TestPolish_LengthViolationAppliedAndFlagged: LLM returns a change whose
-// length delta exceeds the old hard threshold (was 2, now maxLenDelta=5 is the
-// warning line). Under the relaxed design (2026-07-21) the change is STILL
-// APPLIED — we trust the LLM by default and surface the warning via
+// length delta exceeds the warning threshold (maxLenDelta=5). The change is
+// STILL APPLIED — we trust the LLM by default and surface the warning via
 // HighEditDistanceCount so the admin can spot-check in the diff UI. This is
 // the inversion of the old behavior, which rejected these outright and caused
 // legitimate homophone fixes on short cues to fail repeatedly.
@@ -591,11 +590,10 @@ func TestPolish_SkipGlossaryMining_UsesLeanPrompt(t *testing.T) {
 	}
 }
 
-// TestSystemPrompt_NoCharCountRule_NoBatchInvalidation: pins the 2026-07-22
-// prompt/code realignment. The old prompt falsely told the model "字符数差距 ≤ 2"
-// and "违反则整批结果作废" while the code (maxLenDelta=5, validation only
-// warns) did neither — the model self-censored legit 3-5 char fixes. The new
-// prompt must NOT contain those stale, misleading claims.
+// TestSystemPrompt_NoCharCountRule_NoBatchInvalidation: pins the prompt/code
+// realignment. The prompt must NOT claim "字符数差距 ≤ 2" or "违反则整批结果作废"
+// — the code (maxLenDelta=5, validation only warns) does neither, so such claims
+// would make the model self-censor legit 3-5 char fixes.
 func TestSystemPrompt_NoCharCountRule_NoBatchInvalidation(t *testing.T) {
 	for name, p := range map[string]string{
 		"systemPrompt":          systemPrompt,
@@ -638,8 +636,8 @@ func TestPolish_GlossaryCollected(t *testing.T) {
 }
 
 // TestPolish_GlossaryFiltered: candidates below the high-confidence/high-
-// frequency bar are dropped (2026-07-29 门槛收紧)。孤例(evidence<2)和低置信度
-// (conf<0.9)的依赖上下文、不可复用,存进字典会过拟合到具体词条,且让审核流于形式。
+// frequency bar are dropped。孤例(evidence<2)和低置信度(conf<0.9)的依赖上下文、
+// 不可复用,存进字典会过拟合到具体词条,且让审核流于形式。
 func TestPolish_GlossaryFiltered(t *testing.T) {
 	vtt := makeVTT(2)
 	// 三个候选:① conf 够但 evidence 只 1(孤例)→ 过滤;② evidence 够但 conf 不够 → 过滤;

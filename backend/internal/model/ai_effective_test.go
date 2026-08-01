@@ -6,8 +6,8 @@ import (
 )
 
 // TestEffectiveHints_Priority 测试 Effective* 系列的"Course > Subject"两层优先级。
-// 2026-07-27 删 deprecated AIHint 列后,EffectiveWhisperHint/EffectiveQuizHint 不再有
-// 第三层 fallback。本测试锁定两层行为:
+// EffectiveWhisperHint/EffectiveQuizHint 只有两层 fallback(无第三层)。本测试锁定
+// 两层行为:
 //   - Course 配了 → 用 Course 的(优先)
 //   - Course 没配 + Subject 配了 → 用 Subject 的(兜底)
 //   - 都没配 → 返回空

@@ -279,9 +279,9 @@ func (s *importService) ExecuteTreeImport(req *ExecuteTreeImportRequest) error {
 			} else {
 				return errors.New("no subject available; create a subject first")
 			}
-			// 2026-07-20:以前用 subject key=="entertainment" 字面量判定 ContentType,
-			// 现在改成查 subject.Category —— 选任何娱乐子类(animation/movie/...)都会
-			// 自动设 ContentType=entertainment,不再依赖单行 entertainment 占位。
+			// 用 subject.Category 判定 ContentType —— 选任何娱乐子类
+			// (animation/movie/...)都会自动设 ContentType=entertainment,不依赖单行
+			// entertainment 占位 subject。
 			contentType := model.ContentLearning
 			if subj != nil && subj.Category == string(model.SubjectCategoryEntertainment) {
 				contentType = model.ContentEntertainment

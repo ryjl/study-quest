@@ -1,5 +1,5 @@
-// CourseGlossaryTab — 课程工作台「术语」tab。修复旧版最大的任务流断裂之一:
-// "在术语候选接受完 → 想让现有字幕用上新术语 → 得跨 tab 跳到内容管理去重新润色"。
+// CourseGlossaryTab — 课程工作台「术语」tab:术语审核 + "应用到本课字幕"
+// (批量重新润色)聚合到同一页——接受完术语想更新字幕,就地一键润色,不跨 tab。
 //
 // 这里把 GlossaryTab(术语审核)和"应用到本课字幕"(批量重新润色)聚合到同一页:
 // admin 接受完术语后,顶部出现"一键应用到本课字幕"按钮,直接批量入队 polish job,
@@ -44,7 +44,7 @@ export function CourseGlossaryTab({ courseId }: { courseId: number }) {
 
   return (
     <div className="space-y-4">
-      {/* 一键应用行动条:修复"接受术语后要跨 tab 去应用"的断裂。
+      {/* 一键应用行动条:接受术语后就地应用,不跨 tab。
           解释清楚为什么需要这一步(术语进了字典,但已润色的字幕不会自动更新)+
           一键触发的后果(从原始 whisper 重跑,不会越润越偏)。 */}
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">

@@ -202,28 +202,12 @@ func (s *aiService) buildUserStudyCourses(ctx context.Context, userID uint) []ag
 	return out
 }
 
-// recordUserReportRun 写 ai_run(供 admin 观测 user_report 生成)。和 recordAdviceRun
-// 平行,capability="user_report",response_text 存报告文本预览(截断)。systemPrompt/
-// userPrompt 是本次发给 LLM 的开场 prompt,写进 ai_runs.system_prompt_text /
-// user_prompt_text 供 admin "查看回放"。
+// recordUserReportRun 写 ai_run(供 admin 观测 user_report 生成)。是 recordAgentRun 的
+// 薄 wrapper:capability="user_report",preview 复用 advice 的 truncateAdvicePreview
+// (同为自然语言、400 字上限、advice_preview key——admin 前端对 advice/user_report 用同一
+// 渲染约定)。
 func (s *aiService) recordUserReportRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, reportText, systemPrompt, userPrompt string) {
-	preview := truncateAdvicePreview(reportText)
-	s.contentRepo.CreateRun(&model.AIRun{
-		JobID:            jobID,
-		Capability:       "user_report",
-		InputJSON:        fmt.Sprintf(`{"job_id":%d,"turns":%d,"steps":%d}`, jobID, turns, len(trace)),
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelUsed:        modelName,
-		ResponseText:     preview,
-		TraceJSON:        agent.TraceJSON(trace),
-		SelfCheckResult:  result, // 复用字段存 pass/fail(报告无 self-check)
-		SelfCheckNote:    note,
-		DurationMs:       int(elapsed.Milliseconds()),
-		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
-		SystemPromptText: systemPrompt,
-		UserPromptText:   userPrompt,
-	})
+	s.recordAgentRun("user_report", truncateAdvicePreview(reportText), jobID, modelName, trace, usage, turns, elapsed, result, note, systemPrompt, userPrompt)
 }
 
 // EnqueueUserReport 是 admin 触发的"为某用户生成学习报告"入口(和 advice 的 lazy 生成
@@ -289,5 +273,3 @@ func (s *aiService) hasPendingUserReportJob(userID uint) bool {
 		Count(&count)
 	return count > 0
 }
-
-// (truncateAdvicePreview 复用 advice.go 的实现,本文件无需重复定义或 import json。)

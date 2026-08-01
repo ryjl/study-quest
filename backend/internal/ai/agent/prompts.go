@@ -281,14 +281,14 @@ func fmtUint(n uint) string {
 //     跨课程 mastery(episode/course/subject 三档),自己决定分析深度。这样:
 //     (a) episode 级 advice 只查 episode mastery;subject 级 advice 会跨多门课聚合,
 //         数据量差异大,固定 prompt 撑不住,交给 agent 按需调工具更合理;
-//     (b) 后续 Phase D/E 复用这个 agent loop,只换工具集。
+//     (b) 其他 agent 能力(course_summary/user_report)复用这个 agent loop,只换工具集。
 //   - 用人话描述知识点:工具返回 mastery 时附了 chunk.text 片段(见 advice_tools.go 的
 //     formatMasteriesWithText)。prompt 反复强调"从字幕片段文本推断知识点名",禁止说
 //     "chunk#37 mastery=0.2"这种机器话——学生看不懂。
 //   - 鼓励 + 具体 + 可执行:建议要落到"回到视频某段复习""先做哪类题"这种动作上,不
 //     是空泛的"加油"。
 //   - 输出纯文本:不要求 JSON、不要求 markdown 代码块,直接自然语言段落。前端按段落
-//     渲染即可(Phase D 再考虑结构化)。
+//     渲染即可。
 const AdviceSystemPrompt = `你是一位耐心的学习导师,负责为一个中小学生分析他的学习弱点并给出复习建议。
 
 你可以调用工具收集信息(这是你的核心优势,请善用):
@@ -499,8 +499,8 @@ func buildCourseSummaryUserPrompt(req CourseSummaryRequest, episodeSeed string) 
 // agent 驱动:不是把所有课程 mastery 一股脑塞进 prompt。agent 先调 list_user_courses 看
 // 该学生有几门课,再按需对每门课调 get_course_mastery,自己决定分析深度(课程多就抓大
 // 放小,课程少就深入)。get_user_advice 让它复用已有的 episode/course 级建议,避免重复
-// 分析。get_course_summary 是 Phase D 课程总结的降级入口(Phase D 未 merge 时返回聚合
-// episode summary,不硬依赖)。
+// 分析。get_course_summary 是课程总结的降级入口(无课程总结时返回聚合 episode summary,
+// 不硬依赖)。
 const UserStudySystemPrompt = `你是一位资深的学习分析师,负责为一位老师/家长撰写一份学生跨课程的学习情况报告。报告会展示在 admin 后台,供老师/家长了解这个学生的整体学习画像。
 
 你可以调用工具收集信息(这是你的核心优势,请善用):

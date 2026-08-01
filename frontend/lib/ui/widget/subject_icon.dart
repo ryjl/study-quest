@@ -52,7 +52,7 @@ IconData subjectIconData(String key) {
     case 'entertainment':
     case '娱乐':
       return Icons.movie_rounded;
-    // 2026-07-20 新增娱乐子类(配合 Subject.Category=entertainment)。
+    // 娱乐子类(配合 Subject.Category=entertainment)。
     case 'animation':
     case '动画':
     case '动画片':

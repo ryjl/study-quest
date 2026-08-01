@@ -20,12 +20,6 @@ import (
 // 设计:逐题校验,残题丢弃,只有全部题都废才返回 error。参考 quizzer.go parseQuizGeneration
 // 的逐题校验范式(:258-322)。不依赖任何 service/repo/model 写入——纯函数。
 
-// ExtractJSONObject 委托到 jsonx.ExtractJSONObject,保留导出名供 service 层兼容调用。
-// 围栏剥离/截断兜底的实现见 jsonx 包文档。新代码请直接用 jsonx.ParseLLMJSON。
-func ExtractJSONObject(raw string) string {
-	return jsonx.ExtractJSONObject(raw)
-}
-
 // homeworkLLMResponse 是 LLM 输出的 JSON 形状(字段名用下划线,和 prompt 约定一致)。
 // 仅用于解码,不是对外产物。解码后逐题校验、规范化 scoring,产出 HomeworkDraft。
 type homeworkLLMResponse struct {
@@ -301,11 +295,4 @@ func normalizeHomeworkScoring(typ string, opts []string, raw json.RawMessage) (s
 		// 未知 type:丢弃。
 		return "", false
 	}
-}
-
-// RepairBareQuotesInJSON 委托到 jsonx.RepairBareQuotesInJSON。裸引号修复(pair-aware
-// 成对替换成中文「」)的实现已下沉到 jsonx 包(详见该函数文档)。保留导出名供 service
-// 层做事后比对(RepairBareQuotesInJSON(content) != content 判断是否靠修复救回)兼容调用。
-func RepairBareQuotesInJSON(s string) string {
-	return jsonx.RepairBareQuotesInJSON(s)
 }

@@ -106,9 +106,9 @@ func (s *gradeService) Rename(from, to string) error {
 // from ListAll (unless it's a preset — presets stay listed with Count=0 after
 // their rows migrate). Use case: the admin accumulated "考研" and "研究生"
 // over time and wants to consolidate. Unlike Rename, `from` MAY be a preset
-// — that's how the historical "adult" tag gets migrated to "college": merge
-// adult→college moves the rows, and "adult" stops appearing (it was never a
-// preset under the new scheme; see model/grade.go's 2026-07-21 note).
+// — that's how a stray "adult" tag gets migrated to "college": merge
+// adult→college moves the rows, and "adult" stops appearing ("adult" is not a
+// preset under the current scheme; see model/grade.go).
 func (s *gradeService) Merge(from, to string) error {
 	if s.gradeRepo == nil {
 		return errors.New("grade subsystem not configured")

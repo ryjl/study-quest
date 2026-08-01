@@ -173,7 +173,7 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 		req.EpisodeID = ep.ID
 		req.CourseID = ep.CourseID
 		req.ScopeTitle = ep.Title
-		// 顺便反查 course 拿 subject_id + 科目名(供 subject 工具 + prompt)+ advice hint + 术语字典。
+		// 反查 course 拿 subject_id + 科目名(供 subject 工具 + prompt)+ advice hint + 术语字典。
 		// courseRepo.FindByID 不 Preload Subject(避免 UpdateCourse 的 Save 误改关联),
 		// 这里单独 s.db.First 查 subject。
 		if course, cerr := s.courseRepo.FindByID(ep.CourseID); cerr == nil && course != nil {
@@ -228,47 +228,19 @@ func (s *aiService) buildAdviceRequest(job *model.AIJob) (agent.AdviceRequest, e
 	return req, nil
 }
 
-// recordAdviceRun 写 ai_run(供 admin 观测 advice 生成)。和 recordQuizRun 平行,但
-// capability="advice",response_text 存 advice 文本预览(截断,避免 ai_run 行过大)。
-// systemPrompt/userPrompt 是本次发给 LLM 的开场 prompt,写进 ai_runs.system_prompt_text /
-// user_prompt_text 供 admin "查看回放"。
+// recordAdviceRun 写 ai_run(供 admin 观测 advice 生成)。是 recordAgentRun 的薄 wrapper:
+// capability="advice",preview 用 advice 的 400 字 / advice_preview key 截断。共性的
+// CreateRun 字段填充 + 错误日志都在 recordAgentRun 里。
 func (s *aiService) recordAdviceRun(jobID uint, modelName string, trace []agent.TraceStep, usage ai.Usage, turns int, elapsed time.Duration, result, note, adviceText, systemPrompt, userPrompt string) {
-	preview := truncateAdvicePreview(adviceText)
-	if err := s.contentRepo.CreateRun(&model.AIRun{
-		JobID:            jobID,
-		Capability:       "advice",
-		InputJSON:        fmt.Sprintf(`{"job_id":%d,"turns":%d,"steps":%d}`, jobID, turns, len(trace)),
-		PromptTokens:     usage.PromptTokens,
-		CompletionTokens: usage.CompletionTokens,
-		ModelUsed:        modelName,
-		ResponseText:     preview,
-		TraceJSON:        agent.TraceJSON(trace),
-		SelfCheckResult:  result, // 复用字段存 advice 的 pass/fail(advice 无 self-check,这里记生成结果)
-		SelfCheckNote:    note,
-		DurationMs:       int(elapsed.Milliseconds()),
-		// 记下这次发给 LLM 的完整 system+user prompt,供 admin "查看回放"还原本次 prompt。
-		SystemPromptText: systemPrompt,
-		UserPromptText:   userPrompt,
-	}); err != nil {
-		log.Printf("AI: recordAdviceRun failed for job %d: %v", jobID, err)
-	}
+	s.recordAgentRun("advice", truncateAdvicePreview(adviceText), jobID, modelName, trace, usage, turns, elapsed, result, note, systemPrompt, userPrompt)
 }
 
-// truncateAdvicePreview 把 advice 文本截到 400 字并包成 JSON 预览(ai_run.response_text)。
-// 和 quiz 的 truncateForRun([]QuestionDraft, ...) 不同签名(Go 不支持重载),所以单独
-// 命名。admin 前端按 capability="advice" 渲染 advice_preview 字段。
+// truncateAdvicePreview 把 advice 文本截到 400 字并包成 `{advice_preview: "..."}` 预览
+// (ai_run.response_text)。user_report 也复用(advice 和 user_report 都是自然语言、400 字
+// 上限、同一个 admin 渲染约定)。底层委托 truncateTextPreview。
 func truncateAdvicePreview(adviceText string) string {
-	if len([]rune(adviceText)) > 400 {
-		adviceText = string([]rune(adviceText)[:400]) + "…"
-	}
-	preview, _ := json.Marshal(map[string]any{
-		"advice_preview": adviceText,
-	})
-	return string(preview)
+	return truncateTextPreview(adviceText, 400, "advice_preview")
 }
-
-// 为了让 recordAdviceRun 复用预览截断且不和 quiz 的 truncateForRun([]QuestionDraft,...)
-// 冲突,recordAdviceRun 直接调 truncateAdvicePreview(纯文本入参)。
 
 // GetOrEnqueueAdvice 是建议的 lazy 生成入口(同 GetOrEnqueueQuiz 的模式):
 //   - 已有 advice → "ready" + advice

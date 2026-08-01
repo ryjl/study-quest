@@ -403,8 +403,8 @@ func (h *adminHandler) RealTestAIProvider(c *gin.Context) {
 		return
 	}
 
-	// 90s 超时:真实 quiz step4/5 实测 46-57s,现有 Ping 的 30s 根本不够,会把正常的
-	// 长输出误判成超时失败。这里给足余量,让"是中转站 502 还是本地超时"的判定更准。
+	// 90s 超时:单个 agent step 的 LLM 调用可能跑较长(尤其长输出),Ping 用的 30s
+	// 会把正常长调用误判成超时。这里给足余量,让"是中转站 502 还是本地超时"的判定更准。
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 90*time.Second)
 	defer cancel()
 

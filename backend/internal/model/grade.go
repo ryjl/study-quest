@@ -5,23 +5,21 @@ import "strings"
 // Code split from models.go for navigability. See models.go for the
 // package overview.
 
-// Grade 是课程/阅读资源的适用人群 tag。历史上是 1-9 年级硬编码 enum,2026-07-20
-// 改成开放 tag 体系:GradeValid 不再校验具体值,admin 可以填任意自定义 tag
-// (如 "小学""初中""大学""考研""职场")。
+// Grade 是课程/阅读资源的适用人群 tag,开放 tag 体系:GradeValid 不校验具体值,
+// admin 可以填任意自定义 tag(如 "小学""初中""大学""考研""职场")。
 //
 // 推荐使用语义化预设常量 GradePrimary/Junior/Senior/College/Other/Universal,
-// admin 表单默认显示这几个 + 允许自定义补充。历史 Grade1-9 常量已删除,DB 中
-// 遗留的 "1"-"9" 字面值会作为普通自定义 tag 回显(Grade 本身是 string,不受影响)。
+// admin 表单默认显示这几个 + 允许自定义补充。DB 中遗留的旧字面值("1"-"9"、
+// "adult")会作为普通自定义 tag 回显(Grade 是 string,不受影响)。
 //
-// 2026-07-21:GradeAdult("成人")已删除,替换为 GradeCollege("大学")和
-// GradeOther("其它")。"成人"一词在中文教育语境下联想偏向成人教育/夜校,与
-// 产品定位(中小学生 + 大学/进修)不太搭。历史 DB 里仍存的 "adult" 字面值会
-// 作为普通自定义 tag 回显,admin 可在 Grade 管理页用「合并」功能一次性迁到
+// 注:没有 "adult"/"成人" 预设——该词在中文教育语境下联想偏向成人教育/夜校,与
+// 产品定位(中小学生 + 大学/进修)不太搭,用 GradeCollege("大学")/GradeOther("其它")
+// 代替。DB 里若仍有 "adult" 字面值,admin 可在 Grade 管理页用「合并」功能一次性迁到
 // "college" 或 "other"(详见 admin_grade.go / Grades.tsx)。
 type Grade string
 
 const (
-	// 2026-07-20 新预设(推荐值)。这几个 + admin 自定义组成实际可用 tag 集。
+	// 推荐预设值。这几个 + admin 自定义组成实际可用 tag 集。
 	GradePrimary   Grade = "primary"   // 小学
 	GradeJunior    Grade = "junior"    // 初中
 	GradeSenior    Grade = "senior"    // 高中
@@ -55,9 +53,9 @@ func PresetGradeLabel(g Grade) string {
 	return ""
 }
 
-// Valid 报告 grade 值是否合法。2026-07-20 改成开放 tag 后,任何非空 trim 字符串
-// 都合法 —— 不再限制具体枚举值。空串返回 false(调用方 parseGrades 会把空串
-// 当作"未指定" → 默认 Universal)。
+// Valid 报告 grade 值是否合法。开放 tag 体系下任何非空 trim 字符串都合法 ——
+// 不限制具体枚举值。空串返回 false(调用方 parseGrades 会把空串当作"未指定"
+// → 默认 Universal)。
 func (g Grade) Valid() bool {
 	return strings.TrimSpace(string(g)) != ""
 }

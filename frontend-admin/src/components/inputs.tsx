@@ -57,8 +57,8 @@ export function ImageUpload({
   );
 }
 
-// Multi-select grade tag picker. 2026-07-20 重构:从 1-9 硬编码 checkbox grid
-// 改成"5 预设 checkbox + 自定义 tag 输入框"模式,后端 grade 已是开放 tag 体系。
+// Multi-select grade tag picker. "5 预设 checkbox + 自定义 tag 输入框"模式
+// (后端 grade 是开放 tag 体系)。
 //
 // 行为:
 //   - 5 个预设(primary/junior/senior/adult/universal)以 checkbox 形式展示

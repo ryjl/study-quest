@@ -96,7 +96,7 @@ export function Settings() {
               placeholder="3"
             />
             <p className="mt-2 text-xs text-muted">
-              润色时同时进行的 LLM 请求数（默认 3）。实测家里用的中继并发 3 稳定、并发 4 偶发限流；如遇 429 失败可调低到 2，换了不限制并发的中继可调高。
+              润色时同时进行的 LLM 请求数。值越大越快，但中继限流时会 429。
             </p>
             <button
               className="btn-primary mt-3"

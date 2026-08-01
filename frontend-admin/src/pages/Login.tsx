@@ -41,7 +41,7 @@ export function Login() {
             <div className="h-8 w-8 rounded-md bg-primary flex items-center justify-center text-bg font-bold">S</div>
           </div>
           <div className="text-3xl font-semibold tracking-tight text-txt">StudyQuest</div>
-          <div className="text-sm text-muted">学途奇旅后台管理系统</div>
+          <div className="text-sm text-muted">StudyQuest 管理后台</div>
         </div>
         <form onSubmit={submit} className="card">
           <label className="mb-1 block text-sm text-muted">管理员密码</label>

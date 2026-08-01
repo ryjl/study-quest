@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	log.Println("Starting StudyQuest (学途奇旅) Go Backend Server...")
+	log.Println("Starting StudyQuest Go Backend Server...")
 
 	// 1. Load Configurations
 	cfg := config.LoadConfig()

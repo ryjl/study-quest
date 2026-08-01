@@ -16,8 +16,7 @@ import { Wand2 } from 'lucide-react';
 // The actual click behavior is delegated via `onApplyTemplate` — the parent
 // knows about subjects/labels and decides what "apply template" means
 // (复制选中课程的学科 ai_config 到当前编辑的 5 字段)。模板源 100% 来自 DB
-// Subject.AIConfig —— 前端曾经的 aiHintTemplates.ts fallback 已在 2026-07-19
-// 集中化轮次删除(象棋等模板已迁移到后端 SeedDefaultSubjects 的 subjectAISeed)。
+// Subject.AIConfig(象棋等模板在后端 SeedDefaultSubjects 的 subjectAISeed)。
 
 export interface AiHintFieldsValue {
   whisper_hint: string;

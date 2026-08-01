@@ -104,9 +104,9 @@ func (h *adminHandler) UpdateSettings(c *gin.Context) {
 		_ = h.settingsRepo.Set("admin_password_hash", string(hash), "Admin panel password hash")
 	}
 
-	// polish_concurrency: 1~10。默认 3(实测中继并发 3 稳定/4 偶发 429)。用指针区分"未
-	// 提交该字段"(不改)和"显式给了值"。越界返回 400——虽然 polish.go 会把 <1
-	// clamp 成 1,但这里直接拒更诚实,让 admin 知道填错了。
+	// polish_concurrency: 1~10，默认 3。用指针区分"未提交该字段"(不改)和"显式
+	// 给了值"。越界返回 400——虽然 polish.go 会把 <1 clamp 成 1,但这里直接拒更
+	// 诚实,让 admin 知道填错了。
 	if req.PolishConcurrency != nil {
 		conc := *req.PolishConcurrency
 		if conc < 1 || conc > 10 {

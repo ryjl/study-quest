@@ -73,7 +73,7 @@ class MarkdownView extends StatelessWidget {
       extensionSet: md.ExtensionSet.gitHubFlavored,
       softLineBreak: true,
       // selectable: 长按可选中复制正文(题面/解析/AI总结/学习建议等)。默认 false 不可选,
-      // 用户反馈想把解析、建议等文字复制出来,所以全局开启(需求#4)。
+      // 这里全局开启,让解析、建议等文字能复制出来。
       selectable: true,
       styleSheet: sheet,
       builders: {
@@ -388,10 +388,10 @@ class _SvgViewState extends State<_SvgView> {
       child: SvgPicture.string(
         widget.svgSource,
         // 保持无 width/height 约束 —— SVG 自身必须带 width/height/viewBox 属性
-        // (prompt 已强制),让 flutter_svg 按 intrinsic size 测量。曾经试过加
-        // width: double.infinity,被 markdown 表格的 IntrinsicColumnWidth 测出
+        // (prompt 已强制),让 flutter_svg 按 intrinsic size 测量。不要加
+        // width: double.infinity:会被 markdown 表格的 IntrinsicColumnWidth 测出
         // 无限大 → 布局 NaN → 子节点被 ListView 丢弃甚至 C++ 崩溃(详见
-        // docs/frontend_render_fix_summary.md),绝不能回退。
+        // docs/frontend_render_fix_summary.md)。
         // BoxFit.fitWidth:按父容器宽度等比缩放(比 contain 更适合"全宽图表"),
         // 仍依赖 SVG 自身的 width/viewBox 做 intrinsic 测量。
         fit: BoxFit.fitWidth,

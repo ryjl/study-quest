@@ -97,7 +97,7 @@ describe('api client', () => {
     expect(JSON.parse(capturedBody!)).toEqual({ ids: [3, 1, 2] });
   });
 
-  // ---- AI regenerate + delete endpoints (2026-07-19) ----
+  // ---- AI regenerate + delete endpoints ----
 
   it('regenerateUserQuiz POSTs episode_id in body', async () => {
     let captured: { url?: string; init?: RequestInit } = {};
