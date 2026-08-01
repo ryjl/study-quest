@@ -8,7 +8,7 @@ with faster-whisper → posts the SRT back. The resulting subtitles land in the
 Runs on the GPU desktop (WSL2, RTX 4060 8GB). The backend VPS only coordinates —
 it never downloads video bytes.
 
-> Full protocol/state-machine/concurrency docs: `docs/ai-subtitle-queue.md`.
+> Full protocol/state-machine/concurrency docs: `docs/modules/ai/subtitle-queue.md`.
 > Real-environment pitfalls (cublas, 9P, tls, moov): §10 of that doc.
 
 ## Setup
@@ -70,12 +70,13 @@ response:
 2. **Course context** (auto) — subject / course title / chapter title. These
    are dense with subject terminology, suppressing Whisper's tendency to
    mistranscribe proper nouns.
-3. **`ai_hint`** (admin-authored, per course) — anything针对性: a teacher's
+3. **`whisper_hint`** (admin-authored, per course) — anything针对性: a teacher's
    accent, the key theorem to listen for. Edit it in the admin course editor's
-   "AI 提示" field. It also feeds the future quiz agent.
+   "AI 提示" field (stored on `Course.AIConfig().WhisperHint`). It also feeds
+   the quiz/summary agents via the same AIConfig.
 
-You don't write prompts per-video — set an `ai_hint` once per course and every
-episode under it gets a tailored prompt automatically.
+You don't write prompts per-video — set a `whisper_hint` once per course and
+every episode under it gets a tailored prompt automatically.
 
 ## GPU policy (hard requirement — NO fallback)
 

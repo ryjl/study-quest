@@ -185,6 +185,6 @@ PAD 端原先只有浅色主题（与 TV 深色分工）。本次新增用户可
   - `frontend/lib/theme/app_colors.dart` —— `AppColors`（ThemeExtension，亮/暗两套语义 token）+ `AppColorsX`（context.colors 扩展）。
   - `frontend/lib/theme.dart` —— `AppTheme` 门面：`lightTheme`/`darkTheme` ThemeData 构建、渐变/圆角/`switchDecoration`/`getSubjectGradientFromColor` 等亮度无关常量与 helper。
   - `frontend/lib/service/theme_prefs.dart` —— `ThemePrefs`（ChangeNotifier，三态持久化 + `themeMode`）。
-- **TV（Kotlin）**：`tv-android/app/src/main/java/com/revin/studyquest/tv/ui/theme/`（阶段 1 Agent B 实现 `StudyQuestTheme` + `Color.kt` + `Type.kt` + `Shape.kt`）。
+- **TV（Kotlin）**：`tv-android/app/src/main/java/app/studyquest/tv/ui/theme/`（阶段 1 Agent B 实现 `StudyQuestTheme` + `Color.kt` + `Type.kt` + `Shape.kt`）。
 
 两端 token 改动 → 改本文档 → 两端同步。

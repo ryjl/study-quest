@@ -53,8 +53,10 @@ MiniMax 还是 DeepSeek,都没机会到约束解码那层就被挡掉。
 
 **根治路径(未来切换)**:换成支持约束解码的后端(vLLM + xgrammar/guidance/outlines,
 或原生 OpenAI gpt-4o+),在 `internal/ai/provider.go` 的 `ChatRequest` 加 `ResponseFormat`
-字段、各生成点启用即可。代码结构已预留:`ParseLLMJSON` 的 repair 兜底届时继续保留
-作为第二保险。探测用一次性脚本(见本文末"探测脚本"段,key 不落地)。
+字段、各生成点启用即可(当前代码里没有这个字段——曾有过一个 `JSONSchemaResponseFormat`
+构造函数,因中转站不支持 response_format、零调用已删;换后端时照本文重建即可)。
+`ParseLLMJSON` 的 repair 兜底届时继续保留作为第二保险。探测用一次性脚本(见本文末
+"探测脚本"段,key 不落地)。
 
 ### 第 2 层:事后修复(ParseLLMJSON)—— 当前主防线 ✅
 

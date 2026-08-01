@@ -36,11 +36,11 @@
 
 | 常量 | 值 | 用途 | 依据 |
 |------|----|----|------|
-| `MaxTokensSummary` | 16000 | 课程总结（结构最重） | 实测峰值 3021；ep123 曾因默认上限截断断裂。16000 给足安全垫 |
+| `MaxTokensSummary` | 16000 | 课程总结（结构最重） | 输出含 headline+sections+key_points+methods+common_mistakes+takeaway+SVG，截断会断 JSON。给足安全垫 |
 | `MaxTokensHomework` | 16000 | 作业卷生成 | 和 summary 同级，整卷结构重 |
-| `MaxTokensQuiz` | 10000 | quiz 出题 | 实测 ep3 峰值 6142，1.6x 余量 |
+| `MaxTokensQuiz` | 10000 | quiz 出题 | 8-12 题 + 富文本 explanation，体积大 |
 | `MaxTokensQuizSelfCheck` | 800 | quiz 自检判决 | 结构极简（`{pass,note}`） |
-| `MaxTokensPolish` | 12000 | 字幕校对 | **原 8000，实测 completion 到 ~9700 确凿超限，提到 12000** |
+| `MaxTokensPolish` | 12000 | 字幕校对 | 每 chunk 150 cues 的 changes/glossary diff，体积大 |
 | `MaxTokensAdvice` | 2500 | 学习建议 | 300-700 字 |
 | `MaxTokensUserReport` | 3000 | 用户跨课程报告 | 比 advice 略长 |
 | `MaxTokensCourseSummary` | 3000 | 课程级总结 | 300-700 字 |
@@ -75,10 +75,10 @@
 
 ## Tuning 历史
 
-| 日期 | 参数 | 变更 | 依据 |
-|------|------|------|------|
-| 2026-07-29 | `MaxTokensPolish` | 8000 → 12000 | 生产实测 polish completion 到 ~9700，确凿超过 8000 设定（中转站不严格遵守 maxTokens，但说明偏紧） |
-| 2026-07-29 | 集中化 | 散落字面量 → params.go 常量 | 单一真相源，消除"改一处漏一处"风险 |
+| 参数 | 变更 | 依据 |
+|------|------|------|
+| `MaxTokensPolish` | 8000 → 12000 | polish completion 偶尔超 8000（中转站不严格遵守 maxTokens），提到 12000 留余量 |
+| 集中化 | 散落字面量 → params.go 常量 | 单一真相源，消除"改一处漏一处"风险 |
 
 ## 怎么改参数
 

@@ -1,161 +1,53 @@
-# StudyQuest (学途奇旅) 前端设计与优化规范
+# StudyQuest 前端设计
 
-本文件详细记录了 StudyQuest 的项目定位、现有前端功能与实现、当前设计系统以及后续前端优化的核心意图。以便设计系统与前端人员（如 stitch）能够以此为基础进行高水准的 UI/UX 重构与细节设计。
+> 本文件是**前端的产品定位 + 功能盘点**。视觉 token(色值/字号/圆角/焦点态)的
+> 单一真相源是 [`docs/design-tokens.md`](../../design-tokens.md),这里不重复写色值,
+> 只讲三端分工与各端页面做什么。
 
----
+## 1. 产品定位
 
-## 1. 项目定位与核心意图 (Product Intent)
+家长自建的**私有学习资源管理平台**:把网盘(115/天翼云/夸克,经 AList/WebDAV 挂载)
+里散落的课外视频,变成有结构、有进度追踪、有 AI 互动的自主学习体验。
 
-* **定位**：StudyQuest 是一款**长期个人学习资源管理平台**。其核心意图是家长自行搭建的私有学习资料统一入口，将散落在各种网盘（如 115网盘、天翼云、夸克等，通过 AList/WebDAV 挂载）中的课外视频资源，智能转化为有结构、有播放进度追踪、有 AI 探险卡和课后小挑战互动的自主学习体验。
-* **用户角色与控制感**：
-  * **学生端（Client）**：初期主要面向小学 3-6 年级儿童。设计上应当极其游戏化、多插图、高饱和度或精美暗色调、且尽量减少生硬的长篇文字交互。配合积分系统，将“背单词、看课外纪录片、学数学思维”包装为一场“探险通关之旅”。
-  * **家长端（Admin Panel）**：属于管理和控制侧。家长在此导入网盘视频、分配课程访问权限、调整 AI 挑战题的生成等。
-* **多端适配与遥控器交互 (D-Pad Optimization)**：
-  * 客户端使用 Flutter 编写，同一套代码同时编译并运行在 **Android 平板 (PAD)** 与 **Android 电视 (TV/电视盒子)** 上。
-  * **电视端必须原生支持物理遥控器/D-pad 焦点系统**。所有按钮和卡片都必须有非常明确且符合直觉的焦点移动逻辑，并拥有吸睛的焦点激活态反馈（如发光、放大或框线动画）。
+- **学生端**:面向小学中高年级。游戏化、多插图、高饱和度或精美暗色(TV),尽量减少
+  长篇文字。配合积分系统,把"看课外纪录片、学数学思维"包装成"探险通关之旅"。
+- **家长端(Admin)**:管理与控制侧。导入网盘视频、配课程/章节、配 AI、授权孩子访问。
 
----
+## 2. 三端分工
 
-## 2. 现有前端页面与核心功能 (Current Features)
+| 端 | 工程 | 技术 | 角色 |
+|---|---|---|---|
+| 学生端 PAD/手机 | `frontend/`(Flutter) | Flutter / Dart | 看课 + 闯关 + AI 学习 |
+| TV 端 | `tv-android/` | Kotlin + Compose for TV | 大屏看课(独立工程,视觉 token 与 PAD 同源,**底色取向不同**:PAD 浅色主题、TV 深色主题) |
+| 家长管理端 | `frontend-admin/`(React SPA) | React 18 + TS + Vite + Tailwind | 导入/编排/配 AI/看数据。构建产物 `go:embed` 内嵌进 Go 二进制,访问 `/admin` |
 
-目前系统拥有 **学习客户端 (Flutter Client)** 和 **管理后台 (Go Admin Panel)** 两个主要前端组成部分。
+> Admin 已是 React SPA(不再是历史曾有的 Go HTML 模板后台)。详见
+> [`frontend-admin/README.md`](../../../frontend-admin/README.md)。
 
-### 2.1 学习客户端 (Flutter Client) 页面功能
+## 3. 学生端(Flutter)页面功能
 
-目前客户端的 Flutter 代码在 [frontend/lib](file:///home/revin/repos/study-quest/frontend/lib) 下，已经实现了以下界面和交互：
+- **登录**:授权学生头像 + 4-6 位 PIN(bcrypt 校验),磨砂黑数字键盘。
+- **主导航**:游戏化左侧栏(学生头像 + 积分 + 学习大厅 / 我的足迹 / 设置)。
+- **学习大厅**:已授权课程网格(封面 + 标题 + 年级 + 科目徽章),响应式列数。
+- **课程详情**:左右分栏(左侧课程封面/元数据,右侧课时时间轴,已通关显示绿色勾)。
+- **视频播放**:网盘直链拉流(带鉴权 Header,不经 Go 中转);课前探险思考卡拦截;
+  每 5s 上报观看进度;课后小挑战(quiz)入口。
+- **AI 学习**(`ai_study_screen`):做 quiz / 看学习建议 / 复盘;统一交卷(submit-all)
+  后归档为历史。三态门禁(ready/generating/unavailable)。
+- **成长足迹**:积分 + 通关统计 + 近期学习明细。
 
-1. **多用户登录页 ([login_screen.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/login_screen.dart))**：
-   * 启动后展示所有已被授权的学生头像与昵称。
-   * 点击/选择学生后，弹出一个磨砂黑的 PIN 码输入板 ([num_pad.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/widget/num_pad.dart))，学生需输入 4-6 位数 PIN 码。
-   * PIN 码通过加密传输，后端使用 bcrypt 校验，校验成功则进入系统主导航。如果服务器配置失败，提供去配置 IP 的入口。
-2. **主导航架构 ([main_navigation.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/main_navigation.dart))**：
-   * 采用经典的游戏左侧导航栏（含有当前学生头像卡片、积分显示、三个功能标签页：“学习大厅”、“我的足迹”、“设置中心”，以及退出切换账号按钮）。
-   * 专为 D-pad 遥控器优化，支持从左侧边栏向右移动焦点进入内容区。
-3. **学习大厅 ([course_list_screen.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/course_list_screen.dart))**：
-   * 展示该学生已被分配授权的课程网格 (Grid View)。
-   * 每张课程卡片包含：课程封面大图、课程标题、适用年级标签 (如 3年级)、所属科目 (如 语文 📚, 数学 📐, 英语 🔠, 科学 🧪, 百科 🌎)。
-   * 响应式布局：根据屏幕宽度自动切分列数（大平板/TV 显示 3 列，小屏幕显示 2 列）。
-4. **课程详情页 ([course_detail_screen.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/course_detail_screen.dart))**：
-   * 左右分栏：
-     * **左侧**：大型课程封面、年级与科目徽章、标题描述。
-     * **右侧**：垂直线性课时时间轴 (Episode Timeline)。每一个课时节点有一个指示器，显示如 `P1`, `P2` 等序号，已通关的课时显示绿色小勾，未通关的显示紫色播放按钮。
-5. **视频播放与 AI Blocker 互动页 ([player_screen.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/player_screen.dart))**：
-   * 视频流由 Go 后端通过 API 动态解析网盘（如 AList/WebDAV），并返回带有鉴权 Header 的直链，由播放器直接拉流，不经过 Go 服务器中转。
-   * **交互拦截器 1：课前探险卡 (Pre-adventure Explorer Cards)**：
-     * 在视频初始化完成后，并不立即播放，而是暂停并弹出浮层。
-     * 轮播展示 1~3 张“探险思考卡”（AI 预先从视频字幕中提取的引导思考题），学生必须点击“下一张”，阅读完毕后才能解锁视频播放。
-   * **防作弊进度上报**：视频播放过程中每 5 秒上报一次观看进度（仅用于进度追踪，不触发任何 UI）。
-   * **课后小挑战 (Post-watch Quiz) 入口（手动触发）**：
-     * Quiz 完全由学生主动点击入口进入，与播放进度无关。
-     * 三个入口（均先 `pause()` 视频再 `Navigator.push` 到 [AiStudyScreen](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/ai_study_screen.dart)）：
-       1. 播放器顶栏的 AI 图标（`player_screen.dart:1015` 附近）。
-       2. 播放器右侧"随堂助手"面板里的"AI 学习"卡片（`player_screen.dart:1492` 附近；卡片实体在 [helper_panel.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/widget/helper_panel.dart)）。
-       3. 课程详情页的"AI 重点总结"按钮（[course_detail_screen.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/course_detail_screen.dart) 882 附近）——不经过视频也能直接进入。
-     * 进入 `AiStudyScreen` 后，在 `initState()` 中调 `_loadQuiz()` 拉题：后端 ready 则立即渲染；返回 `generating` 则每 3 秒轮询直到就绪。
-     * 作答采用统一提交（`submit-all`），统一交卷后立即归档为历史 quiz，归档后不可再改。题目渲染走全站统一的 `QuizReviewCard`。
-     * 三态化门禁：三个入口都受 `AiAvailabilityHelper.fromEpisode(episode)` 约束（需要 `aiSummaryEnabled || aiQuizEnabled` 且该 episode 有字幕），不可用时按钮置灰、点击提示原因。
-6. **成长足迹页 (My Progress in [main_navigation.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/main_navigation.dart#L187-L326))**：
-   * 统计模块：
-     * 积分卡片：展示当前可用积分、累计获得积分，带星星图标。
-     * 通关卡片：展示已通关课时数、已参与学习的课时总数，带对勾图标。
-   * 明细列表：以卡片形式展示近期学习通关的课时历史记录与时间。
-7. **客户端设置页 (Settings in [main_navigation.dart](file:///home/revin/repos/study-quest/frontend/lib/ui/screen/main_navigation.dart#L329-L390))**：
-   * 提供文本输入框，允许输入或恢复默认的局域网后端 API 地址 (例如 `http://192.168.1.100:8080`)。
+## 4. TV 端(Kotlin / Compose for TV)
 
-### 2.2 管理后台 (Go Admin Panel) 页面功能
+大屏看课为主,复用后端 `/api/v1/*`。物理遥控器 D-pad 焦点导航是硬要求(所有可点
+元素都要有明确的焦点移动逻辑 + 吸睛焦点激活态)。视觉 token 见
+[`docs/design-tokens.md`](../../design-tokens.md) 的 TV 段。
 
-管理后台目前集成在 Go 后端中，使用 HTML 模板渲染，代码在 [backend/internal/admin/templates](file:///home/revin/repos/study-quest/backend/internal/admin/templates) 下，主要功能包括：
+## 5. 家长管理端(React SPA)页面功能
 
-1. **登录页 (`login.html`)**：管理员独立密码登录，密码经过 Bcrypt 处理并存储在 `settings` 系统配置表中。
-2. **仪表盘 (`dashboard.html`)**：展示系统基础状况与快速导航。
-3. **用户管理 (`users.html`)**：创建/编辑学生账号、修改 PIN 码、上传/配置头像 URL、定义角色。
-4. **课程管理 (`courses.html`)**：创建、编辑和删除课程包，编辑年级、科目，并可关联已扫描导入的课时视频。
-5. **网盘导入向导 (`import.html`)**：
-   * 管理员选择网盘（AList/WebDAV）物理路径，系统递归扫描目录。
-   * **智能映射识别**：将根目录自动识别为 Course，子目录识别为 Chapter（章节），视频文件识别为 Episode（课时）。
-   * **目录穿透**：支持管理员手动勾选跳过某些空心、层级过深的文件夹（Skip），其下属的视频会自动“浮动”挂载到最近的有效上级节点中。
-   * **预览并导入**：在页面上直接微调课程/课时名称，剔除无用文件，一键导入数据库。
-6. **系统设置 (`settings.html`)**：
-   * 配置网盘存储源连接（AList URL / Token 或 WebDAV 地址与账号密码）。
-   * 配置 DeepSeek 等大语言模型 API Key 与端点，供 AI 后台服务生成探险卡和选择题。
-
----
-
-## 3. 当前 UI 设计系统规范 (Theme Tokens)
-
-现有的 Flutter 客户端定义了以下规范以支持大圆角、游戏化的 Switch 风格：
-
-* **核心色板** (定义在 [theme.dart](file:///home/revin/repos/study-quest/frontend/lib/theme.dart))：
-  * `backgroundColor = Color(0xFF0B0F19)`：暗黑深邃的星空底色。
-  * `cardColor = Color(0xFF111827)`：深蓝灰色，用于内容卡片和容器背景。
-  * `primaryColor = Color(0xFF8B5CF6)`：主题紫色，用于主要按钮、选中的导航、激活的焦点边框。
-  * `accentGreen = Color(0xFF10B981)`：薄荷绿，代表完成、通过、正确答案和增加的积分。
-  * `accentOrange = Color(0xFFF59E0B)`：温暖橙，用于积分星星、荣誉和提醒。
-  * `textWhite = Color(0xFFF1F5F9)`：主要文字颜色。
-  * `textMuted = Color(0xFF9CA3AF)`：次要/辅助说明文字。
-  * `borderMuted = Color(0xFF1F2937)`：暗灰蓝色，用于默认边框线。
-* **高辨识度的边框与圆角**：
-  * 卡片和按钮的圆角全部统一采用高圆角：`BorderRadius.circular(18.0)`。
-  * 默认边框厚度为：`3.0`。
-* **遥控器焦点感知设计 (D-pad Focus Decoration)**：
-  * 使用自定义包装组件 `FocusButton`。当小组件获得遥控器焦点时：
-    * 边框由 `borderMuted` 渐变为 `primaryColor` (幻彩紫)。
-    * 附加明显的 `boxShadow` 外发光呼吸效果：`primaryColor.withOpacity(0.4)`, 模糊半径为 `12`。
-
----
-
-## 4. 前端优化意图与 Stitch 设计指导 (Optimization Goals)
-
-目前的前端实现已经打通了业务功能，但是在**视觉档次、游戏化交互趣味、流畅微动效、数据大屏质感**上面还非常欠缺。我们希望进行如下维度的彻底升级与重构：
-
-### 4.1 引入更高级的视觉质感 (Premium Aesthetics)
-
-1. **渐变与磨砂玻璃 (Glassmorphism & Gradients)**
-   * 底色不能只是一片死板的黑色。引入微妙的背景动态渐变，比如极弱的星空粒子或流光溢彩（Auroral Glow）。
-   * 弹出层（如 PIN 码输入板、探险卡、答题小挑战）改用高档的**毛玻璃 (Frosted Glass)** 效果，使整体界面的视觉深度更强。
-2. **高质量插图与游戏化图标**
-   * 取代目前生硬的系统原生 Icon，设计一套成体系的卡通/探险手绘风格图标。
-   * 为不同科目 (语文、数学、英语、百科) 绘制专属的游戏化科目插画封面或卡片背景。
-
-### 4.2 重构游戏化闯关地图路线 (Interactive Path Map)
-
-* **摆脱普通列表**：将课程详情页中右侧呆板的垂直列表重构为类似 **多邻国 (Duolingo) 的蜿蜒探险地图路线 (Path Map)**。
-* **路线设计**：
-  * 课时 Episode 作为一个个沿着小径分布的关卡节点（可以是小星球、宝箱或石碑）。
-  * 路线周围可以摆放与该课程主题相关的趣味插画元素。
-  * 学生通关 P1 之后，路线会平滑亮起，延伸到 P2。
-  * 点击某个关卡节点时，在节点上方弹出精美气泡（Popover），展示课时名和开始学习按钮。
-
-### 4.3 精雕细琢的微动效与欢庆体验 (Micro-interactions & Celebration)
-
-1. **焦点的动态过渡 (Focus Transitions)**
-   * D-pad 移动焦点时，卡片选中状态的切换应有极其丝滑的**平移动画**，或者缩放微动效 (Scale Transition)，而不是生硬地直接跳转。
-2. **通关与答题的爽快感**
-   * **探险卡翻牌**：课前探险卡设计成实体卡牌的 3D 翻转动效 (Card Flip Animation)。
-   * **答题交互**：答对选项时，选项卡片向上弹跳，并向周围喷洒出彩带粒子；答错时卡片左右晃动 (Shake Animation) 提示错误。
-   * **金币飞入**：答题完全通过后，奖励的积分数值应以滚数字 (Number Counter) 的形式跳动，金币/星星伴随声效从屏幕中央飞入左上角或右上角的学生积分统计池。
-
-### 4.4 管理后台 (Admin Web) 彻底升级为现代化 SPA 看板 ✅ 已落地
-
-> **实现状态（2026-07）**：管理后台已从 Gin 服务端渲染的 HTML 模板（`internal/admin/templates/*.html`）完整重写为 **React 18 + TypeScript + Vite + Tailwind CSS** 单页应用，源码位于 [`frontend-admin/`](../frontend-admin)，构建产物通过 `go:embed` 内嵌进 Go 二进制（[`backend/internal/admin/spa/`](../backend/internal/admin/spa)）。运行时仍是**单端口、单二进制、零额外依赖**——访问 `http://<服务器IP>:8080/admin` 即进入后台。旧的 10 个 HTML 模板已全部删除，`router.go` 不再加载任何 Go 模板。
-
-* **高颜值现代化 Dashboard** ✅：
-  * 后台已脱离古板的 HTML 表单，采用 Tailwind CSS 深度优化的暗色控制台布局，设计 token（`#0B0F19` 底 / `#8B5CF6` 主题紫 / `#10B981` 完成绿等）与 Flutter 客户端 `theme.dart` 保持同源。
-  * **数据可视化**：首页仪表盘展示 StatCard 网格（用户数 / 课程数 / 课时数 / 视频总时长 / 待探测数）+ 各科目课时分布条形图 + 近 7 天新增课时柱状图，数据由 `/admin/api/stats/dashboard` 一次聚合返回。
-* **智能导入树的重构** ✅：三步向导（选路径 → 配置导入目标 → 预览确认），左侧目录折叠树、右侧逐节点类型下拉（课程/章节/穿透/课时/跳过），支持行内重命名。
-* **课程管理深度重构**（重点）：可折叠课程卡片、封面缩略图、章节-课时树、每课时展示 ffprobe 探测出的时长 / 分辨率 / 编码徽章 / 文件大小 / Hash 状态；批量勾选移动/删除；字幕管理从嵌套 modal 改为右侧抽屉；搜索 + 科目 + 学段三维过滤；编辑课时走 PATCH 风格接口，**不会覆盖** ffprobe 探测的媒体元数据。
-* **课后作业卷（Homework）** ✅：v2 起并入 AI 控制台 RegenTab 的 CourseRegenColumn（勾选式，抄 GlossaryTab 的 `Set<number>` 范式）。选课程 → 勾选若干课时（无字幕禁用,每行带视频缩略图 `cover_url`）→ 顶部批量操作区「生成作业」按钮（调通用 `POST /admin/api/ai/jobs {job_type:"homework"}`）→ 行内「查看作业」按钮打开 `HomeworkPreviewModal`（`<Modal size="xl">`）预览/打印。**RegenTab v2 改造**：从"两列并排(grid-cols-2, 课程+学生)"改成"两个子 tab 切换"(按课程 / 按学生),两功能独立且各自独占全宽,行内容更宽松(能放下缩略图 + 标题 + 状态 + 4 按钮)。**卷面排版（v2 重设计：中性现代风 · 小学高年级，定位是练习卷不是考试卷，刻意去掉所有评分压力元素）**：`HomeworkPrintView` 组件（屏上预览 + 打印共用，抽到 `components/homework/`）+ `homework.css`（A4 `@media print` + `@page`）。字体走中文衬线栈（Songti/STSong/宋体/Noto Serif SC）让卷子有印刷感，抄写范字用楷体（STKaiti）。卷头克制（课程名 + 课时标题 + 姓名/日期简洁信息栏，**无密封线/得分框/满分框/评卷人**——避免给小朋友考试压力）。题型作答区按高年级需求强化：choice/multi_choice 走 2×2 网格（题干长，省竖空间）；fill 按题干 `____` 出现次数自动给等量横线；calculation 给 130px+ 大方框（够多位数竖式，顶部「解:」提示）；copy_word 首行范字（楷体红色，从 `scoring.content` 取字）+ 后续空格描红（像语文本）；dictation 按参考文本长度给 3-5 行；short_answer 带「答:」前缀；translation 带「译文:」前缀。答案版（showAnswers toggle，家长/老师批改视角）：choice 正确项背景浅蓝高亮 + 蓝边框（直观，不是文字标注），其他题型参考答案用蓝色斜体小字标在作答区上方（不遮挡横线）。打印走 `window.print()`，页脚页码用 CSS counter（「第 X 页 共 Y 页」）。**打印分页修复（v2）**：卷面在 Modal 的 `position:fixed` overlay 深层,absolute 定位跨页时浏览器每页重复绘制(用户曾报"3 页都是第一页")。改用 `createPortal` 把"打印专用副本"渲染到 `document.body` 直接子节点(不在 Modal 里),屏上副本 `.hw-screen-only` 打印态 `display:none`,打印副本 `.hw-print-portal` 打印态显示 + `#root` 整棵 `display:none`。这样卷面是 body 唯一可见直接子节点,正常文档流分页,`page-break-inside:avoid` 才生效(顺带修了"题目半行被截")。**分页粒度细化**:`page-break-inside:avoid` 只加在原子单元(`.hw-question`/`.hw-passage`/`.hw-options`/`.hw-header`),**不**加在 `.hw-section`(整个大题)上——大题可能含 5-10 道题接近一页高,avoid 会让浏览器放不下整块就推到下页,前一页留大片空白(用户曾报"第一页只有标题就换页"就是这个)。大题允许跨页,只要内部每道题不被截断即可;`.hw-section-title` 加 `break-after:avoid` 防标题孤悬页底。**其它卷面修复**：大题标题智能去重序号(LLM 在 title 已写「一/二/1、选择题」时组件剥掉原前缀统一用 cnSeq 拼,避免「二、二、填空题」);卷头学科显示走 `useSubjects` 的 key→label 映射(`math`→「数学」);copy_word 后端约束 `content` ≤ 12 字符(超长整段课文级丢弃,避免田字格撑爆 A4 行)。**review 修复**:(1) 打印 CSS 全部限定在 `body.hw-printing` 作用域下,打印按钮 onClick 加 class、`afterprint` 移除——避免进过 AI Console 后任何页 Ctrl+P 空白;(2) portal 打印副本强制 `showAnswers={false}`,屏上 toggle 答案只影响屏上预览,打印始终出学生卷(不泄答案);(3) RegenTab/PromptConfigTab 切子 tab 用 CSS `hidden` keep-alive(两 panel 常驻 DOM),不丢勾选状态/prompt 草稿; (4) 课时缩略图 `cover_url` 加 `onError` 兜底(404/签名过期时藏掉 img 露灰底,避免破图)。**作业是纯 admin 功能：学生在 pad 端不出现作业概念**（作业是打印教具，打印动作由家长在 admin 完成，学生在 pad 上的心智是学习+闯关）。prompt 配置：v2 起从 PromptConfigTab 的「第三个 section」改成**子 tab 切换**（`<Tabs>` 受控组件），「学习 AI Prompt」tab 放学科默认 + 课程覆盖两 section，「作业生成 Prompt」tab 放作业 prompt section（两套 prompt 独立，tab 切换比堆叠清晰）。
-
----
-
-## 5. 建议的技术实现路径参考
-
-1. **客户端 (Flutter)**：
-   * 采用 `Flutter Animate` 或 `Lottie` 导入精美轻量动画，提升欢庆界面的趣味性。
-   * 使用 `CustomPainter` 或 `flutter_map_path` 构建多邻国关卡地图组件。
-   * 保持现有的 `FocusNode` 与 `FocusScope` 机制，在此之上用 `AnimatedContainer` 承接焦点事件，实现有过渡动画的焦点发光环。
-2. **后台管理端 (Admin)** ✅ 已落地：
-   * 基于 **React + Vite + Tailwind CSS** 构建高颜值看板，源码在 `frontend-admin/`。
-   * 打包后的静态资源通过 Go 的 `go:embed`（`backend/internal/admin/spa/embed.go`）统一内嵌编译至 Go 后端可执行文件中，继续保持「单文件、单端口、零依赖」的极简服务器运维体验。
-   * 构建流水线：`make build` 先 `npm ci && npm run build`（输出到 `backend/internal/admin/spa/dist`），再 `go build`；Dockerfile 为三阶段（Node → Go → Alpine 运行时）。
-   * 所有 `/admin/api/*` 接口返回干净的 snake_case JSON（见 `backend/internal/handler/admin_dto.go`），与客户端用的 `/api/v1/*`（Flutter）完全隔离，互不影响。
+- **Dashboard**:StatCard 网格 + 科目分布 + 近 7 天新增课时。
+- **内容管理**:课程/章节/课时树、ffprobe 媒体元数据徽章、批量操作、字幕抽屉。
+- **网盘导入**:三步向导(选路径 → 配导入目标 → 预览确认),智能映射
+  (根目录→Course,子目录→Chapter,视频→Episode)+ 目录穿透。
+- **AI 控制台**:对象即导航的课程/学生工作台(总结/作业/quiz 生成与重生成、prompt
+  配置、术语候选审阅、润色、学习数据观测)。
+- **用户/阅读室/设置**:学生账号 CRUD、阅读资源、存储与 AI provider 配置。

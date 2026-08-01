@@ -5,7 +5,7 @@ drill into the linked docs when you need depth.
 
 ## What this is
 
-StudyQuest ("学途奇旅") — a video-learning platform for young students. Three
+StudyQuest — a video-learning platform for young students. Three
 parts in one repo:
 
 | Part | Path | Stack |
@@ -46,10 +46,10 @@ Always run `make test` before declaring backend work done.
   Shared helpers (`bindJSON`, `parseUintParam`, `parseLimit`, `respondError`)
   live in `httperr.go`.
 - `service/` — business logic. `ai_service*.go` is split into
-  `{_advice,_quiz,_course_summary,_user_report,_polish,_jobs,_naming}.go` +
-  the core `ai_service.go` (interface/struct/worker/segment+summary runners).
+  `{_advice,_quiz,_homework,_course_summary,_user_report,_polish,_jobs,_naming,_run_record}.go`
+  + the core `ai_service.go` (interface/struct/worker/segment+summary runners).
 - `repository/` — GORM queries. `ai_content_repo.go` is the interface +
-  constructor; method bodies live in `ai_{chunk,summary,job,quiz,memory,advice}_repo.go`.
+  constructor; method bodies live in `ai_{chunk,summary,job,quiz,memory,advice,polish_chunk}_repo.go`.
 - `media/` — ffmpeg/ffprobe wrappers (probe, screenshot, cover extraction,
   retry-on-transient-network-error).
 - `ai/` — LLM provider plumbing and prompt construction (`agent/`, `polish/`).
@@ -57,8 +57,9 @@ Always run `make test` before declaring backend work done.
 
 **Admin SPA (`frontend-admin/src/`):**
 - `lib/api/` — endpoint client split by domain (`auth.ts`, `courses.ts`,
-  `ai.ts`, ...) aggregated by `lib/api/` 域聚合 (拆分后) as `export const api = {...}`.
-  Call sites always use `api.foo()`; the split is navigability-only.
+  `ai.ts`, ...) aggregated by `lib/api/_request.ts` into a flat
+  `export const api = {...}`. Call sites always use `api.foo()`; the split is
+  navigability-only.
 - `lib/types.ts` is pure interfaces; runtime subject/tag caches live in
   `lib/caches.ts` and grade presets/labels in `lib/grades.ts`.
 - Big pages are folder-per-screen (`pages/users/`, `pages/ai-console/regen/`,
@@ -144,9 +145,8 @@ Always run `make test` before declaring backend work done.
    bug，用户看得到、会困惑。别用"小问题""可观测性层面"给自己找台阶。踩坑细节
    和具体修法进 `docs/pitfalls/`，不堆在 CLAUDE.md。
 
-9. **所有修改直接进 `main`，不要拉 branch。** 这个项目是单人开发，分支管理
-   是纯开销。commit 直接打在 `main` 上，不建 feature branch、不开 PR、不走
-   rebase/merge 流程。不要"按规范先分支"——这里的主线就是 `main`。
+9. **维护者直接在 `main` 上开发,不开 feature branch。** commit 直接打在 `main`
+   上,不建分支、不开 PR。外部贡献者请 fork 后开 PR。
 
 ## Where things live (quick map)
 

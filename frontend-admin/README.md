@@ -14,7 +14,7 @@ all from one binary on one port.
 - **TanStack Query 5** — server state, optimistic updates, background refetch.
   No more `window.location.reload()` anywhere.
 - **Tailwind CSS 3** — design tokens mirror `design.md §3` and the Flutter
-  client's `theme.dart` (same dark palette + purple primary).
+  client's `theme.dart` (same dark palette + blue primary `#3B82F6`).
 - **Recharts** — dashboard charts.
 - **Vitest + Testing Library** — unit/component tests.
 
@@ -24,18 +24,24 @@ all from one binary on one port.
 frontend-admin/
 ├── src/
 │   ├── lib/
-│   │   ├── api.ts          # typed fetch wrapper + all /admin/api/* calls
+│   │   ├── api/            # endpoint client split by domain (auth.ts, courses.ts,
+│   │   │                   # ai.ts, ...) aggregated as `export const api = {...}`.
+│   │   │                   # Call sites use `api.foo()`; the split is navigability-only.
 │   │   ├── types.ts        # snake_case API types + subject/grade metadata
+│   │   ├── grades.ts       # grade presets + labels (open tag system)
+│   │   ├── caches.ts       # runtime subject/tag caches
 │   │   ├── format.ts       # duration / filesize / codec / date formatting
 │   │   └── toast.tsx       # toast + confirm() providers (replaces alert/confirm)
 │   ├── components/         # Layout, Modal, Drawer, TagInput, ImageUpload, ...
+│   │   └── homework/       # homework sheet print view + preview modal + print CSS
 │   └── pages/
 │       ├── courses/        # the big one: CourseTree, CourseModal, editors, subtitles
+│       ├── ai/             # AI workbench: object-as-navigation (course/student)
+│       ├── ai-console/     # legacy AI console (regen columns, prompt config)
+│       ├── users/          # user CRUD + per-user detail
+│       ├── reading-room/   # reading resources
 │       ├── Dashboard.tsx   # stats + charts
-│       ├── Users.tsx       # CRUD + per-user detail drawer (ledger + badges + access)
-│       ├── Badges.tsx      # badge wall + rule-engine editor
-│       ├── Import.tsx      # 3-step netdisk import wizard
-│       └── Settings.tsx    # storage config + connection test + probe trigger
+│       └── ...
 └── vite.config.ts          # outDir → ../backend/internal/admin/spa/dist
 ```
 
@@ -62,7 +68,7 @@ npm run dev
 ## Tests
 
 ```bash
-npm test            # run once (format, api, TagInput — 41 tests)
+npm test            # run once (112 tests across 10 files)
 npm run test:watch  # watch mode
 ```
 
@@ -76,7 +82,7 @@ preserves ffprobe media metadata.
 frontend-admin/ ──npm run build──▶ backend/internal/admin/spa/dist/
                                             │
                       backend/internal/admin/spa/embed.go
-                                            │  //go:embed dist/*
+                                            │  //go:embed all:dist
                                             ▼
                               gin serves /admin + /admin/assets/*
                               (deep links fall back to index.html)

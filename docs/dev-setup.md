@@ -1,11 +1,25 @@
 # 开发环境与调试
 
+## 前置依赖
+
+| 工具 | 版本 | 用于 |
+|---|---|---|
+| Go | 1.23+ | 后端（`backend/go.mod` 声明 1.23） |
+| Node + npm | Node 18+ | admin SPA（`frontend-admin`） |
+| Flutter | 3.x | 学生端 PAD/手机（`frontend`） |
+| JDK | 17 | Android 构建（Flutter + TV Kotlin） |
+| Android SDK | API 34+ | Android 构建 |
+| Python | 3.12 | 字幕 worker（`tools/video-pipeline`，可选） |
+
+> 版本以各工程的 manifest 为准：`backend/go.mod`、`frontend/pubspec.yaml`、
+> `tools/video-pipeline/.python-version`、`tv-android/app/build.gradle.kts`。
+
 ## 标准命令
 
 ```bash
 # 后端（Go + Gin + GORM + SQLite）
 make build              # build backend（先 build-admin 嵌入最新 SPA）
-make run                # build + 启动服务（http://localhost:PORT）
+make run                # build + 启动服务（http://localhost:8080）
 make test               # go test ./...
 
 # Admin SPA（React + TS + Vite + TanStack Query）
@@ -19,8 +33,9 @@ cd frontend
 flutter analyze         # 静态检查
 flutter test            # dart 测试
 
-# Flutter APK（交叉编译多 ABI）
-make build-apk          # 默认 fat APK
+# Flutter APK（按 ABI split,推荐）
+make build-apk          # 按 ABI split 出多个 APK(arm64/arm/x64)
+make build-apk-fat      # 一个 fat APK(含所有 ABI,包体大但安装省心)
 make build-apk-arm64    # 仅 arm64-v8a（现代 Android 设备）
 make build-apk-arm      # 仅 armeabi-v7a（老设备）
 make build-apk-x64      # 仅 x86_64（模拟器）
@@ -29,6 +44,13 @@ make build-apk-x64      # 仅 x86_64（模拟器）
 ## 后端
 
 ### 首次启动
+
+**前置**：首次运行前先拉 ffmpeg/ffprobe + AI 模型（ONNX embedding runtime），
+否则导入视频会 ffprobe not found、AI 功能缺 runtime：
+
+```bash
+make fetch-ffmpeg fetch-ai-models   # 幂等,已存在则跳过
+```
 
 `make run` 自动执行：
 - `AutoMigrate`（`backend/internal/model/migrate.go`）建/补表
@@ -124,14 +146,14 @@ claim → 转录 → complete 的完整链路。真正的 worker 按 `tools/vide
 
 ### 前置
 
-- 后端已 `make run`
+- 后端已 `make run`（默认监听 `:8080`，可用环境变量 `SERVER_ADDR` 覆盖；下面示例用 `8080`）
 - 已设 `INGEST_KEY` 环境变量（worker 协议端点受 `X-Ingest-Key` 保护）
 - admin 已设密码，至少有一个 learning 课程的 episode
 
 ### 1. admin 登录拿 cookie
 
 ```bash
-curl -c cookies.txt -X POST http://localhost:PORT/admin/api/login \
+curl -c cookies.txt -X POST http://localhost:8080/admin/api/login \
   -H "Content-Type: application/json" \
   -d '{"password":"<your-password>"}'
 ```
@@ -139,7 +161,7 @@ curl -c cookies.txt -X POST http://localhost:PORT/admin/api/login \
 ### 2. 把 episode 加入字幕队列
 
 ```bash
-curl -b cookies.txt -X POST http://localhost:PORT/admin/api/subtitle-jobs \
+curl -b cookies.txt -X POST http://localhost:8080/admin/api/subtitle-jobs \
   -H "Content-Type: application/json" \
   -d '{"episode_ids":[1]}'
 ```
@@ -147,7 +169,7 @@ curl -b cookies.txt -X POST http://localhost:PORT/admin/api/subtitle-jobs \
 ### 3. worker 认领任务（关键：返回现签的下载直链）
 
 ```bash
-curl -X POST http://localhost:PORT/subtitle-jobs/claim \
+curl -X POST http://localhost:8080/subtitle-jobs/claim \
   -H "X-Ingest-Key: $INGEST_KEY" \
   -H "Content-Type: application/json" \
   -d '{"job_types":["subtitle"]}'
@@ -158,7 +180,7 @@ curl -X POST http://localhost:PORT/subtitle-jobs/claim \
 ### 4. worker 回传 SRT（用假字幕模拟 whisper 输出）
 
 ```bash
-curl -X POST http://localhost:PORT/subtitle-jobs/<job-id>/complete \
+curl -X POST http://localhost:8080/subtitle-jobs/<job-id>/complete \
   -H "X-Ingest-Key: $INGEST_KEY" \
   -H "Content-Type: application/json" \
   -d '{"srt":"1\n00:00:01,000 --> 00:00:03,000\n这是测试字幕\n"}'
@@ -171,7 +193,7 @@ curl -X POST http://localhost:PORT/subtitle-jobs/<job-id>/complete \
 ```bash
 # Flutter 端：进入这一课 → 看到"CC"字幕按钮可点 → 字幕显示
 # 或直接 curl 验证 API
-curl -b cookies.txt http://localhost:PORT/api/v1/episodes/1/play-info
+curl -b cookies.txt http://localhost:8080/api/v1/episodes/1/play-info
 # 应包含 subtitles 数组
 ```
 

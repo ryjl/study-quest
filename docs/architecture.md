@@ -1,4 +1,4 @@
-# StudyQuest（学途奇旅）架构设计
+# StudyQuest 架构设计
 
 > 整体架构权威文档。模块深度细节见 `docs/modules/<module>/`，踩坑见
 > `docs/pitfalls/`，开发环境/调试见 `docs/dev-setup.md`。
@@ -106,11 +106,11 @@ backend/internal/
 │   ├── admin_{course,episode,chapter,subtitle}.go  admin_content 拆分后
 │   └── ...
 ├── service/          # 业务逻辑
-│   ├── ai_service*.go  分 8 文件(core/polish/jobs/naming/quiz/advice/course_summary/user_report)
+│   ├── ai_service*.go  分 10 文件(core/polish/jobs/naming/quiz/homework/advice/course_summary/user_report/run_record)
 │   └── ...
 ├── repository/       # GORM 查询
 │   ├── ai_content_repo.go  接口 + 构造器
-│   ├── ai_{chunk,summary,job,quiz,memory,advice}_repo.go  分 entity
+│   ├── ai_{chunk,summary,job,quiz,memory,advice,polish_chunk}_repo.go  分 entity
 │   └── ...
 ├── media/            # ffmpeg/ffprobe wrappers(本轮抽出的新包)
 │   ├── ffmpeg.go       ExtractEmbeddedCover/ExtractScreenshot/RunFFmpegWithRetry/IsTransientFFmpegError

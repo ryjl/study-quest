@@ -4,13 +4,42 @@
 
 ## 现状(`make deploy`)
 
-当前一键部署走 `Makefile` 的 `deploy` 目标:
+一键部署走 `Makefile` 的 `deploy` 目标:
 
 1. 本地 `docker build` 出 `studyquest-backend:latest`(多阶段:ONNX 模型 + admin SPA + Go 二进制)。
-2. `docker save | gzip | ssh` 把镜像推到远程主机(`ry@192.168.8.4:30901`)。
-3. 远端 `docker run -d -p 6001:8080` 启动,**明文 HTTP**,无反向代理、无 TLS。
+2. `docker save | gzip | ssh` 把镜像推到远程主机。
+3. 远端 `docker run -d -p <DEPLOY_PORT>:8080` 启动,**明文 HTTP**,无反向代理、无 TLS。
 
-即:后端 8080 端口通过主机 6001 端口**直接暴露,明文传输**。这在局域网/家庭内网可用,
+目标机器通过环境变量指定(不写死在 Makefile 里):
+
+| 变量 | 含义 | 默认 |
+|---|---|---|
+| `DEPLOY_HOST` | 远程主机 IP/域名 | (必填) |
+| `DEPLOY_USER` | ssh 用户名 | (必填) |
+| `DEPLOY_SSH_PORT` | ssh 端口 | 22 |
+| `DEPLOY_PORT` | 容器在远程主机暴露的端口(映射到容器内 8080) | 8080 |
+
+三种用法(任选其一):
+
+```bash
+# 1. 本地配置文件(推荐):复制模板填你的值,make deploy 自动读取
+cp .deploy.env.example .deploy.env
+# 编辑 .deploy.env 填入 DEPLOY_HOST/DEPLOY_USER 等(.deploy.env 不进 git)
+make deploy
+
+# 2. 命令行临时带参数
+make deploy DEPLOY_HOST=192.168.1.10 DEPLOY_USER=me DEPLOY_SSH_PORT=22 DEPLOY_PORT=8080
+
+# 3. export 到 ~/.bashrc 或 ~/.zshrc,之后 make deploy 直接用
+export DEPLOY_HOST=192.168.1.10
+export DEPLOY_USER=me
+export DEPLOY_SSH_PORT=22
+export DEPLOY_PORT=8080
+```
+
+未设 `DEPLOY_HOST`/`DEPLOY_USER` 时 `make deploy` 会报错提示,不会误连。
+
+即:后端 8080 端口通过主机端口**直接暴露,明文传输**。这在局域网/家庭内网可用,
 **公网部署前必须完成下面的加固**。
 
 ---
@@ -25,7 +54,7 @@
 - **推荐 Caddy**:自动申请/续期 Let's Encrypt 证书,配置最简:
   ```caddyfile
   studyquest.example.com {
-      reverse_proxy localhost:6001
+      reverse_proxy localhost:8080
   }
   ```
 - **nginx + certbot** 同样可行,需手动配证书续期。
@@ -56,7 +85,7 @@ admin 后台是**独立登录体系**(不走 User 表 PIN),首启动若 settings
 ### 4. 数据库不暴露公网
 
 SQLite 数据文件(`/app/data`)含 bcrypt PIN hash、admin 密码 hash、会话 token。bcrypt
-缓解离线破解,但根本防线是**数据库文件不暴露公网**:只开放反代的 443,不开 6001/8080,
+缓解离线破解,但根本防线是**数据库文件不暴露公网**:只开放反代的 443,不开后端直连端口,
 不开 SSH 给公网(用密钥 + 限制来源)。PIN 熵仅 ~20 bit(6 位数字),DB 泄露后离线破解
 仍快,所以 DB 隔离是第一道、也是最关键的防线。
 

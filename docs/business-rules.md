@@ -3,7 +3,7 @@
 > **目的**：StudyQuest 有两个前端（PAD 用 Flutter / Dart，TV 用 Kotlin），两端语言不通，无法共享代码。
 > 但业务规则必须一致。本文档是这些规则的**唯一事实源**，两端实现都要对照它，并由测试保证语义一致。
 >
-> **TV 端实现位置**：`tv-android/app/src/main/java/com/revin/studyquest/tv/`
+> **TV 端实现位置**：`tv-android/app/src/main/java/app/studyquest/tv/`
 > **PAD 端实现位置**：`frontend/lib/`（Flutter，现有）
 >
 > 改任一规则 → 改本文档 → 两端同步 → 两端测试同步更新。

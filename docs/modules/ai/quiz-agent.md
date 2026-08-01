@@ -175,7 +175,7 @@ Answer:      + quiz_id (uint, 冗余快照; 换题后历史答题可查)
 ### 客户端（`/api/v1/episodes/:id/ai-quiz*`，受 IsEpisodeVisible 访问控制）
 ```
 GET  /ai-quiz            无题→202 generating 懒生成; ready 返回题(不下发答案)
-POST /ai-quiz/submit     {question_id, answer_index? | answer_text?} → 判题+解析+跳转时间
+POST /ai-quiz/submit-all {answers:[{question_id, answer_index? | answer_text?}]} → 统一交卷:一次判分全部题→逐题结果→锁定 quiz
 POST /ai-quiz/regenerate 换题(删旧基于最新 memory 重新生成)→202 generating
 ```
 

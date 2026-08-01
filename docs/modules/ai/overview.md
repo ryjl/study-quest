@@ -391,7 +391,6 @@ GET  /episodes/:id/ai-quiz            拉题。状态机:
                                        - 200 done:有历史归档(交卷/换题归档过)但无 active quiz——不自动出新题,
                                          前端渲染「已完成、点重新生成」入口(只有从未做过才首次自动 enqueue)
                                        - 404 unavailable:AI 未开/无 chunks
-POST /episodes/:id/ai-quiz/submit     单题即时判分(兼容保留)→更新 memory→返回结果+解析+跳转时间
 POST /episodes/:id/ai-quiz/submit-all 统一交卷(一次考试):一次性判分全部题→逐题返回结果→锁定 quiz
                                        body:{answers:[{question_id, answer_index? | answer_text?}]}
                                        成功后立即归档该 quiz(交卷即归档,进历史面板可 review)
@@ -461,7 +460,6 @@ GET  /admin/api/ai/users/:userID/study-report  读已生成的用户报告(无�
 ### Admin 作业卷端（课后作业卷，admin 批量生成 + 预览打印 + prompt 配置）
 ```
 POST   /admin/api/ai/jobs  {job_type:"homework", episode_ids:[...]}   v2 勾选式批量入队(走通用 /jobs switch case=homework + service.EnqueueHomework 逐 episode 入队 + skipped map;去重:已在途/无字幕素材的跳过) → {enqueued, skipped}
-POST   /admin/api/ai/courses/:id/homework/generate     [DEPRECATED v2] course-level 整门课批量生成(保留兜底,二期清;前端 v2 起改用上面 /jobs 勾选式) → {enqueued}
 GET    /admin/api/ai/courses/:id/homeworks             列该课程所有作业(active+archived,按 created_at DESC)
 GET    /admin/api/ai/homeworks/:id                     取单份作业完整内容(sections+questions 分组,预览/打印用;无→404)
 GET    /admin/api/ai/subjects/:id/homework-prompt?key=math  取某 subject 的完整 system prompt(首次 lazy 灌默认)
@@ -837,7 +835,7 @@ self-check 仍走"判废→重出"循环（agent.go 的 ReAct loop），不通�
 - **科目默认模板**：admin CourseModal 的"套用科目模板"按钮，按科目一键填 WhisperHint/QuizHint（11 科 + alias 机制），admin 在模板基础上微调。详见 §13、`frontend-admin/src/lib/aiHintTemplates.ts`
 - **Whisper 协议去兼容债**：`EpisodeInfo.ai_hint` → `whisper_hint`（Python worker + backend 同步改造，handler 只发 `whisper_hint`，不再双发 `ai_hint` 兼容老 worker）
 - **submit-all 并发安全（TOCTOU 修复）**：新增 `TryMarkQuizSubmitted`（条件 `UPDATE ... WHERE submitted_at IS NULL`），在落任何 answer/memory 之前抢占交卷锁，消除"并发双交卷重复落 answer + 重复扣 mastery"窗口。详见 §17
-- **多选题已交卷回填补全**：`GetQuizForClient`/`SubmitQuizAnswer`/`buildQuizHistoryView` 三处对 multi_choice 的正确答案揭示 + 作答回填统一走三题型 switch（原把 `q.Answer=0` 当多选正确答案、把 `[0,2,3]` JSON 当文本回传的 bug 修复）
+- **多选题已交卷回填补全**：`GetQuizForClient`/`buildQuizHistoryView`（及历史曾有的 `SubmitQuizAnswer`,该单题路径已删）几处对 multi_choice 的正确答案揭示 + 作答回填统一走三题型 switch（原把 `q.Answer=0` 当多选正确答案、把 `[0,2,3]` JSON 当文本回传的 bug 修复）
 - **多选题部分对 mastery 不扣分**：`RecordAnswer` 传 `verdict.Correct || verdict.Partial`（部分对视为掌握），避免漏选 1 个就 -0.2 系统性压低 mastery 误导 advice
 - **课程库去三点菜单**：课程卡片 + 课时树顶部的 ⋯ 菜单全部去掉，操作直接露出为图标按钮（编辑/解锁/删除/探测时长）。整个课程库不再有三点菜单
 - **Modal/Drawer hook 顺序 bug 修复**：`clickOutsideOnly`（含 `useRef`）从 `if (!open) return null` 之后移到之前，消除 React #310（open 切换时 hook 数变化）
@@ -1031,7 +1029,7 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 - `UserProgress.IsCompleted`：`int`（0/1）→ `bool`。Go 侧 GORM 存 SQLite 仍是 INTEGER 0/1，但 JSON 序列化从 `1`/`0` 变成 `true`/`false`，Flutter `progress.dart` 加 `_parseBool` 兼容三种形态（bool/int/string）
 
 **删契约**（forward-compat 包袱）：
-- **单题 `/ai-quiz/submit` 端点**：Flutter 实际只用 `submit-all`，单题 submit 是死代码。删路由 + handler，service 层 `SubmitQuizAnswer` 方法保留（接口惯性，`gradeOneAnswer` helper 被 submit-all 复用）
+- **单题 `/ai-quiz/submit` 端点**：Flutter 实际只用 `submit-all`，单题 submit 是死代码。删路由 + handler + service 层 `SubmitQuizAnswer` 方法（含只被它调的 `getQuestion` helper）；`RecordAnswer`/`agent.GradeAnswer` 等被 exam + submit-all 复用的路径保留
 - **`tags` 逗号字符串契约**：`TagsList()`/`TagsJoined()` 模型方法删除，DTO 改为只发 `tags_list`（数组）+ `tag_ids`。Flutter `course.dart` 的 `tags` 字段从 `String` 改成 `tagsList: List<String>`
 - **`watch_minutes` DTO**：`admin_dto.go` 删 `WatchMinutes`（= watch_seconds/60 的兼容字段），admin 改用 `WatchSeconds`
 - **`X-User-ID` / `Bearer<integer>` 遗留鉴权拒绝逻辑**：全新安装从未用过这些方案，删 middleware 拒绝代码 + 回归测试
@@ -1078,7 +1076,7 @@ agent 出题时判断每题是否对应明确视频片段（`Question.HasJump`�
 
 ### 第三轮的具体 DB 变更（本次定档前的最后一次调整）
 
-1. **`Answer` 加 `UserAnswerText` 列**（text）—— 填补唯一真实结构缺口：填空题用户原文之前判完就丢（`Answer.UserAnswer` 只有 int），交卷后/历史 review 无法回放"你当时填了什么"。加列后，写路径（`SubmitQuizAnswer`/`SubmitAllQuizAnswers`）落原文，读路径（`QuizViewQuestion`/`QuizHistoryQuestion`/admin `QuizDetailAnswer`）回放。
+1. **`Answer` 加 `UserAnswerText` 列**（text）—— 填补唯一真实结构缺口：填空题用户原文之前判完就丢（`Answer.UserAnswer` 只有 int），交卷后/历史 review 无法回放"你当时填了什么"。加列后，写路径（`SubmitAllQuizAnswers`）落原文，读路径（`QuizViewQuestion`/`QuizHistoryQuestion`/admin `QuizDetailAnswer`）回放。
 2. **三表 Upsert 改 `ON CONFLICT`** —— `UpsertAdvice`/`UpsertCourseSummary`/`UpsertUserStudyReport` 从 delete-then-insert 改为 GORM `clause.OnConflict`（和 `UpsertMemoryOnAnswer` 同语义）。功能等价、无并发窗口、语义更清晰。纯实现层，schema 不变。
 3. **`AIJob.JobType` 注释更正** —— 注释从 `segment|summary|quiz|advice` 更新为 6 种 job type（漏了 course_summary/user_report）。纯注释，列定义（`size:20`）不变，老数据兼容。
 

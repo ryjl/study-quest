@@ -1,5 +1,9 @@
 .PHONY: build-admin build run run-admin test test-admin docker-build docker-run clean migrate build-apk build-apk-arm64 build-apk-arm build-apk-x64 build-apk-fat build-tv-apk build-tv-apk-debug install-tv fetch-ai-models clean-ai-models fetch-ffmpeg clean-ffmpeg
 
+# 本地 deploy 配置(不进 git):把你的 DEPLOY_HOST/DEPLOY_USER 等写进 .deploy.env,
+# make deploy 自动读取。模板见 .deploy.env.example。
+-include .deploy.env
+
 # Build the admin SPA (React/Vite). Output lands in
 # backend/internal/admin/spa/dist and is embedded into the Go binary via go:embed.
 build-admin:
@@ -206,16 +210,31 @@ clean-ffmpeg:
 	@echo "==> Removing $(FFMPEG_BIN_DIR)/ ..."
 	@rm -rf $(FFMPEG_BIN_DIR)/
 
-# 一键部署到远程服务器
+# 一键部署到远程服务器。目标机器配置通过环境变量提供(不写死在 Makefile 里):
+#   DEPLOY_HOST      远程主机(IP/域名)
+#   DEPLOY_USER      ssh 用户名
+#   DEPLOY_SSH_PORT  ssh 端口(默认 22)
+#   DEPLOY_PORT      容器在远程主机暴露的端口(映射到容器内 8080)
+# 例: make deploy DEPLOY_HOST=192.168.1.10 DEPLOY_USER=me
+# 或把这些 export 到 shell 配置里,make deploy 直接用。
+DEPLOY_HOST     ?=
+DEPLOY_USER     ?=
+DEPLOY_SSH_PORT ?= 22
+DEPLOY_PORT     ?= 8080
+
 deploy: docker-build
-	@echo "==> Deploying to server (with gzip compression)..."
-	@docker save studyquest-backend:latest | gzip | ssh -p 30901 ry@192.168.8.4 \
+	@if [ -z "$(DEPLOY_HOST)" ] || [ -z "$(DEPLOY_USER)" ]; then \
+		echo "ERROR: DEPLOY_HOST 和 DEPLOY_USER 必须设置。例:make deploy DEPLOY_HOST=1.2.3.4 DEPLOY_USER=me"; \
+		exit 1; \
+	fi
+	@echo "==> Deploying to $(DEPLOY_USER)@$(DEPLOY_HOST):$(DEPLOY_SSH_PORT) (host port $(DEPLOY_PORT))..."
+	@docker save studyquest-backend:latest | gzip | ssh -p $(DEPLOY_SSH_PORT) $(DEPLOY_USER)@$(DEPLOY_HOST) \
 		"mkdir -p ~/data/studyquest-data/subtitles && \
 		docker load && \
 		{ docker stop studyquest-backend 2>/dev/null || true; } && \
 		{ docker rm studyquest-backend 2>/dev/null || true; } && \
 		docker run -d --name studyquest-backend --restart unless-stopped \
-			-p 6001:8080 \
+			-p $(DEPLOY_PORT):8080 \
 			--user \`id -u\`:\`id -g\` \
 			-e AI_MODELS_DIR=/app/ai-models \
 			-v ~/data/studyquest-data:/app/data \

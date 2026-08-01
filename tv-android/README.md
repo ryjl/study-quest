@@ -9,8 +9,6 @@ PAD/手机端用 Flutter(`../frontend/`),但 TV 端换原生,因为:
 - Flutter Focus 系统对 TV D-pad 场景支持不成熟(框架层问题,非代码问题)
 - Google 官方推荐 Compose for TV(Leanback 已废弃)
 
-详见 `../docs/handoff-tv-flavor.md`。
-
 ## 技术栈
 
 | 层 | 技术 | 版本 |
@@ -30,7 +28,7 @@ PAD/手机端用 Flutter(`../frontend/`),但 TV 端换原生,因为:
 
 ```
 tv-android/
-├── app/src/main/java/com/revin/studyquest/tv/
+├── app/src/main/java/app/studyquest/tv/
 │   ├── MainActivity.kt              # 单 Activity 入口
 │   ├── StudyQuestApp.kt             # Application + Hilt
 │   ├── data/                        # 数据层(网络+存储+DTO)
@@ -105,4 +103,4 @@ AI 学习页 TV 端**只读**(看 summary + advice,无 quiz)。
 - **课程详情页**:点课程卡直接跳播放器(用 courseId 兜底),详情页(选集/章节)待建。
 - **足迹数据**:学习时长/完成数/时间线已接 API,徽章墙待补(badge 结构复杂)。
 - **Quicksand 字体**:暂用系统默认,后续接 res/font 或 Downloadable Fonts。
-- **OTA**:暂未实现(后端契约需加 flavor 维度,见 `../docs/handoff-tv-flavor.md`)。
+- **OTA**:暂未实现(后端契约需加 flavor 维度)。
