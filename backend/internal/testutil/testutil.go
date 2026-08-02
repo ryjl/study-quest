@@ -62,10 +62,19 @@ func NewDB(t *testing.T) *gorm.DB {
 // test. Use this (not NewDB) for tests that need concurrent writers across the
 // GORM connection pool — :memory: gives each connection a private empty DB,
 // so a 2nd pooled connection sees no tables.
+//
+// _busy_timeout=5000 in the DSN (not a PRAGMA Exec) so EVERY pooled connection
+// honors it — mirrors testhelper_test.go's in-memory DSN. This serializes
+// concurrent writers (a would-be-blocked writer waits up to 5s instead of
+// erroring with "database is locked" immediately) for the few tests that do
+// fan out concurrent writes. A PRAGMA Exec would only set it on the one
+// connection it ran on. (Note: NewAIService no longer spawns its background
+// worker for tests — see Start/Stop on AIService — so the worker-vs-test
+// write contention that previously required WAL here is gone.)
 func NewFileDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dir := t.TempDir()
-	dsn := filepath.Join(dir, "test.db") + "?_loc=UTC"
+	dsn := filepath.Join(dir, "test.db") + "?_loc=UTC&_busy_timeout=5000"
 	db, err := gorm.Open(sqlite.Open(dsn), GormConfig())
 	if err != nil {
 		t.Fatalf("testutil: open file-backed sqlite: %v", err)

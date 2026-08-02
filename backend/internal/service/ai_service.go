@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 	"gorm.io/gorm"
 	"studyquest/backend/internal/ai"
@@ -259,9 +260,18 @@ type AIService interface {
 	// ErrGlossaryNotPending if the candidate isn't reviewable.
 	RejectGlossaryCandidate(id uint) error
 
+	// Start launches the background worker that drains the AI job queue.
+	// Production calls this once from main after constructing the service.
+	// Tests almost never call it — NewAIService no longer auto-spawns the
+	// worker (it raced test-body DB writes), and job-execution tests drive
+	// processOneJob directly. Only the enqueue→drain e2e tests in
+	// ai_service_lifecycle_test.go call Start. Idempotent.
+	Start()
 	// Stop halts the background worker goroutine. Production never calls this
 	// (process exit reclaims it); tests call it via t.Cleanup to avoid leaking a
-	// poller per NewAIService across the test binary.
+	// poller per NewAIService across the test binary. No-op if Start was never
+	// called (cancel is nil) — so harnesses can unconditionally register
+	// t.Cleanup(svc.Stop) without knowing whether the worker ran.
 	Stop()
 
 	// ── 课程考试 (TODO.md P0) ──
@@ -318,12 +328,26 @@ type aiService struct {
 	subtitleRepo  repository.EpisodeRepository // same repo, GetSubtitle lives here
 	resolver      *ai.ProviderResolver
 	unlockService UnlockService // gates client quiz access (IsEpisodeVisible); nil in tests
-	// cancel stops the runWorker goroutine. Replacing the old "worker polls
-	// forever, leaks one goroutine per NewAIService call" pattern that caused
-	// intermittent test failures when many service tests spawned workers
-	// concurrently. Production never calls Stop (process exit reclaims it);
-	// tests register t.Cleanup(svc.Stop).
+	// cancel stops the runWorker goroutine. It's set by Start() (not the
+	// constructor — the worker is opt-in now), so it's nil until Start runs.
+	// Stop() no-ops when cancel is nil, which is the case for every test that
+	// constructs a service without starting its worker. Production calls Start
+	// once from main; tests only call it for the few enqueue→drain e2e tests.
 	cancel context.CancelFunc
+	// startOnce guards Start against spawning a second worker goroutine on a
+	// double call (defensive — no current caller double-starts).
+	startOnce sync.Once
+	// workerDone is closed when runWorker returns, so Stop can WAIT for the
+	// worker to fully exit before returning. Without this wait, Stop()'s old
+	// fire-and-forget cancel() raced the test teardown: t.Cleanup(svc.Stop)
+	// returned immediately, the next cleanup step closed the file-backed
+	// SQLite (t.TempDir reclamation), and an in-flight ClaimNextQueuedJob on
+	// the worker goroutine then wrote to a closing DB → "database is locked"
+	// / "attempt to write a readonly database" under -race. The 2s receive
+	// timeout in Stop is a safety net so a hypothetical stuck worker can never
+	// hang the whole test binary; ctx cancellation makes runWorker return
+	// promptly (within one select), so the timeout never trips in practice.
+	workerDone chan struct{}
 	// userRepo feeds advice agent 的 list_user_courses 工具(查学生被授权的课程 id)。
 	// nil 时该工具回退返回空(advice agent 据此降级)。quiz 路径不用它。
 	userRepo aiUserCourseLister
@@ -373,6 +397,13 @@ type aiService struct {
 	// through `resolver`. Lets service tests drive the full RAG→LLM→parse→persist
 	// path with a fake LLM. Production leaves this nil. See ai_service_homework_test.go.
 	homeworkLLMOverride ai.LLMProvider
+	// summaryLLMOverride is a TEST-ONLY seam (mirrors polish/homework): when
+	// non-nil, runSummaryJob uses this provider directly instead of resolving
+	// through `resolver`. Lets the lifecycle e2e test (ai_service_lifecycle_test)
+	// drive the enqueue→claim→summarize→persist loop with a fake LLM, proving the
+	// dispatcher's summary branch + done-writeback actually persist a summary.
+	// Production leaves this nil; the resolver path runs unchanged.
+	summaryLLMOverride ai.LLMProvider
 }
 
 // aiUserCourseLister 是 aiService 对 userRepo 的窄依赖:只暴露 advice 工具需要的
@@ -465,18 +496,54 @@ func NewAIService(
 		homeworkRepo:    homeworkRepo,
 		settingsRepo:    settingsRepo,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-	go s.runWorker(ctx) // single in-process worker goroutine; see runWorker
+	s.workerDone = make(chan struct{})
+	// The worker is NOT auto-started here. NewAIService used to spawn it
+	// unconditionally, but that meant every test (which call NewAIService
+	// directly) paid for a 3s-tick background goroutine that periodically
+	// wrote to ai_jobs — racing the test body's own writes on the shared
+	// SQLite file and surfacing as "database is locked" under -race, since no
+	// test actually needs the worker to drain jobs (job-execution tests drive
+	// processOneJob manually). Production calls Start() once after construct;
+	// the few tests that exercise the real poll loop (see ai_service_lifecycle
+	// _test.go) call Start() explicitly. Everyone else gets a worker-free
+	// service with no teardown race to manage.
 	return s
 }
 
-// Stop halts the background worker goroutine. Production code never needs to
-// call this (the worker dies with the process); it exists so tests can release
-// the worker instead of leaking it for the duration of `go test ./...`.
+// Start launches the background worker goroutine that drains the AI job queue.
+// Production calls this once from main; tests only call it when they actually
+// exercise the enqueue→drain loop. It's idempotent (a second call is a no-op)
+// so callers don't need to track whether it's already running.
+func (s *aiService) Start() {
+	s.startOnce.Do(func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.cancel = cancel
+		go s.runWorker(ctx) // single in-process worker goroutine; see runWorker
+	})
+}
+
+// Stop halts the background worker goroutine and waits for it to fully exit.
+// Production code never needs to call this (the worker dies with the process);
+// it exists so tests can release the worker instead of leaking it for the
+// duration of `go test ./...`.
+//
+// The wait is what fixes the teardown race: cancel() alone returned while the
+// worker could still be mid-DB-write, and the next t.Cleanup step closed the
+// file-backed SQLite out from under it. The 2s timeout is a safety net against
+// a hypothetical stuck worker hanging the whole test binary — ctx cancellation
+// makes runWorker return within one select iteration, so it never trips.
 func (s *aiService) Stop() {
-	if s.cancel != nil {
-		s.cancel()
+	// cancel is nil when Start() was never called (the common test case — a
+	// worker-free service has nothing to stop). Guarding here means the many
+	// test harnesses that construct-then-t.Cleanup(svc.Stop) without starting
+	// a worker are a cheap no-op, not a 2s-timeout-per-test stall.
+	if s.cancel == nil {
+		return
+	}
+	s.cancel()
+	select {
+	case <-s.workerDone:
+	case <-time.After(2 * time.Second):
 	}
 }
 
@@ -902,6 +969,7 @@ func adviceJobMatchesScope(j model.AIJob, scope string, scopeID uint) bool {
 // killed job is just lost, acceptable for a generation task that the admin can
 // re-trigger).
 func (s *aiService) runWorker(ctx context.Context) {
+	defer close(s.workerDone) // signal Stop() that we've fully exited (teardown-race fix)
 	jobTypes := []string{"segment", "summary", "quiz", "advice", "course_summary", "user_report", "polish", "homework"}
 	// Use a 3s ticker for polling; on ctx cancellation the worker exits
 	// promptly (within the select, not after a full sleep).
@@ -1141,12 +1209,23 @@ func (s *aiService) runSummaryJob(job *model.AIJob) {
 		summaryHint = course.EffectiveSummaryHint(subj)
 		termDict = course.EffectiveTermDict(subj)
 	}
-	llm, err := s.resolver.ResolveChatByPurpose("summary")
-	if err != nil {
-		s.failJob(job, "resolve chat provider: "+err.Error())
-		return
+	// summaryLLMOverride (test-only seam) short-circuits the resolver entirely,
+	// matching polish/homework: tests get a fake LLM without a live provider row.
+	// Production leaves it nil and the resolver path runs unchanged.
+	var llm ai.LLMProvider
+	var modelName string
+	if s.summaryLLMOverride != nil {
+		llm = s.summaryLLMOverride
+		modelName = "fake-summary"
+	} else {
+		resolved, err := s.resolver.ResolveChatByPurpose("summary")
+		if err != nil {
+			s.failJob(job, "resolve chat provider: "+err.Error())
+			return
+		}
+		llm = resolved
+		modelName = s.resolver.ChatModelNameByPurpose("summary")
 	}
-	modelName := s.resolver.ChatModelNameByPurpose("summary")
 	summarizer := agent.NewSummarizer(llm, s.contentRepo, modelName)
 	// 重试 1 次(共 2 次尝试)。summary 是单次 LLM 调用,没有 polish 那种 chunk
 	// 续跑机制,一次失败整个 job 就废——而很多失败是瞬时抖动(relay 504、
