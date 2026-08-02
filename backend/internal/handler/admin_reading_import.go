@@ -36,7 +36,18 @@ func (h *adminHandler) ExecuteReadingImport(c *gin.Context) {
 	var req service.ExecuteReadingImportRequest
 	if !bindJSON(c, &req) { return }
 	if err := h.readingImportService.ExecuteReadingImport(&req); err != nil {
-		respondError(c, err)
+		// Map the service-level sentinels so a bad request shape surfaces as a
+		// 400 (with the actionable message) rather than a generic 500. The
+		// generic 500 path hid "source_id is required" behind "服务器内部错误",
+		// leaving the admin with no clue what to fix.
+		switch {
+		case errors.Is(err, service.ErrReadingImportBadRequest):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrReadingImportTargetNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		default:
+			respondError(c, err)
+		}
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"status": "success"})

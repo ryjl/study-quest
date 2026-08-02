@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 
@@ -11,6 +12,19 @@ import (
 	"studyquest/backend/internal/repository"
 	"studyquest/backend/internal/storage"
 )
+
+// ErrReadingImportBadRequest is the sentinel for client-correctable execute
+// failures (bad request shape: empty tree, missing source_id, missing series
+// title, bad grade, no subject). Wrapping with %w lets the handler map these
+// to 400 instead of the default 500 that respondError gives an unmapped error —
+// a 500 for "you forgot source_id" leaks "server error" semantics and hides the
+// actionable message behind the generic 500 body.
+var ErrReadingImportBadRequest = errors.New("reading import: bad request")
+
+// ErrReadingImportTargetNotFound is the 404 sentinel: the requested target
+// series id doesn't exist. Distinct from a 400 (the request shape was fine, the
+// referenced resource just isn't there).
+var ErrReadingImportTargetNotFound = errors.New("reading import: target series not found")
 
 // ReadingImportService scans a storage folder and creates a ReadingSeries +
 // ReadingBook rows from it, mirroring ImportService's PreviewDeepScan +
@@ -184,13 +198,13 @@ func pruneReadingEmptyNodes(node *ReadingPreviewNode) bool {
 // are matched by title or path for idempotent re-import.
 func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportRequest) error {
 	if req.Tree == nil {
-		return errors.New("empty tree payload")
+		return fmt.Errorf("%w: empty tree payload", ErrReadingImportBadRequest)
 	}
 	// Every imported book must be bound to a storage source. There is no
 	// longer a global-settings fallback at stream time, so a nil SourceID would
 	// leave the row un-streamable.
 	if req.SourceID == nil {
-		return errors.New("source_id is required (no global storage fallback)")
+		return fmt.Errorf("%w: source_id is required (no global storage fallback)", ErrReadingImportBadRequest)
 	}
 
 	return s.db.Transaction(func(tx *gorm.DB) error {
@@ -204,12 +218,12 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 				return err
 			}
 			if series == nil {
-				return errors.New("target series not found")
+				return ErrReadingImportTargetNotFound
 			}
 			seriesID = series.ID
 		} else {
 			if req.NewSeries == nil || req.NewSeries.Title == "" {
-				return errors.New("new series title is required")
+				return fmt.Errorf("%w: new series title is required", ErrReadingImportBadRequest)
 			}
 			gradeStr := strings.TrimSpace(req.NewSeries.Grade)
 			if gradeStr == "" {
@@ -217,7 +231,7 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 			}
 			g := model.Grade(gradeStr)
 			if !g.Valid() {
-				return errors.New("invalid series grade value: " + req.NewSeries.Grade)
+				return fmt.Errorf("%w: invalid series grade value: %s", ErrReadingImportBadRequest, req.NewSeries.Grade)
 			}
 			var subjectID uint
 			if subj, _ := s.subjectRepo.FindByKey(req.NewSeries.Subject); subj != nil {
@@ -225,7 +239,7 @@ func (s *readingImportService) ExecuteReadingImport(req *ExecuteReadingImportReq
 			} else if list, err := s.subjectRepo.List(); err == nil && len(list) > 0 {
 				subjectID = list[0].ID
 			} else {
-				return errors.New("no subject available; create a subject first")
+				return fmt.Errorf("%w: no subject available; create a subject first", ErrReadingImportBadRequest)
 			}
 			series := &model.ReadingSeries{
 				Title:     req.NewSeries.Title,
