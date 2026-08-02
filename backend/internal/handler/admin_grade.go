@@ -148,9 +148,11 @@ func (h *gradeHandler) DeleteGrade(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
-// respondGradeError maps the service-layer sentinel errors to HTTP statuses. The three
-// sentinels (ErrGradeIsPreset / ErrGradeNotFound / ErrGradeInUse) are all
-// admin-actionable 409s; everything else is a 500. Mirrors the
+// respondGradeError maps the service-layer sentinel errors to HTTP statuses.
+// ErrGradeIsPreset / ErrGradeInUse are 409 (admin can resolve via merge/delete
+// of a custom tag instead); ErrGradeNotFound is 404 (the tag isn't there to
+// act on). Input validation errors (empty new_key, merge-into-a-nonexistent-
+// tag) and unexpected DB errors fall through to 400. Mirrors the
 // subject_handler / ai_jobs error-mapping style.
 func respondGradeError(c *gin.Context, err error) {
 	switch {

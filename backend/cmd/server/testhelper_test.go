@@ -165,8 +165,9 @@ func newTestEnvInternal(t *testing.T, enableAI bool) *testEnv {
 		aiContentRepo := repository.NewAIContentRepository(db)
 		wrongBookRepo := repository.NewWrongBookRepository(db)
 		examRepo := repository.NewExamRepository(db)
+		glossaryRepo := repository.NewGlossaryRepository(db)
 	aiSvc = service.NewAIService(db, aiContentRepo, episodeRepo, courseRepo,
-		nil, unlockService, userRepo, nil, subjectRepo, nil, nil, wrongBookRepo,
+		nil, unlockService, userRepo, glossaryRepo, subjectRepo, nil, nil, wrongBookRepo,
 		examRepo, nil, nil)
 		aiStop = aiSvc.Stop
 	}
@@ -181,7 +182,8 @@ func newTestEnvInternal(t *testing.T, enableAI bool) *testEnv {
 		WithReadingSeriesService(readingSeriesService).WithReadingBookService(readingBookService).WithReadingArticleService(readingArticleService).
 		WithReadingImportService(readingImportService).
 		WithProbeWorker(probeWorker).WithSubtitleJobService(subtitleJobService).WithSessionService(sessionService).WithWatchEventRepo(watchEventRepo).
-		WithStorageSources(storageSourceRepo).WithStorageResolver(storageResolver)
+		WithStorageSources(storageSourceRepo).WithStorageResolver(storageResolver).
+		WithAIProviderRepo(repository.NewAIProviderRepository(db))
 	if aiSvc != nil {
 		adminDeps = adminDeps.WithAIService(aiSvc)
 	}
@@ -189,9 +191,12 @@ func newTestEnvInternal(t *testing.T, enableAI bool) *testEnv {
 	badgeH := handler.NewBadgeHandler(badgeService)
 	subjectH := handler.NewSubjectHandler(subjectService)
 	tagH := handler.NewTagHandler(tagService)
-	// Grade handler with nil service — tests don't exercise grade CRUD; the
-	// endpoints return 503 cleanly. Mirrors the aiH nil-service pattern.
-	gradeH := handler.NewGradeHandler(nil)
+	// Grade handler with a real GradeService — the grades integration tests
+	// (grades_integration_test.go) exercise list/rename/merge/delete over HTTP.
+	// Was previously nil (returned 503); wired now that those endpoints have
+	// coverage.
+	gradeService := service.NewGradeService(repository.NewGradeRepository(db))
+	gradeH := handler.NewGradeHandler(gradeService)
 	unlockH := handler.NewUnlockHandler(unlockService)
 	releaseH := handler.NewReleaseHandler(releaseRepo)
 	readingH := handler.NewReadingHandler(readingSeriesService, readingBookService, readingArticleService, subjectRepo, storageSourceRepo)
