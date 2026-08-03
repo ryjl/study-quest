@@ -508,16 +508,6 @@ type readingArticleDTO struct {
 	UpdatedAt        string   `json:"updated_at"`
 }
 
-// gradeKeysJoined returns a comma-joined string of grade keys from a loaded
-// CourseGrade set, for DTO projection.
-func gradeKeysJoinedCourse(gs []model.CourseGrade) string {
-	parts := make([]string, 0, len(gs))
-	for _, g := range gs {
-		parts = append(parts, string(g.Grade))
-	}
-	return strings.Join(parts, ",")
-}
-
 func (h *adminHandler) toReadingSeriesDTO(s model.ReadingSeries) readingSeriesDTO {
 	books, _ := h.readingBookRepo.ListBySeries(s.ID)
 	articles, _ := h.readingArticleRepo.ListBySeries(s.ID)

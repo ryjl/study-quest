@@ -105,17 +105,17 @@ class _CourseListScreenState extends State<CourseListScreen> {
     // Load the subject catalog in the background; non-fatal on failure.
     ApiService.fetchSubjects(widget.activeUserId).then((list) {
       if (mounted) setState(() => _subjectsCatalog = list);
-    });
+    }).catchError((_) {});
     // Load the tag catalog the same way (drives the multi-select chips).
     ApiService.fetchTags(widget.activeUserId).then((list) {
       if (mounted) setState(() => _tagsCatalog = list);
-    });
+    }).catchError((_) {});
     // Load the grade-tag catalog (drives the grade filter chips).
     // 失败时用 kPresetGradeTags 兜底,保证过滤栏始终可用。
     ApiService.fetchGradeTags(widget.activeUserId).then((list) {
       if (!mounted) return;
       setState(() => _gradeTagsCatalog = list.isEmpty ? kPresetGradeTags : list);
-    });
+    }).catchError((_) {});
   }
 
   @override

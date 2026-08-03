@@ -134,7 +134,13 @@ func (r *unlockRepo) IncrementManualUnlock(userID, courseID uint) error {
 	// Determine the strategy to seed a brand-new row with. If a row already
 	// exists, the ON CONFLICT branch ignores these values, so this only
 	// matters for the insert path.
-	eff, _ := r.ResolveEffective(userID, courseID)
+	eff, err := r.ResolveEffective(userID, courseID)
+	if err != nil {
+		// 不吞错:ResolveEffective 失败时,seed 值会全零 → 首次 INSERT 落到
+		// all_open,把本该 manual/weekly gated 的课程第一次手动解锁就误全开。
+		// 让错误冒泡,由调用方决定中止,而不是静默用错误的 seed。
+		return err
+	}
 	seedStrategy := eff.Strategy
 	if seedStrategy == "" {
 		seedStrategy = model.StrategyAllOpen
@@ -173,7 +179,11 @@ func (r *unlockRepo) SetAllowedEpisodes(userID, courseID uint, ids []uint) error
 	// setting an allowlist doesn't silently switch a manual/weekly course to
 	// all_open). Idempotent via the same inheritance mechanism as
 	// IncrementManualUnlock.
-	eff, _ := r.ResolveEffective(userID, courseID)
+	eff, err := r.ResolveEffective(userID, courseID)
+	if err != nil {
+		// 同 IncrementManualUnlock:不吞错,避免首次 INSERT 用全零 seed 误开 all_open。
+		return err
+	}
 	seedStrategy := eff.Strategy
 	if seedStrategy == "" {
 		seedStrategy = model.StrategyAllOpen

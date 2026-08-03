@@ -64,10 +64,22 @@ func (s *aiService) runCourseSummaryJob(job *model.AIJob) {
 		return
 	}
 
+	// courseRepo.FindByID 不 Preload Subject(避免 UpdateCourse 的 Save 误改关联),
+	// 这里单独查 subject 给 prompt 用——和 runSummaryJob 同一范式。不查的话
+	// course.Subject 是零值,prompt 里 Subject 永远是空串,静默降低总结质量。
+	subject := ""
+	var subj model.Subject
+	if course.SubjectID != 0 {
+		s.db.First(&subj, course.SubjectID) // 取不到保持零值,prompt 显示空
+	}
+	if subj.Label != "" {
+		subject = subj.Label
+	}
+
 	req := agent.CourseSummaryRequest{
 		CourseID:    course.ID,
 		CourseTitle: course.Title,
-		Subject:     course.Subject.Label,
+		Subject:     subject,
 	}
 	// job.UserID 仅用于 admin 可观测(谁触发的);课程总结本身不含个人维度。
 	if job.UserID != nil {

@@ -157,12 +157,6 @@ export interface Course {
   updated_at?: string;
 }
 
-export interface CourseDetail {
-  course: Course;
-  episodes: Episode[];
-  chapters: Chapter[];
-}
-
 export interface User {
   id: number;
   nickname: string;
@@ -729,15 +723,6 @@ export interface AiTraceStep {
 // ---------------------------------------------------------------------------
 // Phase C — quiz observability types
 // ---------------------------------------------------------------------------
-
-// A generated summary row (GET /admin/api/ai/summaries/:episodeID).
-export interface AiSummaryRow {
-  episode_id: number;
-  course_id: number;
-  summary_json: string; // {headline, key_points[], concepts[], takeaway}
-  model_used: string;
-  created_at: string;
-}
 
 // One quiz for a user (GET /admin/api/ai/users/:userID/quizzes).
 export interface AiQuizRow {

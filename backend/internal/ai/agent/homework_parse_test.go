@@ -49,10 +49,6 @@ func (b *homeworkSectionBuilder) String() string {
 	return sb.String()
 }
 
-// qQuestion 是构造一题 JSON 的辅助。rawJSON 是该题的完整对象字面量(含花括号),让调用方
-// 完全控制字段(包括故意缺字段/写字段写错值的 malformed 场景)。
-func qQuestion(rawJSON string) string { return rawJSON }
-
 // goodQuestionXxx 是 8 种题型的合法模板(每题 section_seq 填 1,可通过 string replace 改)。
 // scoring 故意带一个冗余字段 "_noise":"x",用来验证规范化后会剔除冗余、只保留 schema 字段。
 func goodChoice(idx int) string {

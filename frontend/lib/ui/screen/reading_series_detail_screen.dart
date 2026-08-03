@@ -42,7 +42,7 @@ class _ReadingSeriesDetailScreenState extends State<ReadingSeriesDetailScreen> {
     setState(() {});
     ApiService.fetchSubjects(widget.activeUserId).then((list) {
       if (mounted) setState(() => _subjectsCatalog = list);
-    });
+    }).catchError((_) {});
   }
 
   @override

@@ -70,7 +70,7 @@ class _CourseDetailScreenState extends State<CourseDetailScreen> {
     // label and the hero gradient matches the subject color. Non-fatal.
     ApiService.fetchSubjects(widget.activeUserId).then((list) {
       if (mounted) setState(() => _subjectsCatalog = list);
-    });
+    }).catchError((_) {});
   }
 
   void _refreshData() {

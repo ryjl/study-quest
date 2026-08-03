@@ -8,7 +8,7 @@
 // CRITICAL(同 PromptConfigTab):后端 UpdateCourse 是 PUT 全量替换,必须发完整 course
 // body(title/subject 等原值回传),否则 400 或误清字段。
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Eye } from 'lucide-react';
 import { api } from '../../../lib/api';
 import { useToast } from '../../../lib/toast';
@@ -18,6 +18,7 @@ import { PreviewPromptModal } from '../../../components/ai/PreviewPromptModal';
 
 export function CoursePromptTab({ courseId }: { courseId: number }) {
   const toast = useToast();
+  const qc = useQueryClient();
   const coursesQ = useQuery({ queryKey: ['courses'], queryFn: api.listCourses });
   const subjectsQ = useSubjects();
   const course = (coursesQ.data ?? []).find((c) => c.id === courseId);
@@ -97,7 +98,11 @@ export function CoursePromptTab({ courseId }: { courseId: number }) {
     },
     onSuccess: () => {
       toast.success('课程 Prompt 已保存');
-      coursesQ.refetch();
+      // term_dict 是 ai_config 的一部分,改它会让挂着的 glossary 审核面板 stale
+      // (已加的词会重复推),所以连 ['glossary-candidates'] 一起 invalidate——
+      // 对照 GlossaryTab 的双向 invalidate,保持一致(AGENTS.md rule #2)。
+      qc.invalidateQueries({ queryKey: ['courses'] });
+      qc.invalidateQueries({ queryKey: ['glossary-candidates'] });
     },
     onError: (e: unknown) => toast.error((e as { message?: string }).message ?? '保存失败'),
   });
