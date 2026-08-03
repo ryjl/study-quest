@@ -3,7 +3,7 @@
 > 整体架构权威文档。模块深度细节见 `docs/modules/<module>/`，踩坑见
 > `docs/pitfalls/`，开发环境/调试见 `docs/dev-setup.md`。
 >
-> 文档版本：v2.0 | 最后更新：2026-07-21（对齐代码重构后的目录结构）
+> 文档版本：v2.1 | 最后更新：2026-08-03（model/api 域文件计数 + AI 能力表对齐代码现状）
 
 ---
 
@@ -95,10 +95,13 @@ backend/internal/
 │   ├── unlock.go       CourseUnlockTemplate / UserUnlockOverride
 │   ├── reading.go      ReadingSeries/Book/Article + access + progress
 │   ├── ai.go           AIProvider/AIJob/AISummary/Quiz/... + AIConfig
+│   ├── exam.go         Exam / ExamQuestion / ExamAnswer(课程考试)
+│   ├── homework.go     Homework / HomeworkSection / HomeworkQuestion / HomeworkPromptConfig(课后作业卷)
+│   ├── wrong_book.go   WrongBookItem(错题本)
 │   ├── release.go      AppRelease (OTA)
 │   ├── watch.go        WatchEvent
 │   ├── migrate.go      AutoMigrate
-│   └── models.go       20 行索引/overview
+│   └── models.go       索引/overview
 ├── handler/          # Gin HTTP handler,按主题拆文件
 │   ├── httperr.go      共享 helper: bindJSON/parseUintParam/parseLimit/respondError
 │   ├── admin_ai_*.go   admin AI 接口分 4 文件(provider/jobs/results/lifecycle)
@@ -183,13 +186,20 @@ StorageSource (admin 配置)
 AI 是**附加层**：不配 provider / 课程没开 AI → 系统行为与之前完全一致。客户端把
 404 当"无 AI 数据",UI 隐藏 AI 卡片。这是"AI 是加分项不是依赖项"的产品定位。
 
-### 三能力 + 词汇表挖矿
+### AI 能力一览
+
+> 早期定位是"三能力(Summary/Quiz/Advice)+ 润色",后续按模块扩展。完整字段/题型/prompt 细节见 `docs/modules/ai/overview.md` §1。
 
 | 能力 | 触发 | 模型要求 |
 |---|---|---|
 | **Summary** | episode 字幕落库后入队 | 中 |
 | **Quiz** | 学生请求时按需生成(ReAct + memory) | 中-高 |
 | **Advice** | episode/course/subject 级建议 | 中-高 |
+| **课程总结 CourseSummary** | admin 触发,串起整门课的 episode summary | 中 |
+| **学习报告 UserReport** | admin 触发,跨课程聚合 + 建议 | 中 |
+| **课后作业 Homework** | admin 勾选课时批量生成,纸笔卷家长手批 | 中 |
+| **课程考试 Exam** | 题库抽题,学生开考/交卷 | —(不走 LLM,纯 SQL 抽题) |
+| **错题本 WrongBook** | 交卷时做错的题自动进,复习掌握 | —(数据驱动,不调 LLM) |
 | **字幕润色** | 字幕入库后入队 polish job | 低(DeepSeek-chat 即可) |
 | **词汇表挖矿** | 润色副产物 | — |
 
@@ -266,7 +276,7 @@ admin 勾选 episode → subtitle_jobs(queued)
 ### Admin SPA：TanStack Query 是 immediate source of truth
 
 不是 server。所有写操作必须 `invalidateQueries` 对应的 key,否则 UI 读 stale 数据。
-登录 bounce bug 就是这么来的。`frontend-admin/src/lib/api/` 拆 21 个域文件聚合为
+登录 bounce bug 就是这么来的。`frontend-admin/src/lib/api/` 拆 25 个域文件聚合为
 `api` flat 对象,调用方一律 `api.foo()`,拆分纯为可导航性。
 
 ### Flutter：StatefulWidget + FutureBuilder + 单例 ApiService

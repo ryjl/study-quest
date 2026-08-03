@@ -42,7 +42,8 @@ Always run `make test` before declaring backend work done.
   `ai.go`, `release.go`); `migrate.go` holds `AutoMigrate`. `models.go` is
   just the index/overview.
 - `handler/` — Gin HTTP handlers. Big topics are sub-filed (`admin_ai_*.go`,
-  `admin_reading_*.go`, `admin_content` → `admin_{course,episode,chapter,subtitle}.go`).
+  `admin_reading_*.go`; `admin_content.go`/`admin_ai.go`/`admin_reading.go` are now
+  index-only stubs, real handlers live in `admin_{course,episode,chapter,subtitle}.go` etc.).
   Shared helpers (`bindJSON`, `parseUintParam`, `parseLimit`, `respondError`)
   live in `httperr.go`.
 - `service/` — business logic. `ai_service*.go` is split into

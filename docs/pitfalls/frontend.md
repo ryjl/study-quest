@@ -34,7 +34,7 @@ toast；用 `||` 正确 fallback 到 `errorMsg` 或通用文案。
 
 ### `api/` 域文件聚合时方法名必须跨域唯一
 
-`frontend-admin/src/lib/api/` 拆成 21 个域文件（auth/courses/users/ai/...），每个
+`frontend-admin/src/lib/api/` 拆成 25 个域文件（auth/courses/users/ai/...），每个
 导出一个 sub-object，`lib/api/` 域聚合 (拆分后) 用 `{ ...auth, ...courses, ... }` spread 成 flat
 `api`。**方法名跨域冲突时，后 spread 的会静默 shadow 前面的**。
 
