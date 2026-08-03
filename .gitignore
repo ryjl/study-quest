@@ -52,7 +52,7 @@ docs/handoff/
 # 私人 seed/PRD 文档(不进 git,本地 brainstorm 用)
 docs/**/*-seed.md
 docs/**/*-seed-*.md
-study_quest_ai_prd.md
+docs/private/
 
 # IDEs
 .idea/
